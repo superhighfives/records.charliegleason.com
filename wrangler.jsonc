@@ -34,6 +34,11 @@
 	"ai": {
 		"binding": "AI"
 	},
+	// Cloudflare Images — resize sourced cover art before storing in R2. Requires
+	// Image Transformations enabled on the account (dashboard → Images).
+	"images": {
+		"binding": "IMAGES"
+	},
 	// Daily "records to buy" digest email (Cron Trigger drives the job).
 	"triggers": {
 		"crons": [

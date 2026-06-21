@@ -30,6 +30,7 @@ export const recordCreateSchema = recordInputSchema.extend({
 	discogsUrl: z.string().nullish(),
 	pitchforkUrl: z.string().nullish(),
 	coverImageKey: z.string().nullish(),
+	capturePhotoKey: z.string().nullish(),
 	source: z.enum(["photo", "manual", "import"]).optional(),
 });
 

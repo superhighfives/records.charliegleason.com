@@ -17,7 +17,7 @@ export interface RecordSuggestion {
 	pitchforkUrl: string | null;
 	discogsId: string | null;
 	discogsUrl: string | null;
-	coverImageKey: string;
+	capturePhotoKey: string;
 	confidence: number;
 	candidates: Array<DiscogsCandidate>;
 }
@@ -188,10 +188,11 @@ export const analyzePhoto = createServerFn({ method: "POST" })
 				const mediaType = data.mediaType || "image/jpeg";
 				const raw = stripDataUrl(data.imageBase64);
 
-				// Store the photo in R2 first so we keep it even if analysis is edited.
+				// Keep the iPhone shot as a reference (admin only). The displayed cover
+				// is sourced from Discogs + resized at save time (see createRecord).
 				const ext = mediaType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
-				const coverImageKey = `covers/${crypto.randomUUID()}.${ext}`;
-				await env.PHOTOS.put(coverImageKey, base64ToBytes(raw), {
+				const capturePhotoKey = `captures/${crypto.randomUUID()}.${ext}`;
+				await env.PHOTOS.put(capturePhotoKey, base64ToBytes(raw), {
 					httpMetadata: { contentType: mediaType },
 				});
 
@@ -238,7 +239,7 @@ export const analyzePhoto = createServerFn({ method: "POST" })
 					pitchforkUrl: pitchfork?.url ?? null,
 					discogsId: best?.discogsId ?? null,
 					discogsUrl: best?.discogsUrl ?? null,
-					coverImageKey,
+					capturePhotoKey,
 					confidence: extraction.confidence,
 					candidates,
 				};

@@ -116,8 +116,12 @@ lets Claude's server-side `web_search` tool run for hard identifications.
 - [x] The Fork wired to its real data source (static `albums.json`, matched locally).
 - [x] Discogs `candidates[]` pick-list + manual artist/title search in the capture flow
       (`searchDiscogs` server fn); picking a release re-prefills the form.
-- [ ] Follow-ups: thumbnail column in the admin table; re-run Pitchfork lookup when a
-      different candidate is picked (currently keeps the first-pass score, editable).
+- [x] Display cover sourced from the chosen Discogs release, resized via the Cloudflare
+      Images binding (webp ≤600px) → R2 at save time; iPhone capture kept admin-only
+      (`capturePhotoKey`, omitted from `/api/records`). Thumbnail column in admin table.
+- [ ] Follow-ups: re-run Pitchfork lookup when a different candidate is picked (keeps
+      the first-pass score, editable); re-source the cover if the Discogs id changes on
+      edit; lazy-load / cache thumbnails.
 
 ---
 

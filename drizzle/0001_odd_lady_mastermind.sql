@@ -1,0 +1,1 @@
+ALTER TABLE `records` ADD `capture_photo_key` text;

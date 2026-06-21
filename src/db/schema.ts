@@ -26,7 +26,8 @@ export const records = sqliteTable("records", {
 	discogsUrl: text("discogs_url"),
 
 	// Storage / provenance
-	coverImageKey: text("cover_image_key"), // R2 object key (PHOTOS bucket)
+	coverImageKey: text("cover_image_key"), // R2 key — good cover, sourced + resized (public)
+	capturePhotoKey: text("capture_photo_key"), // R2 key — the original iPhone shot (admin only)
 	notes: text("notes"),
 	source: text("source", { enum: ["photo", "manual", "import"] }).default(
 		"manual",

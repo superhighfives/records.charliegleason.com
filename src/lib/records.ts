@@ -6,6 +6,7 @@ import { desc, eq } from "drizzle-orm";
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
+import { sourceCoverFromDiscogs } from "#/lib/images";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 
 /**
@@ -43,10 +44,17 @@ export const createRecord = createServerFn({ method: "POST" })
 	.handler(({ data }) =>
 		Sentry.startSpan({ name: "createRecord" }, async () => {
 			const db = getDb(env.DB);
-			const { source, ...rest } = data;
+			const { source, coverImageKey: provided, ...rest } = data;
+
+			// Display cover comes from Discogs (resized → R2), not the iPhone shot.
+			let coverImageKey = provided ?? null;
+			if (!coverImageKey && rest.discogsId) {
+				coverImageKey = await sourceCoverFromDiscogs(rest.discogsId);
+			}
+
 			const [row] = await db
 				.insert(records)
-				.values({ ...rest, source: source ?? "manual" })
+				.values({ ...rest, coverImageKey, source: source ?? "manual" })
 				.returning();
 			return row;
 		}),

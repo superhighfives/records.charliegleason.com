@@ -46,6 +46,10 @@ your account. Requirements:
 2. An **AI Gateway**: dashboard → **AI → AI Gateway**, create one (e.g. `records`) and
    set `AI_GATEWAY_NAME` to its name. Leaving it blank uses `"default"` (auto-created).
 
+**Image Transformations.** The app resizes sourced cover art with the Images binding
+(`env.IMAGES`). Enable it once: dashboard → **Images → Transformations** → enable for
+your zone/account. Cover sourcing fails closed (no cover) if it's off.
+
 After any edit to `wrangler.jsonc`, regenerate the binding types:
 
 ```bash

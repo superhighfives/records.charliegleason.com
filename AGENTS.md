@@ -134,7 +134,13 @@ production and live in `.env.local` for dev. See `.env.example`.
   Discogs pick-list / manual search. (TanStack AI isn't used — it doesn't expose
   Claude's server-side tools.)
 - **Photo flow** (`src/lib/analyze.ts`): vision read → Discogs lookup → web-search
-  escalation when unsure → Pitchfork. R2 stores the cover; `/api/photos/$` serves it.
+  escalation when unsure → Pitchfork. `/api/photos/$` serves R2 objects.
+- **Two images per record.** `capturePhotoKey` = the iPhone shot (R2 `captures/`,
+  **admin only** — omitted from `/api/records`). `coverImageKey` = the *displayed*
+  cover, sourced from the chosen Discogs release and resized with the Cloudflare
+  **Images binding** (`env.IMAGES` → webp ≤600px) at `createRecord` time
+  (`src/lib/images.ts`). Needs Image Transformations enabled on the account; fails
+  closed to no cover. Admin table thumbnail prefers the cover, falls back to capture.
 - **The Fork** (`src/lib/the-fork.ts`) has no query API — it ships a 20 MB static
   `albums.json` (28k Pitchfork reviews: `{artist,title,score,url,...}`). We fetch it
   (edge + isolate cached), normalize, and match locally. Fails closed (null).

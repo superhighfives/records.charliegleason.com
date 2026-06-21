@@ -223,7 +223,7 @@ function Capture() {
 								data: {
 									...input,
 									source: "photo",
-									coverImageKey: suggestion.coverImageKey,
+									capturePhotoKey: suggestion.capturePhotoKey,
 									discogsId: picked?.discogsId ?? suggestion.discogsId,
 									discogsUrl: picked?.discogsUrl ?? suggestion.discogsUrl,
 									pitchforkUrl: suggestion.pitchforkUrl,

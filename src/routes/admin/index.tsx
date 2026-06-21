@@ -57,6 +57,24 @@ function AdminRecords() {
 	]);
 
 	const columns: Array<ColumnDef<Record>> = [
+		{
+			id: "cover",
+			header: "",
+			enableSorting: false,
+			cell: ({ row }) => {
+				// Prefer the sourced/resized cover; fall back to the capture (admin only).
+				const key = row.original.coverImageKey ?? row.original.capturePhotoKey;
+				return key ? (
+					<img
+						src={`/api/photos/${key}`}
+						alt=""
+						className="size-10 rounded object-cover"
+					/>
+				) : (
+					<div className="size-10 rounded bg-muted" />
+				);
+			},
+		},
 		{ accessorKey: "artist", header: "Artist" },
 		{ accessorKey: "title", header: "Title" },
 		{ accessorKey: "year", header: "Year" },

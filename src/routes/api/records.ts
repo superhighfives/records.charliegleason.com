@@ -22,8 +22,11 @@ export const Route = createFileRoute("/api/records")({
 					.from(records)
 					.orderBy(desc(records.createdAt));
 
+				// The iPhone capture is admin-only; never expose it publicly.
+				const publicRows = rows.map(({ capturePhotoKey: _omit, ...r }) => r);
+
 				return json(
-					{ records: rows, count: rows.length },
+					{ records: publicRows, count: publicRows.length },
 					{ headers: { "access-control-allow-origin": "*" } },
 				);
 			},

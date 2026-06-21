@@ -39,6 +39,18 @@ function splitTitle(combined: string): { artist: string; title: string } {
 	};
 }
 
+/** Highest-quality cover image URL for a release (primary image, full size). */
+export async function getReleaseImageUrl(id: string): Promise<string | null> {
+	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });
+	if (!res.ok) return null;
+	const data = (await res.json()) as {
+		images?: Array<{ type?: string; uri?: string }>;
+	};
+	const images = data.images ?? [];
+	const primary = images.find((i) => i.type === "primary") ?? images[0];
+	return primary?.uri ?? null;
+}
+
 export async function searchReleases(
 	artist: string,
 	title: string,
