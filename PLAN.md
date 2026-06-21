@@ -168,7 +168,10 @@ Goal: once-a-day "records to buy" digest.
 
 ## Phase 6 — Polish & ship
 
-- [ ] Sentry: confirm `VITE_SENTRY_DSN` set in prod; spot-check error + span capture.
+- [x] Sentry: Worker runtime instrumented via `withSentry` (`src/server.ts`) — fetch +
+      scheduled + server-fn spans. Set `VITE_SENTRY_DSN` in prod and spot-check capture.
+- [ ] Sentry: wire **client/browser** error reporting (init + router wrap) and the
+      Sentry Vite plugin for source-map upload (org/project/auth-token vars).
 - [ ] Storybook coverage for key UI (capture flow, record card, table).
 - [ ] `bun run build && bunx wrangler deploy`; attach `records.charliegleason.com` as a
       Workers Custom Domain (or uncomment `routes` in `wrangler.jsonc`).

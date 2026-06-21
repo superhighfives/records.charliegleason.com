@@ -50,7 +50,7 @@ changes (TanStack AI, DB, Start, Router all ship skills) instead of guessing pat
 | State              | TanStack Store                                                   |
 | AI                 | TanStack AI (`@tanstack/ai*`) → Cloudflare Workers AI / AI Gateway |
 | Auth               | Clerk (`@clerk/clerk-react`), admin gated at `/admin`           |
-| Error monitoring   | Sentry (`@sentry/tanstackstart-react`)                          |
+| Error monitoring   | Sentry — Worker runtime via `@sentry/cloudflare` `withSentry` (`src/server.ts`); server-fn spans via `@sentry/tanstackstart-react` |
 | Database           | Drizzle ORM → Cloudflare **D1** (SQLite)                         |
 | Photo storage      | Cloudflare **R2**                                                |
 | Deployment / host  | Cloudflare Workers (`@cloudflare/vite-plugin`, `wrangler.jsonc`) |
@@ -92,7 +92,7 @@ production and live in `.env.local` for dev. See `.env.example`.
 | ---------------------------- | ------------ | ---------------------------------------- |
 | `VITE_CLERK_PUBLISHABLE_KEY` | public       | Clerk frontend                           |
 | `CLERK_SECRET_KEY`           | secret       | Clerk server-side `auth()`               |
-| `VITE_SENTRY_DSN`            | public       | Sentry (see `instrument.server.mjs`)     |
+| `VITE_SENTRY_DSN`            | public       | Sentry (read by `withSentry` in `src/server.ts`) |
 | D1 binding `DB`              | binding      | Database, dev + prod (`wrangler.jsonc`)  |
 | `DISCOGS_TOKEN`              | secret       | Discogs API                              |
 | `LASTFM_API_KEY` / `LASTFM_USER` | secret  | daily digest suggestions                 |
@@ -106,8 +106,10 @@ production and live in `.env.local` for dev. See `.env.example`.
 
 - `bun run build` then `wrangler deploy` (see `package.json` scripts).
 - **Worker entry is `src/server.ts`** (wrangler `main`), not the TanStack default —
-  it wraps `@tanstack/react-start/server-entry`'s `fetch` and adds a `scheduled`
-  (cron) handler that runs the daily digest. Keep this wrapper when touching the entry.
+  it wraps `@tanstack/react-start/server-entry`'s `fetch`, adds a `scheduled` (cron)
+  handler for the daily digest, and wraps the whole handler in `@sentry/cloudflare`
+  `withSentry` for runtime error capture. Keep all three when touching the entry.
+  (The old `instrument.server.mjs` was removed — it never instrumented the worker.)
 - Bindings (D1 `DB`, R2 `PHOTOS`, Workers `AI`, `IMAGES`, `EMAIL`, Cron) are declared
   in `wrangler.jsonc`; worker `name` is `records`. D1 `database_id` is provisioned
   (`records`, WNAM region).

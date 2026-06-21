@@ -6,7 +6,7 @@
     "#/*": "./src/*"
   },
   "scripts": {
-    "dev": "dotenv -e .env.local -- sh -c \"NODE_OPTIONS='--import ./instrument.server.mjs' vite dev --port 3000\"",
+    "dev": "dotenv -e .env.local -- vite dev --port 3000",
     "generate-routes": "tsr generate",
     "build": "vite build",
     "preview": "vite preview",
@@ -15,7 +15,6 @@
     "lint": "biome lint",
     "check": "biome check",
     "deploy": "bun run build && wrangler deploy",
-    "start": "node --import ./.output/server/instrument.server.mjs .output/server/index.mjs",
     "db:generate": "drizzle-kit generate",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"
@@ -25,6 +24,7 @@
     "@clerk/clerk-react": "^5.61.3",
     "@cloudflare/vite-plugin": "^1.26.0",
     "@faker-js/faker": "^10.3.0",
+    "@sentry/cloudflare": "^10.42.0",
     "@sentry/tanstackstart-react": "^10.42.0",
     "@storybook/react-vite": "^10.2.15",
     "@tailwindcss/vite": "^4.1.18",

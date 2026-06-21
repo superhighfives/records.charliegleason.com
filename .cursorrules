@@ -2,7 +2,10 @@ We use Sentry for watching for errors in our deployed application, as well as fo
 
 ## Error collection
 
-Error collection is automatic and configured in `src/router.tsx`.
+The Worker runtime is instrumented in `src/server.ts` with `@sentry/cloudflare`'s
+`withSentry`, which inits Sentry from `env.VITE_SENTRY_DSN` and captures errors in
+both the `fetch` and `scheduled` (cron) handlers. (Browser/client error reporting is
+not wired yet.)
 
 ## Instrumentation
 
