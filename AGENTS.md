@@ -94,9 +94,6 @@ production and live in `.env.local` for dev. See `.env.example`.
 | `VITE_CLERK_PUBLISHABLE_KEY` | public       | Clerk frontend                           |
 | `CLERK_SECRET_KEY`           | secret       | Clerk server-side `auth()`               |
 | `VITE_SENTRY_DSN`            | public       | Sentry (see `instrument.server.mjs`)     |
-| `CLOUDFLARE_ACCOUNT_ID`      | dev          | Drizzle Kit `db:push`/`db:studio` (d1-http)|
-| `CLOUDFLARE_DATABASE_ID`     | dev          | Drizzle Kit `db:push`/`db:studio`        |
-| `CLOUDFLARE_D1_TOKEN`        | dev/secret   | Drizzle Kit `db:push`/`db:studio`        |
 | D1 binding `DB`              | binding      | Database, dev + prod (`wrangler.jsonc`)  |
 | `DISCOGS_TOKEN`              | secret       | Discogs API                              |
 | `LASTFM_API_KEY`             | secret       | Last.fm API                              |

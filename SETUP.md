@@ -61,7 +61,6 @@ bunx wrangler types
 | **Clerk** | [dashboard.clerk.com](https://dashboard.clerk.com) → app → **API keys** | `/admin` auth |
 | **Discogs** | [discogs.com/settings/developers](https://www.discogs.com/settings/developers) → **Generate token** | release metadata lookup |
 | **Sentry** *(optional)* | [sentry.io](https://sentry.io) → project → **Client keys (DSN)** | error monitoring |
-| **Cloudflare API token** *(for `db:studio`/`db:push`)* | dashboard → **My Profile → API Tokens**, with **D1 edit** | Drizzle Kit over HTTP |
 | **Last.fm** *(Phase 3, not yet wired)* | [last.fm/api](https://www.last.fm/api) | future buy-suggestions email |
 
 ---
@@ -81,11 +80,9 @@ cp .env.example .env.local
 | `VITE_CLERK_PUBLISHABLE_KEY` | ✅ | Clerk **publishable** key (`pk_…`) — public |
 | `CLERK_SECRET_KEY` | ✅ | Clerk **secret** key (`sk_…`) — server-side auth boundary |
 | `AI_GATEWAY_NAME` | optional | AI Gateway to route Claude through; blank → `"default"` |
-| `CLOUDFLARE_ACCOUNT_ID` | ✅ | Cloudflare account id |
 | `DISCOGS_TOKEN` | recommended | enrichment degrades gracefully without it |
 | `VITE_SENTRY_DSN` | optional | error monitoring |
 | `VITE_SENTRY_ORG` / `VITE_SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` | optional | build-time source-map upload |
-| `CLOUDFLARE_DATABASE_ID` / `CLOUDFLARE_D1_TOKEN` | only for `db:studio`/`db:push` | not needed for app runtime |
 | `LASTFM_API_KEY` | not yet | Phase 3 |
 
 > After adding a **new** key to `.env.local`, run `bunx wrangler types` so it's typed
@@ -138,7 +135,7 @@ Set each secret in the deployed Worker (these are NOT read from `.env.local` in 
 bunx wrangler secret put CLERK_SECRET_KEY
 bunx wrangler secret put DISCOGS_TOKEN
 bunx wrangler secret put VITE_SENTRY_DSN          # if using Sentry
-# AI_GATEWAY_NAME + CLOUDFLARE_ACCOUNT_ID can also be set as plain vars in wrangler.jsonc.
+# AI_GATEWAY_NAME can also be set as a plain var in wrangler.jsonc.
 # No ANTHROPIC_API_KEY — Claude is billed via Cloudflare Unified Billing.
 ```
 
