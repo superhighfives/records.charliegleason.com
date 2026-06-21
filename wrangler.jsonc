@@ -1,0 +1,52 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "records",
+  "compatibility_date": "2025-09-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "@tanstack/react-start/server-entry",
+
+  // Custom domain. Attach records.charliegleason.com as a Workers Custom Domain
+  // (Cloudflare dashboard) or uncomment + set the zone below.
+  // "routes": [
+  //   { "pattern": "records.charliegleason.com", "custom_domain": true }
+  // ],
+
+  // D1 — primary database (Drizzle). Create with:
+  //   bunx wrangler d1 create records
+  // then paste the returned database_id here.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "records",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "drizzle"
+    }
+  ],
+
+  // R2 — vinyl cover photos. Create with:
+  //   bunx wrangler r2 bucket create records-photos
+  "r2_buckets": [
+    {
+      "binding": "PHOTOS",
+      "bucket_name": "records-photos"
+    }
+  ],
+
+  // Workers AI — photo analysis / metadata extraction. Also usable via AI Gateway.
+  "ai": {
+    "binding": "AI"
+  },
+
+  // Daily "records to buy" digest email (Cron Trigger drives the job).
+  "triggers": {
+    "crons": ["0 14 * * *"]
+  },
+
+  // Cloudflare Email Routing send binding (set the verified sender address).
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "destination_address": "hi@charliegleason.com"
+    }
+  ]
+}
