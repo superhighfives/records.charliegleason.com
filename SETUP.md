@@ -141,15 +141,21 @@ bun run build
 bunx wrangler deploy
 ```
 
-Set each secret in the deployed Worker (these are NOT read from `.env.local` in prod):
+**Runtime secrets** — set in the deployed Worker (NOT read from `.env.local` in prod):
 
 ```bash
 bunx wrangler secret put CLERK_SECRET_KEY
 bunx wrangler secret put DISCOGS_TOKEN
-bunx wrangler secret put VITE_SENTRY_DSN          # if using Sentry
-# AI_GATEWAY_NAME can also be set as a plain var in wrangler.jsonc.
+bunx wrangler secret put LASTFM_API_KEY
+bunx wrangler secret put CRON_SECRET
+# Non-secret runtime values → wrangler.jsonc `vars` (or secrets): AI_GATEWAY_NAME, LASTFM_USER.
 # No ANTHROPIC_API_KEY — Claude is billed via Cloudflare Unified Billing.
 ```
+
+**Build-time vars** (used by `bun run build`, NOT Wrangler) — set in `.env.local` / CI:
+`VITE_CLERK_PUBLISHABLE_KEY` and `VITE_SENTRY_DSN` are inlined into the bundle by Vite
+(both read via `import.meta.env`), and `VITE_SENTRY_ORG`/`VITE_SENTRY_PROJECT`/
+`SENTRY_AUTH_TOKEN` drive the Sentry source-map upload. None of these go to Wrangler.
 
 Apply migrations to prod D1 (same command — `--remote` is the production DB):
 

@@ -19,8 +19,9 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 };
 
 export default Sentry.withSentry(
-	(env: Cloudflare.Env) => ({
-		dsn: env.VITE_SENTRY_DSN,
+	() => ({
+		// Public DSN, build-time inlined — no runtime Wrangler var needed.
+		dsn: import.meta.env.VITE_SENTRY_DSN,
 		sendDefaultPii: true,
 		tracesSampleRate: 1.0,
 	}),

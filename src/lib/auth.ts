@@ -14,7 +14,8 @@ export const authMiddleware = createMiddleware({ type: "function" }).server(
 	async ({ next }) => {
 		const clerk = createClerkClient({
 			secretKey: env.CLERK_SECRET_KEY,
-			publishableKey: env.VITE_CLERK_PUBLISHABLE_KEY,
+			// Build-time inlined (Vite) — no runtime Wrangler var needed for this one.
+			publishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
 		});
 
 		const requestState = await clerk.authenticateRequest(getRequest());

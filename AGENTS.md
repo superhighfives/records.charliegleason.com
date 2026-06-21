@@ -50,7 +50,7 @@ changes (TanStack AI, DB, Start, Router all ship skills) instead of guessing pat
 | State              | TanStack Store                                                   |
 | AI                 | TanStack AI (`@tanstack/ai*`) → Cloudflare Workers AI / AI Gateway |
 | Auth               | Clerk (`@clerk/clerk-react`), admin gated at `/admin`           |
-| Error monitoring   | Sentry — Worker runtime via `@sentry/cloudflare` `withSentry` (`src/server.ts`); server-fn spans via `@sentry/tanstackstart-react` |
+| Error monitoring   | Sentry — Worker via `@sentry/cloudflare` `withSentry` (`src/server.ts`), browser via `init` in `src/client.tsx`, source maps via `sentryTanstackStart` Vite plugin |
 | Database           | Drizzle ORM → Cloudflare **D1** (SQLite)                         |
 | Photo storage      | Cloudflare **R2**                                                |
 | Deployment / host  | Cloudflare Workers (`@cloudflare/vite-plugin`, `wrangler.jsonc`) |
@@ -90,9 +90,10 @@ production and live in `.env.local` for dev. See `.env.example`.
 
 | Var                          | Scope        | Purpose                                  |
 | ---------------------------- | ------------ | ---------------------------------------- |
-| `VITE_CLERK_PUBLISHABLE_KEY` | public       | Clerk frontend                           |
+| `VITE_CLERK_PUBLISHABLE_KEY` | build-time   | Clerk (client + `auth.ts`, via `import.meta.env`) |
 | `CLERK_SECRET_KEY`           | secret       | Clerk server-side `auth()`               |
-| `VITE_SENTRY_DSN`            | public       | Sentry (read by `withSentry` in `src/server.ts`) |
+| `VITE_SENTRY_DSN`            | build-time   | Sentry DSN (client + `withSentry`, via `import.meta.env`) |
+| `VITE_SENTRY_ORG`/`_PROJECT`/`SENTRY_AUTH_TOKEN` | build-time | Sentry source-map upload (Vite plugin) |
 | D1 binding `DB`              | binding      | Database, dev + prod (`wrangler.jsonc`)  |
 | `DISCOGS_TOKEN`              | secret       | Discogs API                              |
 | `LASTFM_API_KEY` / `LASTFM_USER` | secret  | daily digest suggestions                 |

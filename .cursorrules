@@ -2,10 +2,11 @@ We use Sentry for watching for errors in our deployed application, as well as fo
 
 ## Error collection
 
-The Worker runtime is instrumented in `src/server.ts` with `@sentry/cloudflare`'s
-`withSentry`, which inits Sentry from `env.VITE_SENTRY_DSN` and captures errors in
-both the `fetch` and `scheduled` (cron) handlers. (Browser/client error reporting is
-not wired yet.)
+Sentry is wired three ways: the **Worker runtime** in `src/server.ts` via
+`@sentry/cloudflare`'s `withSentry` (captures `fetch` + `scheduled` errors), the
+**browser** via `Sentry.init` in `src/client.tsx`, and **source-map upload** via the
+`sentryTanstackStart` Vite plugin (active only when `SENTRY_AUTH_TOKEN` is set). DSN is
+`import.meta.env.VITE_SENTRY_DSN` (build-time inlined, public).
 
 ## Instrumentation
 

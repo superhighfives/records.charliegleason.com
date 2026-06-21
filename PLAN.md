@@ -170,8 +170,9 @@ Goal: once-a-day "records to buy" digest.
 
 - [x] Sentry: Worker runtime instrumented via `withSentry` (`src/server.ts`) — fetch +
       scheduled + server-fn spans. Set `VITE_SENTRY_DSN` in prod and spot-check capture.
-- [ ] Sentry: wire **client/browser** error reporting (init + router wrap) and the
-      Sentry Vite plugin for source-map upload (org/project/auth-token vars).
+- [x] Sentry: **browser** error reporting via `Sentry.init` in `src/client.tsx`; the
+      `sentryTanstackStart` Vite plugin uploads source maps when `SENTRY_AUTH_TOKEN` is
+      set. (Follow-up: add `tanstackRouterBrowserTracingIntegration` for navigation spans.)
 - [ ] Storybook coverage for key UI (capture flow, record card, table).
 - [ ] `bun run build && bunx wrangler deploy`; attach `records.charliegleason.com` as a
       Workers Custom Domain (or uncomment `routes` in `wrangler.jsonc`).
