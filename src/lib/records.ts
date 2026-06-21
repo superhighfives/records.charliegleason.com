@@ -5,6 +5,7 @@ import { desc, eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
+import { recordInputSchema } from "#/lib/record-schema";
 
 /**
  * Server-side data access for the records collection.
@@ -32,5 +33,45 @@ export const getRecord = createServerFn({ method: "GET" })
 				.where(eq(records.id, id))
 				.limit(1);
 			return row ?? null;
+		}),
+	);
+
+export const createRecord = createServerFn({ method: "POST" })
+	.validator((data: unknown) => recordInputSchema.parse(data))
+	.handler(({ data }) =>
+		Sentry.startSpan({ name: "createRecord" }, async () => {
+			const db = getDb(env.DB);
+			const [row] = await db
+				.insert(records)
+				.values({ ...data, source: "manual" })
+				.returning();
+			return row;
+		}),
+	);
+
+export const updateRecord = createServerFn({ method: "POST" })
+	.validator((input: { id: number; data: unknown }) => ({
+		id: input.id,
+		data: recordInputSchema.parse(input.data),
+	}))
+	.handler(({ data: { id, data } }) =>
+		Sentry.startSpan({ name: "updateRecord" }, async () => {
+			const db = getDb(env.DB);
+			const [row] = await db
+				.update(records)
+				.set({ ...data, updatedAt: new Date() })
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
+		}),
+	);
+
+export const deleteRecord = createServerFn({ method: "POST" })
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "deleteRecord" }, async () => {
+			const db = getDb(env.DB);
+			await db.delete(records).where(eq(records.id, id));
+			return { id };
 		}),
 	);

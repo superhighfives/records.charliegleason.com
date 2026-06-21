@@ -14,6 +14,8 @@ import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as ApiRecordsRouteImport } from './routes/api/records'
+import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
+import { Route as AdminRecordsIdEditRouteImport } from './routes/admin/records.$id.edit'
 
 const McpRoute = McpRouteImport.update({
   id: '/mcp',
@@ -40,6 +42,16 @@ const ApiRecordsRoute = ApiRecordsRouteImport.update({
   path: '/api/records',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminRecordsNewRoute = AdminRecordsNewRouteImport.update({
+  id: '/records/new',
+  path: '/records/new',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminRecordsIdEditRoute = AdminRecordsIdEditRouteImport.update({
+  id: '/records/$id/edit',
+  path: '/records/$id/edit',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -47,12 +59,16 @@ export interface FileRoutesByFullPath {
   '/mcp': typeof McpRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
+  '/admin/records/new': typeof AdminRecordsNewRoute
+  '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/mcp': typeof McpRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin': typeof AdminIndexRoute
+  '/admin/records/new': typeof AdminRecordsNewRoute
+  '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -61,13 +77,36 @@ export interface FileRoutesById {
   '/mcp': typeof McpRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
+  '/admin/records/new': typeof AdminRecordsNewRoute
+  '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/admin' | '/mcp' | '/api/records' | '/admin/'
+  fullPaths:
+    | '/'
+    | '/admin'
+    | '/mcp'
+    | '/api/records'
+    | '/admin/'
+    | '/admin/records/new'
+    | '/admin/records/$id/edit'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/mcp' | '/api/records' | '/admin'
-  id: '__root__' | '/' | '/admin' | '/mcp' | '/api/records' | '/admin/'
+  to:
+    | '/'
+    | '/mcp'
+    | '/api/records'
+    | '/admin'
+    | '/admin/records/new'
+    | '/admin/records/$id/edit'
+  id:
+    | '__root__'
+    | '/'
+    | '/admin'
+    | '/mcp'
+    | '/api/records'
+    | '/admin/'
+    | '/admin/records/new'
+    | '/admin/records/$id/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -114,15 +153,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRecordsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/records/new': {
+      id: '/admin/records/new'
+      path: '/records/new'
+      fullPath: '/admin/records/new'
+      preLoaderRoute: typeof AdminRecordsNewRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/records/$id/edit': {
+      id: '/admin/records/$id/edit'
+      path: '/records/$id/edit'
+      fullPath: '/admin/records/$id/edit'
+      preLoaderRoute: typeof AdminRecordsIdEditRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
   }
 }
 
 interface AdminRouteRouteChildren {
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminRecordsNewRoute: typeof AdminRecordsNewRoute
+  AdminRecordsIdEditRoute: typeof AdminRecordsIdEditRoute
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminIndexRoute: AdminIndexRoute,
+  AdminRecordsNewRoute: AdminRecordsNewRoute,
+  AdminRecordsIdEditRoute: AdminRecordsIdEditRoute,
 }
 
 const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
@@ -138,3 +195,12 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+  }
+}
