@@ -24,6 +24,9 @@ function AdminLayout() {
 								<Link to="/admin" className="font-semibold">
 									Records admin
 								</Link>
+								<Link to="/admin/capture" className="text-sm">
+									Capture
+								</Link>
 							</nav>
 							<UserButton />
 						</header>

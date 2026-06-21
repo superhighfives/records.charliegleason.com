@@ -6,7 +6,7 @@ import { desc, eq } from "drizzle-orm";
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
-import { recordInputSchema } from "#/lib/record-schema";
+import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 
 /**
  * Server-side data access for the records collection.
@@ -39,13 +39,14 @@ export const getRecord = createServerFn({ method: "GET" })
 
 export const createRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator((data: unknown) => recordInputSchema.parse(data))
+	.validator((data: unknown) => recordCreateSchema.parse(data))
 	.handler(({ data }) =>
 		Sentry.startSpan({ name: "createRecord" }, async () => {
 			const db = getDb(env.DB);
+			const { source, ...rest } = data;
 			const [row] = await db
 				.insert(records)
-				.values({ ...data, source: "manual" })
+				.values({ ...rest, source: source ?? "manual" })
 				.returning();
 			return row;
 		}),

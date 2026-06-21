@@ -127,9 +127,21 @@ production and live in `.env.local` for dev. See `.env.example`.
   attached to `createRecord`/`updateRecord`/`deleteRecord`. Reads (`listRecords`,
   `/api/*`) are intentionally public. Needs `CLERK_SECRET_KEY` in `.env.local` (dev,
   read by the Cloudflare Vite plugin) and `wrangler secret put CLERK_SECRET_KEY` (prod).
-- **TanStack AI ships OpenAI/Anthropic/Gemini/Ollama adapters**, not a Workers-AI
-  adapter — point the `openaiCompatible` adapter at an AI Gateway / Workers AI
-  OpenAI-compatible endpoint.
+- **AI = Claude Sonnet 4.6 via the Anthropic SDK, fronted by Cloudflare AI Gateway**
+  (`src/lib/ai.ts`). The gateway's `/anthropic` path is a transparent passthrough, so
+  Claude's server-side `web_search` tool works through it. We use the Anthropic SDK
+  (not TanStack AI) here specifically because TanStack AI doesn't expose Claude's
+  server-side tools. Needs `ANTHROPIC_API_KEY` + `AI_GATEWAY_NAME` (+ `CLOUDFLARE_ACCOUNT_ID`);
+  blank gateway name → calls api.anthropic.com directly.
+- **Photo flow** (`src/lib/analyze.ts`): vision read → Discogs lookup → web-search
+  escalation when unsure → Pitchfork. R2 stores the cover; `/api/photos/$` serves it.
+- **The Fork client (`src/lib/the-fork.ts`) is a flagged guess** — no public API; the
+  endpoint/shape must be confirmed from the site's network tab. It fails closed (null).
+- **Discogs** uses a personal access token (`DISCOGS_TOKEN`, `Authorization: Discogs
+  token=…`) with a mandatory unique User-Agent; 60 req/min.
+- **`recordCreateSchema` vs `recordInputSchema`**: create accepts enrichment fields
+  (discogs/pitchfork/cover/source); the edit form uses the narrower input schema so it
+  can't null those out on update.
 - TanStack DB live-query collections are **client-only** (no SSR) — disable SSR on
   routes that preload collections (see `db#meta-framework` skill).
 - Re-run `bunx wrangler types` after editing `wrangler.jsonc` (regenerates

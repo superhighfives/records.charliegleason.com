@@ -20,6 +20,22 @@ export const recordInputSchema = z.object({
 export type RecordInput = z.infer<typeof recordInputSchema>;
 
 /**
+ * Create-time schema: the editable fields plus AI/enrichment fields the photo
+ * flow carries through (Discogs ids, Pitchfork url, R2 key, provenance). Kept
+ * separate from `recordInputSchema` so the edit form — which only knows the
+ * editable fields — can't null these out on update.
+ */
+export const recordCreateSchema = recordInputSchema.extend({
+	discogsId: z.string().nullish(),
+	discogsUrl: z.string().nullish(),
+	pitchforkUrl: z.string().nullish(),
+	coverImageKey: z.string().nullish(),
+	source: z.enum(["photo", "manual", "import"]).optional(),
+});
+
+export type RecordCreateInput = z.infer<typeof recordCreateSchema>;
+
+/**
  * Form state. The form deals in strings (text inputs); we convert to a
  * `RecordInput` on submit and let the server schema do the real validation.
  */

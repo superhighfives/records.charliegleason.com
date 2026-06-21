@@ -14,6 +14,8 @@ import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as ApiRecordsRouteImport } from './routes/api/records'
+import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
+import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdEditRouteImport } from './routes/admin/records.$id.edit'
 
@@ -42,6 +44,16 @@ const ApiRecordsRoute = ApiRecordsRouteImport.update({
   path: '/api/records',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminCaptureRoute = AdminCaptureRouteImport.update({
+  id: '/capture',
+  path: '/capture',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const ApiPhotosSplatRoute = ApiPhotosSplatRouteImport.update({
+  id: '/api/photos/$',
+  path: '/api/photos/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRecordsNewRoute = AdminRecordsNewRouteImport.update({
   id: '/records/new',
   path: '/records/new',
@@ -57,17 +69,21 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
   '/mcp': typeof McpRoute
+  '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/photos/$': typeof ApiPhotosSplatRoute
   '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/mcp': typeof McpRoute
+  '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin': typeof AdminIndexRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/photos/$': typeof ApiPhotosSplatRoute
   '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRoutesById {
@@ -75,9 +91,11 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
   '/mcp': typeof McpRoute
+  '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/photos/$': typeof ApiPhotosSplatRoute
   '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRouteTypes {
@@ -86,26 +104,32 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/mcp'
+    | '/admin/capture'
     | '/api/records'
     | '/admin/'
     | '/admin/records/new'
+    | '/api/photos/$'
     | '/admin/records/$id/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/mcp'
+    | '/admin/capture'
     | '/api/records'
     | '/admin'
     | '/admin/records/new'
+    | '/api/photos/$'
     | '/admin/records/$id/edit'
   id:
     | '__root__'
     | '/'
     | '/admin'
     | '/mcp'
+    | '/admin/capture'
     | '/api/records'
     | '/admin/'
     | '/admin/records/new'
+    | '/api/photos/$'
     | '/admin/records/$id/edit'
   fileRoutesById: FileRoutesById
 }
@@ -114,6 +138,7 @@ export interface RootRouteChildren {
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
   McpRoute: typeof McpRoute
   ApiRecordsRoute: typeof ApiRecordsRoute
+  ApiPhotosSplatRoute: typeof ApiPhotosSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -153,6 +178,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRecordsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/capture': {
+      id: '/admin/capture'
+      path: '/capture'
+      fullPath: '/admin/capture'
+      preLoaderRoute: typeof AdminCaptureRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/api/photos/$': {
+      id: '/api/photos/$'
+      path: '/api/photos/$'
+      fullPath: '/api/photos/$'
+      preLoaderRoute: typeof ApiPhotosSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/records/new': {
       id: '/admin/records/new'
       path: '/records/new'
@@ -171,12 +210,14 @@ declare module '@tanstack/react-router' {
 }
 
 interface AdminRouteRouteChildren {
+  AdminCaptureRoute: typeof AdminCaptureRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminRecordsNewRoute: typeof AdminRecordsNewRoute
   AdminRecordsIdEditRoute: typeof AdminRecordsIdEditRoute
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
+  AdminCaptureRoute: AdminCaptureRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminRecordsNewRoute: AdminRecordsNewRoute,
   AdminRecordsIdEditRoute: AdminRecordsIdEditRoute,
@@ -191,6 +232,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRouteRoute: AdminRouteRouteWithChildren,
   McpRoute: McpRoute,
   ApiRecordsRoute: ApiRecordsRoute,
+  ApiPhotosSplatRoute: ApiPhotosSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

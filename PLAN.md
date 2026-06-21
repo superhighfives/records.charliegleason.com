@@ -97,23 +97,25 @@ Goal: manage records by hand end-to-end before any AI.
 
 ---
 
-## Phase 2 — AI photo capture & extraction
+## Phase 2 — AI photo capture & extraction ✅
 
-Goal: photograph a record on iPhone → structured metadata.
+Goal: photograph a record on iPhone → structured metadata. **Decision (researched):**
+Claude vision (Sonnet 4.6) via **Cloudflare AI Gateway** as the single AI path —
+Workers AI vision can't make web calls, and the gateway's `/anthropic` passthrough
+lets Claude's server-side `web_search` tool run for hard identifications.
 
-- [ ] `/admin/capture` route: `<input type="file" accept="image/*" capture>` for the
-      iPhone camera; preview + confirm.
-- [ ] Server fn `uploadPhoto`: stream the image into **R2** (`PHOTOS`), return the key.
-- [ ] Server fn `analyzePhoto`: call **Workers AI** vision model with the image and a
-      structured prompt → `{ artist, title, year }`. Use **TanStack AI** `structured-outputs`
-      (Zod `outputSchema`) so the result is validated. For Workers AI / AI Gateway, point
-      the `openaiCompatible` adapter at the gateway's OpenAI-compatible endpoint (TanStack
-      AI ships OpenAI/Anthropic/Gemini/Ollama adapters, not a native Workers-AI one — see
-      AGENTS.md gotchas).
-- [ ] Pre-fill the create form with the extracted fields for human confirmation before
-      writing to D1. Set `source: 'photo'` and `coverImageKey`.
-- [ ] Load skills first: `@tanstack/ai#ai-core/structured-outputs`,
-      `ai-core/media-generation` / `ai-core/chat-experience` as needed.
+- [x] `/admin/capture` — iPhone camera input → preview → "Analyze".
+- [x] `analyzePhoto` server fn (auth-gated): uploads the photo to **R2** (`PHOTOS`),
+      reads the cover with Claude vision (forced tool call → `{artist,title,year,
+      confidence}`), looks it up on **Discogs**, escalates to **Claude + web_search**
+      when confidence is low / unmatched, then fetches the **Pitchfork** score.
+- [x] Result pre-fills `RecordForm`; user confirms; `createRecord` saves with
+      `source: 'photo'`, `coverImageKey`, and Discogs/Pitchfork links (via the
+      `recordCreateSchema` enrichment fields, which the edit form can't null out).
+- [x] `/api/photos/$` streams covers back from R2.
+- [ ] Follow-ups: confirm The Fork's real endpoint (`src/lib/the-fork.ts` is a flagged
+      guess); show `candidates[]` as pick-list + a manual Discogs search box; thumbnail
+      column in the admin table.
 
 ---
 
