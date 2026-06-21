@@ -149,6 +149,16 @@ async function identifyWithWebSearch(
 	return null;
 }
 
+/** Manual Discogs search, for the pick-list / "wrong match" fallback in capture. */
+export const searchDiscogs = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((q: { artist: string; title: string }) => q)
+	.handler(({ data }) =>
+		Sentry.startSpan({ name: "searchDiscogs" }, () =>
+			searchReleases(data.artist, data.title).catch(() => []),
+		),
+	);
+
 export const analyzePhoto = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator((data: { imageBase64: string; mediaType: string }) => data)

@@ -113,9 +113,11 @@ lets Claude's server-side `web_search` tool run for hard identifications.
       `source: 'photo'`, `coverImageKey`, and Discogs/Pitchfork links (via the
       `recordCreateSchema` enrichment fields, which the edit form can't null out).
 - [x] `/api/photos/$` streams covers back from R2.
-- [ ] Follow-ups: confirm The Fork's real endpoint (`src/lib/the-fork.ts` is a flagged
-      guess); show `candidates[]` as pick-list + a manual Discogs search box; thumbnail
-      column in the admin table.
+- [x] The Fork wired to its real data source (static `albums.json`, matched locally).
+- [x] Discogs `candidates[]` pick-list + manual artist/title search in the capture flow
+      (`searchDiscogs` server fn); picking a release re-prefills the form.
+- [ ] Follow-ups: thumbnail column in the admin table; re-run Pitchfork lookup when a
+      different candidate is picked (currently keeps the first-pass score, editable).
 
 ---
 

@@ -135,8 +135,9 @@ production and live in `.env.local` for dev. See `.env.example`.
   blank gateway name → calls api.anthropic.com directly.
 - **Photo flow** (`src/lib/analyze.ts`): vision read → Discogs lookup → web-search
   escalation when unsure → Pitchfork. R2 stores the cover; `/api/photos/$` serves it.
-- **The Fork client (`src/lib/the-fork.ts`) is a flagged guess** — no public API; the
-  endpoint/shape must be confirmed from the site's network tab. It fails closed (null).
+- **The Fork** (`src/lib/the-fork.ts`) has no query API — it ships a 20 MB static
+  `albums.json` (28k Pitchfork reviews: `{artist,title,score,url,...}`). We fetch it
+  (edge + isolate cached), normalize, and match locally. Fails closed (null).
 - **Discogs** uses a personal access token (`DISCOGS_TOKEN`, `Authorization: Discogs
   token=…`) with a mandatory unique User-Agent; 60 req/min.
 - **`recordCreateSchema` vs `recordInputSchema`**: create accepts enrichment fields
