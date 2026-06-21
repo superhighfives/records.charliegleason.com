@@ -29,7 +29,11 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'TanStack Start Starter',
+        name: 'description',
+        content: "Charlie Gleason's vinyl record collection.",
+      },
+      {
+        title: 'Records · charliegleason.com',
       },
     ],
     links: [

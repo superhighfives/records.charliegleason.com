@@ -56,7 +56,6 @@ changes (TanStack AI, DB, Start, Router all ship skills) instead of guessing pat
 | Deployment / host  | Cloudflare Workers (`@cloudflare/vite-plugin`, `wrangler.jsonc`) |
 | Package manager    | **bun**                                                          |
 | Toolchain          | **biome** (lint/format/check)                                    |
-| MCP                | `@modelcontextprotocol/sdk` server at `/mcp` (bonus API surface) |
 
 ### Required TanStack libraries (brief)
 

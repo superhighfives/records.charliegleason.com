@@ -9,7 +9,6 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as McpRouteImport } from './routes/mcp'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
@@ -20,11 +19,6 @@ import { Route as ApiCronDigestRouteImport } from './routes/api/cron.digest'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdEditRouteImport } from './routes/admin/records.$id.edit'
 
-const McpRoute = McpRouteImport.update({
-  id: '/mcp',
-  path: '/mcp',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AdminRouteRoute = AdminRouteRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -74,7 +68,6 @@ const AdminRecordsIdEditRoute = AdminRecordsIdEditRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
-  '/mcp': typeof McpRoute
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
@@ -85,7 +78,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/mcp': typeof McpRoute
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin': typeof AdminIndexRoute
@@ -98,7 +90,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
-  '/mcp': typeof McpRoute
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
@@ -112,7 +103,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
-    | '/mcp'
     | '/admin/capture'
     | '/api/records'
     | '/admin/'
@@ -123,7 +113,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/mcp'
     | '/admin/capture'
     | '/api/records'
     | '/admin'
@@ -135,7 +124,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
-    | '/mcp'
     | '/admin/capture'
     | '/api/records'
     | '/admin/'
@@ -148,7 +136,6 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
-  McpRoute: typeof McpRoute
   ApiRecordsRoute: typeof ApiRecordsRoute
   ApiCronDigestRoute: typeof ApiCronDigestRoute
   ApiPhotosSplatRoute: typeof ApiPhotosSplatRoute
@@ -156,13 +143,6 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/mcp': {
-      id: '/mcp'
-      path: '/mcp'
-      fullPath: '/mcp'
-      preLoaderRoute: typeof McpRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin': {
       id: '/admin'
       path: '/admin'
@@ -250,7 +230,6 @@ const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRouteRoute: AdminRouteRouteWithChildren,
-  McpRoute: McpRoute,
   ApiRecordsRoute: ApiRecordsRoute,
   ApiCronDigestRoute: ApiCronDigestRoute,
   ApiPhotosSplatRoute: ApiPhotosSplatRoute,

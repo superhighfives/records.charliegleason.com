@@ -24,6 +24,18 @@ export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 	}),
 );
 
+/** Public list for the homepage — omits the admin-only iPhone capture key. */
+export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
+	Sentry.startSpan({ name: "listPublicRecords" }, async () => {
+		const db = getDb(env.DB);
+		const rows = await db
+			.select()
+			.from(records)
+			.orderBy(desc(records.createdAt));
+		return rows.map(({ capturePhotoKey: _omit, ...r }) => r);
+	}),
+);
+
 export const getRecord = createServerFn({ method: "GET" })
 	.validator((id: number) => id)
 	.handler(({ data: id }) =>
