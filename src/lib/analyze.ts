@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn } from "@tanstack/react-start";
-import { AI_MODEL, getAnthropic } from "#/lib/ai";
+import { runClaude } from "#/lib/ai";
 import { authMiddleware } from "#/lib/auth";
 import { type DiscogsCandidate, searchReleases } from "#/lib/discogs";
 import { getPitchforkScore } from "#/lib/the-fork";
@@ -67,9 +67,7 @@ async function extractFromImage(
 	data: string,
 	mediaType: string,
 ): Promise<Extraction> {
-	const client = getAnthropic();
-	const msg = await client.messages.create({
-		model: AI_MODEL,
+	const msg = await runClaude({
 		max_tokens: 1024,
 		tools: [EXTRACT_TOOL],
 		tool_choice: { type: "tool", name: "record" },
@@ -79,8 +77,7 @@ async function extractFromImage(
 				content: [
 					{
 						type: "image",
-						// biome-ignore lint/suspicious/noExplicitAny: SDK media_type is a string-literal union
-						source: { type: "base64", media_type: mediaType as any, data },
+						source: { type: "base64", media_type: mediaType, data },
 					},
 					{
 						type: "text",
@@ -91,7 +88,9 @@ async function extractFromImage(
 		],
 	});
 
-	const block = msg.content.find((b) => b.type === "tool_use");
+	const block = msg.content.find((b) => b.type === "tool_use") as
+		| { input?: unknown }
+		| undefined;
 	const input = (block?.input ?? {}) as Partial<Extraction>;
 	return {
 		artist: String(input.artist ?? "").trim(),
@@ -109,7 +108,6 @@ async function extractFromImage(
 async function identifyWithWebSearch(
 	partial: Extraction,
 ): Promise<Extraction | null> {
-	const client = getAnthropic();
 	// biome-ignore lint/suspicious/noExplicitAny: heterogeneous Anthropic message content
 	const messages: Array<any> = [
 		{
@@ -119,8 +117,7 @@ async function identifyWithWebSearch(
 	];
 
 	for (let i = 0; i < 5; i++) {
-		const r = await client.messages.create({
-			model: AI_MODEL,
+		const r = await runClaude({
 			max_tokens: 2048,
 			tools: [
 				{ type: "web_search_20260209", name: "web_search" },
@@ -131,8 +128,8 @@ async function identifyWithWebSearch(
 
 		const rec = r.content.find(
 			(b) => b.type === "tool_use" && b.name === "record",
-		);
-		if (rec && "input" in rec) {
+		) as { input?: unknown } | undefined;
+		if (rec?.input) {
 			const input = rec.input as Partial<Extraction>;
 			return {
 				artist: String(input.artist ?? partial.artist).trim(),

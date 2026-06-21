@@ -127,12 +127,15 @@ production and live in `.env.local` for dev. See `.env.example`.
   attached to `createRecord`/`updateRecord`/`deleteRecord`. Reads (`listRecords`,
   `/api/*`) are intentionally public. Needs `CLERK_SECRET_KEY` in `.env.local` (dev,
   read by the Cloudflare Vite plugin) and `wrangler secret put CLERK_SECRET_KEY` (prod).
-- **AI = Claude Sonnet 4.6 via the Anthropic SDK, fronted by Cloudflare AI Gateway**
-  (`src/lib/ai.ts`). The gateway's `/anthropic` path is a transparent passthrough, so
-  Claude's server-side `web_search` tool works through it. We use the Anthropic SDK
-  (not TanStack AI) here specifically because TanStack AI doesn't expose Claude's
-  server-side tools. Needs `ANTHROPIC_API_KEY` + `AI_GATEWAY_NAME` (+ `CLOUDFLARE_ACCOUNT_ID`);
-  blank gateway name → calls api.anthropic.com directly.
+- **AI = Claude Sonnet 4.6 via Cloudflare Workers AI partner models + Unified Billing**
+  (`src/lib/ai.ts`, `runClaude` → `env.AI.run('anthropic/claude-sonnet-4.6', body,
+  { gateway })`). **No `ANTHROPIC_API_KEY`** — Cloudflare bills it (Workers Paid +
+  credits). `runClaude` is the entire AI surface: swap it back to the Anthropic SDK +
+  BYOK in one file if needed. Body is the Anthropic Messages format (vision + tools
+  pass through). **Caveat: server-side `web_search` is undocumented on the Unified-
+  Billing path** — `identifyWithWebSearch` is best-effort and fails closed to the
+  Discogs pick-list / manual search. (TanStack AI isn't used — it doesn't expose
+  Claude's server-side tools.)
 - **Photo flow** (`src/lib/analyze.ts`): vision read → Discogs lookup → web-search
   escalation when unsure → Pitchfork. R2 stores the cover; `/api/photos/$` serves it.
 - **The Fork** (`src/lib/the-fork.ts`) has no query API — it ships a 20 MB static

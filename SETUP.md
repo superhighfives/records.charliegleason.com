@@ -36,10 +36,15 @@ bunx wrangler d1 create records            # → paste database_id into wrangler
 bunx wrangler r2 bucket create records-photos
 ```
 
-**AI Gateway** (fronts Anthropic — caching, logging, rate limits). Create one in the
-dashboard → **AI** → **AI Gateway**, give it a name (e.g. `records`), and use that as
-`AI_GATEWAY_NAME` below. *Optional:* leave `AI_GATEWAY_NAME` blank to call
-`api.anthropic.com` directly and skip the gateway.
+**AI Gateway + Unified Billing.** The app calls Claude via Cloudflare's **partner
+models** on the `AI` binding (`env.AI.run('anthropic/claude-sonnet-4.6', …)`), so
+**you don't need an Anthropic API key** — Cloudflare holds the credentials and bills
+your account. Requirements:
+
+1. **Workers Paid** plan + **add credits** to your Cloudflare account (dashboard → AI →
+   billing) — Unified Billing draws from these.
+2. An **AI Gateway**: dashboard → **AI → AI Gateway**, create one (e.g. `records`) and
+   set `AI_GATEWAY_NAME` to its name. Leaving it blank uses `"default"` (auto-created).
 
 After any edit to `wrangler.jsonc`, regenerate the binding types:
 
@@ -54,7 +59,6 @@ bunx wrangler types
 | Service | Get | Used for |
 | ------- | --- | -------- |
 | **Clerk** | [dashboard.clerk.com](https://dashboard.clerk.com) → app → **API keys** | `/admin` auth |
-| **Anthropic** | [console.anthropic.com](https://console.anthropic.com) → **API keys** | cover analysis + web-search ID (Sonnet 4.6) |
 | **Discogs** | [discogs.com/settings/developers](https://www.discogs.com/settings/developers) → **Generate token** | release metadata lookup |
 | **Sentry** *(optional)* | [sentry.io](https://sentry.io) → project → **Client keys (DSN)** | error monitoring |
 | **Cloudflare API token** *(for `db:studio`/`db:push`)* | dashboard → **My Profile → API Tokens**, with **D1 edit** | Drizzle Kit over HTTP |
@@ -76,9 +80,8 @@ cp .env.example .env.local
 | -------- | --------- | ----- |
 | `VITE_CLERK_PUBLISHABLE_KEY` | ✅ | Clerk **publishable** key (`pk_…`) — public |
 | `CLERK_SECRET_KEY` | ✅ | Clerk **secret** key (`sk_…`) — server-side auth boundary |
-| `ANTHROPIC_API_KEY` | ✅ for capture | `sk-ant-…` |
-| `AI_GATEWAY_NAME` | optional | your AI Gateway name; blank → direct to Anthropic |
-| `CLOUDFLARE_ACCOUNT_ID` | ✅ | also builds the AI Gateway URL |
+| `AI_GATEWAY_NAME` | optional | AI Gateway to route Claude through; blank → `"default"` |
+| `CLOUDFLARE_ACCOUNT_ID` | ✅ | Cloudflare account id |
 | `DISCOGS_TOKEN` | recommended | enrichment degrades gracefully without it |
 | `VITE_SENTRY_DSN` | optional | error monitoring |
 | `VITE_SENTRY_ORG` / `VITE_SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` | optional | build-time source-map upload |
@@ -117,8 +120,8 @@ Smoke test:
 - `/api/records` — public JSON (`{"records":[],"count":0}` until you add some)
 
 **Minimum to boot the admin + capture flow:** Wrangler login, the migration applied,
-and `VITE_CLERK_PUBLISHABLE_KEY` + `CLERK_SECRET_KEY` + `ANTHROPIC_API_KEY` set.
-Discogs/Sentry/AI-Gateway are all optional — the app degrades without them.
+Unified Billing credits + an AI Gateway, and `VITE_CLERK_PUBLISHABLE_KEY` +
+`CLERK_SECRET_KEY` set. Discogs/Sentry are optional — the app degrades without them.
 
 ---
 
@@ -133,10 +136,10 @@ Set each secret in the deployed Worker (these are NOT read from `.env.local` in 
 
 ```bash
 bunx wrangler secret put CLERK_SECRET_KEY
-bunx wrangler secret put ANTHROPIC_API_KEY
 bunx wrangler secret put DISCOGS_TOKEN
 bunx wrangler secret put VITE_SENTRY_DSN          # if using Sentry
-# AI_GATEWAY_NAME + CLOUDFLARE_ACCOUNT_ID can also be set as plain vars in wrangler.jsonc
+# AI_GATEWAY_NAME + CLOUDFLARE_ACCOUNT_ID can also be set as plain vars in wrangler.jsonc.
+# No ANTHROPIC_API_KEY — Claude is billed via Cloudflare Unified Billing.
 ```
 
 Apply migrations to prod D1 (same command — `--remote` is the production DB):
@@ -161,7 +164,7 @@ production Clerk instance, and add `records.charliegleason.com` under **Domains*
 | `no such table: records` | run the migration (§4) |
 | `env.X` is `undefined` at runtime | add `X` to `.env.local`, then `bunx wrangler types`; restart dev |
 | Clerk "Add your Publishable Key" crash | `VITE_CLERK_PUBLISHABLE_KEY` missing from `.env.local` |
-| Capture analyze fails | check `ANTHROPIC_API_KEY` (and `AI_GATEWAY_NAME` if set) |
+| Capture analyze fails | confirm Workers Paid + Unified Billing credits and that the `AI` binding / gateway exist |
 | Pitchfork score always blank | The Fork match is best-effort (`src/lib/the-fork.ts`); fine to ignore |
 | Type errors after editing `wrangler.jsonc` | `bunx wrangler types` |
 ```
