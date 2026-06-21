@@ -61,10 +61,14 @@ fill the placeholders:
 ```bash
 bunx wrangler d1 create records          # paste database_id into wrangler.jsonc
 bunx wrangler r2 bucket create records-photos
-bunx wrangler d1 migrations apply records --local
+bunx wrangler d1 migrations apply records --remote   # remote-only; no local DB
 cp .env.example .env.local               # fill Clerk + secrets
-bun run dev
+bun run dev                              # connects to the remote D1/R2
 ```
+
+> Dev uses **remote bindings** (`remoteBindings: true` in `vite.config.ts` +
+> `remote: true` on each binding in `wrangler.jsonc`), so there is no local
+> SQLite/R2 — localhost reads and writes the real Cloudflare resources.
 
 ---
 

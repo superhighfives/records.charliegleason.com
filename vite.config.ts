@@ -11,7 +11,9 @@ const config = defineConfig({
   resolve: { tsconfigPaths: true },
   plugins: [
     devtools(),
-    cloudflare({ viteEnvironment: { name: 'ssr' } }),
+    // remoteBindings: dev connects to the real D1/R2 (bindings marked
+    // `remote: true` in wrangler.jsonc). No local DB — single source of truth.
+    cloudflare({ viteEnvironment: { name: 'ssr' }, remoteBindings: true }),
     tailwindcss(),
     tanstackStart(),
     viteReact(),

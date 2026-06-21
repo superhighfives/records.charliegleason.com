@@ -94,8 +94,10 @@ production and live in `.env.local` for dev. See `.env.example`.
 | `VITE_CLERK_PUBLISHABLE_KEY` | public       | Clerk frontend                           |
 | `CLERK_SECRET_KEY`           | secret       | Clerk server-side `auth()`               |
 | `VITE_SENTRY_DSN`            | public       | Sentry (see `instrument.server.mjs`)     |
-| `DATABASE_URL`               | dev/secret   | Drizzle Kit local SQLite (migrations)    |
-| D1 binding `DB`              | binding      | Production database (`wrangler.jsonc`)   |
+| `CLOUDFLARE_ACCOUNT_ID`      | dev          | Drizzle Kit `db:push`/`db:studio` (d1-http)|
+| `CLOUDFLARE_DATABASE_ID`     | dev          | Drizzle Kit `db:push`/`db:studio`        |
+| `CLOUDFLARE_D1_TOKEN`        | dev/secret   | Drizzle Kit `db:push`/`db:studio`        |
+| D1 binding `DB`              | binding      | Database, dev + prod (`wrangler.jsonc`)  |
 | `DISCOGS_TOKEN`              | secret       | Discogs API                              |
 | `LASTFM_API_KEY`             | secret       | Last.fm API                              |
 | Workers AI binding `AI`      | binding      | Workers AI / AI Gateway (`wrangler.jsonc`)|
@@ -105,7 +107,8 @@ production and live in `.env.local` for dev. See `.env.example`.
 
 - `bun run build` then `wrangler deploy` (see `package.json` scripts).
 - Bindings (D1 `DB`, R2 `PHOTOS`, Workers `AI`, Email, Cron) are declared in
-  `wrangler.jsonc`. The worker `name` must be `records` (currently a placeholder).
+  `wrangler.jsonc`; worker `name` is `records`. D1 `database_id` is provisioned
+  (`records`, WNAM region).
 - Custom domain `records.charliegleason.com` is attached via a Workers route /
   custom domain in the Cloudflare dashboard or `wrangler.jsonc` `routes`.
 - Daily "records to buy" email uses the Cloudflare **Email** feature driven by a
@@ -113,31 +116,30 @@ production and live in `.env.local` for dev. See `.env.example`.
 
 ## Known gotchas
 
-- **DB is still SQLite/`better-sqlite3`, not D1.** `drizzle.config.ts` uses
-  `dialect: 'sqlite'` + `DATABASE_URL`; runtime must move to `drizzle-orm/d1` with the
-  `DB` binding, and `wrangler.jsonc` needs a `d1_databases` entry.
-- **`wrangler.jsonc` is the scaffold default** — `name: "tanstack-start-app"`, no D1 /
-  R2 / AI / Email / route bindings yet.
-- **Package manager is npm right now** (`package-lock.json`, `.cta.json` →
-  `"packageManager": "npm"`); brief mandates **bun**. README/`.cursorrules` still say
-  `npm`/`pnpm dlx`.
+- **Dev uses remote bindings — there is NO local DB.** `remoteBindings: true` in
+  `vite.config.ts` + `remote: true` on each binding in `wrangler.jsonc` means
+  localhost reads/writes the real Cloudflare D1/R2. Apply migrations with
+  `--remote` only (`bunx wrangler d1 migrations apply records --remote`).
+- **`better-sqlite3` is still in `dependencies`** but unused after the D1 move — safe
+  to remove later.
+- **Admin auth is currently client-side only** (`<SignedIn>`/`<SignedOut>` in
+  `routes/admin/route.tsx`). Add server-side Clerk `auth()` (+ `CLERK_SECRET_KEY`)
+  before treating `/admin` or write server fns as a real security boundary.
 - **TanStack AI ships OpenAI/Anthropic/Gemini/Ollama adapters**, not a Workers-AI
   adapter — point the `openaiCompatible` adapter at an AI Gateway / Workers AI
   OpenAI-compatible endpoint.
 - TanStack DB live-query collections are **client-only** (no SSR) — disable SSR on
   routes that preload collections (see `db#meta-framework` skill).
-- `src/db/schema.ts` is still the placeholder `todos` table.
+- Re-run `bunx wrangler types` after editing `wrangler.jsonc` (regenerates
+  `worker-configuration.d.ts`).
 
 ## Next steps
 
-1. Migrate package manager to **bun** (`bun install`, delete `package-lock.json`,
-   update `.cta.json`, README, `.cursorrules`).
-2. Add & demonstrate **TanStack Hotkeys, Pacer, Virtual**.
-3. Convert DB to **D1**: `wrangler.jsonc` `d1_databases` binding, `drizzle-orm/d1`
-   runtime, `drizzle-kit` `d1-http` driver; replace `todos` with a `records` schema.
-4. Add **R2** (`PHOTOS`), **Workers AI** (`AI`), **Email**, and a daily **Cron Trigger**
-   to `wrangler.jsonc`; rename the worker to `records`.
-5. Build `/admin` (Clerk-gated) with data table, filters, and create/edit forms.
-6. Build the AI photo-analysis flow and Discogs / The Fork / Last.fm enrichment.
-7. Expose the public read **API** under `/api/*`.
-8. Expand `.env.example` with every var above.
+See **PLAN.md** for the full phased build plan. Immediate items:
+
+1. Apply the migration to D1: `bunx wrangler d1 migrations apply records --remote`.
+2. Phase 1 — CRUD: `create/update/deleteRecord` server fns + TanStack Form pages.
+3. Phase 1.5 — server-side Clerk auth on `/admin` and write server fns.
+4. Phase 2 — AI photo capture → Workers AI extraction → R2 storage.
+5. Phase 3+ — Discogs / The Fork / Last.fm enrichment, public API expansion, daily
+   email via Cron + Cloudflare Email.
