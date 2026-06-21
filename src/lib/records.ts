@@ -5,6 +5,7 @@ import { desc, eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
+import { authMiddleware } from "#/lib/auth";
 import { recordInputSchema } from "#/lib/record-schema";
 
 /**
@@ -37,6 +38,7 @@ export const getRecord = createServerFn({ method: "GET" })
 	);
 
 export const createRecord = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
 	.validator((data: unknown) => recordInputSchema.parse(data))
 	.handler(({ data }) =>
 		Sentry.startSpan({ name: "createRecord" }, async () => {
@@ -50,6 +52,7 @@ export const createRecord = createServerFn({ method: "POST" })
 	);
 
 export const updateRecord = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
 	.validator((input: { id: number; data: unknown }) => ({
 		id: input.id,
 		data: recordInputSchema.parse(input.data),
@@ -67,6 +70,7 @@ export const updateRecord = createServerFn({ method: "POST" })
 	);
 
 export const deleteRecord = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
 	.validator((id: number) => id)
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "deleteRecord" }, async () => {

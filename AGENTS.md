@@ -122,9 +122,11 @@ production and live in `.env.local` for dev. See `.env.example`.
   `--remote` only (`bunx wrangler d1 migrations apply records --remote`).
 - **`better-sqlite3` is still in `dependencies`** but unused after the D1 move — safe
   to remove later.
-- **Admin auth is currently client-side only** (`<SignedIn>`/`<SignedOut>` in
-  `routes/admin/route.tsx`). Add server-side Clerk `auth()` (+ `CLERK_SECRET_KEY`)
-  before treating `/admin` or write server fns as a real security boundary.
+- **Auth boundary = write server fns, not the UI.** `/admin`'s `<SignedIn>` gate is
+  UX only; the real check is `authMiddleware` (`src/lib/auth.ts`, Clerk backend SDK)
+  attached to `createRecord`/`updateRecord`/`deleteRecord`. Reads (`listRecords`,
+  `/api/*`) are intentionally public. Needs `CLERK_SECRET_KEY` in `.env.local` (dev,
+  read by the Cloudflare Vite plugin) and `wrangler secret put CLERK_SECRET_KEY` (prod).
 - **TanStack AI ships OpenAI/Anthropic/Gemini/Ollama adapters**, not a Workers-AI
   adapter — point the `openaiCompatible` adapter at an AI Gateway / Workers AI
   OpenAI-compatible endpoint.

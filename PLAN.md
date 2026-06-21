@@ -86,12 +86,14 @@ Goal: manage records by hand end-to-end before any AI.
       the admin table via **TanStack Table**.
 - [ ] Use **TanStack Virtual** for the row body once the collection is large.
 
-### Phase 1.5 — Harden auth
+### Phase 1.5 — Harden auth ✅
 
-- [ ] Add `CLERK_SECRET_KEY`; verify the session **server-side** in admin server fns /
-      loaders (don't rely only on the client `<SignedIn>` gate). Load the Clerk skill:
-      `router-core#auth-and-guards` for the `beforeLoad` redirect pattern.
-- [ ] Public `/api/*` stays read-only and unauthenticated; all writes require auth.
+- [x] `authMiddleware` (`src/lib/auth.ts`, Clerk backend SDK) verifies the session
+      **server-side** and is attached to `create`/`update`/`deleteRecord`. Client
+      `<SignedIn>` gate stays for UX.
+- [x] Public `/api/*` + reads stay unauthenticated; all writes require auth.
+- [ ] Optional: `beforeLoad` redirect guard on `/admin` for a cleaner signed-out
+      redirect (currently handled by `<RedirectToSignIn>`). See `router-core#auth-and-guards`.
 
 ---
 
