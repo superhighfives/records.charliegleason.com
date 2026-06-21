@@ -150,15 +150,19 @@ Goal: read the collection from anywhere.
 
 ---
 
-## Phase 5 — Daily suggestions email
+## Phase 5 — Daily suggestions email ✅
 
 Goal: once-a-day "records to buy" digest.
 
-- [ ] **Last.fm** client (`LASTFM_API_KEY`): pull recent/top artists & albums.
-- [ ] Suggestion logic: albums not already in the collection; (optional) scan US deals.
-- [ ] **Cron Trigger** (already declared, `0 14 * * *`) → Worker `scheduled` handler →
-      compose + send via the Cloudflare **Email** `EMAIL` binding to hi@charliegleason.com.
-- [ ] Verify the sender address in Cloudflare Email Routing first.
+- [x] **Last.fm** client (`src/lib/lastfm.ts`): top albums for `LASTFM_USER`.
+- [x] Suggestion logic (`src/lib/digest.ts`): top albums minus the collection
+      (normalized artist+title match), top 10.
+- [x] **Cron Trigger** (`0 14 * * *`) → `scheduled` handler in `src/server.ts` (wraps
+      the TanStack entry) → compose + send via the **Email** `EMAIL` binding. Also
+      `POST /api/cron/digest` (guarded by `CRON_SECRET`) for manual runs/testing.
+- [ ] Before it sends: enable Email Routing + verify the destination; sender on-domain.
+- [ ] Follow-ups: US deal-scanning; richer email (cover thumbs, Pitchfork scores);
+      let the digest link straight into a pre-filled add flow.
 
 ---
 

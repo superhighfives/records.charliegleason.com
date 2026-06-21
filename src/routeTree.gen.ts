@@ -16,6 +16,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as ApiRecordsRouteImport } from './routes/api/records'
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
+import { Route as ApiCronDigestRouteImport } from './routes/api/cron.digest'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdEditRouteImport } from './routes/admin/records.$id.edit'
 
@@ -54,6 +55,11 @@ const ApiPhotosSplatRoute = ApiPhotosSplatRouteImport.update({
   path: '/api/photos/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiCronDigestRoute = ApiCronDigestRouteImport.update({
+  id: '/api/cron/digest',
+  path: '/api/cron/digest',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRecordsNewRoute = AdminRecordsNewRouteImport.update({
   id: '/records/new',
   path: '/records/new',
@@ -73,6 +79,7 @@ export interface FileRoutesByFullPath {
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
@@ -83,6 +90,7 @@ export interface FileRoutesByTo {
   '/api/records': typeof ApiRecordsRoute
   '/admin': typeof AdminIndexRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
@@ -95,6 +103,7 @@ export interface FileRoutesById {
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
@@ -108,6 +117,7 @@ export interface FileRouteTypes {
     | '/api/records'
     | '/admin/'
     | '/admin/records/new'
+    | '/api/cron/digest'
     | '/api/photos/$'
     | '/admin/records/$id/edit'
   fileRoutesByTo: FileRoutesByTo
@@ -118,6 +128,7 @@ export interface FileRouteTypes {
     | '/api/records'
     | '/admin'
     | '/admin/records/new'
+    | '/api/cron/digest'
     | '/api/photos/$'
     | '/admin/records/$id/edit'
   id:
@@ -129,6 +140,7 @@ export interface FileRouteTypes {
     | '/api/records'
     | '/admin/'
     | '/admin/records/new'
+    | '/api/cron/digest'
     | '/api/photos/$'
     | '/admin/records/$id/edit'
   fileRoutesById: FileRoutesById
@@ -138,6 +150,7 @@ export interface RootRouteChildren {
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
   McpRoute: typeof McpRoute
   ApiRecordsRoute: typeof ApiRecordsRoute
+  ApiCronDigestRoute: typeof ApiCronDigestRoute
   ApiPhotosSplatRoute: typeof ApiPhotosSplatRoute
 }
 
@@ -192,6 +205,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPhotosSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/cron/digest': {
+      id: '/api/cron/digest'
+      path: '/api/cron/digest'
+      fullPath: '/api/cron/digest'
+      preLoaderRoute: typeof ApiCronDigestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/records/new': {
       id: '/admin/records/new'
       path: '/records/new'
@@ -232,6 +252,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRouteRoute: AdminRouteRouteWithChildren,
   McpRoute: McpRoute,
   ApiRecordsRoute: ApiRecordsRoute,
+  ApiCronDigestRoute: ApiCronDigestRoute,
   ApiPhotosSplatRoute: ApiPhotosSplatRoute,
 }
 export const routeTree = rootRouteImport

@@ -5,7 +5,7 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	"main": "@tanstack/react-start/server-entry",
+	"main": "src/server.ts",
 	// Custom domain. Attach records.charliegleason.com as a Workers Custom Domain
 	// (Cloudflare dashboard) or uncomment + set the zone below.
 	// "routes": [

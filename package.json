@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "dotenv -e .env.local -- sh -c \"NODE_OPTIONS='--import ./instrument.server.mjs' vite dev --port 3000\"",
     "generate-routes": "tsr generate",
-    "build": "vite build && cp instrument.server.mjs .output/server",
+    "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "format": "biome format",
@@ -62,6 +62,7 @@
     "drizzle-orm": "^0.45.1",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.577.0",
+    "mimetext": "^3.0.28",
     "radix-ui": "^1.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

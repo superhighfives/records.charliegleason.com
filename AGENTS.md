@@ -96,20 +96,29 @@ production and live in `.env.local` for dev. See `.env.example`.
 | `VITE_SENTRY_DSN`            | public       | Sentry (see `instrument.server.mjs`)     |
 | D1 binding `DB`              | binding      | Database, dev + prod (`wrangler.jsonc`)  |
 | `DISCOGS_TOKEN`              | secret       | Discogs API                              |
-| `LASTFM_API_KEY`             | secret       | Last.fm API                              |
+| `LASTFM_API_KEY` / `LASTFM_USER` | secret  | daily digest suggestions                 |
+| `CRON_SECRET`               | secret       | guards `POST /api/cron/digest`           |
 | Workers AI binding `AI`      | binding      | Workers AI / AI Gateway (`wrangler.jsonc`)|
 | R2 binding `PHOTOS`          | binding      | Vinyl photo storage (`wrangler.jsonc`)   |
+| Images binding `IMAGES`      | binding      | Cover resize (`wrangler.jsonc`)          |
+| Email binding `EMAIL`        | binding      | Daily digest send (`wrangler.jsonc`)     |
 
 ## Deployment notes
 
 - `bun run build` then `wrangler deploy` (see `package.json` scripts).
-- Bindings (D1 `DB`, R2 `PHOTOS`, Workers `AI`, Email, Cron) are declared in
-  `wrangler.jsonc`; worker `name` is `records`. D1 `database_id` is provisioned
+- **Worker entry is `src/server.ts`** (wrangler `main`), not the TanStack default —
+  it wraps `@tanstack/react-start/server-entry`'s `fetch` and adds a `scheduled`
+  (cron) handler that runs the daily digest. Keep this wrapper when touching the entry.
+- Bindings (D1 `DB`, R2 `PHOTOS`, Workers `AI`, `IMAGES`, `EMAIL`, Cron) are declared
+  in `wrangler.jsonc`; worker `name` is `records`. D1 `database_id` is provisioned
   (`records`, WNAM region).
 - Custom domain `records.charliegleason.com` is attached via a Workers route /
   custom domain in the Cloudflare dashboard or `wrangler.jsonc` `routes`.
-- Daily "records to buy" email uses the Cloudflare **Email** feature driven by a
-  **Cron Trigger** (once/day).
+- **Daily digest** (`src/lib/digest.ts`): Last.fm top albums minus the collection →
+  email via the `EMAIL` binding. Cron `triggers.crons` (`0 14 * * *`) → `scheduled`;
+  also `POST /api/cron/digest` (guarded by `CRON_SECRET`) for manual runs. Needs Email
+  Routing enabled + the destination verified; sender is on the domain. Sends nothing
+  when there are no suggestions.
 
 ## Known gotchas
 

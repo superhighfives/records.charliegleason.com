@@ -50,6 +50,13 @@ your account. Requirements:
 (`env.IMAGES`). Enable it once: dashboard → **Images → Transformations** → enable for
 your zone/account. Cover sourcing fails closed (no cover) if it's off.
 
+**Email (daily digest).** The cron sends a "records to buy" email via the `EMAIL`
+binding. Enable **Email Routing** on the domain and **verify the destination**
+(`hi@charliegleason.com` — set in `wrangler.jsonc` `send_email.destination_address`).
+The sender is `digest@records.charliegleason.com` (on your domain). The cron schedule
+(`triggers.crons`, currently `0 14 * * *`) runs `scheduled` in `src/server.ts`. Test
+without waiting: `curl -X POST https://…/api/cron/digest -H "x-cron-secret: $CRON_SECRET"`.
+
 After any edit to `wrangler.jsonc`, regenerate the binding types:
 
 ```bash
@@ -87,7 +94,8 @@ cp .env.example .env.local
 | `DISCOGS_TOKEN` | recommended | enrichment degrades gracefully without it |
 | `VITE_SENTRY_DSN` | optional | error monitoring |
 | `VITE_SENTRY_ORG` / `VITE_SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` | optional | build-time source-map upload |
-| `LASTFM_API_KEY` | not yet | Phase 3 |
+| `LASTFM_API_KEY` / `LASTFM_USER` | for digest | daily buy-suggestions email |
+| `CRON_SECRET` | for digest | guards the manual `POST /api/cron/digest` trigger |
 
 > After adding a **new** key to `.env.local`, run `bunx wrangler types` so it's typed
 > on `env`. (Dev reads `.env.local` via the Cloudflare Vite plugin.)
