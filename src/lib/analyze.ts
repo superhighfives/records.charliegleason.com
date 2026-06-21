@@ -103,7 +103,8 @@ async function extractFromImage(
 /**
  * Escalation: let Claude use the server-side web_search tool to pin down a
  * record the cover read + Discogs couldn't. Bounded manual loop; returns a
- * refined extraction or null. Wrapped by the caller so failures degrade.
+ * refined extraction or null. Self-contained: never throws, logs whether
+ * web_search actually ran so we can confirm support on the env.AI.run path.
  */
 async function identifyWithWebSearch(
 	partial: Extraction,
@@ -116,34 +117,55 @@ async function identifyWithWebSearch(
 		},
 	];
 
-	for (let i = 0; i < 5; i++) {
-		const r = await runClaude({
-			max_tokens: 2048,
-			tools: [
-				{ type: "web_search_20260209", name: "web_search" },
-				EXTRACT_TOOL,
-			],
-			messages,
-		});
+	// Did Anthropic's server-side web_search actually run on this AI path? Logged
+	// so the first real capture tells us whether web_search rides through Unified
+	// Billing (env.AI.run), without needing a curl pre-flight.
+	try {
+		for (let i = 0; i < 5; i++) {
+			const r = await runClaude({
+				max_tokens: 2048,
+				tools: [
+					{ type: "web_search_20260209", name: "web_search" },
+					EXTRACT_TOOL,
+				],
+				messages,
+			});
 
-		const rec = r.content.find(
-			(b) => b.type === "tool_use" && b.name === "record",
-		) as { input?: unknown } | undefined;
-		if (rec?.input) {
-			const input = rec.input as Partial<Extraction>;
-			return {
-				artist: String(input.artist ?? partial.artist).trim(),
-				title: String(input.title ?? partial.title).trim(),
-				year: typeof input.year === "number" ? input.year : partial.year,
-				confidence:
-					typeof input.confidence === "number" ? input.confidence : 0.7,
-			};
+			const usedWebSearch = r.content.some(
+				(b) =>
+					b.type === "server_tool_use" || b.type === "web_search_tool_result",
+			);
+			console.info(
+				`[analyze] web-search iter ${i}: web_search ${
+					usedWebSearch ? "RAN" : "did not run"
+				} · blocks=[${r.content.map((b) => b.type).join(",")}]`,
+			);
+
+			const rec = r.content.find(
+				(b) => b.type === "tool_use" && b.name === "record",
+			) as { input?: unknown } | undefined;
+			if (rec?.input) {
+				const input = rec.input as Partial<Extraction>;
+				return {
+					artist: String(input.artist ?? partial.artist).trim(),
+					title: String(input.title ?? partial.title).trim(),
+					year: typeof input.year === "number" ? input.year : partial.year,
+					confidence:
+						typeof input.confidence === "number" ? input.confidence : 0.7,
+				};
+			}
+
+			if (r.stop_reason === "end_turn") break;
+			messages.push({ role: "assistant", content: r.content });
 		}
-
-		if (r.stop_reason === "end_turn") break;
-		messages.push({ role: "assistant", content: r.content });
+		return null;
+	} catch (err) {
+		// Most likely the AI path rejected the web_search tool — degrade to Discogs.
+		console.warn(
+			`[analyze] web-search escalation failed (likely unsupported on env.AI.run): ${String(err)}`,
+		);
+		return null;
 	}
-	return null;
 }
 
 /** Manual Discogs search, for the pick-list / "wrong match" fallback in capture. */
@@ -185,9 +207,10 @@ export const analyzePhoto = createServerFn({ method: "POST" })
 
 				// 3. Escalate to web search when unsure or unmatched.
 				if (extraction.confidence < 0.6 || candidates.length === 0) {
-					const refined = await identifyWithWebSearch(extraction).catch(
-						() => null,
+					console.info(
+						`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs matches=${candidates.length})`,
 					);
+					const refined = await identifyWithWebSearch(extraction);
 					if (refined) {
 						extraction = refined;
 						candidates = await searchReleases(
