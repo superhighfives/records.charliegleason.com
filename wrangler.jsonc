@@ -6,11 +6,11 @@
 		"nodejs_compat"
 	],
 	"main": "src/server.ts",
-	// Custom domain. Attach records.charliegleason.com as a Workers Custom Domain
-	// (Cloudflare dashboard) or uncomment + set the zone below.
-	// "routes": [
-	//   { "pattern": "records.charliegleason.com", "custom_domain": true }
-	// ],
+	// Custom domain — provisions DNS + SSL for the records subdomain on deploy
+	// (apex MX/Gmail untouched). Requires charliegleason.com to be a Cloudflare zone.
+	"routes": [
+		{ "pattern": "records.charliegleason.com", "custom_domain": true }
+	],
 	// D1 — primary database (Drizzle). `remote: true` makes `wrangler dev` use the
 	// real D1 instead of a local SQLite file.
 	"d1_databases": [
