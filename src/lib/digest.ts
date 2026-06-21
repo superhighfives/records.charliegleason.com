@@ -1,7 +1,5 @@
-import { EmailMessage } from "cloudflare:email";
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
-import { createMimeMessage } from "mimetext";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
@@ -9,11 +7,12 @@ import { getTopAlbums, type LastfmAlbum } from "#/lib/lastfm";
 
 /**
  * Daily "records to buy" digest: top Last.fm albums you don't already own,
- * emailed via the Cloudflare Email (`EMAIL`) binding. Driven by the cron trigger
- * (see src/server.ts) or the protected /api/cron/digest route.
+ * emailed via the Cloudflare Email Sending (`EMAIL`) binding. Driven by the cron
+ * trigger (see src/server.ts) or the protected /api/cron/digest route. `FROM` must
+ * be on the domain onboarded for Email Sending (apex, not the worker subdomain).
  */
 
-const FROM = "digest@records.charliegleason.com";
+const FROM = "digest@charliegleason.com";
 const TO = "hi@charliegleason.com";
 
 function normalize(s: string): string {
@@ -76,13 +75,12 @@ export function runDailyDigest(): Promise<{ sent: boolean; count: number }> {
 		const suggestions = await buildSuggestions(10);
 		if (suggestions.length === 0) return { sent: false, count: 0 };
 
-		const msg = createMimeMessage();
-		msg.setSender({ name: "Records", addr: FROM });
-		msg.setRecipient(TO);
-		msg.setSubject(`${suggestions.length} records to consider`);
-		msg.addMessage({ contentType: "text/html", data: renderHtml(suggestions) });
-
-		await env.EMAIL.send(new EmailMessage(FROM, TO, msg.asRaw()));
+		await env.EMAIL.send({
+			from: FROM,
+			to: TO,
+			subject: `${suggestions.length} records to consider`,
+			html: renderHtml(suggestions),
+		});
 		return { sent: true, count: suggestions.length };
 	});
 }

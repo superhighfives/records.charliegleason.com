@@ -160,7 +160,8 @@ Goal: once-a-day "records to buy" digest.
 - [x] **Cron Trigger** (`0 14 * * *`) → `scheduled` handler in `src/server.ts` (wraps
       the TanStack entry) → compose + send via the **Email** `EMAIL` binding. Also
       `POST /api/cron/digest` (guarded by `CRON_SECRET`) for manual runs/testing.
-- [ ] Before it sends: enable Email Routing + verify the destination; sender on-domain.
+- [ ] Before it sends: onboard the sender domain for **Cloudflare Email Sending**
+      (cf-bounce subdomain + SPF/DKIM/DMARC TXT — keeps the apex Gmail MX intact).
 - [ ] Follow-ups: US deal-scanning; richer email (cover thumbs, Pitchfork scores);
       let the digest link straight into a pre-filled add flow.
 

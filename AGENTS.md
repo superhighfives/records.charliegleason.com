@@ -117,10 +117,13 @@ production and live in `.env.local` for dev. See `.env.example`.
 - Custom domain `records.charliegleason.com` is attached via a Workers route /
   custom domain in the Cloudflare dashboard or `wrangler.jsonc` `routes`.
 - **Daily digest** (`src/lib/digest.ts`): Last.fm top albums minus the collection →
-  email via the `EMAIL` binding. Cron `triggers.crons` (`0 14 * * *`) → `scheduled`;
-  also `POST /api/cron/digest` (guarded by `CRON_SECRET`) for manual runs. Needs Email
-  Routing enabled + the destination verified; sender is on the domain. Sends nothing
-  when there are no suggestions.
+  email via the `EMAIL` binding using **Cloudflare Email Sending** (`env.EMAIL.send({
+  from, to, subject, html })` — structured API, no MIME lib). `send_email` binding is
+  `{ name: "EMAIL", remote: true }` (send to anyone). Needs the **sender domain
+  onboarded for Email Sending** (cf-bounce subdomain + SPF/DKIM/DMARC TXT — apex MX
+  untouched); `FROM` must be on that domain (apex, not the worker subdomain). Cron
+  `triggers.crons` (`0 14 * * *`) → `scheduled`; also `POST /api/cron/digest`
+  (`CRON_SECRET`). Sends nothing when there are no suggestions.
 
 ## Known gotchas
 

@@ -51,11 +51,15 @@ your account. Requirements:
 your zone/account. Cover sourcing fails closed (no cover) if it's off.
 
 **Email (daily digest).** The cron sends a "records to buy" email via the `EMAIL`
-binding. Enable **Email Routing** on the domain and **verify the destination**
-(`hi@charliegleason.com` — set in `wrangler.jsonc` `send_email.destination_address`).
-The sender is `digest@records.charliegleason.com` (on your domain). The cron schedule
-(`triggers.crons`, currently `0 14 * * *`) runs `scheduled` in `src/server.ts`. Test
-without waiting: `curl -X POST https://…/api/cron/digest -H "x-cron-secret: $CRON_SECRET"`.
+binding using **Cloudflare Email Sending** (Email Service, beta). Onboard the sender
+domain: dashboard → **Compute → Email Service → Email Sending → Onboard Domain** →
+`charliegleason.com`. It adds a `cf-bounce` subdomain MX + SPF/DKIM/DMARC **TXT**
+records — your **apex MX (Gmail/Workspace) is untouched**, and you can send to any
+recipient (no destination to verify). The sender is `digest@charliegleason.com`
+(must be on the onboarded domain — not the worker subdomain); recipient is
+`hi@charliegleason.com` (`src/lib/digest.ts`). The cron (`triggers.crons`, `0 14 * * *`)
+runs `scheduled` in `src/server.ts`. Test now:
+`curl -X POST https://…/api/cron/digest -H "x-cron-secret: $CRON_SECRET"`.
 
 After any edit to `wrangler.jsonc`, regenerate the binding types:
 

@@ -45,11 +45,14 @@
 			"0 14 * * *"
 		]
 	},
-	// Cloudflare Email Routing send binding (set the verified sender address).
+	// Cloudflare Email Sending (Email Service, beta) — onboard charliegleason.com
+	// for sending (dashboard → Compute → Email Service → Email Sending). It adds a
+	// cf-bounce subdomain MX + SPF/DKIM/DMARC TXT records; the apex MX (Gmail) is
+	// untouched. Sends to any recipient; no destination_address restriction.
 	"send_email": [
 		{
 			"name": "EMAIL",
-			"destination_address": "hi@charliegleason.com"
+			"remote": true
 		}
 	]
 }

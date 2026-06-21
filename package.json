@@ -60,7 +60,6 @@
     "drizzle-orm": "^0.45.1",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.577.0",
-    "mimetext": "^3.0.28",
     "radix-ui": "^1.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
