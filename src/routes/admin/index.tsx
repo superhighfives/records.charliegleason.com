@@ -180,8 +180,11 @@ function AdminRecords() {
 						placeholder="Filter records…  ( / )"
 						className="max-w-xs"
 					/>
+					<Button asChild variant="outline">
+						<Link to="/admin/records/new">Add manually</Link>
+					</Button>
 					<Button asChild>
-						<Link to="/admin/records/new">New record</Link>
+						<Link to="/admin/capture">Capture record</Link>
 					</Button>
 				</div>
 			</div>
