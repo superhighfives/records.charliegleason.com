@@ -4,7 +4,17 @@ import tailwindcss from "@tailwindcss/vite";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { defineConfig, loadEnv } from "vite";
+import { createLogger, defineConfig, loadEnv } from "vite";
+
+// Some @tanstack/* packages ship `//# sourceMappingURL=` comments without the
+// referenced `.js.map` files, so Vite logs a noisy multi-line warning per file
+// on startup. Nothing is broken (the maps just don't exist), so filter them.
+const logger = createLogger();
+const baseWarn = logger.warn;
+logger.warn = (msg, opts) => {
+	if (msg.includes("Failed to load source map")) return;
+	baseWarn(msg, opts);
+};
 
 export default defineConfig(({ mode }) => {
 	// loadEnv with '' prefix reads non-VITE vars too (org/project/auth token).
@@ -23,6 +33,7 @@ export default defineConfig(({ mode }) => {
 		: [];
 
 	return {
+		customLogger: logger,
 		resolve: { tsconfigPaths: true },
 		plugins: [
 			devtools(),
