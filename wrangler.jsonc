@@ -90,6 +90,20 @@
 	//   wrangler secret put CLERK_SECRET_KEY --env preview   # + DISCOGS_TOKEN, LASTFM_API_KEY
 	"env": {
 		"preview": {
+			// `routes` and `triggers` ARE inherited by environments, so both are
+			// overridden here: without the routes override, deploying preview would
+			// reassign records.charliegleason.com (production!) to this Worker; the
+			// empty crons disable the inherited daily digest in preview. `send_email`
+			// is intentionally omitted (not inherited) — preview never sends mail.
+			"routes": [
+				{
+					"pattern": "preview.records.charliegleason.com",
+					"custom_domain": true
+				}
+			],
+			"triggers": {
+				"crons": []
+			},
 			"d1_databases": [
 				{
 					"binding": "DB",
