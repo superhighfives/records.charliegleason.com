@@ -1,0 +1,41 @@
+name: Deploy
+
+# Build + deploy from CI so the *production* build-time vars (Clerk pk_live,
+# Sentry) are baked in. Building locally would inline whatever is in your
+# .env.local — which is intentionally test keys — and ship "Development mode".
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time; cancel an in-flight run if a newer commit lands.
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # `bun run deploy` = vite build && wrangler deploy.
+      # VITE_* + SENTRY_AUTH_TOKEN are build-time (inlined / source-map upload).
+      # CLOUDFLARE_* authenticate wrangler deploy.
+      # Runtime secrets (CLERK_SECRET_KEY, DISCOGS_TOKEN, LASTFM_API_KEY,
+      # CRON_SECRET) live on the Worker via `wrangler secret put` — not needed here.
+      - run: bun run deploy
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_SENTRY_ORG: ${{ secrets.VITE_SENTRY_ORG }}
+          VITE_SENTRY_PROJECT: ${{ secrets.VITE_SENTRY_PROJECT }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -105,7 +105,13 @@ production and live in `.env.local` for dev. See `.env.example`.
 
 ## Deployment notes
 
-- `bun run build` then `wrangler deploy` (see `package.json` scripts).
+- **Deploys run in CI** (`.github/workflows/deploy.yml`, on push to `main`), not
+  locally. `VITE_CLERK_PUBLISHABLE_KEY`/`VITE_SENTRY_DSN` are build-time inlined, so a
+  local `bun run deploy` would bake the **test** Clerk key into prod (→ "Development
+  mode" banner). CI builds with `pk_live_…` + Cloudflare creds from GitHub repo secrets;
+  `.env.local` stays on test keys. Runtime Worker secrets are set once via
+  `wrangler secret put` and persist across deploys (CI doesn't touch them).
+- `bun run build` then `wrangler deploy` (see `package.json` scripts) — what CI runs.
 - **Worker entry is `src/server.ts`** (wrangler `main`), not the TanStack default —
   it wraps `@tanstack/react-start/server-entry`'s `fetch`, adds a `scheduled` (cron)
   handler for the daily digest, and wraps the whole handler in `@sentry/cloudflare`

@@ -140,12 +140,33 @@ Unified Billing credits + an AI Gateway, and `VITE_CLERK_PUBLISHABLE_KEY` +
 
 ## 6. Deploy to production
 
-```bash
-bun run build
-bunx wrangler deploy
-```
+**Production deploys run in CI** (`.github/workflows/deploy.yml`), not from your
+laptop. The reason: `VITE_CLERK_PUBLISHABLE_KEY` / `VITE_SENTRY_DSN` are **build-time
+inlined** by Vite, so a local `bun run deploy` bakes whatever is in your `.env.local`
+into the bundle — and that's intentionally a Clerk **test** key (→ "Development mode"
+banner). CI builds with the production keys from GitHub secrets instead. The workflow
+runs on every push to `main` (and via **Actions → Deploy → Run workflow**).
 
-**Runtime secrets** — set in the deployed Worker (NOT read from `.env.local` in prod):
+**GitHub repo secrets** (Settings → Secrets and variables → Actions) consumed by the
+workflow — all build-time/deploy, no runtime Worker secrets here:
+
+| Secret | Value |
+| ------ | ----- |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Clerk **production** publishable key (`pk_live_…`) |
+| `VITE_SENTRY_DSN` | Sentry DSN |
+| `VITE_SENTRY_ORG` / `VITE_SENTRY_PROJECT` | Sentry slugs (source-map upload) |
+| `SENTRY_AUTH_TOKEN` | Sentry auth token (source-map upload) |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare token, **Edit Cloudflare Workers** template, scoped to the account + the `charliegleason.com` zone (custom-domain route needs DNS) |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account id (`wrangler whoami`) |
+
+> Keep `.env.local` on **test** keys. Don't run `bun run deploy` locally for a real
+> ship — it would inline the test Clerk key and re-introduce the Development banner.
+
+To deploy by hand in a pinch, mirror the workflow's env: export the `pk_live_…` key
+and Cloudflare creds, then `bun run deploy`.
+
+**Runtime secrets** — set **once** on the deployed Worker (NOT in CI, NOT in
+`.env.local`); they persist across deploys:
 
 ```bash
 bunx wrangler secret put CLERK_SECRET_KEY
