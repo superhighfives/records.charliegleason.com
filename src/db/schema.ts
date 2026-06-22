@@ -33,6 +33,18 @@ export const records = sqliteTable("records", {
 		"manual",
 	),
 
+	// Background analysis (Cloudflare Queue). Photo captures land as `pending`,
+	// the consumer flips them `processing` → `review` (awaiting confirmation) →
+	// `complete` once published. `failed` means the AI work errored after retries.
+	// Manual/import records skip the queue and are `complete` from the start.
+	status: text("status", {
+		enum: ["pending", "processing", "review", "failed", "complete"],
+	}).default("complete"),
+	error: text("error"), // last analysis error message, surfaced on the detail page
+	confidence: real("confidence"), // 0–1 vision confidence from the last analysis
+	captureContext: text("capture_context"), // optional collector hint, used by the analysis
+	candidatesJson: text("candidates_json"), // JSON Array<DiscogsCandidate> the consumer found
+
 	createdAt: integer("created_at", { mode: "timestamp" }).default(
 		sql`(unixepoch())`,
 	),

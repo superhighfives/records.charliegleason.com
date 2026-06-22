@@ -34,6 +34,28 @@
 	"ai": {
 		"binding": "AI"
 	},
+	// Queues — background record analysis. Capturing a record enqueues its id; the
+	// consumer (src/server.ts → handleAnalyzeBatch) runs the AI pipeline. One record
+	// per message, retried up to 3× before going to the dead-letter queue.
+	// Provision once: `wrangler queues create records-analyze` and
+	// `wrangler queues create records-analyze-dlq`.
+	"queues": {
+		"producers": [
+			{
+				"binding": "ANALYZE_QUEUE",
+				"queue": "records-analyze"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "records-analyze",
+				"max_batch_size": 1,
+				"max_batch_timeout": 5,
+				"max_retries": 3,
+				"dead_letter_queue": "records-analyze-dlq"
+			}
+		]
+	},
 	// Cloudflare Images — resize sourced cover art before storing in R2. Requires
 	// Image Transformations enabled on the account (dashboard → Images).
 	"images": {

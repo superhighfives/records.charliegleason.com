@@ -1,13 +1,25 @@
 import { env } from "cloudflare:workers";
-import * as Sentry from "@sentry/tanstackstart-react";
-import { createServerFn } from "@tanstack/react-start";
+
+import type { Record } from "#/db/schema";
 import { runClaude } from "#/lib/ai";
-import { authMiddleware } from "#/lib/auth";
 import { type DiscogsCandidate, searchReleases } from "#/lib/discogs";
+import { bytesToBase64 } from "#/lib/image-data";
+import { sourceCoverFromDiscogs } from "#/lib/images";
 import { getPitchforkScore } from "#/lib/the-fork";
 
-/** What the photo flow proposes; the user confirms/edits before saving. */
-export interface RecordSuggestion {
+/**
+ * Server-only record analysis pipeline. Reads a stored capture photo, identifies
+ * the release (Claude vision → Discogs → web-search escalation), scores it on
+ * Pitchfork and sources a cover. Runs in the queue consumer — never import this
+ * from a client route (it pulls in `cloudflare:workers`); use the `searchDiscogs`
+ * server fn in `lib/records.ts` for the UI's manual lookup instead.
+ */
+
+/**
+ * The enrichment the background analysis produces for a captured record. The
+ * queue consumer writes this onto the row and moves it to `review`.
+ */
+export interface AnalysisResult {
 	artist: string;
 	title: string;
 	year: number | null;
@@ -17,7 +29,7 @@ export interface RecordSuggestion {
 	pitchforkUrl: string | null;
 	discogsId: string | null;
 	discogsUrl: string | null;
-	capturePhotoKey: string;
+	coverImageKey: string | null;
 	confidence: number;
 	candidates: Array<DiscogsCandidate>;
 }
@@ -49,18 +61,6 @@ const EXTRACT_TOOL = {
 		required: ["artist", "title", "confidence"],
 	},
 };
-
-function stripDataUrl(b64: string) {
-	const comma = b64.indexOf(",");
-	return b64.startsWith("data:") && comma !== -1 ? b64.slice(comma + 1) : b64;
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-	const binary = atob(b64);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-	return bytes;
-}
 
 /** Read artist/title/year off the cover with Claude vision (forced tool call). */
 async function extractFromImage(
@@ -177,85 +177,73 @@ async function identifyWithWebSearch(
 	}
 }
 
-/** Manual Discogs search, for the pick-list / "wrong match" fallback in capture. */
-export const searchDiscogs = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((q: { artist: string; title: string }) => q)
-	.handler(({ data }) =>
-		Sentry.startSpan({ name: "searchDiscogs" }, () =>
-			searchReleases(data.artist, data.title).catch(() => []),
-		),
+/**
+ * The full background pipeline for one captured record: read the stored capture
+ * photo from R2, identify it (vision → Discogs → web-search escalation), score it
+ * on Pitchfork, and source a resized cover. Never stores anything on the record —
+ * the queue consumer writes the result.
+ */
+export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
+	if (!record.capturePhotoKey) {
+		throw new Error("record has no capture photo to analyze");
+	}
+
+	const object = await env.PHOTOS.get(record.capturePhotoKey);
+	if (!object) {
+		throw new Error(`capture photo missing in R2: ${record.capturePhotoKey}`);
+	}
+	const bytes = new Uint8Array(await object.arrayBuffer());
+	const data = bytesToBase64(bytes);
+	const mediaType = object.httpMetadata?.contentType || "image/jpeg";
+	const context = record.captureContext?.trim() || undefined;
+
+	// 1. Vision read.
+	let extraction = await extractFromImage(data, mediaType, context);
+
+	// 2. Discogs lookup.
+	let candidates = extraction.artist
+		? await searchReleases(extraction.artist, extraction.title).catch(() => [])
+		: [];
+
+	// 3. Escalate to web search when unsure or unmatched.
+	if (extraction.confidence < 0.6 || candidates.length === 0) {
+		console.info(
+			`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs matches=${candidates.length})`,
+		);
+		const refined = await identifyWithWebSearch(extraction, context);
+		if (refined) {
+			extraction = refined;
+			candidates = await searchReleases(refined.artist, refined.title).catch(
+				() => [],
+			);
+		}
+	}
+
+	const best = candidates[0] ?? null;
+
+	// 4. Pitchfork score (best-effort).
+	const pitchfork = await getPitchforkScore(
+		extraction.artist,
+		extraction.title,
 	);
 
-export const analyzePhoto = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(
-		(data: { imageBase64: string; mediaType: string; context?: string }) =>
-			data,
-	)
-	.handler(({ data }) =>
-		Sentry.startSpan(
-			{ name: "analyzePhoto" },
-			async (): Promise<RecordSuggestion> => {
-				const mediaType = data.mediaType || "image/jpeg";
-				const raw = stripDataUrl(data.imageBase64);
-				const context = data.context?.trim() || undefined;
+	// 5. Source + resize the displayed cover from the best Discogs match.
+	const coverImageKey = best?.discogsId
+		? await sourceCoverFromDiscogs(best.discogsId)
+		: null;
 
-				// Keep the iPhone shot as a reference (admin only). The displayed cover
-				// is sourced from Discogs + resized at save time (see createRecord).
-				const ext = mediaType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
-				const capturePhotoKey = `captures/${crypto.randomUUID()}.${ext}`;
-				await env.PHOTOS.put(capturePhotoKey, base64ToBytes(raw), {
-					httpMetadata: { contentType: mediaType },
-				});
-
-				// 1. Vision read.
-				let extraction = await extractFromImage(raw, mediaType, context);
-
-				// 2. Discogs lookup.
-				let candidates = extraction.artist
-					? await searchReleases(extraction.artist, extraction.title).catch(
-							() => [],
-						)
-					: [];
-
-				// 3. Escalate to web search when unsure or unmatched.
-				if (extraction.confidence < 0.6 || candidates.length === 0) {
-					console.info(
-						`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs matches=${candidates.length})`,
-					);
-					const refined = await identifyWithWebSearch(extraction, context);
-					if (refined) {
-						extraction = refined;
-						candidates = await searchReleases(
-							refined.artist,
-							refined.title,
-						).catch(() => []);
-					}
-				}
-
-				const best = candidates[0] ?? null;
-
-				// 4. Pitchfork score (best-effort).
-				const pitchfork = await getPitchforkScore(
-					extraction.artist,
-					extraction.title,
-				);
-
-				return {
-					artist: best?.artist || extraction.artist,
-					title: best?.title || extraction.title,
-					year: best?.year ?? extraction.year,
-					label: best?.label ?? null,
-					genre: best?.genre ?? null,
-					pitchforkScore: pitchfork?.score ?? null,
-					pitchforkUrl: pitchfork?.url ?? null,
-					discogsId: best?.discogsId ?? null,
-					discogsUrl: best?.discogsUrl ?? null,
-					capturePhotoKey,
-					confidence: extraction.confidence,
-					candidates,
-				};
-			},
-		),
-	);
+	return {
+		artist: best?.artist || extraction.artist,
+		title: best?.title || extraction.title,
+		year: best?.year ?? extraction.year,
+		label: best?.label ?? null,
+		genre: best?.genre ?? null,
+		pitchforkScore: pitchfork?.score ?? null,
+		pitchforkUrl: pitchfork?.url ?? null,
+		discogsId: best?.discogsId ?? null,
+		discogsUrl: best?.discogsUrl ?? null,
+		coverImageKey,
+		confidence: extraction.confidence,
+		candidates,
+	};
+}

@@ -17,7 +17,7 @@ import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
 import { Route as ApiCronDigestRouteImport } from './routes/api/cron.digest'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
-import { Route as AdminRecordsIdEditRouteImport } from './routes/admin/records.$id.edit'
+import { Route as AdminRecordsIdRouteImport } from './routes/admin/records.$id'
 
 const AdminRouteRoute = AdminRouteRouteImport.update({
   id: '/admin',
@@ -59,9 +59,9 @@ const AdminRecordsNewRoute = AdminRecordsNewRouteImport.update({
   path: '/records/new',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const AdminRecordsIdEditRoute = AdminRecordsIdEditRouteImport.update({
-  id: '/records/$id/edit',
-  path: '/records/$id/edit',
+const AdminRecordsIdRoute = AdminRecordsIdRouteImport.update({
+  id: '/records/$id',
+  path: '/records/$id',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 
@@ -71,20 +71,20 @@ export interface FileRoutesByFullPath {
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
+  '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
-  '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin': typeof AdminIndexRoute
+  '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
-  '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -93,10 +93,10 @@ export interface FileRoutesById {
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
+  '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
-  '/admin/records/$id/edit': typeof AdminRecordsIdEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -106,20 +106,20 @@ export interface FileRouteTypes {
     | '/admin/capture'
     | '/api/records'
     | '/admin/'
+    | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/cron/digest'
     | '/api/photos/$'
-    | '/admin/records/$id/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/admin/capture'
     | '/api/records'
     | '/admin'
+    | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/cron/digest'
     | '/api/photos/$'
-    | '/admin/records/$id/edit'
   id:
     | '__root__'
     | '/'
@@ -127,10 +127,10 @@ export interface FileRouteTypes {
     | '/admin/capture'
     | '/api/records'
     | '/admin/'
+    | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/cron/digest'
     | '/api/photos/$'
-    | '/admin/records/$id/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -199,11 +199,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRecordsNewRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/admin/records/$id/edit': {
-      id: '/admin/records/$id/edit'
-      path: '/records/$id/edit'
-      fullPath: '/admin/records/$id/edit'
-      preLoaderRoute: typeof AdminRecordsIdEditRouteImport
+    '/admin/records/$id': {
+      id: '/admin/records/$id'
+      path: '/records/$id'
+      fullPath: '/admin/records/$id'
+      preLoaderRoute: typeof AdminRecordsIdRouteImport
       parentRoute: typeof AdminRouteRoute
     }
   }
@@ -212,15 +212,15 @@ declare module '@tanstack/react-router' {
 interface AdminRouteRouteChildren {
   AdminCaptureRoute: typeof AdminCaptureRoute
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminRecordsIdRoute: typeof AdminRecordsIdRoute
   AdminRecordsNewRoute: typeof AdminRecordsNewRoute
-  AdminRecordsIdEditRoute: typeof AdminRecordsIdEditRoute
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminCaptureRoute: AdminCaptureRoute,
   AdminIndexRoute: AdminIndexRoute,
+  AdminRecordsIdRoute: AdminRecordsIdRoute,
   AdminRecordsNewRoute: AdminRecordsNewRoute,
-  AdminRecordsIdEditRoute: AdminRecordsIdEditRoute,
 }
 
 const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
