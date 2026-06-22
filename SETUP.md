@@ -148,16 +148,22 @@ banner). CI builds with the production keys from GitHub secrets instead. The wor
 runs on every push to `main` (and via **Actions → Deploy → Run workflow**).
 
 **GitHub repo secrets** (Settings → Secrets and variables → Actions) consumed by the
-workflow — all build-time/deploy, no runtime Worker secrets here:
+Deploy **and** Preview workflows — all build-time/deploy, no runtime Worker secrets here:
 
 | Secret | Value |
 | ------ | ----- |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Clerk **production** publishable key (`pk_live_…`) |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Clerk **production** publishable key (`pk_live_…`) — Deploy only |
+| `VITE_CLERK_PUBLISHABLE_KEY_PREVIEW` | Clerk **development** publishable key (`pk_test_…`) — Preview only (see §7) |
 | `VITE_SENTRY_DSN` | Sentry DSN |
 | `VITE_SENTRY_ORG` / `VITE_SENTRY_PROJECT` | Sentry slugs (source-map upload) |
 | `SENTRY_AUTH_TOKEN` | Sentry auth token (source-map upload) |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare token, **Edit Cloudflare Workers** template, scoped to the account + the `charliegleason.com` zone (custom-domain route needs DNS) |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare token, **Edit Cloudflare Workers** template, scoped to the account + the `charliegleason.com` zone (custom-domain route needs DNS). Also needs **D1 : Edit** and **Queues : Edit** (migrations clone + queue consumer) |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account id (`wrangler whoami`) |
+
+> The Preview workflow reuses every secret above **except** Clerk — it builds with
+> `VITE_CLERK_PUBLISHABLE_KEY_PREVIEW` instead of `VITE_CLERK_PUBLISHABLE_KEY`, so the
+> only *new* secret previews need is the `_PREVIEW` one. A missing/empty value makes
+> the preview 500 on every page (the Clerk provider throws when the key is blank).
 
 > Keep `.env.local` on **test** keys. Don't run `bun run deploy` locally for a real
 > ship — it would inline the test Clerk key and re-introduce the Development banner.
