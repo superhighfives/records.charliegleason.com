@@ -196,6 +196,45 @@ production Clerk instance, and add `records.charliegleason.com` under **Domains*
 
 ---
 
+## 7. PR previews
+
+Each pull request gets a live preview on a standalone `records-preview` Worker
+(`.github/workflows/preview.yml`, runs `wrangler deploy --env preview`). The
+preview reuses the production R2 bucket but gets its **own** D1 database and
+queue, so reviewing — including captures — never touches production data. On
+every run the workflow **clones the production DB into the preview DB** (export →
+reset → import → apply this PR's migrations), so the preview is current but
+isolated. There's one shared preview environment, so the most recent PR build is
+what's live.
+
+One-time provisioning (needs the Cloudflare account; CI fails until it's done):
+
+```bash
+bunx wrangler d1 create records-preview        # → paste id into wrangler.jsonc env.preview
+bunx wrangler queues create records-analyze-preview
+bunx wrangler queues create records-analyze-preview-dlq
+
+# Runtime secrets are per-Worker — set them on the preview Worker too:
+bunx wrangler secret put CLERK_SECRET_KEY --env preview
+bunx wrangler secret put DISCOGS_TOKEN --env preview
+bunx wrangler secret put LASTFM_API_KEY --env preview
+```
+
+Then paste the new `database_id` into the `env.preview.d1_databases` block in
+`wrangler.jsonc` (it ships with a `REPLACE_WITH_…` placeholder).
+
+**Clerk origin.** The build inlines the `pk_live_…` key, so the preview's
+`*.workers.dev` URL must be an allowed origin or `/admin` sign-in is blocked. Add
+it under the Clerk instance's **Domains**, or point the preview build at a Clerk
+**development** instance via a separate `VITE_CLERK_PUBLISHABLE_KEY` for the
+preview workflow.
+
+When you add a new migration, also apply it in the "Refresh preview database"
+step of `preview.yml` (production is a migration behind the PR, so the clone
+needs the new files applied on top).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |

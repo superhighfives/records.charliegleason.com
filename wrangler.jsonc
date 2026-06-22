@@ -76,5 +76,59 @@
 			"name": "EMAIL",
 			"remote": true
 		}
-	]
+	],
+	// PR preview environment — a standalone `records-preview` Worker on
+	// *.workers.dev (no custom domain, cron or email). Deployed by CI on each PR
+	// (.github/workflows/preview.yml), which clones the production D1 into the
+	// preview DB so it's up to date but isolated. R2 is shared with production.
+	// Bindings are NOT inherited by named environments, so everything is repeated.
+	//
+	// One-time setup (needs your Cloudflare account — see SETUP.md):
+	//   wrangler d1 create records-preview            # paste the id below
+	//   wrangler queues create records-analyze-preview
+	//   wrangler queues create records-analyze-preview-dlq
+	//   wrangler secret put CLERK_SECRET_KEY --env preview   # + DISCOGS_TOKEN, LASTFM_API_KEY
+	"env": {
+		"preview": {
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "records-preview",
+					"database_id": "REPLACE_WITH_records-preview_DATABASE_ID",
+					"migrations_dir": "drizzle",
+					"remote": true
+				}
+			],
+			"r2_buckets": [
+				{
+					"binding": "PHOTOS",
+					"bucket_name": "records-photos",
+					"remote": true
+				}
+			],
+			"ai": {
+				"binding": "AI"
+			},
+			"images": {
+				"binding": "IMAGES"
+			},
+			"queues": {
+				"producers": [
+					{
+						"binding": "ANALYZE_QUEUE",
+						"queue": "records-analyze-preview"
+					}
+				],
+				"consumers": [
+					{
+						"queue": "records-analyze-preview",
+						"max_batch_size": 1,
+						"max_batch_timeout": 5,
+						"max_retries": 3,
+						"dead_letter_queue": "records-analyze-preview-dlq"
+					}
+				]
+			}
+		}
+	}
 }
