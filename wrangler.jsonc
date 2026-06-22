@@ -94,7 +94,7 @@
 				{
 					"binding": "DB",
 					"database_name": "records-preview",
-					"database_id": "REPLACE_WITH_records-preview_DATABASE_ID",
+					"database_id": "1de59465-de47-45bc-b5a0-5fdb56b24f10",
 					"migrations_dir": "drizzle",
 					"remote": true
 				}
