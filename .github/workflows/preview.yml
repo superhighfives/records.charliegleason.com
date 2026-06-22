@@ -40,9 +40,15 @@ jobs:
       # with DNS you can't add to workers.dev. Set VITE_CLERK_PUBLISHABLE_KEY_PREVIEW
       # (pk_test_…) in repo secrets, and the preview Worker's CLERK_SECRET_KEY to the
       # matching sk_test_… (wrangler secret put CLERK_SECRET_KEY --env preview).
+      #
+      # CLOUDFLARE_ENV selects the wrangler environment at BUILD time — the
+      # @cloudflare/vite-plugin bakes it into the generated deploy config. Without
+      # it the build defaults to the top-level (production!) config and a later
+      # `wrangler deploy --env preview` can't override it.
       - name: Build
         run: bun run build
         env:
+          CLOUDFLARE_ENV: preview
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY_PREVIEW }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           VITE_SENTRY_ORG: ${{ secrets.VITE_SENTRY_ORG }}
@@ -70,11 +76,15 @@ jobs:
           #    current. No need to name migration files explicitly.
           bunx wrangler d1 migrations apply records-preview --remote --env preview
 
+      # CLOUDFLARE_ENV (not `--env`) keeps wrangler aligned with the build output
+      # the vite plugin generated for the preview environment, and guarantees this
+      # never falls back to the production config/Worker.
       - name: Deploy preview Worker
         env:
+          CLOUDFLARE_ENV: preview
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bunx wrangler deploy --env preview
+        run: bunx wrangler deploy
 
       - name: Comment preview URL on the PR
         uses: actions/github-script@v7
