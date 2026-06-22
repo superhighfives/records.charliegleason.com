@@ -5,6 +5,8 @@ import { useState } from "react";
 import { RecordForm } from "#/components/record-form";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
+import { Label } from "#/components/ui/label";
+import { Textarea } from "#/components/ui/textarea";
 import {
 	analyzePhoto,
 	type RecordSuggestion,
@@ -53,10 +55,14 @@ function Capture() {
 	const [candidates, setCandidates] = useState<Array<DiscogsCandidate>>([]);
 	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
 	const [query, setQuery] = useState({ artist: "", title: "" });
+	const [context, setContext] = useState("");
 
 	const analyze = useMutation({
-		mutationFn: (vars: { imageBase64: string; mediaType: string }) =>
-			analyzePhoto({ data: vars }),
+		mutationFn: (vars: {
+			imageBase64: string;
+			mediaType: string;
+			context: string;
+		}) => analyzePhoto({ data: vars }),
 		onSuccess: (s) => {
 			setSuggestion(s);
 			setCandidates(s.candidates);
@@ -108,11 +114,26 @@ function Capture() {
 						className="max-h-64 rounded-md border"
 					/>
 					{!suggestion && (
+						<div className="space-y-1.5">
+							<Label htmlFor="context">Additional context (optional)</Label>
+							<Textarea
+								id="context"
+								value={context}
+								onChange={(e) => setContext(e.target.value)}
+								placeholder="e.g. it's a 2×LP reissue, or the deluxe pressing on red vinyl — anything that helps pin down the right Discogs release."
+							/>
+							<p className="text-xs text-muted-foreground">
+								Helps Claude read the cover and search Discogs. Not saved with
+								the record.
+							</p>
+						</div>
+					)}
+					{!suggestion && (
 						<Button
 							type="button"
 							disabled={analyze.isPending}
 							onClick={() =>
-								analyze.mutate({ imageBase64: preview, mediaType })
+								analyze.mutate({ imageBase64: preview, mediaType, context })
 							}
 						>
 							{analyze.isPending ? "Analyzing…" : "Analyze photo"}

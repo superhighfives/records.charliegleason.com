@@ -66,7 +66,14 @@ function base64ToBytes(b64: string): Uint8Array {
 async function extractFromImage(
 	data: string,
 	mediaType: string,
+	context?: string,
 ): Promise<Extraction> {
+	const instruction =
+		"Identify the vinyl record from this cover photo. Read the artist and album title exactly as printed. Only set a year if it's clearly shown.";
+	const text = context
+		? `${instruction}\n\nExtra context from the collector (use it to disambiguate the pressing/format or guide the read): ${context}`
+		: instruction;
+
 	const msg = await runClaude({
 		max_tokens: 1024,
 		tools: [EXTRACT_TOOL],
@@ -81,7 +88,7 @@ async function extractFromImage(
 					},
 					{
 						type: "text",
-						text: "Identify the vinyl record from this cover photo. Read the artist and album title exactly as printed. Only set a year if it's clearly shown.",
+						text,
 					},
 				],
 			},
@@ -108,12 +115,14 @@ async function extractFromImage(
  */
 async function identifyWithWebSearch(
 	partial: Extraction,
+	context?: string,
 ): Promise<Extraction | null> {
+	const hint = context ? ` The collector adds: "${context}".` : "";
 	// biome-ignore lint/suspicious/noExplicitAny: heterogeneous Anthropic message content
 	const messages: Array<any> = [
 		{
 			role: "user",
-			content: `I photographed a vinyl record. A first guess is artist="${partial.artist}", title="${partial.title}". Use web search to confirm the correct artist, album title, and original release year (check Discogs/Wikipedia). When confident, call the "record" tool with the corrected values.`,
+			content: `I photographed a vinyl record. A first guess is artist="${partial.artist}", title="${partial.title}".${hint} Use web search to confirm the correct artist, album title, and original release year (check Discogs/Wikipedia). When confident, call the "record" tool with the corrected values.`,
 		},
 	];
 
@@ -180,13 +189,17 @@ export const searchDiscogs = createServerFn({ method: "POST" })
 
 export const analyzePhoto = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator((data: { imageBase64: string; mediaType: string }) => data)
+	.validator(
+		(data: { imageBase64: string; mediaType: string; context?: string }) =>
+			data,
+	)
 	.handler(({ data }) =>
 		Sentry.startSpan(
 			{ name: "analyzePhoto" },
 			async (): Promise<RecordSuggestion> => {
 				const mediaType = data.mediaType || "image/jpeg";
 				const raw = stripDataUrl(data.imageBase64);
+				const context = data.context?.trim() || undefined;
 
 				// Keep the iPhone shot as a reference (admin only). The displayed cover
 				// is sourced from Discogs + resized at save time (see createRecord).
@@ -197,7 +210,7 @@ export const analyzePhoto = createServerFn({ method: "POST" })
 				});
 
 				// 1. Vision read.
-				let extraction = await extractFromImage(raw, mediaType);
+				let extraction = await extractFromImage(raw, mediaType, context);
 
 				// 2. Discogs lookup.
 				let candidates = extraction.artist
@@ -211,7 +224,7 @@ export const analyzePhoto = createServerFn({ method: "POST" })
 					console.info(
 						`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs matches=${candidates.length})`,
 					);
-					const refined = await identifyWithWebSearch(extraction);
+					const refined = await identifyWithWebSearch(extraction, context);
 					if (refined) {
 						extraction = refined;
 						candidates = await searchReleases(
