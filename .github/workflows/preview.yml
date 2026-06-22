@@ -64,11 +64,11 @@ jobs:
           # 3. Load the fresh copy of production (production's current schema).
           bunx wrangler d1 execute records-preview --remote --env preview --yes \
             --file /tmp/prod.sql
-          # 4. Bring the preview schema up to this PR. Production is one migration
-          #    behind this branch; apply the new migration(s) on top of the clone.
-          #    Add any further migrations here as you create them.
-          bunx wrangler d1 execute records-preview --remote --env preview --yes \
-            --file drizzle/0002_many_risque.sql
+          # 4. Bring the preview schema up to this PR's migrations. The clone
+          #    includes production's d1_migrations table, so this applies only the
+          #    migrations production doesn't have yet — a no-op when prod is already
+          #    current. No need to name migration files explicitly.
+          bunx wrangler d1 migrations apply records-preview --remote --env preview
 
       - name: Deploy preview Worker
         env:

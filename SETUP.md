@@ -237,9 +237,10 @@ the matching `sk_test_…`. (Dev instances show a "development mode" banner — 
 for review. To get `pk_live` parity instead, add `preview.records.charliegleason.com`
 as a Clerk satellite domain and set `isSatellite`/`domain` on `ClerkProvider`.)
 
-When you add a new migration, also apply it in the "Refresh preview database"
-step of `preview.yml` (production is a migration behind the PR, so the clone
-needs the new files applied on top).
+New migrations need no workflow changes: after cloning production (which carries
+its `d1_migrations` table), the "Refresh preview database" step runs
+`wrangler d1 migrations apply`, which applies only the migrations the PR adds on
+top of production — a no-op when production is already current.
 
 ---
 
