@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Camera, CheckCircle2, Loader2, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { DuplicateBadge } from "#/components/duplicate-badge";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -50,6 +51,7 @@ function SessionItem({ id }: { id: number }) {
 					<div className="size-10 shrink-0 rounded bg-muted" />
 				)}
 				<span className="min-w-0 flex-1 truncate">{label}</span>
+				{record?.duplicateOf != null && <DuplicateBadge className="shrink-0" />}
 				<StatusBadge
 					status={record?.status ?? "pending"}
 					className="shrink-0"

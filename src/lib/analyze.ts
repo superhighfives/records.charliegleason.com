@@ -41,6 +41,51 @@ interface Extraction {
 	confidence: number;
 }
 
+/** Normalize a name for loose comparison: lowercase, collapse whitespace, drop punctuation. */
+function normalizeName(value: string | null | undefined): string {
+	return (value ?? "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+/**
+ * Decide whether an identified record already exists in the collection. Matches
+ * on Discogs id first (the most reliable signal — same release), then falls back
+ * to a normalized artist + title comparison so a re-photographed sleeve still
+ * gets flagged even when Discogs didn't resolve. Returns the id of the existing
+ * record it duplicates, or null. Pure: the caller supplies the rows to check
+ * against (the record being analyzed must be excluded by the caller).
+ */
+export function findDuplicateOf(
+	target: { artist: string; title: string; discogsId: string | null },
+	existing: Array<Pick<Record, "id" | "artist" | "title" | "discogsId">>,
+): number | null {
+	const artist = normalizeName(target.artist);
+	const title = normalizeName(target.title);
+	const discogsId = target.discogsId?.trim() || null;
+
+	// A blank identification can't meaningfully match anything.
+	if (!discogsId && (!artist || !title)) return null;
+
+	let fallback: number | null = null;
+	for (const row of existing) {
+		if (discogsId && row.discogsId?.trim() === discogsId) {
+			return row.id; // exact release match wins outright
+		}
+		if (
+			fallback === null &&
+			artist &&
+			title &&
+			normalizeName(row.artist) === artist &&
+			normalizeName(row.title) === title
+		) {
+			fallback = row.id;
+		}
+	}
+	return fallback;
+}
+
 const EXTRACT_TOOL = {
 	name: "record",
 	description: "Report the identified vinyl record.",

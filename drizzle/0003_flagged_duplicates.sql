@@ -1,0 +1,1 @@
+ALTER TABLE `records` ADD `duplicate_of` integer;
