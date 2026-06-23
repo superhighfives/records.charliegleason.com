@@ -1,15 +1,63 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Camera, Loader2, UploadCloud } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { Camera, CheckCircle2, Loader2, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { type ProcessedImage, squareDownscale } from "#/lib/image-resize";
 import { captureRecord } from "#/lib/records";
-import { recordsQueryOptions } from "#/lib/records-queries";
+import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 
 export const Route = createFileRoute("/admin/capture")({ component: Capture });
+
+/**
+ * One row in the "this session" strip. Subscribes to the record so the badge
+ * flips pending → analyzing → needs review on its own, and the artist/title
+ * fill in as soon as the background analysis lands — no navigating away.
+ */
+function SessionItem({ id }: { id: number }) {
+	const { data: record } = useQuery({
+		...recordQueryOptions(id),
+		refetchInterval: (query) => {
+			const status = query.state.data?.status;
+			return status === "pending" || status === "processing" ? 2000 : false;
+		},
+	});
+
+	const key = record?.coverImageKey ?? record?.capturePhotoKey;
+	const label =
+		record?.artist || record?.title
+			? `${record.artist || "Unknown"} — ${record.title || "Untitled"}`
+			: "Analyzing…";
+
+	return (
+		<li>
+			<Link
+				to="/admin/records/$id"
+				params={{ id: String(id) }}
+				className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-accent/50"
+			>
+				{key ? (
+					<img
+						src={`/api/photos/${key}`}
+						alt=""
+						className="size-10 shrink-0 rounded object-cover"
+					/>
+				) : (
+					<div className="size-10 shrink-0 rounded bg-muted" />
+				)}
+				<span className="min-w-0 flex-1 truncate">{label}</span>
+				<StatusBadge
+					status={record?.status ?? "pending"}
+					className="shrink-0"
+				/>
+			</Link>
+		</li>
+	);
+}
 
 function readFile(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -20,8 +68,22 @@ function readFile(file: File): Promise<string> {
 	});
 }
 
+/**
+ * Crop to a square and downscale in the browser for a fast upload, falling back
+ * to the untouched file if the browser can't decode it (e.g. HEIC on desktop).
+ */
+async function prepareUpload(file: File): Promise<ProcessedImage> {
+	try {
+		return await squareDownscale(file);
+	} catch {
+		return {
+			dataUrl: await readFile(file),
+			mediaType: file.type || "image/jpeg",
+		};
+	}
+}
+
 function Capture() {
-	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 
 	const [preview, setPreview] = useState<string | null>(null);
@@ -29,6 +91,9 @@ function Capture() {
 	const [context, setContext] = useState("");
 	const [dragOver, setDragOver] = useState(false);
 	const [reading, setReading] = useState(false);
+	// Records captured in this sitting, newest first — lets you shoot a stack of
+	// sleeves back-to-back and watch each get matched without leaving the page.
+	const [session, setSession] = useState<Array<number>>([]);
 
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -43,18 +108,21 @@ function Capture() {
 			await queryClient.invalidateQueries({
 				queryKey: recordsQueryOptions.queryKey,
 			});
-			// Jump to the detail page and watch the AI work land.
-			navigate({ to: "/admin/records/$id", params: { id: String(record.id) } });
+			// Stay put and reset for the next sleeve — the session strip below tracks
+			// this capture as the AI works through it in the background.
+			setSession((prev) => [record.id, ...prev]);
+			reset();
 		},
 	});
 
 	async function handleFile(file: File | undefined) {
 		if (!file || !file.type.startsWith("image/")) return;
-		setMediaType(file.type || "image/jpeg");
-		// Reading a large HEIC/JPEG to base64 isn't instant — show a spinner meanwhile.
+		// Decoding + cropping a large HEIC/JPEG isn't instant — show a spinner.
 		setReading(true);
 		try {
-			setPreview(await readFile(file));
+			const processed = await prepareUpload(file);
+			setMediaType(processed.mediaType);
+			setPreview(processed.dataUrl);
 		} finally {
 			setReading(false);
 		}
@@ -72,8 +140,8 @@ function Capture() {
 				<h1 className="text-2xl font-semibold">Capture a record</h1>
 				<p className="text-sm text-muted-foreground">
 					Photograph the cover and save it — Claude reads it, Discogs and
-					Pitchfork fill in the rest in the background. You’ll confirm the
-					details before it goes live.
+					Pitchfork fill in the rest in the background. Keep shooting one sleeve
+					after another; review and publish them later from the collection.
 				</p>
 			</div>
 
@@ -194,7 +262,14 @@ function Capture() {
 					</div>
 
 					<Button type="submit" disabled={capture.isPending}>
-						{capture.isPending ? "Saving…" : "Capture record"}
+						{capture.isPending ? (
+							<>
+								<Loader2 className="animate-spin" />
+								Uploading…
+							</>
+						) : (
+							"Capture record"
+						)}
 					</Button>
 
 					{capture.isError && (
@@ -204,6 +279,23 @@ function Capture() {
 						</p>
 					)}
 				</form>
+			)}
+
+			{session.length > 0 && (
+				<div className="space-y-2">
+					<div className="flex items-center gap-2 text-sm font-medium">
+						<CheckCircle2 className="size-4 text-green-600" />
+						Captured this session ({session.length})
+					</div>
+					<ul className="divide-y rounded-md border">
+						{session.map((id) => (
+							<SessionItem key={id} id={id} />
+						))}
+					</ul>
+					<Button asChild variant="outline" className="w-full">
+						<Link to="/admin">Review &amp; publish in the collection</Link>
+					</Button>
+				</div>
 			)}
 		</div>
 	);

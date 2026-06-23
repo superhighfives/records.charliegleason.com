@@ -8,7 +8,7 @@ import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
 import { getReleaseDetail, searchReleases } from "#/lib/discogs";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
-import { sourceCoverFromDiscogs } from "#/lib/images";
+import { sourceCoverFromDiscogs, storeCapturePhoto } from "#/lib/images";
 import { enqueueAnalyze } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 
@@ -111,14 +111,14 @@ export const captureRecord = createServerFn({ method: "POST" })
 	.handler(({ data }) =>
 		Sentry.startSpan({ name: "captureRecord" }, async () => {
 			const db = getDb(env.DB);
-			const { mediaType } = data;
-			const raw = stripDataUrl(data.imageBase64);
+			const bytes = base64ToBytes(stripDataUrl(data.imageBase64));
 
-			const ext = mediaType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
-			const capturePhotoKey = `captures/${crypto.randomUUID()}.${ext}`;
-			await env.PHOTOS.put(capturePhotoKey, base64ToBytes(raw), {
-				httpMetadata: { contentType: mediaType },
-			});
+			// Canonicalise to a square webp via Cloudflare Images (falls back to the
+			// raw bytes if Image Transformations are unavailable).
+			const { key: capturePhotoKey } = await storeCapturePhoto(
+				bytes,
+				data.mediaType,
+			);
 
 			const [row] = await db
 				.insert(records)
