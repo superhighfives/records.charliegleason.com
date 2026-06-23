@@ -41,9 +41,15 @@ interface Extraction {
 	confidence: number;
 }
 
-/** Normalize a name for loose comparison: lowercase, collapse whitespace, drop punctuation. */
+/**
+ * Normalize a name for loose comparison: fold diacritics to their base letter
+ * (ö → o, so "Björk" matches a plain "Bjork"), lowercase, then collapse runs of
+ * punctuation/whitespace to single spaces.
+ */
 function normalizeName(value: string | null | undefined): string {
 	return (value ?? "")
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "") // drop combining marks left by NFKD
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, " ")
 		.trim();
@@ -68,22 +74,26 @@ export function findDuplicateOf(
 	// A blank identification can't meaningfully match anything.
 	if (!discogsId && (!artist || !title)) return null;
 
-	let fallback: number | null = null;
+	// The caller's rows are unordered, so track the smallest id in each bucket to
+	// keep the result deterministic and point at the earliest record. A Discogs id
+	// match (same release) outranks a name-only match regardless of id.
+	let discogsMatch: number | null = null;
+	let nameMatch: number | null = null;
 	for (const row of existing) {
 		if (discogsId && row.discogsId?.trim() === discogsId) {
-			return row.id; // exact release match wins outright
+			if (discogsMatch === null || row.id < discogsMatch) discogsMatch = row.id;
+			continue;
 		}
 		if (
-			fallback === null &&
 			artist &&
 			title &&
 			normalizeName(row.artist) === artist &&
 			normalizeName(row.title) === title
 		) {
-			fallback = row.id;
+			if (nameMatch === null || row.id < nameMatch) nameMatch = row.id;
 		}
 	}
-	return fallback;
+	return discogsMatch ?? nameMatch;
 }
 
 const EXTRACT_TOOL = {

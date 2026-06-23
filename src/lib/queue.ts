@@ -54,7 +54,12 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		// against every other row (the capture itself is excluded by id), matching
 		// on Discogs id first, then on normalized artist + title.
 		const others = await db
-			.select()
+			.select({
+				id: records.id,
+				artist: records.artist,
+				title: records.title,
+				discogsId: records.discogsId,
+			})
 			.from(records)
 			.where(ne(records.id, recordId));
 		const duplicateOf = findDuplicateOf(
