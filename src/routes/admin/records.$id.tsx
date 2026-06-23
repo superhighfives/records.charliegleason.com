@@ -1,11 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { Info, Loader2 } from "lucide-react";
 import { useState } from "react";
 
 import { RecordForm } from "#/components/record-form";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "#/components/ui/tooltip";
 import type { Record } from "#/db/schema";
 import type { DiscogsCandidate } from "#/lib/discogs";
 import type { RecordFormValues } from "#/lib/record-schema";
@@ -49,65 +55,128 @@ function toForm(
 	};
 }
 
-/** Expanded details for a selected Discogs candidate (fetched on demand). */
-function CandidateDetail({ discogsId }: { discogsId: string }) {
-	const { data, isLoading } = useQuery({
-		queryKey: ["discogs-release", discogsId] as const,
-		queryFn: () => getDiscogsRelease({ data: discogsId }),
+/**
+ * A single Discogs candidate row. Once selected we fetch the full release so we
+ * can fold the richer format/country/year line into the description, and surface
+ * the tracklist in a hover tooltip (no inline accordion).
+ */
+function CandidateRow({
+	candidate: c,
+	active,
+	onToggle,
+}: {
+	candidate: DiscogsCandidate;
+	active: boolean;
+	onToggle: () => void;
+}) {
+	const { data: detail } = useQuery({
+		queryKey: ["discogs-release", c.discogsId] as const,
+		queryFn: () => getDiscogsRelease({ data: c.discogsId }),
 		staleTime: 5 * 60 * 1000,
+		enabled: active,
 	});
 
-	if (isLoading) {
-		return (
-			<p className="px-3 pb-3 text-xs text-muted-foreground">
-				Loading release details…
-			</p>
-		);
-	}
-	if (!data) {
-		return (
-			<p className="px-3 pb-3 text-xs text-muted-foreground">
-				No extra details available.
-			</p>
-		);
-	}
-
-	const meta = [data.formats, data.country, data.released]
-		.filter(Boolean)
-		.join(" · ");
+	// Keep the description identical whether or not the row is selected — always the
+	// search-hit metadata, never the (selected-only) fetched detail. The fetch below
+	// exists purely to populate the tracklist tooltip. Discogs hands back a literal
+	// "none" for missing fields, so drop those alongside empty values.
+	const metaParts = (
+		[
+			["Format", c.format],
+			["Country", c.country],
+			["Label", c.label],
+			["Cat#", c.catno],
+			["Year", c.year],
+		] as const
+	)
+		.map(([k, v]) => [k, v == null ? "" : String(v).trim()] as const)
+		.filter(([, v]) => v !== "" && v.toLowerCase() !== "none");
+	const tracklist = detail?.tracklist ?? [];
 
 	return (
-		<div className="space-y-3 border-t bg-accent/30 px-3 py-3">
-			{meta && <p className="text-sm text-muted-foreground">{meta}</p>}
-			{data.styles.length > 0 && (
-				<div className="flex flex-wrap gap-1">
-					{data.styles.map((s) => (
-						<span key={s} className="rounded-full bg-muted px-2 py-0.5 text-xs">
-							{s}
+		<li>
+			<button
+				type="button"
+				onClick={onToggle}
+				className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
+					active ? "bg-accent" : "hover:bg-accent/50"
+				}`}
+			>
+				{c.thumb ? (
+					<img
+						src={c.thumb}
+						alt=""
+						className="size-10 shrink-0 rounded object-cover"
+					/>
+				) : (
+					<div className="size-10 shrink-0 rounded bg-muted" />
+				)}
+				<span className="min-w-0 flex-1">
+					<span className="block truncate">
+						<span className="font-medium">{c.artist}</span> — {c.title}
+						{c.year ? ` (${c.year})` : ""}
+					</span>
+					{(metaParts.length > 0 || (active && tracklist.length > 0)) && (
+						<span className="flex items-start gap-1.5 text-xs text-muted-foreground">
+							{metaParts.length > 0 && (
+								<span>
+									{metaParts.map(([k, v], i) => (
+										<span key={k}>
+											{i > 0 && (
+												<span className="text-muted-foreground/40"> / </span>
+											)}
+											<span className="font-semibold">{k}:</span> {v}
+										</span>
+									))}
+								</span>
+							)}
+							{active && tracklist.length > 0 && (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										{/* Presentational span keeps this valid inside the row button;
+										    Radix supplies the hover/focus handlers. The click handler only
+										    stops the event reaching the row so tapping the icon (notably on
+										    touch) doesn't toggle/deselect the candidate. */}
+										{/* biome-ignore lint/a11y/noStaticElementInteractions: tooltip trigger, not a control */}
+										{/* biome-ignore lint/a11y/useKeyWithClickEvents: click only stops propagation, no action to key-bind */}
+										<span
+											onClick={(e) => e.stopPropagation()}
+											className="mt-px shrink-0 cursor-help text-muted-foreground hover:text-foreground"
+										>
+											<Info className="size-3.5" aria-label="Show tracklist" />
+										</span>
+									</TooltipTrigger>
+									<TooltipContent
+										align="start"
+										className="max-h-80 max-w-xs overflow-auto"
+									>
+										<ol className="space-y-0.5">
+											{tracklist.map((t) => (
+												<li
+													key={`${t.position}-${t.title}`}
+													className="flex gap-2 text-xs"
+												>
+													<span className="w-8 shrink-0 tabular-nums text-muted-foreground">
+														{t.position}
+													</span>
+													<span className="flex-1">{t.title}</span>
+													{t.duration && (
+														<span className="tabular-nums text-muted-foreground">
+															{t.duration}
+														</span>
+													)}
+												</li>
+											))}
+										</ol>
+									</TooltipContent>
+								</Tooltip>
+							)}
 						</span>
-					))}
-				</div>
-			)}
-			{data.tracklist.length > 0 && (
-				<ol className="space-y-0.5">
-					{data.tracklist.map((t) => (
-						<li
-							key={`${t.position}-${t.title}`}
-							className="flex gap-2 text-xs text-muted-foreground"
-						>
-							<span className="w-8 shrink-0 tabular-nums">{t.position}</span>
-							<span className="flex-1 text-foreground">{t.title}</span>
-							{t.duration && <span className="tabular-nums">{t.duration}</span>}
-						</li>
-					))}
-				</ol>
-			)}
-			{data.notes && (
-				<p className="line-clamp-3 whitespace-pre-line text-xs text-muted-foreground">
-					{data.notes}
-				</p>
-			)}
-		</div>
+					)}
+				</span>
+				{active && <span className="shrink-0 text-xs">✓</span>}
+			</button>
+		</li>
 	);
 }
 
@@ -163,7 +232,7 @@ function RecordDetail() {
 			: "Captured record";
 
 	return (
-		<div className="max-w-2xl space-y-6">
+		<div className="mx-auto max-w-2xl space-y-6">
 			<div className="flex items-start justify-between gap-4">
 				<div>
 					<Link
@@ -214,7 +283,8 @@ function RecordDetail() {
 
 			{/* In-flight: just wait and poll. */}
 			{inFlight && (
-				<div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+				<div className="flex items-start gap-3 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+					<Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" />
 					Analyzing the photo in the background — reading the cover, matching
 					Discogs, scoring on Pitchfork. This page updates itself when it’s
 					ready.
@@ -311,43 +381,12 @@ function RecordDetail() {
 									picked?.discogsId === c.discogsId ||
 									(!picked && record.discogsId === c.discogsId);
 								return (
-									<li key={c.discogsId}>
-										<button
-											type="button"
-											onClick={() => setPicked(active ? null : c)}
-											className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
-												active ? "bg-accent" : "hover:bg-accent/50"
-											}`}
-										>
-											{c.thumb ? (
-												<img
-													src={c.thumb}
-													alt=""
-													className="size-10 shrink-0 rounded object-cover"
-												/>
-											) : (
-												<div className="size-10 shrink-0 rounded bg-muted" />
-											)}
-											<span className="min-w-0 flex-1">
-												<span className="block truncate">
-													<span className="font-medium">{c.artist}</span> —{" "}
-													{c.title}
-													{c.year ? ` (${c.year})` : ""}
-												</span>
-												{[c.format, c.country, c.label, c.catno].some(
-													Boolean,
-												) && (
-													<span className="block truncate text-xs text-muted-foreground">
-														{[c.format, c.country, c.label, c.catno]
-															.filter(Boolean)
-															.join(" · ")}
-													</span>
-												)}
-											</span>
-											{active && <span className="shrink-0 text-xs">✓</span>}
-										</button>
-										{active && <CandidateDetail discogsId={c.discogsId} />}
-									</li>
+									<CandidateRow
+										key={c.discogsId}
+										candidate={c}
+										active={active}
+										onToggle={() => setPicked(active ? null : c)}
+									/>
 								);
 							})}
 						</ul>

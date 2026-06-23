@@ -1,11 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Camera, UploadCloud } from "lucide-react";
+import { Camera, Loader2, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { Button } from "#/components/ui/button";
+import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { Textarea } from "#/components/ui/textarea";
 import { captureRecord } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
@@ -28,6 +28,7 @@ function Capture() {
 	const [mediaType, setMediaType] = useState("image/jpeg");
 	const [context, setContext] = useState("");
 	const [dragOver, setDragOver] = useState(false);
+	const [reading, setReading] = useState(false);
 
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -50,7 +51,13 @@ function Capture() {
 	async function handleFile(file: File | undefined) {
 		if (!file || !file.type.startsWith("image/")) return;
 		setMediaType(file.type || "image/jpeg");
-		setPreview(await readFile(file));
+		// Reading a large HEIC/JPEG to base64 isn't instant — show a spinner meanwhile.
+		setReading(true);
+		try {
+			setPreview(await readFile(file));
+		} finally {
+			setReading(false);
+		}
 	}
 
 	function reset() {
@@ -60,7 +67,7 @@ function Capture() {
 	}
 
 	return (
-		<div className="max-w-lg space-y-6">
+		<div className="mx-auto max-w-2xl space-y-6">
 			<div>
 				<h1 className="text-2xl font-semibold">Capture a record</h1>
 				<p className="text-sm text-muted-foreground">
@@ -87,7 +94,14 @@ function Capture() {
 				onChange={(e) => handleFile(e.target.files?.[0])}
 			/>
 
-			{!preview ? (
+			{reading ? (
+				<div className="flex flex-col items-center gap-3 rounded-xl border-2 border-dashed border-muted-foreground/25 p-8 text-center">
+					<div className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+						<Loader2 className="size-6 animate-spin" />
+					</div>
+					<p className="font-medium">Loading photo…</p>
+				</div>
+			) : !preview ? (
 				// biome-ignore lint/a11y/useSemanticElements: the dropzone wraps a nested "Open camera" button, so it can't itself be a <button>
 				<div
 					role="button"
@@ -143,7 +157,14 @@ function Capture() {
 					</Button>
 				</div>
 			) : (
-				<div className="space-y-4">
+				<form
+					className="space-y-4"
+					onSubmit={(e) => {
+						e.preventDefault();
+						if (capture.isPending) return;
+						capture.mutate({ imageBase64: preview, mediaType, context });
+					}}
+				>
 					<div className="space-y-2">
 						<img
 							src={preview}
@@ -161,24 +182,18 @@ function Capture() {
 
 					<div className="space-y-1.5">
 						<Label htmlFor="context">Additional context (optional)</Label>
-						<Textarea
+						<Input
 							id="context"
 							value={context}
 							onChange={(e) => setContext(e.target.value)}
-							placeholder="e.g. it's a 2×LP reissue, or the deluxe pressing on red vinyl — anything that helps pin down the right Discogs release."
+							placeholder="e.g. 2×LP reissue, or deluxe red vinyl"
 						/>
 						<p className="text-xs text-muted-foreground">
 							Used to help Claude read the cover and search Discogs.
 						</p>
 					</div>
 
-					<Button
-						type="button"
-						disabled={capture.isPending}
-						onClick={() =>
-							capture.mutate({ imageBase64: preview, mediaType, context })
-						}
-					>
+					<Button type="submit" disabled={capture.isPending}>
 						{capture.isPending ? "Saving…" : "Capture record"}
 					</Button>
 
@@ -188,7 +203,7 @@ function Capture() {
 							from the New record page.
 						</p>
 					)}
-				</div>
+				</form>
 			)}
 		</div>
 	);

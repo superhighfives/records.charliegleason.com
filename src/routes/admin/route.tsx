@@ -21,8 +21,8 @@ function AdminLayout() {
 					<div className="min-h-screen">
 						<header className="flex items-center justify-between border-b px-6 py-4">
 							<nav className="flex items-center gap-4">
-								<Link to="/admin" className="font-semibold">
-									Records admin
+								<Link to="/" className="font-semibold">
+									Records
 								</Link>
 							</nav>
 							<UserButton />
