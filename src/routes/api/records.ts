@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { createFileRoute } from "@tanstack/react-router";
 import { json } from "@tanstack/react-start";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
@@ -20,6 +20,7 @@ export const Route = createFileRoute("/api/records")({
 				const rows = await db
 					.select()
 					.from(records)
+					.where(eq(records.status, "complete"))
 					.orderBy(desc(records.createdAt));
 
 				// The iPhone capture is admin-only; never expose it publicly.

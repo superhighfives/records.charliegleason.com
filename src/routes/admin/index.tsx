@@ -17,11 +17,23 @@ import {
 } from "@tanstack/react-table";
 import { useRef, useState } from "react";
 
+import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import type { Record } from "#/db/schema";
 import { deleteRecord } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
+
+type StatusFilter = NonNullable<Record["status"]> | "all";
+
+const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
+	{ value: "all", label: "All" },
+	{ value: "pending", label: "Queued" },
+	{ value: "processing", label: "Analyzing" },
+	{ value: "review", label: "Needs review" },
+	{ value: "failed", label: "Failed" },
+	{ value: "complete", label: "Published" },
+];
 
 export const Route = createFileRoute("/admin/")({
 	loader: ({ context }) =>
@@ -35,6 +47,7 @@ function AdminRecords() {
 	const searchRef = useRef<HTMLInputElement>(null);
 
 	const [filter, setFilter] = useState("");
+	const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 	const [sorting, setSorting] = useState<SortingState>([]);
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
@@ -75,8 +88,20 @@ function AdminRecords() {
 				);
 			},
 		},
-		{ accessorKey: "artist", header: "Artist" },
-		{ accessorKey: "title", header: "Title" },
+		{
+			accessorKey: "artist",
+			header: "Artist",
+			cell: ({ getValue }) =>
+				getValue<string>() || <span className="text-muted-foreground">—</span>,
+		},
+		{
+			accessorKey: "title",
+			header: "Title",
+			cell: ({ getValue }) =>
+				getValue<string>() || (
+					<span className="text-muted-foreground italic">Processing…</span>
+				),
+		},
 		{ accessorKey: "year", header: "Year" },
 		{ accessorKey: "label", header: "Label" },
 		{
@@ -85,17 +110,30 @@ function AdminRecords() {
 			cell: ({ getValue }) => getValue<number | null>() ?? "—",
 		},
 		{
+			accessorKey: "status",
+			header: "Status",
+			cell: ({ row }) => (
+				<Link
+					to="/admin/records/$id"
+					params={{ id: String(row.original.id) }}
+					className="inline-block"
+				>
+					<StatusBadge status={row.original.status} />
+				</Link>
+			),
+		},
+		{
 			id: "actions",
 			header: "",
 			enableSorting: false,
 			cell: ({ row }) => (
 				<div className="flex justify-end gap-2">
 					<Link
-						to="/admin/records/$id/edit"
+						to="/admin/records/$id"
 						params={{ id: String(row.original.id) }}
 						className="text-sm underline underline-offset-4"
 					>
-						Edit
+						View
 					</Link>
 					<button
 						type="button"
@@ -114,8 +152,13 @@ function AdminRecords() {
 		},
 	];
 
+	const rows =
+		statusFilter === "all"
+			? data
+			: data.filter((r) => (r.status ?? "complete") === statusFilter);
+
 	const table = useReactTable({
-		data,
+		data: rows,
 		columns,
 		state: { globalFilter: debouncedFilter, sorting },
 		onGlobalFilterChange: setFilter,
@@ -137,10 +180,37 @@ function AdminRecords() {
 						placeholder="Filter records…  ( / )"
 						className="max-w-xs"
 					/>
+					<Button asChild variant="outline">
+						<Link to="/admin/records/new">Add manually</Link>
+					</Button>
 					<Button asChild>
-						<Link to="/admin/records/new">New record</Link>
+						<Link to="/admin/capture">Capture record</Link>
 					</Button>
 				</div>
+			</div>
+
+			<div className="flex flex-wrap gap-2">
+				{STATUS_FILTERS.map((f) => {
+					const count =
+						f.value === "all"
+							? data.length
+							: data.filter((r) => (r.status ?? "complete") === f.value).length;
+					const active = statusFilter === f.value;
+					return (
+						<button
+							key={f.value}
+							type="button"
+							onClick={() => setStatusFilter(f.value)}
+							className={`rounded-full border px-3 py-1 text-xs ${
+								active
+									? "border-foreground bg-foreground text-background"
+									: "text-muted-foreground hover:bg-accent"
+							}`}
+						>
+							{f.label} ({count})
+						</button>
+					);
+				})}
 			</div>
 
 			<table className="w-full border-collapse text-sm">

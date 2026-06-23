@@ -148,16 +148,22 @@ banner). CI builds with the production keys from GitHub secrets instead. The wor
 runs on every push to `main` (and via **Actions → Deploy → Run workflow**).
 
 **GitHub repo secrets** (Settings → Secrets and variables → Actions) consumed by the
-workflow — all build-time/deploy, no runtime Worker secrets here:
+Deploy **and** Preview workflows — all build-time/deploy, no runtime Worker secrets here:
 
 | Secret | Value |
 | ------ | ----- |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Clerk **production** publishable key (`pk_live_…`) |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Clerk **production** publishable key (`pk_live_…`) — Deploy only |
+| `VITE_CLERK_PUBLISHABLE_KEY_PREVIEW` | Clerk **development** publishable key (`pk_test_…`) — Preview only (see §7) |
 | `VITE_SENTRY_DSN` | Sentry DSN |
 | `VITE_SENTRY_ORG` / `VITE_SENTRY_PROJECT` | Sentry slugs (source-map upload) |
 | `SENTRY_AUTH_TOKEN` | Sentry auth token (source-map upload) |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare token, **Edit Cloudflare Workers** template, scoped to the account + the `charliegleason.com` zone (custom-domain route needs DNS) |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare token, **Edit Cloudflare Workers** template, scoped to the account + the `charliegleason.com` zone (custom-domain route needs DNS). Also needs **D1 : Edit** and **Queues : Edit** (migrations clone + queue consumer) |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account id (`wrangler whoami`) |
+
+> The Preview workflow reuses every secret above **except** Clerk — it builds with
+> `VITE_CLERK_PUBLISHABLE_KEY_PREVIEW` instead of `VITE_CLERK_PUBLISHABLE_KEY`, so the
+> only *new* secret previews need is the `_PREVIEW` one. A missing/empty value makes
+> the preview 500 on every page (the Clerk provider throws when the key is blank).
 
 > Keep `.env.local` on **test** keys. Don't run `bun run deploy` locally for a real
 > ship — it would inline the test Clerk key and re-introduce the Development banner.
@@ -193,6 +199,54 @@ in the dashboard, or uncomment the `routes` block in `wrangler.jsonc`.
 
 **Clerk production** — swap the test keys for **production** keys from a dedicated
 production Clerk instance, and add `records.charliegleason.com` under **Domains**.
+
+---
+
+## 7. PR previews
+
+Each pull request gets a live preview at **`preview.records.charliegleason.com`**
+on a standalone `records-preview` Worker (`.github/workflows/preview.yml`, runs
+`wrangler deploy --env preview`). The preview reuses the production R2 bucket but
+gets its **own** D1 database and queue, so reviewing — including captures — never
+touches production data. On every run the workflow **clones the production DB
+into the preview DB** (export → reset → import → apply this PR's migrations), so
+the preview is current but isolated. There's one shared preview environment, so
+the most recent PR build is what's live.
+
+> `env.preview` overrides the inherited `routes` (so it takes
+> `preview.records.charliegleason.com`, **not** the production domain) and the
+> inherited `triggers` (empty crons — no digest in preview).
+
+One-time provisioning (needs the Cloudflare account; CI fails until it's done):
+
+```bash
+bunx wrangler d1 create records-preview        # → paste id into wrangler.jsonc env.preview
+bunx wrangler queues create records-analyze-preview
+bunx wrangler queues create records-analyze-preview-dlq
+
+# Runtime secrets are per-Worker — set them on the preview Worker too. Use the
+# Clerk *development* keys here (sk_test_…) to match the build key below:
+bunx wrangler secret put CLERK_SECRET_KEY --env preview
+bunx wrangler secret put DISCOGS_TOKEN --env preview
+```
+
+Then paste the new `database_id` into the `env.preview.d1_databases` block in
+`wrangler.jsonc` (it ships with a `REPLACE_WITH_…` placeholder). The custom
+domain is provisioned automatically on first deploy.
+
+**Clerk.** A production instance (`pk_live_…`) can't authorize the preview host —
+extra domains on a production instance are *satellite domains* needing their own
+DNS/code. Instead the preview build uses a Clerk **development** instance, which
+works on any origin. Set repo secret **`VITE_CLERK_PUBLISHABLE_KEY_PREVIEW`** to
+the dev `pk_test_…` key, and the preview Worker's `CLERK_SECRET_KEY` (above) to
+the matching `sk_test_…`. (Dev instances show a "development mode" banner — fine
+for review. To get `pk_live` parity instead, add `preview.records.charliegleason.com`
+as a Clerk satellite domain and set `isSatellite`/`domain` on `ClerkProvider`.)
+
+New migrations need no workflow changes: after cloning production (which carries
+its `d1_migrations` table), the "Refresh preview database" step runs
+`wrangler d1 migrations apply`, which applies only the migrations the PR adds on
+top of production — a no-op when production is already current.
 
 ---
 

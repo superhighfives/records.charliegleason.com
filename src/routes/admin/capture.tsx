@@ -1,38 +1,15 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { Camera, UploadCloud } from "lucide-react";
+import { useRef, useState } from "react";
 
-import { RecordForm } from "#/components/record-form";
 import { Button } from "#/components/ui/button";
-import { Input } from "#/components/ui/input";
-import {
-	analyzePhoto,
-	type RecordSuggestion,
-	searchDiscogs,
-} from "#/lib/analyze";
-import type { DiscogsCandidate } from "#/lib/discogs";
-import type { RecordFormValues } from "#/lib/record-schema";
-import { createRecord } from "#/lib/records";
+import { Label } from "#/components/ui/label";
+import { Textarea } from "#/components/ui/textarea";
+import { captureRecord } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
 export const Route = createFileRoute("/admin/capture")({ component: Capture });
-
-/** Build form defaults from either a picked Discogs candidate or the AI suggestion. */
-function toForm(
-	s: RecordSuggestion,
-	picked: DiscogsCandidate | null,
-): RecordFormValues {
-	return {
-		artist: picked?.artist || s.artist,
-		title: picked?.title || s.title,
-		year: (picked?.year ?? s.year)?.toString() ?? "",
-		label: picked?.label ?? s.label ?? "",
-		format: "LP",
-		genre: picked?.genre ?? s.genre ?? "",
-		pitchforkScore: s.pitchforkScore?.toString() ?? "",
-		notes: "",
-	};
-}
 
 function readFile(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -49,34 +26,37 @@ function Capture() {
 
 	const [preview, setPreview] = useState<string | null>(null);
 	const [mediaType, setMediaType] = useState("image/jpeg");
-	const [suggestion, setSuggestion] = useState<RecordSuggestion | null>(null);
-	const [candidates, setCandidates] = useState<Array<DiscogsCandidate>>([]);
-	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
-	const [query, setQuery] = useState({ artist: "", title: "" });
+	const [context, setContext] = useState("");
+	const [dragOver, setDragOver] = useState(false);
 
-	const analyze = useMutation({
-		mutationFn: (vars: { imageBase64: string; mediaType: string }) =>
-			analyzePhoto({ data: vars }),
-		onSuccess: (s) => {
-			setSuggestion(s);
-			setCandidates(s.candidates);
-			setPicked(null);
-			setQuery({ artist: s.artist, title: s.title });
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const cameraInputRef = useRef<HTMLInputElement>(null);
+
+	const capture = useMutation({
+		mutationFn: (vars: {
+			imageBase64: string;
+			mediaType: string;
+			context: string;
+		}) => captureRecord({ data: vars }),
+		onSuccess: async (record) => {
+			await queryClient.invalidateQueries({
+				queryKey: recordsQueryOptions.queryKey,
+			});
+			// Jump to the detail page and watch the AI work land.
+			navigate({ to: "/admin/records/$id", params: { id: String(record.id) } });
 		},
 	});
 
-	const search = useMutation({
-		mutationFn: (q: { artist: string; title: string }) =>
-			searchDiscogs({ data: q }),
-		onSuccess: setCandidates,
-	});
-
-	async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-		const file = e.target.files?.[0];
-		if (!file) return;
-		setSuggestion(null);
+	async function handleFile(file: File | undefined) {
+		if (!file || !file.type.startsWith("image/")) return;
 		setMediaType(file.type || "image/jpeg");
 		setPreview(await readFile(file));
+	}
+
+	function reset() {
+		setPreview(null);
+		setContext("");
+		capture.reset();
 	}
 
 	return (
@@ -84,157 +64,130 @@ function Capture() {
 			<div>
 				<h1 className="text-2xl font-semibold">Capture a record</h1>
 				<p className="text-sm text-muted-foreground">
-					Photograph the cover — Claude reads it, Discogs and Pitchfork fill in
-					the rest. Confirm before saving.
+					Photograph the cover and save it — Claude reads it, Discogs and
+					Pitchfork fill in the rest in the background. You’ll confirm the
+					details before it goes live.
 				</p>
 			</div>
 
-			<label className="block">
-				<span className="sr-only">Take or choose a photo</span>
-				<input
-					type="file"
-					accept="image/*"
-					capture="environment"
-					onChange={onFile}
-					className="block w-full text-sm"
-				/>
-			</label>
+			{/* Hidden inputs: one for the gallery/file picker, one that forces the camera. */}
+			<input
+				ref={fileInputRef}
+				type="file"
+				accept="image/*"
+				className="hidden"
+				onChange={(e) => handleFile(e.target.files?.[0])}
+			/>
+			<input
+				ref={cameraInputRef}
+				type="file"
+				accept="image/*"
+				capture="environment"
+				className="hidden"
+				onChange={(e) => handleFile(e.target.files?.[0])}
+			/>
 
-			{preview && (
-				<div className="space-y-3">
-					<img
-						src={preview}
-						alt="Record cover preview"
-						className="max-h-64 rounded-md border"
-					/>
-					{!suggestion && (
-						<Button
-							type="button"
-							disabled={analyze.isPending}
-							onClick={() =>
-								analyze.mutate({ imageBase64: preview, mediaType })
-							}
-						>
-							{analyze.isPending ? "Analyzing…" : "Analyze photo"}
-						</Button>
-					)}
-					{analyze.isError && (
-						<p className="text-sm text-destructive">
-							Analysis failed. You can still add the record by hand from the New
-							record page.
+			{!preview ? (
+				// biome-ignore lint/a11y/useSemanticElements: the dropzone wraps a nested "Open camera" button, so it can't itself be a <button>
+				<div
+					role="button"
+					tabIndex={0}
+					onClick={() => fileInputRef.current?.click()}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" || e.key === " ") {
+							e.preventDefault();
+							fileInputRef.current?.click();
+						}
+					}}
+					onDragOver={(e) => {
+						e.preventDefault();
+						setDragOver(true);
+					}}
+					onDragLeave={() => setDragOver(false)}
+					onDrop={(e) => {
+						e.preventDefault();
+						setDragOver(false);
+						handleFile(e.dataTransfer.files?.[0]);
+					}}
+					className={`flex cursor-pointer flex-col items-center gap-3 rounded-xl border-2 border-dashed p-8 text-center transition-colors ${
+						dragOver
+							? "border-primary bg-accent"
+							: "border-muted-foreground/25 hover:border-primary/50 hover:bg-accent/40"
+					}`}
+				>
+					<div className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+						<UploadCloud className="size-6" />
+					</div>
+					<div className="space-y-0.5">
+						<p className="font-medium text-primary">Tap to upload photo</p>
+						<p className="text-xs text-muted-foreground">
+							PNG, JPG or HEIC — or drag one in
 						</p>
-					)}
-				</div>
-			)}
-
-			{suggestion && (
-				<div className="space-y-4">
-					<p className="text-sm text-muted-foreground">
-						Identified with {Math.round(suggestion.confidence * 100)}%
-						confidence. Pick the right Discogs release if the match is off, then
-						save.
-					</p>
-
-					{/* Manual Discogs search */}
-					<div className="flex items-end gap-2">
-						<div className="flex-1 space-y-1">
-							<label
-								htmlFor="q-artist"
-								className="text-xs text-muted-foreground"
-							>
-								Artist
-							</label>
-							<Input
-								id="q-artist"
-								value={query.artist}
-								onChange={(e) =>
-									setQuery((q) => ({ ...q, artist: e.target.value }))
-								}
-							/>
-						</div>
-						<div className="flex-1 space-y-1">
-							<label
-								htmlFor="q-title"
-								className="text-xs text-muted-foreground"
-							>
-								Title
-							</label>
-							<Input
-								id="q-title"
-								value={query.title}
-								onChange={(e) =>
-									setQuery((q) => ({ ...q, title: e.target.value }))
-								}
-							/>
-						</div>
-						<Button
-							type="button"
-							variant="outline"
-							disabled={search.isPending}
-							onClick={() => search.mutate(query)}
-						>
-							{search.isPending ? "…" : "Search"}
-						</Button>
 					</div>
 
-					{/* Candidate pick-list */}
-					{candidates.length > 0 && (
-						<ul className="divide-y rounded-md border">
-							{candidates.map((c) => {
-								const active = picked?.discogsId === c.discogsId;
-								return (
-									<li key={c.discogsId}>
-										<button
-											type="button"
-											onClick={() => setPicked(active ? null : c)}
-											className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
-												active ? "bg-accent" : "hover:bg-accent/50"
-											}`}
-										>
-											{c.thumb ? (
-												<img
-													src={c.thumb}
-													alt=""
-													className="size-10 rounded object-cover"
-												/>
-											) : (
-												<div className="size-10 rounded bg-muted" />
-											)}
-											<span className="flex-1">
-												<span className="font-medium">{c.artist}</span> —{" "}
-												{c.title}
-												{c.year ? ` (${c.year})` : ""}
-												{c.label ? ` · ${c.label}` : ""}
-											</span>
-											{active && <span className="text-xs">✓</span>}
-										</button>
-									</li>
-								);
-							})}
-						</ul>
-					)}
+					<div className="flex w-full items-center gap-3 text-xs text-muted-foreground">
+						<span className="h-px flex-1 bg-border" />
+						OR
+						<span className="h-px flex-1 bg-border" />
+					</div>
 
-					<RecordForm
-						key={picked?.discogsId ?? "extracted"}
-						defaultValues={toForm(suggestion, picked)}
-						submitLabel="Save record"
-						onSubmit={async (input) => {
-							await createRecord({
-								data: {
-									...input,
-									source: "photo",
-									capturePhotoKey: suggestion.capturePhotoKey,
-									discogsId: picked?.discogsId ?? suggestion.discogsId,
-									discogsUrl: picked?.discogsUrl ?? suggestion.discogsUrl,
-									pitchforkUrl: suggestion.pitchforkUrl,
-								},
-							});
-							await queryClient.invalidateQueries({
-								queryKey: recordsQueryOptions.queryKey,
-							});
-							navigate({ to: "/admin" });
+					<Button
+						type="button"
+						onClick={(e) => {
+							e.stopPropagation();
+							cameraInputRef.current?.click();
 						}}
-					/>
+					>
+						<Camera />
+						Open camera
+					</Button>
+				</div>
+			) : (
+				<div className="space-y-4">
+					<div className="space-y-2">
+						<img
+							src={preview}
+							alt="Record cover preview"
+							className="max-h-64 rounded-md border"
+						/>
+						<button
+							type="button"
+							onClick={reset}
+							className="text-sm text-muted-foreground underline underline-offset-4"
+						>
+							Choose a different photo
+						</button>
+					</div>
+
+					<div className="space-y-1.5">
+						<Label htmlFor="context">Additional context (optional)</Label>
+						<Textarea
+							id="context"
+							value={context}
+							onChange={(e) => setContext(e.target.value)}
+							placeholder="e.g. it's a 2×LP reissue, or the deluxe pressing on red vinyl — anything that helps pin down the right Discogs release."
+						/>
+						<p className="text-xs text-muted-foreground">
+							Used to help Claude read the cover and search Discogs.
+						</p>
+					</div>
+
+					<Button
+						type="button"
+						disabled={capture.isPending}
+						onClick={() =>
+							capture.mutate({ imageBase64: preview, mediaType, context })
+						}
+					>
+						{capture.isPending ? "Saving…" : "Capture record"}
+					</Button>
+
+					{capture.isError && (
+						<p className="text-sm text-destructive">
+							Couldn’t save the capture. Try again, or add the record by hand
+							from the New record page.
+						</p>
+					)}
 				</div>
 			)}
 		</div>

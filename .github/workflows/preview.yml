@@ -1,0 +1,123 @@
+name: Preview
+
+# Per-PR preview of the app on a standalone `records-preview` Worker
+# (*.workers.dev — no custom domain, cron or email). The preview database is a
+# fresh clone of production on every run, so it's up to date but isolated:
+# captures made while reviewing never touch production data. R2 (cover photos)
+# is shared with production. See SETUP.md → "Preview environment" for the
+# one-time provisioning this depends on.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+# One shared preview environment, so only the most recent PR build is live.
+concurrency:
+  group: preview
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview:
+    # Skip forks — they don't have access to the repo/account secrets.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # Same build-time vars as Deploy, except Clerk: previews use a Clerk
+      # *development* instance, which works on any origin (incl. *.workers.dev).
+      # A production instance would need the preview URL as a satellite domain
+      # with DNS you can't add to workers.dev. Set VITE_CLERK_PUBLISHABLE_KEY_PREVIEW
+      # (pk_test_…) in repo secrets, and the preview Worker's CLERK_SECRET_KEY to the
+      # matching sk_test_… (wrangler secret put CLERK_SECRET_KEY --env preview).
+      #
+      # CLOUDFLARE_ENV selects the wrangler environment at BUILD time — the
+      # @cloudflare/vite-plugin bakes it into the generated deploy config. Without
+      # it the build defaults to the top-level (production!) config and a later
+      # `wrangler deploy --env preview` can't override it.
+      - name: Build
+        run: bun run build
+        env:
+          CLOUDFLARE_ENV: preview
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY_PREVIEW }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_SENTRY_ORG: ${{ secrets.VITE_SENTRY_ORG }}
+          VITE_SENTRY_PROJECT: ${{ secrets.VITE_SENTRY_PROJECT }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+      # Clone production → preview. Production D1 is only ever *read* (export).
+      - name: Refresh preview database from production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # 1. Export production (schema + data).
+          bunx wrangler d1 export records --remote --output /tmp/prod.sql
+          # 2. Reset the preview DB so re-runs start clean.
+          bunx wrangler d1 execute records-preview --remote --env preview --yes \
+            --command "DROP TABLE IF EXISTS records; DROP TABLE IF EXISTS d1_migrations;"
+          # 3. Load the fresh copy of production (production's current schema).
+          bunx wrangler d1 execute records-preview --remote --env preview --yes \
+            --file /tmp/prod.sql
+          # 4. Bring the preview schema up to this PR's migrations. The clone
+          #    includes production's d1_migrations table, so this applies only the
+          #    migrations production doesn't have yet — a no-op when prod is already
+          #    current. No need to name migration files explicitly.
+          bunx wrangler d1 migrations apply records-preview --remote --env preview
+
+      # CLOUDFLARE_ENV (not `--env`) keeps wrangler aligned with the build output
+      # the vite plugin generated for the preview environment, and guarantees this
+      # never falls back to the production config/Worker.
+      - name: Deploy preview Worker
+        env:
+          CLOUDFLARE_ENV: preview
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler deploy
+
+      - name: Comment preview URL on the PR
+        uses: actions/github-script@v7
+        env:
+          # Stable custom domain from wrangler.jsonc env.preview.routes.
+          PREVIEW_URL: https://preview.records.charliegleason.com
+        with:
+          script: |
+            const url = process.env.PREVIEW_URL;
+            const marker = "<!-- records-preview -->";
+            const body = `${marker}
+            ### 🔎 Preview deployed
+
+            **${url}**
+
+            Standalone \`records-preview\` Worker with a fresh clone of the production
+            database (this PR's migrations applied) and the shared production R2
+            bucket. Captures made here won't touch production data.
+
+            _Updated for ${context.sha.slice(0, 7)}._`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number,
+            });
+            const existing = comments.find((c) => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+            }

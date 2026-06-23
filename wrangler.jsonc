@@ -34,6 +34,28 @@
 	"ai": {
 		"binding": "AI"
 	},
+	// Queues — background record analysis. Capturing a record enqueues its id; the
+	// consumer (src/server.ts → handleAnalyzeBatch) runs the AI pipeline. One record
+	// per message, retried up to 3× before going to the dead-letter queue.
+	// Provision once: `wrangler queues create records-analyze` and
+	// `wrangler queues create records-analyze-dlq`.
+	"queues": {
+		"producers": [
+			{
+				"binding": "ANALYZE_QUEUE",
+				"queue": "records-analyze"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "records-analyze",
+				"max_batch_size": 1,
+				"max_batch_timeout": 5,
+				"max_retries": 3,
+				"dead_letter_queue": "records-analyze-dlq"
+			}
+		]
+	},
 	// Cloudflare Images — resize sourced cover art before storing in R2. Requires
 	// Image Transformations enabled on the account (dashboard → Images).
 	"images": {
@@ -54,5 +76,73 @@
 			"name": "EMAIL",
 			"remote": true
 		}
-	]
+	],
+	// PR preview environment — a standalone `records-preview` Worker on
+	// *.workers.dev (no custom domain, cron or email). Deployed by CI on each PR
+	// (.github/workflows/preview.yml), which clones the production D1 into the
+	// preview DB so it's up to date but isolated. R2 is shared with production.
+	// Bindings are NOT inherited by named environments, so everything is repeated.
+	//
+	// One-time setup (needs your Cloudflare account — see SETUP.md):
+	//   wrangler d1 create records-preview            # paste the id below
+	//   wrangler queues create records-analyze-preview
+	//   wrangler queues create records-analyze-preview-dlq
+	//   wrangler secret put CLERK_SECRET_KEY --env preview   # + DISCOGS_TOKEN, LASTFM_API_KEY
+	"env": {
+		"preview": {
+			// `routes` and `triggers` ARE inherited by environments, so both are
+			// overridden here: without the routes override, deploying preview would
+			// reassign records.charliegleason.com (production!) to this Worker; the
+			// empty crons disable the inherited daily digest in preview. `send_email`
+			// is intentionally omitted (not inherited) — preview never sends mail.
+			"routes": [
+				{
+					"pattern": "preview.records.charliegleason.com",
+					"custom_domain": true
+				}
+			],
+			"triggers": {
+				"crons": []
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "records-preview",
+					"database_id": "1de59465-de47-45bc-b5a0-5fdb56b24f10",
+					"migrations_dir": "drizzle",
+					"remote": true
+				}
+			],
+			"r2_buckets": [
+				{
+					"binding": "PHOTOS",
+					"bucket_name": "records-photos",
+					"remote": true
+				}
+			],
+			"ai": {
+				"binding": "AI"
+			},
+			"images": {
+				"binding": "IMAGES"
+			},
+			"queues": {
+				"producers": [
+					{
+						"binding": "ANALYZE_QUEUE",
+						"queue": "records-analyze-preview"
+					}
+				],
+				"consumers": [
+					{
+						"queue": "records-analyze-preview",
+						"max_batch_size": 1,
+						"max_batch_timeout": 5,
+						"max_retries": 3,
+						"dead_letter_queue": "records-analyze-preview-dlq"
+					}
+				]
+			}
+		}
+	}
 }
