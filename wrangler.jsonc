@@ -11,6 +11,11 @@
 	"routes": [
 		{ "pattern": "records.charliegleason.com", "custom_domain": true }
 	],
+	// Lets the worker tell production apart from the preview deploy at runtime —
+	// used to gate Sentry reporting (src/server.ts). Overridden in env.preview.
+	"vars": {
+		"ENVIRONMENT": "production"
+	},
 	// D1 — primary database (Drizzle). `remote: true` makes `wrangler dev` use the
 	// real D1 instead of a local SQLite file.
 	"d1_databases": [
@@ -103,6 +108,11 @@
 			],
 			"triggers": {
 				"crons": []
+			},
+			// `vars` is non-inheritable, so restate it — marks this the preview deploy
+			// so Sentry stays disabled (src/server.ts).
+			"vars": {
+				"ENVIRONMENT": "preview"
 			},
 			"d1_databases": [
 				{
