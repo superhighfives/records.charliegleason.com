@@ -41,3 +41,38 @@ export async function sourceCoverFromDiscogs(
 	const url = await getReleaseImageUrl(discogsId).catch(() => null);
 	return url ? storeResizedCover(url) : null;
 }
+
+/**
+ * Normalise an uploaded capture and store it in R2. The browser already crops to
+ * a square and shrinks for a fast upload; Cloudflare Images then canonicalises it
+ * to a square webp (consistent format/size, EXIF stripped) and guarantees the
+ * square even if the client fell back to uploading the original.
+ *
+ * The capture is what the vision step reads, so this must always store *something*
+ * — if Image Transformations are unavailable it falls back to the raw bytes.
+ * Returns the R2 key plus the stored content type (used as the vision media type).
+ */
+export async function storeCapturePhoto(
+	bytes: Uint8Array,
+	fallbackMediaType: string,
+): Promise<{ key: string; contentType: string }> {
+	try {
+		const out = await env.IMAGES.input(new Blob([bytes as BlobPart]).stream())
+			.transform({ width: 1280, height: 1280, fit: "cover" })
+			.output({ format: "image/webp", quality: 82 });
+		const buffer = await out.response().arrayBuffer();
+		const key = `captures/${crypto.randomUUID()}.webp`;
+		await env.PHOTOS.put(key, buffer, {
+			httpMetadata: { contentType: "image/webp" },
+		});
+		return { key, contentType: "image/webp" };
+	} catch {
+		const ext =
+			fallbackMediaType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
+		const key = `captures/${crypto.randomUUID()}.${ext}`;
+		await env.PHOTOS.put(key, bytes, {
+			httpMetadata: { contentType: fallbackMediaType },
+		});
+		return { key, contentType: fallbackMediaType };
+	}
+}

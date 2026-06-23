@@ -5,7 +5,7 @@ import {
 	useQueryClient,
 	useSuspenseQuery,
 } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
 	type ColumnDef,
 	flexRender,
@@ -24,16 +24,36 @@ import type { Record } from "#/db/schema";
 import { deleteRecord } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
-type StatusFilter = NonNullable<Record["status"]> | "all";
+type RecordStatus = NonNullable<Record["status"]>;
+type StatusFilter = RecordStatus | "all" | "unpublished";
 
 const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "all", label: "All" },
+	{ value: "unpublished", label: "Unpublished" },
 	{ value: "pending", label: "Queued" },
 	{ value: "processing", label: "Analyzing" },
 	{ value: "review", label: "Needs review" },
 	{ value: "failed", label: "Failed" },
 	{ value: "complete", label: "Published" },
 ];
+
+// Float the records that still need attention to the top of the default view,
+// newest first, so a capture session lands ready to review without sorting.
+const STATUS_PRIORITY: globalThis.Record<RecordStatus, number> = {
+	review: 0,
+	failed: 1,
+	pending: 2,
+	processing: 3,
+	complete: 4,
+};
+
+const isUnpublished = (status: RecordStatus) => status !== "complete";
+
+function matchesFilter(status: RecordStatus, filter: StatusFilter): boolean {
+	if (filter === "all") return true;
+	if (filter === "unpublished") return isUnpublished(status);
+	return status === filter;
+}
 
 export const Route = createFileRoute("/admin/")({
 	loader: ({ context }) =>
@@ -44,6 +64,7 @@ export const Route = createFileRoute("/admin/")({
 function AdminRecords() {
 	const { data } = useSuspenseQuery(recordsQueryOptions);
 	const queryClient = useQueryClient();
+	const navigate = useNavigate();
 	const searchRef = useRef<HTMLInputElement>(null);
 
 	const [filter, setFilter] = useState("");
@@ -139,7 +160,8 @@ function AdminRecords() {
 						type="button"
 						className="text-sm text-destructive underline underline-offset-4 disabled:opacity-50"
 						disabled={deleteMutation.isPending}
-						onClick={() => {
+						onClick={(e) => {
+							e.stopPropagation();
 							if (confirm(`Delete "${row.original.title}"?`)) {
 								deleteMutation.mutate(row.original.id);
 							}
@@ -152,10 +174,16 @@ function AdminRecords() {
 		},
 	];
 
-	const rows =
-		statusFilter === "all"
-			? data
-			: data.filter((r) => (r.status ?? "complete") === statusFilter);
+	// Filter, then float the records that still need attention to the top
+	// (newest first). User-driven column sorting still overrides this default.
+	const rows = data
+		.filter((r) => matchesFilter(r.status ?? "complete", statusFilter))
+		.sort((a, b) => {
+			const pa = STATUS_PRIORITY[a.status ?? "complete"];
+			const pb = STATUS_PRIORITY[b.status ?? "complete"];
+			if (pa !== pb) return pa - pb;
+			return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
+		});
 
 	const table = useReactTable({
 		data: rows,
@@ -191,10 +219,9 @@ function AdminRecords() {
 
 			<div className="flex flex-wrap gap-2">
 				{STATUS_FILTERS.map((f) => {
-					const count =
-						f.value === "all"
-							? data.length
-							: data.filter((r) => (r.status ?? "complete") === f.value).length;
+					const count = data.filter((r) =>
+						matchesFilter(r.status ?? "complete", f.value),
+					).length;
 					const active = statusFilter === f.value;
 					return (
 						<button
@@ -242,7 +269,28 @@ function AdminRecords() {
 				</thead>
 				<tbody>
 					{table.getRowModel().rows.map((row) => (
-						<tr key={row.id} className="border-b">
+						<tr
+							key={row.id}
+							className="cursor-pointer border-b hover:bg-accent/40"
+							onClick={(e) => {
+								// Pointer convenience only — keyboard users (and screen readers)
+								// use the real links in the row. Let nested links/buttons handle
+								// their own clicks, and don't hijack ⌘/Ctrl/Shift-click (which
+								// the links use to open in a new tab).
+								if (
+									e.metaKey ||
+									e.ctrlKey ||
+									e.shiftKey ||
+									(e.target as HTMLElement).closest("a, button, input")
+								) {
+									return;
+								}
+								navigate({
+									to: "/admin/records/$id",
+									params: { id: String(row.original.id) },
+								});
+							}}
+						>
 							{row.getVisibleCells().map((cell) => (
 								<td key={cell.id} className="px-3 py-2">
 									{flexRender(cell.column.columnDef.cell, cell.getContext())}

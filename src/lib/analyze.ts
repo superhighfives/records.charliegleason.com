@@ -69,7 +69,7 @@ async function extractFromImage(
 	context?: string,
 ): Promise<Extraction> {
 	const instruction =
-		"Identify the vinyl record from this cover photo. Read the artist and album title exactly as printed. Only set a year if it's clearly shown.";
+		"Identify the vinyl record from this cover photo. If the artist and album title are printed on the cover, read them exactly as printed. If the cover has little or no text — abstract or image-only artwork, which is common for iconic albums — identify the release by recognising the artwork itself. Only set a year if it's clearly shown, and report confidence honestly: low if you're unsure or guessing.";
 	const text = context
 		? `${instruction}\n\nExtra context from the collector (use it to disambiguate the pressing/format or guide the read): ${context}`
 		: instruction;
@@ -115,14 +115,32 @@ async function extractFromImage(
  */
 async function identifyWithWebSearch(
 	partial: Extraction,
+	image: { data: string; mediaType: string },
 	context?: string,
 ): Promise<Extraction | null> {
 	const hint = context ? ` The collector adds: "${context}".` : "";
+	const guess =
+		partial.artist || partial.title
+			? `A first guess from reading the cover is artist="${partial.artist}", title="${partial.title}", but it may be wrong or incomplete.`
+			: "Reading the cover text alone wasn't enough — it has little or no printed text.";
 	// biome-ignore lint/suspicious/noExplicitAny: heterogeneous Anthropic message content
 	const messages: Array<any> = [
 		{
 			role: "user",
-			content: `I photographed a vinyl record. A first guess is artist="${partial.artist}", title="${partial.title}".${hint} Use web search to confirm the correct artist, album title, and original release year (check Discogs/Wikipedia). When confident, call the "record" tool with the corrected values.`,
+			content: [
+				{
+					type: "image",
+					source: {
+						type: "base64",
+						media_type: image.mediaType,
+						data: image.data,
+					},
+				},
+				{
+					type: "text",
+					text: `I photographed this vinyl record cover. ${guess}${hint} Recognise the album from the cover artwork — many iconic records have abstract, text-free sleeves — and use web search to confirm the correct artist, album title, and original release year (check Discogs/Wikipedia). When confident, call the "record" tool with the corrected values.`,
+				},
+			],
 		},
 	];
 
@@ -210,7 +228,11 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		console.info(
 			`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs matches=${candidates.length})`,
 		);
-		const refined = await identifyWithWebSearch(extraction, context);
+		const refined = await identifyWithWebSearch(
+			extraction,
+			{ data, mediaType },
+			context,
+		);
 		if (refined) {
 			extraction = refined;
 			candidates = await searchReleases(refined.artist, refined.title).catch(
