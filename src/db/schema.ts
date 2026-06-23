@@ -45,6 +45,11 @@ export const records = sqliteTable("records", {
 	captureContext: text("capture_context"), // optional collector hint, used by the analysis
 	candidatesJson: text("candidates_json"), // JSON Array<DiscogsCandidate> the consumer found
 
+	// Duplicate detection. After analysis identifies a record, the queue consumer
+	// checks it against the rest of the collection; if it already owns the same
+	// release this holds the id of the earlier record it duplicates (else null).
+	duplicateOf: integer("duplicate_of"),
+
 	createdAt: integer("created_at", { mode: "timestamp" }).default(
 		sql`(unixepoch())`,
 	),

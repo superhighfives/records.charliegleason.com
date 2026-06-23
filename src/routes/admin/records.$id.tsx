@@ -3,6 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Info, Loader2 } from "lucide-react";
 import { useState } from "react";
 
+import { DuplicateBadge } from "#/components/duplicate-badge";
 import { RecordForm } from "#/components/record-form";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
@@ -243,8 +244,25 @@ function RecordDetail() {
 					</Link>
 					<h1 className="mt-1 text-2xl font-semibold">{heading}</h1>
 				</div>
-				<StatusBadge status={record.status} className="shrink-0" />
+				<div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+					{record.duplicateOf != null && <DuplicateBadge />}
+					<StatusBadge status={record.status} />
+				</div>
 			</div>
+
+			{/* Flagged by analysis as already in the collection — link to the original. */}
+			{record.duplicateOf != null && (
+				<div className="flex items-center gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800">
+					<span>This release looks like it’s already in your collection.</span>
+					<Link
+						to="/admin/records/$id"
+						params={{ id: String(record.duplicateOf) }}
+						className="font-medium underline underline-offset-4"
+					>
+						View the original
+					</Link>
+				</div>
+			)}
 
 			{/* Photos: the iPhone capture, plus the sourced cover once we have one. */}
 			<div className="flex gap-3">

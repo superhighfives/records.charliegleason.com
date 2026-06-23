@@ -1,10 +1,10 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { eq } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
-import { analyzeCapture } from "#/lib/analyze";
+import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -50,6 +50,27 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 
 		const result = await analyzeCapture(record);
 
+		// Flag the record if the collection already holds this release. Compared
+		// against every other row (the capture itself is excluded by id), matching
+		// on Discogs id first, then on normalized artist + title.
+		const others = await db
+			.select({
+				id: records.id,
+				artist: records.artist,
+				title: records.title,
+				discogsId: records.discogsId,
+			})
+			.from(records)
+			.where(ne(records.id, recordId));
+		const duplicateOf = findDuplicateOf(
+			{
+				artist: result.artist,
+				title: result.title,
+				discogsId: result.discogsId,
+			},
+			others,
+		);
+
 		await db
 			.update(records)
 			.set({
@@ -65,6 +86,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				coverImageKey: result.coverImageKey,
 				confidence: result.confidence,
 				candidatesJson: JSON.stringify(result.candidates),
+				duplicateOf,
 				status: "review",
 				error: null,
 				updatedAt: new Date(),

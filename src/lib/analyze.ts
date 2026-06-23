@@ -41,6 +41,61 @@ interface Extraction {
 	confidence: number;
 }
 
+/**
+ * Normalize a name for loose comparison: fold diacritics to their base letter
+ * (ö → o, so "Björk" matches a plain "Bjork"), lowercase, then collapse runs of
+ * punctuation/whitespace to single spaces.
+ */
+function normalizeName(value: string | null | undefined): string {
+	return (value ?? "")
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "") // drop combining marks left by NFKD
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+/**
+ * Decide whether an identified record already exists in the collection. Matches
+ * on Discogs id first (the most reliable signal — same release), then falls back
+ * to a normalized artist + title comparison so a re-photographed sleeve still
+ * gets flagged even when Discogs didn't resolve. Returns the id of the existing
+ * record it duplicates, or null. Pure: the caller supplies the rows to check
+ * against (the record being analyzed must be excluded by the caller).
+ */
+export function findDuplicateOf(
+	target: { artist: string; title: string; discogsId: string | null },
+	existing: Array<Pick<Record, "id" | "artist" | "title" | "discogsId">>,
+): number | null {
+	const artist = normalizeName(target.artist);
+	const title = normalizeName(target.title);
+	const discogsId = target.discogsId?.trim() || null;
+
+	// A blank identification can't meaningfully match anything.
+	if (!discogsId && (!artist || !title)) return null;
+
+	// The caller's rows are unordered, so track the smallest id in each bucket to
+	// keep the result deterministic and point at the earliest record. A Discogs id
+	// match (same release) outranks a name-only match regardless of id.
+	let discogsMatch: number | null = null;
+	let nameMatch: number | null = null;
+	for (const row of existing) {
+		if (discogsId && row.discogsId?.trim() === discogsId) {
+			if (discogsMatch === null || row.id < discogsMatch) discogsMatch = row.id;
+			continue;
+		}
+		if (
+			artist &&
+			title &&
+			normalizeName(row.artist) === artist &&
+			normalizeName(row.title) === title
+		) {
+			if (nameMatch === null || row.id < nameMatch) nameMatch = row.id;
+		}
+	}
+	return discogsMatch ?? nameMatch;
+}
+
 const EXTRACT_TOOL = {
 	name: "record",
 	description: "Report the identified vinyl record.",

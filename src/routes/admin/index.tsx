@@ -17,6 +17,7 @@ import {
 } from "@tanstack/react-table";
 import { useRef, useState } from "react";
 
+import { DuplicateBadge } from "#/components/duplicate-badge";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -137,9 +138,10 @@ function AdminRecords() {
 				<Link
 					to="/admin/records/$id"
 					params={{ id: String(row.original.id) }}
-					className="inline-block"
+					className="inline-flex flex-wrap items-center gap-1"
 				>
 					<StatusBadge status={row.original.status} />
+					{row.original.duplicateOf != null && <DuplicateBadge />}
 				</Link>
 			),
 		},

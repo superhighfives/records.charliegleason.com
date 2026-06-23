@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Camera, CheckCircle2, Loader2, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { DuplicateBadge } from "#/components/duplicate-badge";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -10,6 +11,7 @@ import { Label } from "#/components/ui/label";
 import { type ProcessedImage, squareDownscale } from "#/lib/image-resize";
 import { captureRecord } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
+import { cn } from "#/lib/utils";
 
 export const Route = createFileRoute("/admin/capture")({ component: Capture });
 
@@ -28,10 +30,11 @@ function SessionItem({ id }: { id: number }) {
 	});
 
 	const key = record?.coverImageKey ?? record?.capturePhotoKey;
-	const label =
-		record?.artist || record?.title
-			? `${record.artist || "Unknown"} — ${record.title || "Untitled"}`
-			: "Analyzing…";
+	// Until the analysis fills in a name, show a muted placeholder.
+	const identified = Boolean(record?.artist || record?.title);
+	const label = identified
+		? `${record?.artist || "Unknown"} — ${record?.title || "Untitled"}`
+		: "Capturing record";
 
 	return (
 		<li>
@@ -49,7 +52,15 @@ function SessionItem({ id }: { id: number }) {
 				) : (
 					<div className="size-10 shrink-0 rounded bg-muted" />
 				)}
-				<span className="min-w-0 flex-1 truncate">{label}</span>
+				<span
+					className={cn(
+						"min-w-0 flex-1 truncate",
+						!identified && "text-muted-foreground",
+					)}
+				>
+					{label}
+				</span>
+				{record?.duplicateOf != null && <DuplicateBadge className="shrink-0" />}
 				<StatusBadge
 					status={record?.status ?? "pending"}
 					className="shrink-0"
