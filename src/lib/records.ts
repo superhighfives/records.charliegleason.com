@@ -6,7 +6,7 @@ import { desc, eq } from "drizzle-orm";
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
-import { searchReleases } from "#/lib/discogs";
+import { getReleaseDetail, searchReleases } from "#/lib/discogs";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
 import { sourceCoverFromDiscogs } from "#/lib/images";
 import { enqueueAnalyze } from "#/lib/queue";
@@ -212,6 +212,16 @@ export const updateRecord = createServerFn({ method: "POST" })
 				.returning();
 			return row ?? null;
 		}),
+	);
+
+/** Full Discogs release details for the expanded (accordion) candidate view. */
+export const getDiscogsRelease = createServerFn({ method: "GET" })
+	.middleware([authMiddleware])
+	.validator((id: string) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "getDiscogsRelease" }, () =>
+			getReleaseDetail(id).catch(() => null),
+		),
 	);
 
 /** Manual Discogs search for the review page's pick-list / "wrong match" fallback. */

@@ -9,7 +9,12 @@ import { Input } from "#/components/ui/input";
 import type { Record } from "#/db/schema";
 import type { DiscogsCandidate } from "#/lib/discogs";
 import type { RecordFormValues } from "#/lib/record-schema";
-import { publishRecord, reprocessRecord, searchDiscogs } from "#/lib/records";
+import {
+	getDiscogsRelease,
+	publishRecord,
+	reprocessRecord,
+	searchDiscogs,
+} from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 
 export const Route = createFileRoute("/admin/records/$id")({
@@ -42,6 +47,68 @@ function toForm(
 		pitchforkScore: record.pitchforkScore?.toString() ?? "",
 		notes: record.notes ?? "",
 	};
+}
+
+/** Expanded details for a selected Discogs candidate (fetched on demand). */
+function CandidateDetail({ discogsId }: { discogsId: string }) {
+	const { data, isLoading } = useQuery({
+		queryKey: ["discogs-release", discogsId] as const,
+		queryFn: () => getDiscogsRelease({ data: discogsId }),
+		staleTime: 5 * 60 * 1000,
+	});
+
+	if (isLoading) {
+		return (
+			<p className="px-3 pb-3 text-xs text-muted-foreground">
+				Loading release details…
+			</p>
+		);
+	}
+	if (!data) {
+		return (
+			<p className="px-3 pb-3 text-xs text-muted-foreground">
+				No extra details available.
+			</p>
+		);
+	}
+
+	const meta = [data.formats, data.country, data.released]
+		.filter(Boolean)
+		.join(" · ");
+
+	return (
+		<div className="space-y-3 border-t bg-accent/30 px-3 py-3">
+			{meta && <p className="text-sm text-muted-foreground">{meta}</p>}
+			{data.styles.length > 0 && (
+				<div className="flex flex-wrap gap-1">
+					{data.styles.map((s) => (
+						<span key={s} className="rounded-full bg-muted px-2 py-0.5 text-xs">
+							{s}
+						</span>
+					))}
+				</div>
+			)}
+			{data.tracklist.length > 0 && (
+				<ol className="space-y-0.5">
+					{data.tracklist.map((t) => (
+						<li
+							key={`${t.position}-${t.title}`}
+							className="flex gap-2 text-xs text-muted-foreground"
+						>
+							<span className="w-8 shrink-0 tabular-nums">{t.position}</span>
+							<span className="flex-1 text-foreground">{t.title}</span>
+							{t.duration && <span className="tabular-nums">{t.duration}</span>}
+						</li>
+					))}
+				</ol>
+			)}
+			{data.notes && (
+				<p className="line-clamp-3 whitespace-pre-line text-xs text-muted-foreground">
+					{data.notes}
+				</p>
+			)}
+		</div>
+	);
 }
 
 function RecordDetail() {
@@ -279,6 +346,7 @@ function RecordDetail() {
 											</span>
 											{active && <span className="shrink-0 text-xs">✓</span>}
 										</button>
+										{active && <CandidateDetail discogsId={c.discogsId} />}
 									</li>
 								);
 							})}

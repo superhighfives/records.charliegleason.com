@@ -42,6 +42,52 @@ function splitTitle(combined: string): { artist: string; title: string } {
 	};
 }
 
+/** Full release details, fetched on demand when a candidate is expanded. */
+export interface DiscogsReleaseDetail {
+	formats: string | null; // detailed, e.g. "2×LP, Album, Reissue, 180g, Gatefold"
+	country: string | null;
+	released: string | null;
+	styles: Array<string>;
+	notes: string | null;
+	tracklist: Array<{ position: string; title: string; duration: string }>;
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
+function formatLine(f: any): string {
+	const head = f?.qty && String(f.qty) !== "1" ? `${f.qty}×${f.name}` : f?.name;
+	return [head, ...(Array.isArray(f?.descriptions) ? f.descriptions : [])]
+		.filter(Boolean)
+		.join(", ");
+}
+
+/** Fetch a single release's full details (tracklist, formats, styles, notes). */
+export async function getReleaseDetail(
+	id: string,
+): Promise<DiscogsReleaseDetail | null> {
+	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });
+	if (!res.ok) return null;
+	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
+	const d = (await res.json()) as any;
+	return {
+		formats: Array.isArray(d.formats)
+			? d.formats.map(formatLine).filter(Boolean).join(" / ") || null
+			: null,
+		country: d.country ? String(d.country) : null,
+		released: d.released ? String(d.released) : null,
+		styles: Array.isArray(d.styles) ? d.styles.map(String) : [],
+		notes: d.notes ? String(d.notes) : null,
+		tracklist: Array.isArray(d.tracklist)
+			? d.tracklist.map(
+					(t: { position?: unknown; title?: unknown; duration?: unknown }) => ({
+						position: String(t?.position ?? ""),
+						title: String(t?.title ?? ""),
+						duration: String(t?.duration ?? ""),
+					}),
+				)
+			: [],
+	};
+}
+
 /** Highest-quality cover image URL for a release (primary image, full size). */
 export async function getReleaseImageUrl(id: string): Promise<string | null> {
 	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });
