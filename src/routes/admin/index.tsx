@@ -272,12 +272,24 @@ function AdminRecords() {
 						<tr
 							key={row.id}
 							className="cursor-pointer border-b hover:bg-accent/40"
-							onClick={() =>
+							onClick={(e) => {
+								// Pointer convenience only — keyboard users (and screen readers)
+								// use the real links in the row. Let nested links/buttons handle
+								// their own clicks, and don't hijack ⌘/Ctrl/Shift-click (which
+								// the links use to open in a new tab).
+								if (
+									e.metaKey ||
+									e.ctrlKey ||
+									e.shiftKey ||
+									(e.target as HTMLElement).closest("a, button, input")
+								) {
+									return;
+								}
 								navigate({
 									to: "/admin/records/$id",
 									params: { id: String(row.original.id) },
-								})
-							}
+								});
+							}}
 						>
 							{row.getVisibleCells().map((cell) => (
 								<td key={cell.id} className="px-3 py-2">
