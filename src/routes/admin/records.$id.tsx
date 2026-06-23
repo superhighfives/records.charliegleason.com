@@ -134,8 +134,15 @@ function CandidateRow({
 								<Tooltip>
 									<TooltipTrigger asChild>
 										{/* Presentational span keeps this valid inside the row button;
-										    Radix wires up the hover/focus handlers itself. */}
-										<span className="mt-px shrink-0 cursor-help text-muted-foreground hover:text-foreground">
+										    Radix supplies the hover/focus handlers. The click handler only
+										    stops the event reaching the row so tapping the icon (notably on
+										    touch) doesn't toggle/deselect the candidate. */}
+										{/* biome-ignore lint/a11y/noStaticElementInteractions: tooltip trigger, not a control */}
+										{/* biome-ignore lint/a11y/useKeyWithClickEvents: click only stops propagation, no action to key-bind */}
+										<span
+											onClick={(e) => e.stopPropagation()}
+											className="mt-px shrink-0 cursor-help text-muted-foreground hover:text-foreground"
+										>
 											<Info className="size-3.5" aria-label="Show tracklist" />
 										</span>
 									</TooltipTrigger>
