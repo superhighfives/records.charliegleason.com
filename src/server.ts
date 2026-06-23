@@ -22,11 +22,19 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 };
 
 export default Sentry.withSentry(
-	() => ({
-		// Public DSN, build-time inlined — no runtime Wrangler var needed.
-		dsn: import.meta.env.VITE_SENTRY_DSN,
-		sendDefaultPii: true,
-		tracesSampleRate: 1.0,
-	}),
+	(env) =>
+		// Only the production deployment reports. `import.meta.env.DEV` is true
+		// under local `vite dev`; the `ENVIRONMENT` var (wrangler.jsonc) is
+		// "preview" on the preview deploy. Returning undefined skips init entirely
+		// — `Sentry.startSpan` stays a no-op that still runs its callback.
+		import.meta.env.DEV || env.ENVIRONMENT !== "production"
+			? undefined
+			: {
+					// Public DSN, build-time inlined — no runtime Wrangler var needed.
+					dsn: import.meta.env.VITE_SENTRY_DSN,
+					environment: env.ENVIRONMENT,
+					sendDefaultPii: true,
+					tracesSampleRate: 1.0,
+				},
 	handler,
 );

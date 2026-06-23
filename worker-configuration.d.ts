@@ -7,6 +7,7 @@ interface __BaseEnv_Env {
 	EMAIL: SendEmail;
 	AI: Ai;
 	IMAGES: ImagesBinding;
+	ENVIRONMENT: "preview" | "production";
 	VITE_CLERK_PUBLISHABLE_KEY: string;
 	CLERK_SECRET_KEY: string;
 	VITE_SENTRY_DSN: string;
