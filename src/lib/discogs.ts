@@ -18,6 +18,9 @@ export interface DiscogsCandidate {
 	year: number | null;
 	label: string | null;
 	genre: string | null;
+	format: string | null; // e.g. "Vinyl, 2×LP, Album, Reissue" — disambiguates pressings
+	country: string | null;
+	catno: string | null; // catalog number
 	discogsUrl: string;
 	thumb: string | null;
 }
@@ -77,6 +80,9 @@ export async function searchReleases(
 			year: Number.isFinite(yearNum) ? yearNum : null,
 			label: Array.isArray(r.label) ? String(r.label[0]) : null,
 			genre: Array.isArray(r.genre) ? String(r.genre[0]) : null,
+			format: Array.isArray(r.format) ? r.format.map(String).join(", ") : null,
+			country: r.country ? String(r.country) : null,
+			catno: r.catno ? String(r.catno) : null,
 			discogsUrl: r.uri ? `https://www.discogs.com${r.uri}` : "",
 			thumb: r.thumb ? String(r.thumb) : null,
 		};

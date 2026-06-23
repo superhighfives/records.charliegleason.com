@@ -256,18 +256,28 @@ function RecordDetail() {
 												<img
 													src={c.thumb}
 													alt=""
-													className="size-10 rounded object-cover"
+													className="size-10 shrink-0 rounded object-cover"
 												/>
 											) : (
-												<div className="size-10 rounded bg-muted" />
+												<div className="size-10 shrink-0 rounded bg-muted" />
 											)}
-											<span className="flex-1">
-												<span className="font-medium">{c.artist}</span> —{" "}
-												{c.title}
-												{c.year ? ` (${c.year})` : ""}
-												{c.label ? ` · ${c.label}` : ""}
+											<span className="min-w-0 flex-1">
+												<span className="block truncate">
+													<span className="font-medium">{c.artist}</span> —{" "}
+													{c.title}
+													{c.year ? ` (${c.year})` : ""}
+												</span>
+												{[c.format, c.country, c.label, c.catno].some(
+													Boolean,
+												) && (
+													<span className="block truncate text-xs text-muted-foreground">
+														{[c.format, c.country, c.label, c.catno]
+															.filter(Boolean)
+															.join(" · ")}
+													</span>
+												)}
 											</span>
-											{active && <span className="text-xs">✓</span>}
+											{active && <span className="shrink-0 text-xs">✓</span>}
 										</button>
 									</li>
 								);
