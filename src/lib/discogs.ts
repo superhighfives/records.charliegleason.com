@@ -100,6 +100,9 @@ export async function getReleaseImageUrl(id: string): Promise<string | null> {
 	return primary?.uri ?? null;
 }
 
+const MAX_CANDIDATES = 5;
+const isVinyl = (c: DiscogsCandidate) => /vinyl/i.test(c.format ?? "");
+
 export async function searchReleases(
 	artist: string,
 	title: string,
@@ -108,7 +111,8 @@ export async function searchReleases(
 	url.searchParams.set("type", "release");
 	if (artist) url.searchParams.set("artist", artist);
 	if (title) url.searchParams.set("release_title", title);
-	url.searchParams.set("per_page", "5");
+	// Pull a wider net so we can prefer vinyl below without losing other pressings.
+	url.searchParams.set("per_page", "25");
 
 	const res = await fetch(url, { headers: headers() });
 	if (!res.ok) return [];
@@ -116,7 +120,7 @@ export async function searchReleases(
 	const data = (await res.json()) as {
 		results?: Array<Record<string, unknown>>;
 	};
-	return (data.results ?? []).map((r) => {
+	const candidates = (data.results ?? []).map((r) => {
 		const parts = splitTitle(String(r.title ?? ""));
 		const yearNum = r.year ? Number.parseInt(String(r.year), 10) : null;
 		return {
@@ -131,6 +135,12 @@ export async function searchReleases(
 			catno: r.catno ? String(r.catno) : null,
 			discogsUrl: r.uri ? `https://www.discogs.com${r.uri}` : "",
 			thumb: r.thumb ? String(r.thumb) : null,
-		};
+		} satisfies DiscogsCandidate;
 	});
+
+	// Prefer vinyl pressings, but fall back to other formats so a CD/digital-only
+	// title still returns matches. Discogs' relevance order is preserved per group.
+	const vinyl = candidates.filter(isVinyl);
+	const rest = candidates.filter((c) => !isVinyl(c));
+	return [...vinyl, ...rest].slice(0, MAX_CANDIDATES);
 }
