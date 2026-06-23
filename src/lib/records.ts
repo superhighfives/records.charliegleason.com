@@ -92,14 +92,26 @@ export const createRecord = createServerFn({ method: "POST" })
  */
 export const captureRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator(
-		(data: { imageBase64: string; mediaType: string; context?: string }) =>
-			data,
-	)
+	// This writes to R2/D1, so validate + normalize the payload before use.
+	.validator((data: unknown) => {
+		const d = (data ?? {}) as Record<string, unknown>;
+		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
+			throw new Error("imageBase64 must be a non-empty string");
+		}
+		const mediaType =
+			typeof d.mediaType === "string" && d.mediaType.startsWith("image/")
+				? d.mediaType
+				: "image/jpeg";
+		return {
+			imageBase64: d.imageBase64,
+			mediaType,
+			context: typeof d.context === "string" ? d.context : undefined,
+		};
+	})
 	.handler(({ data }) =>
 		Sentry.startSpan({ name: "captureRecord" }, async () => {
 			const db = getDb(env.DB);
-			const mediaType = data.mediaType || "image/jpeg";
+			const { mediaType } = data;
 			const raw = stripDataUrl(data.imageBase64);
 
 			const ext = mediaType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
@@ -121,7 +133,24 @@ export const captureRecord = createServerFn({ method: "POST" })
 				})
 				.returning();
 
-			await enqueueAnalyze(row.id);
+			// Don't strand a `pending` row if the queue is unavailable — mark it
+			// `failed` so the detail page can offer a manual retry instead.
+			try {
+				await enqueueAnalyze(row.id);
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				const [failed] = await db
+					.update(records)
+					.set({
+						status: "failed",
+						error: `Could not queue analysis: ${detail}`,
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, row.id))
+					.returning();
+				return failed ?? row;
+			}
+
 			return row;
 		}),
 	);
