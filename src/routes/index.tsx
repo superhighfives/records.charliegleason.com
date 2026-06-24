@@ -1,49 +1,14 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
-// A little emoji mashup in the spirit of charliegleason.com — a few picked at
-// random per page load. Leans musical, since this is a record collection.
-const EMOJI = [
-	"🎵",
-	"🎶",
-	"💿",
-	"📀",
-	"🎧",
-	"🎸",
-	"🎹",
-	"🥁",
-	"🎤",
-	"🎷",
-	"🎺",
-	"🪕",
-	"🎻",
-	"📻",
-	"📼",
-	"🪩",
-	"✨",
-	"🔥",
-	"🌈",
-	"🦄",
-	"👾",
-	"🛸",
-	"⚡️",
-	"🍕",
-];
-
-function pickEmoji(): string[] {
-	const count = 1 + Math.floor(Math.random() * 3); // 1–3
-	const pool = [...EMOJI];
-	const out: string[] = [];
-	for (let i = 0; i < count && pool.length; i++) {
-		out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
-	}
-	return out;
-}
+// charliegleason.com's emoji generator, rendering the 🎧 (headphones) glyph.
+const HERO_EMOJI =
+	"https://www.charliegleason.com/api/emoji/%F0%9F%8E%A7?detailed=false&animated=false";
 
 export const Route = createFileRoute("/")({
 	loader: ({ context }) =>
@@ -54,13 +19,6 @@ export const Route = createFileRoute("/")({
 function Home() {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
 	const [search, setSearch] = useState("");
-
-	// Pick the emoji mashup client-side after mount to avoid an SSR hydration
-	// mismatch (Math.random would differ between server and client render).
-	const [emoji, setEmoji] = useState<string[] | null>(null);
-	useEffect(() => {
-		setEmoji(pickEmoji());
-	}, []);
 
 	const filtered = useMemo(() => {
 		const q = search.trim().toLowerCase();
@@ -81,21 +39,13 @@ function Home() {
 						className="block shrink-0"
 						aria-label="charliegleason.com"
 					>
-						<span className="flex size-14 items-center justify-center text-3xl">
-							{emoji?.map((e, i) => (
-								<span
-									// biome-ignore lint/suspicious/noArrayIndexKey: decorative, fixed per render
-									key={i}
-									className="-ml-1.5 first:ml-0"
-									style={{
-										transform: `rotate(${(i - (emoji.length - 1) / 2) * 12}deg)`,
-										animation: "fade-in 400ms ease-out both",
-									}}
-								>
-									{e}
-								</span>
-							))}
-						</span>
+						<img
+							src={HERO_EMOJI}
+							alt="🎧"
+							width={56}
+							height={56}
+							className="size-14"
+						/>
 					</a>
 					<div>
 						<p className="kicker mb-1">The collection</p>
@@ -160,7 +110,7 @@ function Home() {
 								{r.pitchforkScore != null && (
 									<p className="mt-1 text-xs font-medium text-brand tabular-nums">
 										{r.pitchforkScore}
-										<span className="ml-1 font-normal text-muted-foreground opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+										<span className="ml-2.5 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
 											on Pitchfork
 										</span>
 									</p>
@@ -179,7 +129,7 @@ function Home() {
 				>
 					charliegleason.com
 				</a>{" "}
-				· set in Fraunces &amp; Geist Mono.
+				· set in Fraunces.
 			</footer>
 		</div>
 	);
