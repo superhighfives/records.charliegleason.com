@@ -270,6 +270,12 @@ export const deleteRecord = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "deleteRecord" }, async () => {
 			const db = getDb(env.DB);
 			await db.delete(records).where(eq(records.id, id));
+			// Clear the dangling reference on any record flagged as a duplicate of
+			// the one we just removed, so it stops showing the "Duplicate" badge.
+			await db
+				.update(records)
+				.set({ duplicateOf: null, updatedAt: new Date() })
+				.where(eq(records.duplicateOf, id));
 			return { id };
 		}),
 	);

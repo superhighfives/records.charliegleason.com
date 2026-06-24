@@ -64,6 +64,9 @@ export const Route = createFileRoute("/admin/")({
 
 function AdminRecords() {
 	const { data } = useSuspenseQuery(recordsQueryOptions);
+	// Ids still in the collection, so a record whose `duplicateOf` points at a
+	// since-deleted original stops claiming to be a duplicate.
+	const liveIds = new Set(data.map((r) => r.id));
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const searchRef = useRef<HTMLInputElement>(null);
@@ -141,7 +144,8 @@ function AdminRecords() {
 					className="inline-flex flex-wrap items-center gap-1"
 				>
 					<StatusBadge status={row.original.status} />
-					{row.original.duplicateOf != null && <DuplicateBadge />}
+					{row.original.duplicateOf != null &&
+						liveIds.has(row.original.duplicateOf) && <DuplicateBadge />}
 				</Link>
 			),
 		},
