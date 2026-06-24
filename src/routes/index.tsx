@@ -6,13 +6,44 @@ import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
-// Portraits borrowed from charliegleason.com — rotated like the avatars there.
-const PORTRAITS = [
-	"/photos/charlie-01.jpg",
-	"/photos/charlie-03.jpg",
-	"/photos/charlie-05.jpg",
-	"/photos/charlie-07.jpg",
+// A little emoji mashup in the spirit of charliegleason.com — a few picked at
+// random per page load. Leans musical, since this is a record collection.
+const EMOJI = [
+	"🎵",
+	"🎶",
+	"💿",
+	"📀",
+	"🎧",
+	"🎸",
+	"🎹",
+	"🥁",
+	"🎤",
+	"🎷",
+	"🎺",
+	"🪕",
+	"🎻",
+	"📻",
+	"📼",
+	"🪩",
+	"✨",
+	"🔥",
+	"🌈",
+	"🦄",
+	"👾",
+	"🛸",
+	"⚡️",
+	"🍕",
 ];
+
+function pickEmoji(): string[] {
+	const count = 1 + Math.floor(Math.random() * 3); // 1–3
+	const pool = [...EMOJI];
+	const out: string[] = [];
+	for (let i = 0; i < count && pool.length; i++) {
+		out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+	}
+	return out;
+}
 
 export const Route = createFileRoute("/")({
 	loader: ({ context }) =>
@@ -24,11 +55,11 @@ function Home() {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
 	const [search, setSearch] = useState("");
 
-	// Pick a portrait client-side after mount to avoid an SSR hydration
+	// Pick the emoji mashup client-side after mount to avoid an SSR hydration
 	// mismatch (Math.random would differ between server and client render).
-	const [portrait, setPortrait] = useState<string | null>(null);
+	const [emoji, setEmoji] = useState<string[] | null>(null);
 	useEffect(() => {
-		setPortrait(PORTRAITS[Math.floor(Math.random() * PORTRAITS.length)]);
+		setEmoji(pickEmoji());
 	}, []);
 
 	const filtered = useMemo(() => {
@@ -42,7 +73,7 @@ function Home() {
 	}, [data, search]);
 
 	return (
-		<div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+		<div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
 			<header className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
 				<div className="flex items-center gap-4">
 					<a
@@ -50,20 +81,27 @@ function Home() {
 						className="block shrink-0"
 						aria-label="charliegleason.com"
 					>
-						<span className="block size-14 overflow-hidden rounded-full border border-border ring-1 ring-brand/40">
-							{portrait && (
-								<img
-									src={portrait}
-									alt="Charlie Gleason"
-									className="size-full object-cover"
-									style={{ animation: "fade-in 400ms ease-out both" }}
-								/>
-							)}
+						<span className="flex size-14 items-center justify-center text-3xl">
+							{emoji?.map((e, i) => (
+								<span
+									// biome-ignore lint/suspicious/noArrayIndexKey: decorative, fixed per render
+									key={i}
+									className="-ml-1.5 first:ml-0"
+									style={{
+										transform: `rotate(${(i - (emoji.length - 1) / 2) * 12}deg)`,
+										animation: "fade-in 400ms ease-out both",
+									}}
+								>
+									{e}
+								</span>
+							))}
 						</span>
 					</a>
 					<div>
 						<p className="kicker mb-1">The collection</p>
-						<h1 className="text-3xl font-semibold tracking-tight">Records</h1>
+						<h1 className="font-serif text-4xl font-semibold tracking-tight">
+							Records
+						</h1>
 						<p className="mt-1 text-sm text-muted-foreground">
 							<span className="font-medium text-foreground tabular-nums">
 								{data.length}
@@ -97,7 +135,7 @@ function Home() {
 			) : (
 				<ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4">
 					{filtered.map((r) => (
-						<li key={r.id} className="space-y-2">
+						<li key={r.id} className="group space-y-2">
 							<div className="album-card aspect-square overflow-hidden rounded-md">
 								{r.coverImageKey && (
 									<img
@@ -108,22 +146,23 @@ function Home() {
 									/>
 								)}
 							</div>
-							<div className="text-sm leading-tight">
+							<div className="text-sm leading-snug">
 								<p
-									className="truncate font-medium"
+									className="truncate font-serif text-base font-medium"
 									title={r.title ?? undefined}
 								>
 									{r.title}
 								</p>
-								<p className="truncate text-muted-foreground">
+								<p className="truncate font-serif text-muted-foreground">
 									{r.artist}
 									{r.year ? ` · ${r.year}` : ""}
 								</p>
 								{r.pitchforkScore != null && (
-									<p className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
-										<span className="inline-block size-1.5 rounded-full bg-brand" />
-										Pitchfork{" "}
-										<span className="tabular-nums">{r.pitchforkScore}</span>
+									<p className="mt-1 text-xs font-medium text-brand tabular-nums">
+										{r.pitchforkScore}
+										<span className="ml-1 font-normal text-muted-foreground opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+											on Pitchfork
+										</span>
 									</p>
 								)}
 							</div>
@@ -140,7 +179,7 @@ function Home() {
 				>
 					charliegleason.com
 				</a>{" "}
-				· set in Geist Mono.
+				· set in Fraunces &amp; Geist Mono.
 			</footer>
 		</div>
 	);

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Geist+Mono:wght@300;400;500;600;700&display=swap');
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
@@ -9,10 +9,10 @@
 /*
  * Design language borrowed from charliegleason.com:
  *   - neutral grayscale (white / neutral-900) with a single yellow-500 accent
- *   - a fixed yellow "frame" rule top and bottom of the viewport
  *   - yellow text selection
  *   - dark mode via a `.dark` class on <html>
- * Everything is set in Geist Mono — the whole collection reads as a catalog.
+ * UI, labels and numerals are set in Geist Mono; editorial text (album titles,
+ * artists, the wordmark) is set in the Fraunces serif.
  */
 
 :root {
@@ -55,9 +55,6 @@
   --sidebar-accent-foreground: #171717;
   --sidebar-border: #e5e5e5;
   --sidebar-ring: var(--accent-yellow);
-
-  /* Frame */
-  --frame-gap: 1.25rem;
 }
 
 .dark {
@@ -102,6 +99,7 @@
 @theme inline {
   --font-sans: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-serif: 'Fraunces', Georgia, 'Times New Roman', serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -150,43 +148,12 @@ body,
 
 body {
   margin: 0;
-  /* Leave room for the fixed frame rules top and bottom. */
-  padding-block: calc(var(--frame-gap) + 0.5rem);
   color: var(--foreground);
   background-color: var(--background);
   font-family: var(--font-sans);
   font-feature-settings: 'ss01', 'cv01', 'zero';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-/*
- * Signature frame: two fixed yellow rules near the top and bottom edges, each
- * sitting on a solid band of the page background so content scrolls cleanly
- * underneath. Straight from charliegleason.com.
- */
-body::before,
-body::after {
-  content: '';
-  position: fixed;
-  left: 0;
-  right: 0;
-  height: var(--frame-gap);
-  z-index: 50;
-  pointer-events: none;
-  background: var(--background);
-}
-
-body::before {
-  top: 0;
-  border-bottom: 1px solid var(--accent-yellow);
-  box-shadow: 0 0.75rem 0.75rem -0.5rem var(--background);
-}
-
-body::after {
-  bottom: 0;
-  border-top: 1px solid var(--accent-yellow);
-  box-shadow: 0 -0.75rem 0.75rem -0.5rem var(--background);
 }
 
 ::selection {
