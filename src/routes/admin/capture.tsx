@@ -286,7 +286,14 @@ function Capture() {
 					{capture.isError && (
 						<p className="text-sm text-destructive">
 							Couldn’t save the capture. Try again, or add the record by hand
-							from the New record page.
+							from the{" "}
+							<Link
+								to="/admin/records/new"
+								className="underline underline-offset-4"
+							>
+								New record page
+							</Link>
+							.
 						</p>
 					)}
 				</form>
