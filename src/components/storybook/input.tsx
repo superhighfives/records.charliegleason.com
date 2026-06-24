@@ -21,7 +21,7 @@ export const Input: React.FC<InputProps> = ({
 }) => {
   return (
     <div className={`flex flex-col gap-2 ${className}`}>
-      <label htmlFor={id} className="text-sm font-medium text-[var(--sea-ink)]">
+      <label htmlFor={id} className="text-sm font-medium text-[var(--foreground)]">
         {label}
         {required && <span className="text-red-500 ml-1">*</span>}
       </label>

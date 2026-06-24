@@ -28,12 +28,12 @@ export const Slider: React.FC<SliderProps> = ({
       <div className="flex justify-between items-center">
         <label
           htmlFor={id}
-          className="text-sm font-medium text-[var(--sea-ink)]"
+          className="text-sm font-medium text-[var(--foreground)]"
         >
           {label}
         </label>
         {showValue && (
-          <span className="min-w-12 text-right text-sm font-semibold text-[var(--lagoon-deep)]">
+          <span className="min-w-12 text-right text-sm font-semibold text-[var(--accent-yellow-strong)]">
             {value}
           </span>
         )}
@@ -46,7 +46,7 @@ export const Slider: React.FC<SliderProps> = ({
         min={min}
         max={max}
         step={step}
-        className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-[var(--chip-bg)] accent-[var(--lagoon-deep)]"
+        className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-[var(--muted)] accent-[var(--accent-yellow-strong)]"
       />
       <div className="demo-muted flex justify-between text-xs">
         <span>{min}</span>
