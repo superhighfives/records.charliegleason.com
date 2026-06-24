@@ -248,11 +248,16 @@ function AdminRecords() {
 					const r = row.original;
 					const thumb = r.coverImageKey ?? r.capturePhotoKey;
 					return (
-						<li key={row.id}>
+						<li
+							key={row.id}
+							className="flex items-center gap-3 rounded-lg border border-border p-3 hover:bg-accent/40"
+						>
+							{/* Link wraps only the non-destructive content; the Delete button is
+							    a sibling so we don't nest interactive elements inside an <a>. */}
 							<Link
 								to="/admin/records/$id"
 								params={{ id: String(r.id) }}
-								className="flex items-center gap-3 rounded-lg border border-border p-3 hover:bg-accent/40"
+								className="flex min-w-0 flex-1 items-center gap-3"
 							>
 								{thumb ? (
 									<img
@@ -285,21 +290,19 @@ function AdminRecords() {
 										)}
 									</div>
 								</div>
-								<button
-									type="button"
-									className="shrink-0 self-start text-sm text-destructive underline underline-offset-4 disabled:opacity-50"
-									disabled={deleteMutation.isPending}
-									onClick={(e) => {
-										e.preventDefault();
-										e.stopPropagation();
-										if (confirm(`Delete "${r.title}"?`)) {
-											deleteMutation.mutate(r.id);
-										}
-									}}
-								>
-									Delete
-								</button>
 							</Link>
+							<button
+								type="button"
+								className="shrink-0 self-start text-sm text-destructive underline underline-offset-4 disabled:opacity-50"
+								disabled={deleteMutation.isPending}
+								onClick={() => {
+									if (confirm(`Delete "${r.title || "this record"}"?`)) {
+										deleteMutation.mutate(r.id);
+									}
+								}}
+							>
+								Delete
+							</button>
 						</li>
 					);
 				})}
