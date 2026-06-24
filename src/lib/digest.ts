@@ -75,6 +75,13 @@ export function runDailyDigest(): Promise<{ sent: boolean; count: number }> {
 		const suggestions = await buildSuggestions(10);
 		if (suggestions.length === 0) return { sent: false, count: 0 };
 
+		// `send_email` isn't bound in the preview env, so the binding is optional.
+		// The digest only runs via cron/route in production, where it's present —
+		// surface a clear error if it's ever invoked somewhere it isn't.
+		if (!env.EMAIL) {
+			throw new Error("EMAIL binding is not configured in this environment");
+		}
+
 		await env.EMAIL.send({
 			from: FROM,
 			to: TO,
