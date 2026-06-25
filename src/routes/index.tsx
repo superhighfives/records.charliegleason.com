@@ -2,8 +2,13 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
+import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
+
+// charliegleason.com's emoji generator, rendering the 🎧 (headphones) glyph.
+const HERO_EMOJI =
+	"https://www.charliegleason.com/api/emoji/%F0%9F%8E%A7?detailed=false&animated=false";
 
 export const Route = createFileRoute("/")({
 	loader: ({ context }) =>
@@ -26,20 +31,51 @@ function Home() {
 	}, [data, search]);
 
 	return (
-		<div className="mx-auto max-w-5xl p-6">
-			<header className="mb-8 flex items-baseline justify-between gap-4">
-				<div>
-					<h1 className="text-3xl font-semibold">Records</h1>
-					<p className="text-sm text-muted-foreground">
-						{data.length} in the collection
-					</p>
+		<div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
+			<header className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+				<div className="flex items-center gap-4">
+					<a
+						href="https://charliegleason.com"
+						className="block shrink-0"
+						aria-label="charliegleason.com"
+					>
+						<img
+							src={HERO_EMOJI}
+							alt="🎧"
+							width={56}
+							height={56}
+							className="size-14"
+						/>
+					</a>
+					<div>
+						<p className="kicker mb-1">The collection</p>
+						<h1 className="font-serif text-4xl font-semibold tracking-tight">
+							Records
+						</h1>
+						<p className="mt-1 text-sm text-muted-foreground">
+							<span className="font-medium text-foreground tabular-nums">
+								{data.length}
+							</span>{" "}
+							records ·{" "}
+							<a
+								href="https://charliegleason.com"
+								className="underline decoration-brand/60 underline-offset-4 hover:text-foreground"
+							>
+								charliegleason.com
+							</a>
+						</p>
+					</div>
 				</div>
-				<Input
-					value={search}
-					onChange={(e) => setSearch(e.target.value)}
-					placeholder="Search records…"
-					className="max-w-xs"
-				/>
+
+				<div className="flex items-center gap-2">
+					<Input
+						value={search}
+						onChange={(e) => setSearch(e.target.value)}
+						placeholder="Search records…"
+						className="w-full sm:w-64"
+					/>
+					<ThemeToggle />
+				</div>
 			</header>
 
 			{data.length === 0 ? (
@@ -47,10 +83,10 @@ function Home() {
 			) : filtered.length === 0 ? (
 				<p className="text-muted-foreground">No records match “{search}”.</p>
 			) : (
-				<ul className="grid grid-cols-2 gap-6 sm:grid-cols-3 md:grid-cols-4">
+				<ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4">
 					{filtered.map((r) => (
-						<li key={r.id} className="space-y-2">
-							<div className="aspect-square overflow-hidden rounded-md border bg-muted">
+						<li key={r.id} className="group space-y-2">
+							<div className="album-card aspect-square overflow-hidden rounded-md">
 								{r.coverImageKey && (
 									<img
 										src={`/api/photos/${r.coverImageKey}`}
@@ -60,15 +96,23 @@ function Home() {
 									/>
 								)}
 							</div>
-							<div className="text-sm leading-tight">
-								<p className="font-medium">{r.title}</p>
-								<p className="text-muted-foreground">
+							<div className="text-sm leading-snug">
+								<p
+									className="truncate font-serif text-base font-medium"
+									title={r.title ?? undefined}
+								>
+									{r.title}
+								</p>
+								<p className="truncate font-serif text-muted-foreground">
 									{r.artist}
 									{r.year ? ` · ${r.year}` : ""}
 								</p>
 								{r.pitchforkScore != null && (
-									<p className="text-xs text-muted-foreground">
-										Pitchfork {r.pitchforkScore}
+									<p className="mt-1 text-xs font-medium text-brand tabular-nums">
+										{r.pitchforkScore}
+										<span className="ml-2.5 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+											on Pitchfork
+										</span>
 									</p>
 								)}
 							</div>
@@ -76,6 +120,17 @@ function Home() {
 					))}
 				</ul>
 			)}
+
+			<footer className="mt-16 border-t border-border pt-6 text-xs text-muted-foreground">
+				A corner of{" "}
+				<a
+					href="https://charliegleason.com"
+					className="underline decoration-brand/60 underline-offset-4 hover:text-foreground"
+				>
+					charliegleason.com
+				</a>{" "}
+				· set in Fraunces.
+			</footer>
 		</div>
 	);
 }

@@ -204,26 +204,26 @@ function AdminRecords() {
 
 	return (
 		<div className="space-y-4">
-			<div className="flex items-center justify-between gap-4">
+			<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 				<h1 className="text-2xl font-semibold">Collection</h1>
-				<div className="flex items-center gap-2">
+				<div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
 					<Input
 						ref={searchRef}
 						value={filter}
 						onChange={(e) => setFilter(e.target.value)}
 						placeholder="Filter records…  ( / )"
-						className="max-w-xs"
+						className="w-full sm:w-56"
 					/>
-					<Button asChild variant="outline">
+					<Button asChild variant="outline" className="flex-1 sm:flex-none">
 						<Link to="/admin/records/new">Add manually</Link>
 					</Button>
-					<Button asChild>
+					<Button asChild className="flex-1 sm:flex-none">
 						<Link to="/admin/capture">Capture record</Link>
 					</Button>
 				</div>
 			</div>
 
-			<div className="flex flex-wrap gap-2">
+			<div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible">
 				{STATUS_FILTERS.map((f) => {
 					const count = data.filter((r) =>
 						matchesFilter(r.status ?? "complete", f.value),
@@ -234,7 +234,7 @@ function AdminRecords() {
 							key={f.value}
 							type="button"
 							onClick={() => setStatusFilter(f.value)}
-							className={`rounded-full border px-3 py-1 text-xs ${
+							className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs ${
 								active
 									? "border-foreground bg-foreground text-background"
 									: "text-muted-foreground hover:bg-accent"
@@ -246,7 +246,79 @@ function AdminRecords() {
 				})}
 			</div>
 
-			<table className="w-full border-collapse text-sm">
+			{/* Mobile: stacked cards (the wide table doesn't fit a phone). */}
+			<ul className="space-y-2 md:hidden">
+				{table.getRowModel().rows.map((row) => {
+					const r = row.original;
+					const thumb = r.coverImageKey ?? r.capturePhotoKey;
+					return (
+						<li
+							key={row.id}
+							className="flex items-center gap-3 rounded-lg border border-border p-3 hover:bg-accent/40"
+						>
+							{/* Link wraps only the non-destructive content; the Delete button is
+							    a sibling so we don't nest interactive elements inside an <a>. */}
+							<Link
+								to="/admin/records/$id"
+								params={{ id: String(r.id) }}
+								className="flex min-w-0 flex-1 items-center gap-3"
+							>
+								{thumb ? (
+									<img
+										src={`/api/photos/${thumb}`}
+										alt=""
+										className="size-14 shrink-0 rounded object-cover"
+									/>
+								) : (
+									<div className="size-14 shrink-0 rounded bg-muted" />
+								)}
+								<div className="min-w-0 flex-1">
+									<p className="truncate font-medium">
+										{r.title || (
+											<span className="text-muted-foreground italic">
+												Processing…
+											</span>
+										)}
+									</p>
+									<p className="truncate text-sm text-muted-foreground">
+										{r.artist || "—"}
+										{r.year ? ` · ${r.year}` : ""}
+									</p>
+									<div className="mt-1.5 flex flex-wrap items-center gap-1">
+										<StatusBadge status={r.status} />
+										{r.duplicateOf != null && <DuplicateBadge />}
+										{r.pitchforkScore != null && (
+											<span className="text-xs text-muted-foreground tabular-nums">
+												Pitchfork {r.pitchforkScore}
+											</span>
+										)}
+									</div>
+								</div>
+							</Link>
+							<button
+								type="button"
+								className="shrink-0 self-start text-sm text-destructive underline underline-offset-4 disabled:opacity-50"
+								disabled={deleteMutation.isPending}
+								onClick={() => {
+									if (confirm(`Delete "${r.title || "this record"}"?`)) {
+										deleteMutation.mutate(r.id);
+									}
+								}}
+							>
+								Delete
+							</button>
+						</li>
+					);
+				})}
+				{table.getRowModel().rows.length === 0 && (
+					<li className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-muted-foreground">
+						No records yet. Add one with “Add manually”, or via the photo flow.
+					</li>
+				)}
+			</ul>
+
+			{/* Desktop: the full sortable table. */}
+			<table className="hidden w-full border-collapse text-sm md:table">
 				<thead>
 					{table.getHeaderGroups().map((hg) => (
 						<tr key={hg.id} className="border-b text-left">

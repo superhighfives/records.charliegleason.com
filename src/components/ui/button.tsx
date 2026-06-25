@@ -9,10 +9,9 @@ const buttonVariants = cva(
 	{
 		variants: {
 			variant: {
-				// Brand green (lagoon) CTA. Fixed hexes so white text stays readable in
-				// both light/dark, and `text-white!` to beat the global `a { color }` rule
-				// (styles.css) that otherwise tints asChild link-buttons teal.
-				default: "bg-[#328f97] text-white! hover:bg-[#246f76]",
+				// Neutral primary CTA (neutral-900 / neutral-100), matching the
+				// charliegleason.com palette — yellow is reserved as the accent.
+				default: "bg-primary text-primary-foreground hover:bg-primary/90",
 				destructive:
 					"bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
 				outline:
