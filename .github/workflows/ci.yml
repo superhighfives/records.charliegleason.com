@@ -1,0 +1,35 @@
+name: CI
+
+# Lint, typecheck, and test on every push and PR. Deploys (deploy.yml) run
+# separately on main; this is the gate that should stay green before they do.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      - name: Test
+        run: bun run test
+
+      # NOTE: `bunx biome check .` is intentionally omitted for now — the repo has
+      # pre-existing lint/format debt (mostly in src/components/storybook) that would
+      # make this gate red on day one. Add it here once that's cleared.

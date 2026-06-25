@@ -4,6 +4,7 @@ import * as Sentry from "@sentry/tanstackstart-react";
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { getTopAlbums, type LastfmAlbum } from "#/lib/lastfm";
+import { findCheapestVinyl, type SellerSummary } from "#/lib/sellers";
 
 /**
  * Daily "records to buy" digest: top Last.fm albums you don't already own,
@@ -51,12 +52,43 @@ export async function buildSuggestions(
 		.slice(0, limit);
 }
 
-function renderHtml(suggestions: Array<LastfmAlbum>): string {
+/** Albums to suggest, each with its cheapest-to-buy offer (null if unavailable). */
+type Suggestion = LastfmAlbum & { offer: SellerSummary | null };
+
+function formatPrice(value: number): string {
+	return `$${value.toFixed(2)}`;
+}
+
+/**
+ * One subtle line under a suggestion describing the cheapest place to buy it on
+ * vinyl, by total cost incl. shipping. Returns "" when no pricing is available.
+ */
+function renderOffer(offer: SellerSummary | null): string {
+	if (!offer) return "";
+	const { cheapest, offerCount } = offer;
+
+	let cost: string;
+	if (cheapest.freeShipping) {
+		cost = `${formatPrice(cheapest.itemPrice)} with free shipping`;
+	} else if (cheapest.shippingPrice && cheapest.shippingPrice > 0) {
+		cost = `${formatPrice(cheapest.totalPrice)} incl. shipping`;
+	} else {
+		cost = `${formatPrice(cheapest.itemPrice)} + shipping`;
+	}
+
+	const sellers = offerCount > 1 ? ` · ${offerCount} sellers` : "";
+	const label = `From ${cost} at ${escapeHtml(cheapest.seller)}${sellers}`;
+
+	return `
+  <a href="${escapeHtml(cheapest.url)}" style="display:block;margin-top:2px;color:#aaa;text-decoration:none;font-size:13px">${label}</a>`;
+}
+
+function renderHtml(suggestions: Array<Suggestion>): string {
 	const items = suggestions
 		.map(
 			(s) => `<li style="margin:0 0 12px">
   <a href="${escapeHtml(s.url)}" style="color:#111;text-decoration:none;font-weight:600">${escapeHtml(s.artist)} — ${escapeHtml(s.title)}</a>
-  <span style="color:#888"> · ${s.playcount} plays this month</span>
+  <span style="color:#888"> · ${s.playcount} plays this month</span>${renderOffer(s.offer)}
 </li>`,
 		)
 		.join("");
@@ -72,8 +104,18 @@ function renderHtml(suggestions: Array<LastfmAlbum>): string {
 
 export function runDailyDigest(): Promise<{ sent: boolean; count: number }> {
 	return Sentry.startSpan({ name: "runDailyDigest" }, async () => {
-		const suggestions = await buildSuggestions(10);
-		if (suggestions.length === 0) return { sent: false, count: 0 };
+		const albums = await buildSuggestions(10);
+		if (albums.length === 0) return { sent: false, count: 0 };
+
+		// Enrich each suggestion with its cheapest vinyl offer. Lookups are
+		// independent and individually failure-tolerant (null on any problem), so
+		// run them together — a slow or missing price never blocks the others.
+		const suggestions: Array<Suggestion> = await Promise.all(
+			albums.map(async (a) => ({
+				...a,
+				offer: await findCheapestVinyl(a.artist, a.title),
+			})),
+		);
 
 		// `send_email` isn't bound in the preview env, so the binding is optional.
 		// The digest only runs via cron/route in production, where it's present —
