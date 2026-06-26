@@ -41,7 +41,8 @@ function Home() {
 					>
 						<img
 							src={HERO_EMOJI}
-							alt="🎵"
+							alt=""
+							aria-hidden="true"
 							width={56}
 							height={56}
 							className="size-14"
