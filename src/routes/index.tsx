@@ -6,9 +6,9 @@ import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
-// charliegleason.com's emoji generator, rendering the 🎧 (headphones) glyph.
+// charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
 const HERO_EMOJI =
-	"https://www.charliegleason.com/api/emoji/%F0%9F%8E%A7?detailed=false&animated=false";
+	"https://www.charliegleason.com/api/emoji/%F0%9F%8E%B5?detailed=false&animated=false";
 
 export const Route = createFileRoute("/")({
 	loader: ({ context }) =>
@@ -41,7 +41,7 @@ function Home() {
 					>
 						<img
 							src={HERO_EMOJI}
-							alt="🎧"
+							alt="🎵"
 							width={56}
 							height={56}
 							className="size-14"
@@ -59,7 +59,7 @@ function Home() {
 							records ·{" "}
 							<a
 								href="https://charliegleason.com"
-								className="underline decoration-brand/60 underline-offset-4 hover:text-foreground"
+								className="text-brand underline decoration-brand/60 underline-offset-4 hover:text-brand-strong"
 							>
 								charliegleason.com
 							</a>
@@ -110,7 +110,7 @@ function Home() {
 								{r.pitchforkScore != null && (
 									<p className="mt-1 text-xs font-medium text-brand tabular-nums">
 										{r.pitchforkScore}
-										<span className="ml-2.5 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+										<span className="ml-1 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
 											on Pitchfork
 										</span>
 									</p>
@@ -125,7 +125,7 @@ function Home() {
 				A corner of{" "}
 				<a
 					href="https://charliegleason.com"
-					className="underline decoration-brand/60 underline-offset-4 hover:text-foreground"
+					className="text-brand underline decoration-brand/60 underline-offset-4 hover:text-brand-strong"
 				>
 					charliegleason.com
 				</a>{" "}
