@@ -37,15 +37,17 @@ export interface SellerSummary {
 /**
  * Parse SerpApi's free-text `delivery` string into a shipping cost in USD.
  * Examples: "Free delivery" → 0, "$5.99 delivery" → 5.99,
- * "Free delivery, Free 30-day returns" → 0, "" / "Get it by Fri" → null (unknown).
+ * "Free delivery, Free 30-day returns" → 0, "Free 30-day returns" → null,
+ * "" / "Get it by Fri" → null (unknown).
  */
 export function parseShipping(delivery: string | undefined): number | null {
 	if (!delivery) return null;
 	const text = delivery.toLowerCase();
 	const dollars = text.match(/\$\s*([0-9]+(?:\.[0-9]{1,2})?)/);
 	if (dollars) return Number.parseFloat(dollars[1]);
-	// "Free delivery" but also generic "free shipping" / "free returns" wording.
-	if (text.includes("free")) return 0;
+	// Only treat "free" as free *shipping* when it's tied to delivery/shipping.
+	// "Free 30-day returns" alone says nothing about shipping cost → unknown.
+	if (/free\s+(?:delivery|shipping)/.test(text)) return 0;
 	return null;
 }
 
@@ -58,10 +60,16 @@ interface ShoppingResult {
 	delivery?: string;
 }
 
+/** Only allow http(s) links — never let a javascript:/data: URL reach an email href. */
+function isSafeHttpUrl(url: string): boolean {
+	return /^https?:\/\//i.test(url);
+}
+
 /**
- * Normalize raw Google Shopping rows into offers sorted cheapest-first by total
- * cost. Unknown shipping is treated as $0 for ranking (we can't invent a number),
- * but is surfaced as such in the rendered line. Pure + exported for testing.
+ * Normalize raw Google Shopping rows into offers ranked cheapest-first. Offers
+ * whose seller didn't state shipping have an *unknown* total, so they can't be
+ * claimed cheaper than a known all-in price — they rank after every known total
+ * (then by item price among themselves). Pure + exported for testing.
  */
 export function toOffers(results: Array<ShoppingResult>): Array<SellerOffer> {
 	return results
@@ -71,9 +79,10 @@ export function toOffers(results: Array<ShoppingResult>): Array<SellerOffer> {
 		.map((r) => {
 			const itemPrice = r.extracted_price as number;
 			const shippingPrice = parseShipping(r.delivery);
+			const url = r.product_link || r.link || "";
 			return {
 				seller: (r.source ?? "").trim() || "Unknown seller",
-				url: r.product_link || r.link || "",
+				url: isSafeHttpUrl(url) ? url : "",
 				itemPrice,
 				shippingPrice,
 				totalPrice: itemPrice + (shippingPrice ?? 0),
@@ -81,7 +90,12 @@ export function toOffers(results: Array<ShoppingResult>): Array<SellerOffer> {
 			} satisfies SellerOffer;
 		})
 		.filter((o) => o.url)
-		.sort((a, b) => a.totalPrice - b.totalPrice);
+		.sort((a, b) => {
+			const aKnown = a.shippingPrice !== null;
+			const bKnown = b.shippingPrice !== null;
+			if (aKnown !== bKnown) return aKnown ? -1 : 1; // known totals first
+			return a.totalPrice - b.totalPrice;
+		});
 }
 
 /** Build the SerpApi request URL. Bias the query toward vinyl pressings. */
