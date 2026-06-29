@@ -34,7 +34,10 @@ export default defineConfig(({ mode }) => {
 
 	return {
 		customLogger: logger,
-		resolve: { tsconfigPaths: true },
+		// dedupe react/react-dom so the SSR optimizer can't end up with two React
+		// copies — that's what surfaced as "Cannot read properties of null
+		// (reading 'useContext')" during server rendering (see RECORDS-2/3).
+		resolve: { tsconfigPaths: true, dedupe: ["react", "react-dom"] },
 		plugins: [
 			devtools(),
 			// remoteBindings: dev connects to the real D1/R2 (bindings marked
