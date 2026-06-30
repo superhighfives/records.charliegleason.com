@@ -7,7 +7,7 @@ import { getTopAlbums, type LastfmAlbum } from "#/lib/lastfm";
 import { findCheapestVinyl, type SellerSummary } from "#/lib/sellers";
 
 /**
- * Daily "records to buy" digest: top Last.fm albums you don't already own,
+ * Weekly "records to buy" digest: top Last.fm albums you don't already own,
  * emailed via the Cloudflare Email Sending (`EMAIL`) binding. Driven by the cron
  * trigger (see src/server.ts) or the protected /api/cron/digest route. `FROM` must
  * be on the domain onboarded for Email Sending (apex, not the worker subdomain).
@@ -38,7 +38,7 @@ export async function buildSuggestions(
 ): Promise<Array<LastfmAlbum>> {
 	const db = getDb(env.DB);
 	const [albums, owned] = await Promise.all([
-		getTopAlbums("1month", 50).catch(() => []),
+		getTopAlbums("7day", 50).catch(() => []),
 		db.select({ artist: records.artist, title: records.title }).from(records),
 	]);
 
@@ -59,28 +59,47 @@ function formatPrice(value: number): string {
 	return `$${value.toFixed(2)}`;
 }
 
+/** Phrase an offer's price with what we know about its shipping. */
+function formatCost(offer: {
+	itemPrice: number;
+	totalPrice: number;
+	shippingPrice: number | null;
+	freeShipping: boolean;
+}): string {
+	if (offer.freeShipping)
+		return `${formatPrice(offer.itemPrice)} with free shipping`;
+	if (offer.shippingPrice && offer.shippingPrice > 0) {
+		return `${formatPrice(offer.totalPrice)} incl. shipping`;
+	}
+	return `${formatPrice(offer.itemPrice)} + shipping`;
+}
+
+/** A small pill showing how many qualifying vinyl sellers were found. */
+function renderBadge(count: number): string {
+	const label = `${count} ${count === 1 ? "seller" : "sellers"}`;
+	return ` <span style="display:inline-block;background:#f0f0f0;color:#888;border-radius:9px;padding:0 7px;font-size:11px;line-height:18px;vertical-align:middle">${label}</span>`;
+}
+
 /**
- * One subtle line under a suggestion describing the cheapest place to buy it on
- * vinyl, by total cost incl. shipping. Returns "" when no pricing is available.
+ * The "where to buy" block under a suggestion: a primary line for the cheapest
+ * vinyl seller (with a sellers badge), plus a second line for the Amazon Prime
+ * option when one's available. Returns "" when no pricing is available.
  */
 function renderOffer(offer: SellerSummary | null): string {
 	if (!offer) return "";
-	const { cheapest, offerCount } = offer;
+	const { cheapest, offerCount, prime } = offer;
 
-	let cost: string;
-	if (cheapest.freeShipping) {
-		cost = `${formatPrice(cheapest.itemPrice)} with free shipping`;
-	} else if (cheapest.shippingPrice && cheapest.shippingPrice > 0) {
-		cost = `${formatPrice(cheapest.totalPrice)} incl. shipping`;
-	} else {
-		cost = `${formatPrice(cheapest.itemPrice)} + shipping`;
+	const main = `From ${formatCost(cheapest)} at ${escapeHtml(cheapest.seller)}`;
+	let html = `
+  <a href="${escapeHtml(cheapest.url)}" style="display:block;margin-top:2px;color:#aaa;text-decoration:none;font-size:13px">${main}${renderBadge(offerCount)}</a>`;
+
+	if (prime) {
+		const label = `Amazon Prime · ${formatCost(prime)}`;
+		html += `
+  <a href="${escapeHtml(prime.url)}" style="display:block;margin-top:1px;color:#aaa;text-decoration:none;font-size:13px">${label}</a>`;
 	}
 
-	const sellers = offerCount > 1 ? ` · ${offerCount} sellers` : "";
-	const label = `From ${cost} at ${escapeHtml(cheapest.seller)}${sellers}`;
-
-	return `
-  <a href="${escapeHtml(cheapest.url)}" style="display:block;margin-top:2px;color:#aaa;text-decoration:none;font-size:13px">${label}</a>`;
+	return html;
 }
 
 function renderHtml(suggestions: Array<Suggestion>): string {
@@ -88,7 +107,7 @@ function renderHtml(suggestions: Array<Suggestion>): string {
 		.map(
 			(s) => `<li style="margin:0 0 12px">
   <a href="${escapeHtml(s.url)}" style="color:#111;text-decoration:none;font-weight:600">${escapeHtml(s.artist)} — ${escapeHtml(s.title)}</a>
-  <span style="color:#888"> · ${s.playcount} plays this month</span>${renderOffer(s.offer)}
+  <span style="color:#888"> · ${s.playcount} plays this week</span>${renderOffer(s.offer)}
 </li>`,
 		)
 		.join("");
@@ -96,14 +115,14 @@ function renderHtml(suggestions: Array<Suggestion>): string {
 	return `<!doctype html>
 <html><body style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111">
   <h1 style="font-size:18px">Records to consider</h1>
-  <p style="color:#666;font-size:14px">From your Last.fm listening this month, minus what you already own.</p>
+  <p style="color:#666;font-size:14px">From your Last.fm listening this week, minus what you already own.</p>
   <ul style="list-style:none;padding:0">${items}</ul>
   <p style="color:#aaa;font-size:12px">records.charliegleason.com</p>
 </body></html>`;
 }
 
-export function runDailyDigest(): Promise<{ sent: boolean; count: number }> {
-	return Sentry.startSpan({ name: "runDailyDigest" }, async () => {
+export function runWeeklyDigest(): Promise<{ sent: boolean; count: number }> {
+	return Sentry.startSpan({ name: "runWeeklyDigest" }, async () => {
 		const albums = await buildSuggestions(10);
 		if (albums.length === 0) return { sent: false, count: 0 };
 
