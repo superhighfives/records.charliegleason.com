@@ -225,24 +225,35 @@ async function cachedRows<T>(
 	requestUrl: string,
 	extract: (data: unknown) => Array<T>,
 ): Promise<Array<T>> {
-	const cache = (caches as unknown as { default: Cache }).default;
-	const cacheKey = new Request(cacheKeyUrl);
-	const cached = await cache.match(cacheKey);
-	if (cached) return (await cached.json()) as Array<T>;
+	try {
+		const cache = (caches as unknown as { default: Cache }).default;
+		const cacheKey = new Request(cacheKeyUrl);
+		// A corrupt cache entry must not poison the lookup — fall through to a
+		// fresh fetch rather than throwing out of the whole price block.
+		const cached = await cache.match(cacheKey);
+		if (cached) {
+			const hit = await cached.json().catch(() => null);
+			if (Array.isArray(hit)) return hit as Array<T>;
+		}
 
-	const res = await fetch(requestUrl);
-	if (!res.ok) return [];
-	const rows = extract(await res.json()).slice(0, MAX_OFFERS);
-	await cache.put(
-		cacheKey,
-		new Response(JSON.stringify(rows), {
-			headers: {
-				"content-type": "application/json",
-				"cache-control": `max-age=${CACHE_TTL}`,
-			},
-		}),
-	);
-	return rows;
+		const res = await fetch(requestUrl);
+		if (!res.ok) return [];
+		// Invalid JSON or an unexpected shape (extract throwing) → treat as "no
+		// rows", same as an empty result. Never let it bubble to the caller.
+		const rows = extract(await res.json()).slice(0, MAX_OFFERS);
+		await cache.put(
+			cacheKey,
+			new Response(JSON.stringify(rows), {
+				headers: {
+					"content-type": "application/json",
+					"cache-control": `max-age=${CACHE_TTL}`,
+				},
+			}),
+		);
+		return rows;
+	} catch {
+		return [];
+	}
 }
 
 /** Build the Google Shopping request URL. Bias the query toward vinyl pressings. */
