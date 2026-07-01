@@ -9,7 +9,7 @@ import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 
 import { ThemeToggle } from "#/components/theme-toggle";
-import { ADMIN_ROLE } from "#/lib/roles";
+import { isAdmin } from "#/lib/roles";
 
 /**
  * Authenticated admin shell. Everything under /admin requires a signed-in Clerk
@@ -39,7 +39,7 @@ function AdminGate() {
 	// "not authorized" screen for a legitimate admin on first paint.
 	if (!isLoaded) return null;
 
-	if (user?.publicMetadata.role !== ADMIN_ROLE) {
+	if (!isAdmin(user?.publicMetadata.role)) {
 		return (
 			<div className="flex min-h-screen flex-col items-center justify-center gap-3 p-6 text-center">
 				<h1 className="text-2xl font-semibold">Not authorized</h1>
