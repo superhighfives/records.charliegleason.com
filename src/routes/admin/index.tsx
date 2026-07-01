@@ -15,7 +15,7 @@ import {
 	type SortingState,
 	useReactTable,
 } from "@tanstack/react-table";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { StatusBadge } from "#/components/status-badge";
@@ -65,8 +65,9 @@ export const Route = createFileRoute("/admin/")({
 function AdminRecords() {
 	const { data } = useSuspenseQuery(recordsQueryOptions);
 	// Ids still in the collection, so a record whose `duplicateOf` points at a
-	// since-deleted original stops claiming to be a duplicate.
-	const liveIds = new Set(data.map((r) => r.id));
+	// since-deleted original stops claiming to be a duplicate. Memoised so the
+	// derived `columns` below keep a stable identity between renders.
+	const liveIds = useMemo(() => new Set(data.map((r) => r.id)), [data]);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const searchRef = useRef<HTMLInputElement>(null);
@@ -94,108 +95,125 @@ function AdminRecords() {
 		},
 	]);
 
-	const columns: Array<ColumnDef<Record>> = [
-		{
-			id: "cover",
-			header: "",
-			enableSorting: false,
-			cell: ({ row }) => {
-				// Prefer the sourced/resized cover; fall back to the capture (admin only).
-				const key = row.original.coverImageKey ?? row.original.capturePhotoKey;
-				return key ? (
-					<img
-						src={`/api/photos/${key}`}
-						alt=""
-						className="size-10 rounded object-cover"
-					/>
-				) : (
-					<div className="size-10 rounded bg-muted" />
-				);
+	// react-table memoises its row models against the identity of `columns` and
+	// `data`. Rebuilding either inline on every render (as this used to) can spin
+	// the table into an infinite recompute/re-render loop when other state changes
+	// — so both are memoised to a stable reference.
+	const columns: Array<ColumnDef<Record>> = useMemo(
+		() => [
+			{
+				id: "cover",
+				header: "",
+				enableSorting: false,
+				cell: ({ row }) => {
+					// Prefer the sourced/resized cover; fall back to the capture (admin only).
+					const key =
+						row.original.coverImageKey ?? row.original.capturePhotoKey;
+					return key ? (
+						<img
+							src={`/api/photos/${key}`}
+							alt=""
+							className="size-10 rounded object-cover"
+						/>
+					) : (
+						<div className="size-10 rounded bg-muted" />
+					);
+				},
 			},
-		},
-		{
-			accessorKey: "artist",
-			header: "Artist",
-			cell: ({ getValue }) =>
-				getValue<string>() || <span className="text-muted-foreground">—</span>,
-		},
-		{
-			accessorKey: "title",
-			header: "Title",
-			cell: ({ getValue }) =>
-				getValue<string>() || (
-					<span className="text-muted-foreground italic">Processing…</span>
-				),
-		},
-		{ accessorKey: "year", header: "Year" },
-		{ accessorKey: "label", header: "Label" },
-		{
-			accessorKey: "pitchforkScore",
-			header: "Pitchfork",
-			cell: ({ getValue }) => getValue<number | null>() ?? "—",
-		},
-		{
-			accessorKey: "status",
-			header: "Status",
-			cell: ({ row }) => (
-				<Link
-					to="/admin/records/$id"
-					params={{ id: String(row.original.id) }}
-					className="inline-flex flex-wrap items-center gap-1"
-				>
-					<StatusBadge status={row.original.status} />
-					{row.original.duplicateOf != null &&
-						liveIds.has(row.original.duplicateOf) && <DuplicateBadge />}
-				</Link>
-			),
-		},
-		{
-			id: "actions",
-			header: "",
-			enableSorting: false,
-			cell: ({ row }) => (
-				<div className="flex justify-end gap-2">
+			{
+				accessorKey: "artist",
+				header: "Artist",
+				cell: ({ getValue }) =>
+					getValue<string>() || (
+						<span className="text-muted-foreground">—</span>
+					),
+			},
+			{
+				accessorKey: "title",
+				header: "Title",
+				cell: ({ getValue }) =>
+					getValue<string>() || (
+						<span className="text-muted-foreground italic">Processing…</span>
+					),
+			},
+			{ accessorKey: "year", header: "Year" },
+			{ accessorKey: "label", header: "Label" },
+			{
+				accessorKey: "pitchforkScore",
+				header: "Pitchfork",
+				cell: ({ getValue }) => getValue<number | null>() ?? "—",
+			},
+			{
+				accessorKey: "status",
+				header: "Status",
+				cell: ({ row }) => (
 					<Link
 						to="/admin/records/$id"
 						params={{ id: String(row.original.id) }}
-						className="text-sm underline underline-offset-4"
+						className="inline-flex flex-wrap items-center gap-1"
 					>
-						View
+						<StatusBadge status={row.original.status} />
+						{row.original.duplicateOf != null &&
+							liveIds.has(row.original.duplicateOf) && <DuplicateBadge />}
 					</Link>
-					<button
-						type="button"
-						className="text-sm text-destructive underline underline-offset-4 disabled:opacity-50"
-						disabled={deleteMutation.isPending}
-						onClick={(e) => {
-							e.stopPropagation();
-							if (confirm(`Delete "${row.original.title}"?`)) {
-								deleteMutation.mutate(row.original.id);
-							}
-						}}
-					>
-						Delete
-					</button>
-				</div>
-			),
-		},
-	];
+				),
+			},
+			{
+				id: "actions",
+				header: "",
+				enableSorting: false,
+				cell: ({ row }) => (
+					<div className="flex justify-end gap-2">
+						<Link
+							to="/admin/records/$id"
+							params={{ id: String(row.original.id) }}
+							className="text-sm underline underline-offset-4"
+						>
+							View
+						</Link>
+						<button
+							type="button"
+							className="text-sm text-destructive underline underline-offset-4 disabled:opacity-50"
+							disabled={deleteMutation.isPending}
+							onClick={(e) => {
+								e.stopPropagation();
+								if (confirm(`Delete "${row.original.title}"?`)) {
+									deleteMutation.mutate(row.original.id);
+								}
+							}}
+						>
+							Delete
+						</button>
+					</div>
+				),
+			},
+		],
+		[liveIds, deleteMutation.isPending, deleteMutation.mutate],
+	);
 
 	// Filter, then float the records that still need attention to the top
 	// (newest first). User-driven column sorting still overrides this default.
-	const rows = data
-		.filter((r) => matchesFilter(r.status ?? "complete", statusFilter))
-		.sort((a, b) => {
-			const pa = STATUS_PRIORITY[a.status ?? "complete"];
-			const pb = STATUS_PRIORITY[b.status ?? "complete"];
-			if (pa !== pb) return pa - pb;
-			return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
-		});
+	const rows = useMemo(
+		() =>
+			data
+				.filter((r) => matchesFilter(r.status ?? "complete", statusFilter))
+				.sort((a, b) => {
+					const pa = STATUS_PRIORITY[a.status ?? "complete"];
+					const pb = STATUS_PRIORITY[b.status ?? "complete"];
+					if (pa !== pb) return pa - pb;
+					return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
+				}),
+		[data, statusFilter],
+	);
 
 	const table = useReactTable({
 		data: rows,
 		columns,
+		// `globalFilter` is a read-only controlled value fed by the debounced search
+		// box. We deliberately don't wire `onGlobalFilterChange` back to `setFilter`:
+		// the table reads the *debounced* value but the setter writes the *raw* one,
+		// and that 200ms mismatch let react-table re-fire the setter in a loop.
 		state: { globalFilter: debouncedFilter, sorting },
-		onGlobalFilterChange: setFilter,
 		onSortingChange: setSorting,
 		getCoreRowModel: getCoreRowModel(),
 		getFilteredRowModel: getFilteredRowModel(),

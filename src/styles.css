@@ -160,10 +160,15 @@ body {
   color: #713f12; /* yellow-900 */
 }
 
-a {
-  color: inherit;
-  text-decoration-color: color-mix(in oklab, var(--accent-yellow) 70%, transparent);
-  text-underline-offset: 3px;
+/* In @layer base (like Preflight) so `text-*` utilities can override `color` —
+ * otherwise this unlayered rule beats every layered utility and link-styled
+ * buttons (asChild <Link>) ignore their variant's text colour. */
+@layer base {
+  a {
+    color: inherit;
+    text-decoration-color: color-mix(in oklab, var(--accent-yellow) 70%, transparent);
+    text-underline-offset: 3px;
+  }
 }
 
 code {

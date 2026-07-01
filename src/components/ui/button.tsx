@@ -9,9 +9,11 @@ const buttonVariants = cva(
 	{
 		variants: {
 			variant: {
-				// Neutral primary CTA (neutral-900 / neutral-100), matching the
-				// charliegleason.com palette — yellow is reserved as the accent.
-				default: "bg-primary text-primary-foreground hover:bg-primary/90",
+				// Brand-yellow primary CTA with near-black text — identical in light
+				// and dark mode so the main action never inverts to a washed-out
+				// white button. (`--brand` = charliegleason.com yellow-500.)
+				default:
+					"bg-brand text-neutral-900 hover:bg-brand-strong dark:hover:bg-brand-strong",
 				destructive:
 					"bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
 				outline:
