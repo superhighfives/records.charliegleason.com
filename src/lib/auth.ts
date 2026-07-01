@@ -12,10 +12,10 @@ import { isAdmin } from "#/lib/roles";
  * security boundary. Attach to any write server function so it can't be called
  * by an unauthenticated (or non-admin) request even if the client guard is bypassed.
  *
- * The role rides in the session token, so there's no extra API call per request.
- * That requires a one-time Clerk config — Dashboard → Sessions → Customize session
- * token: `{ "metadata": "{{user.public_metadata}}" }` — otherwise `metadata` is
- * empty and every request is (correctly) rejected as non-admin.
+ * The role rides in the session token (Clerk includes `public_metadata` by
+ * default), so there's no extra API call per request and no session-token
+ * customization needed — just set `publicMetadata.role = "admin"` on the user.
+ * A custom-mapped `metadata` claim is also honoured as a fallback.
  */
 export const authMiddleware = createMiddleware({ type: "function" }).server(
 	async ({ next }) => {
@@ -33,7 +33,10 @@ export const authMiddleware = createMiddleware({ type: "function" }).server(
 			throw new Error("Unauthorized");
 		}
 
-		if (!isAdmin(auth.sessionClaims?.metadata?.role)) {
+		const role =
+			auth.sessionClaims?.public_metadata?.role ??
+			auth.sessionClaims?.metadata?.role;
+		if (!isAdmin(role)) {
 			setResponseStatus(403);
 			throw new Error("Forbidden");
 		}
