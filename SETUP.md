@@ -50,7 +50,7 @@ your account. Requirements:
 (`env.IMAGES`). Enable it once: dashboard → **Images → Transformations** → enable for
 your zone/account. Cover sourcing fails closed (no cover) if it's off.
 
-**Email (daily digest).** The cron sends a "records to buy" email via the `EMAIL`
+**Email (weekly digest).** The cron sends a "records to buy" email via the `EMAIL`
 binding using **Cloudflare Email Sending** (Email Service, beta). Onboard the sender
 domain: dashboard → **Compute → Email Service → Email Sending → Onboard Domain** →
 `charliegleason.com`. It adds a `cf-bounce` subdomain MX + SPF/DKIM/DMARC **TXT**

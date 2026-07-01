@@ -66,10 +66,11 @@
 	"images": {
 		"binding": "IMAGES"
 	},
-	// Daily "records to buy" digest email (Cron Trigger drives the job).
+	// Weekly "records to buy" digest email (Cron Trigger drives the job) —
+	// Mondays at 14:00 UTC.
 	"triggers": {
 		"crons": [
-			"0 14 * * *"
+			"0 14 * * 1"
 		]
 	},
 	// Cloudflare Email Sending (Email Service, beta) — onboard charliegleason.com
@@ -98,7 +99,7 @@
 			// `routes` and `triggers` ARE inherited by environments, so both are
 			// overridden here: without the routes override, deploying preview would
 			// reassign records.charliegleason.com (production!) to this Worker; the
-			// empty crons disable the inherited daily digest in preview. `send_email`
+			// empty crons disable the inherited weekly digest in preview. `send_email`
 			// is intentionally omitted (not inherited) — preview never sends mail.
 			"routes": [
 				{

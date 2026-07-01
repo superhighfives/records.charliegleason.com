@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { findCheapestVinyl, parseShipping, toOffers } from "./sellers";
+import {
+	findCheapestVinyl,
+	isVinylTitle,
+	matchesAlbum,
+	parseShipping,
+	toOffers,
+} from "./sellers";
 
 describe("parseShipping", () => {
 	it("reads an explicit dollar amount", () => {
@@ -23,6 +29,11 @@ describe("parseShipping", () => {
 		expect(parseShipping("$4.99 delivery, Free 30-day returns")).toBe(4.99);
 	});
 
+	it("treats conditional free shipping (a threshold) as unknown, not $0 or the threshold", () => {
+		expect(parseShipping("Free delivery on $50+")).toBeNull();
+		expect(parseShipping("Free shipping over $35")).toBeNull();
+	});
+
 	it("returns null when shipping is unknown", () => {
 		expect(parseShipping(undefined)).toBeNull();
 		expect(parseShipping("")).toBeNull();
@@ -30,22 +41,88 @@ describe("parseShipping", () => {
 	});
 });
 
+describe("isVinylTitle", () => {
+	it("accepts vinyl titles — including the common case with no format word", () => {
+		expect(isVinylTitle("Rumours (Vinyl)")).toBe(true);
+		expect(isVinylTitle("Rumours [LP]")).toBe(true);
+		// Real vinyl listings frequently omit any format word in the title.
+		expect(isVinylTitle("The Tallest Man On Earth - I Love You")).toBe(true);
+	});
+
+	it("rejects competing formats and merch", () => {
+		expect(isVinylTitle("Rumours [CD]")).toBe(false);
+		expect(isVinylTitle("Rumours (Cassette)")).toBe(false);
+		expect(isVinylTitle("Rumours Digital Album")).toBe(false);
+		expect(isVinylTitle("Rumours Tour T-Shirt")).toBe(false);
+		expect(isVinylTitle("Rumours Vinyl + CD bundle")).toBe(false);
+	});
+});
+
+describe("matchesAlbum", () => {
+	it("requires every distinctive album word to appear", () => {
+		expect(matchesAlbum("Colors (Vinyl)", ["colors"])).toBe(true);
+		// A different release of the same artist must not pass as "Colors".
+		expect(matchesAlbum("I Love You Fever Dream (Vinyl)", ["colors"])).toBe(
+			false,
+		);
+	});
+
+	it("defers to the vinyl filter when there's nothing distinctive to match", () => {
+		expect(matchesAlbum("anything", [])).toBe(true);
+	});
+});
+
 describe("toOffers", () => {
+	it("keeps only vinyl pressings of the searched album", () => {
+		const offers = toOffers(
+			[
+				{
+					source: "right",
+					title: "The Tallest Man on Earth - Colors (Vinyl LP)",
+					product_link: "https://right.example/x",
+					extracted_price: 20,
+					delivery: "Free delivery",
+				},
+				{
+					source: "wrong-album",
+					title: "The Tallest Man on Earth - I Love You (Vinyl LP)",
+					product_link: "https://wrong.example/x",
+					extracted_price: 10,
+					delivery: "Free delivery",
+				},
+				{
+					source: "wrong-format",
+					title: "The Tallest Man on Earth - Colors (CD)",
+					product_link: "https://cd.example/x",
+					extracted_price: 5,
+					delivery: "Free delivery",
+				},
+			],
+			"Colors - Single",
+		);
+		expect(offers.map((o) => o.seller)).toEqual(["right"]);
+	});
+
 	it("sorts by total cost incl. shipping, not item price", () => {
-		const offers = toOffers([
-			{
-				source: "A",
-				product_link: "https://a.example/x",
-				extracted_price: 20,
-				delivery: "Free delivery",
-			},
-			{
-				source: "B",
-				product_link: "https://b.example/x",
-				extracted_price: 18,
-				delivery: "$5.00 delivery",
-			},
-		]);
+		const offers = toOffers(
+			[
+				{
+					source: "A",
+					title: "Zed (Vinyl)",
+					product_link: "https://a.example/x",
+					extracted_price: 20,
+					delivery: "Free delivery",
+				},
+				{
+					source: "B",
+					title: "Zed (Vinyl)",
+					product_link: "https://b.example/x",
+					extracted_price: 18,
+					delivery: "$5.00 delivery",
+				},
+			],
+			"Zed",
+		);
 		// B is cheaper on item ($18) but $23 total; A is $20 with free shipping.
 		expect(offers.map((o) => o.seller)).toEqual(["A", "B"]);
 		expect(offers[0].totalPrice).toBe(20);
@@ -54,20 +131,25 @@ describe("toOffers", () => {
 	});
 
 	it("ranks offers with unknown shipping after any known all-in total", () => {
-		const offers = toOffers([
-			{
-				source: "cheap-but-unknown",
-				product_link: "https://u.example/x",
-				extracted_price: 15, // tempting item price, but shipping unknown
-				delivery: "Get it Friday",
-			},
-			{
-				source: "known-total",
-				product_link: "https://k.example/x",
-				extracted_price: 20,
-				delivery: "Free delivery",
-			},
-		]);
+		const offers = toOffers(
+			[
+				{
+					source: "cheap-but-unknown",
+					title: "Zed (Vinyl)",
+					product_link: "https://u.example/x",
+					extracted_price: 15, // tempting item price, but shipping unknown
+					delivery: "Get it Friday",
+				},
+				{
+					source: "known-total",
+					title: "Zed (Vinyl)",
+					product_link: "https://k.example/x",
+					extracted_price: 20,
+					delivery: "Free delivery",
+				},
+			],
+			"Zed",
+		);
 		// We can't claim the $15 unknown-shipping offer beats a real $20 all-in.
 		expect(offers.map((o) => o.seller)).toEqual([
 			"known-total",
@@ -78,39 +160,53 @@ describe("toOffers", () => {
 	});
 
 	it("drops rows without a usable price or safe http(s) buy link", () => {
-		const offers = toOffers([
-			{ source: "no price", product_link: "https://np.example/x" },
-			{
-				source: "zero price",
-				product_link: "https://zp.example/x",
-				extracted_price: 0,
-			},
-			{ source: "no link", extracted_price: 10 },
-			{
-				source: "unsafe link",
-				product_link: "javascript:alert(1)",
-				extracted_price: 5,
-				delivery: "Free delivery",
-			},
-			{
-				source: "ok",
-				product_link: "https://ok.example/x",
-				extracted_price: 10,
-				delivery: "Free delivery",
-			},
-		]);
+		const offers = toOffers(
+			[
+				{
+					source: "no price",
+					title: "Zed (Vinyl)",
+					product_link: "https://np.example/x",
+				},
+				{
+					source: "zero price",
+					title: "Zed (Vinyl)",
+					product_link: "https://zp.example/x",
+					extracted_price: 0,
+				},
+				{ source: "no link", title: "Zed (Vinyl)", extracted_price: 10 },
+				{
+					source: "unsafe link",
+					title: "Zed (Vinyl)",
+					product_link: "javascript:alert(1)",
+					extracted_price: 5,
+					delivery: "Free delivery",
+				},
+				{
+					source: "ok",
+					title: "Zed (Vinyl)",
+					product_link: "https://ok.example/x",
+					extracted_price: 10,
+					delivery: "Free delivery",
+				},
+			],
+			"Zed",
+		);
 		expect(offers).toHaveLength(1);
 		expect(offers[0].seller).toBe("ok");
 	});
 
 	it("falls back to link when product_link is absent, and labels missing sellers", () => {
-		const [offer] = toOffers([
-			{
-				link: "https://shop.example/item",
-				extracted_price: 9.5,
-				delivery: "Free delivery",
-			},
-		]);
+		const [offer] = toOffers(
+			[
+				{
+					title: "Zed (Vinyl)",
+					link: "https://shop.example/item",
+					extracted_price: 9.5,
+					delivery: "Free delivery",
+				},
+			],
+			"Zed",
+		);
 		expect(offer.url).toBe("https://shop.example/item");
 		expect(offer.seller).toBe("Unknown seller");
 	});

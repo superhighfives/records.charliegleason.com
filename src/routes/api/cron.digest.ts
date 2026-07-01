@@ -2,11 +2,11 @@ import { env } from "cloudflare:workers";
 import { createFileRoute } from "@tanstack/react-router";
 import { json } from "@tanstack/react-start";
 
-import { runDailyDigest } from "#/lib/digest";
+import { runWeeklyDigest } from "#/lib/digest";
 
 /**
- * Manual / external trigger for the daily digest, guarded by a shared secret
- * (`x-cron-secret`). The cron trigger calls runDailyDigest() directly via the
+ * Manual / external trigger for the weekly digest, guarded by a shared secret
+ * (`x-cron-secret`). The cron trigger calls runWeeklyDigest() directly via the
  * scheduled handler (src/server.ts); this route is for testing and re-runs.
  */
 export const Route = createFileRoute("/api/cron/digest")({
@@ -17,7 +17,7 @@ export const Route = createFileRoute("/api/cron/digest")({
 				if (!env.CRON_SECRET || secret !== env.CRON_SECRET) {
 					return json({ error: "unauthorized" }, { status: 401 });
 				}
-				const result = await runDailyDigest();
+				const result = await runWeeklyDigest();
 				return json(result);
 			},
 		},
