@@ -19,10 +19,38 @@ export interface DiscogsCandidate {
 	label: string | null;
 	genre: string | null;
 	format: string | null; // e.g. "Vinyl, 2×LP, Album, Reissue" — disambiguates pressings
+	size: string | null; // physical size parsed from format, e.g. '12"'
+	type: string | null; // release type parsed from format — LP / EP / Single
 	country: string | null;
 	catno: string | null; // catalog number
 	discogsUrl: string;
 	thumb: string | null;
+}
+
+const SIZE_RE = /(\d{1,2})"/;
+
+/**
+ * Pull the physical size (e.g. `12"`) and release type (LP / EP / Single) out of
+ * Discogs format descriptions. Accepts the raw descriptions array or a joined
+ * string. Discogs tags vinyl inconsistently — a 12" album may be described as
+ * "Album" with no "LP" — so `Album` folds to `LP` when nothing more specific hits.
+ */
+export function parseSizeAndType(
+	source: string | Array<string> | null | undefined,
+): { size: string | null; type: string | null } {
+	const text = Array.isArray(source) ? source.join(", ") : (source ?? "");
+	if (!text) return { size: null, type: null };
+
+	const sizeMatch = text.match(SIZE_RE);
+	const size = sizeMatch ? `${sizeMatch[1]}"` : null;
+
+	let type: string | null = null;
+	if (/\bEP\b/i.test(text)) type = "EP";
+	else if (/\bmaxi-single\b/i.test(text) || /\bsingle\b/i.test(text))
+		type = "Single";
+	else if (/\bLP\b/i.test(text) || /\balbum\b/i.test(text)) type = "LP";
+
+	return { size, type };
 }
 
 function headers() {
@@ -44,12 +72,26 @@ function splitTitle(combined: string): { artist: string; title: string } {
 
 /** Full release details, fetched on demand when a candidate is expanded. */
 export interface DiscogsReleaseDetail {
+	// Canonical metadata — used to refresh a stored record from its Discogs id.
+	artist: string | null;
+	title: string | null;
+	year: number | null;
+	label: string | null;
+	genre: string | null;
+	catno: string | null;
+	size: string | null; // parsed from `formats`, e.g. '12"'
+	type: string | null; // parsed from `formats` — LP / EP / Single
 	formats: string | null; // detailed, e.g. "2×LP, Album, Reissue, 180g, Gatefold"
 	country: string | null;
 	released: string | null;
 	styles: Array<string>;
 	notes: string | null;
 	tracklist: Array<{ position: string; title: string; duration: string }>;
+}
+
+/** Strip Discogs' disambiguation suffix ("Wire (2)" → "Wire"). */
+function cleanArtistName(name: string): string {
+	return name.replace(/\s*\(\d+\)\s*$/, "").trim();
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
@@ -68,7 +110,32 @@ export async function getReleaseDetail(
 	if (!res.ok) return null;
 	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
 	const d = (await res.json()) as any;
+
+	// Size/type come from the descriptions across every format entry.
+	const descriptions: Array<string> = Array.isArray(d.formats)
+		? // biome-ignore lint/suspicious/noExplicitAny: untyped Discogs format JSON
+			d.formats.flatMap((f: any) =>
+				Array.isArray(f?.descriptions) ? f.descriptions.map(String) : [],
+			)
+		: [];
+	const { size, type } = parseSizeAndType(descriptions);
+	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs label JSON
+	const firstLabel = Array.isArray(d.labels) ? (d.labels[0] as any) : null;
+	const yearNum = d.year ? Number.parseInt(String(d.year), 10) : null;
+
 	return {
+		artist: d.artists_sort
+			? cleanArtistName(String(d.artists_sort))
+			: Array.isArray(d.artists) && d.artists[0]?.name
+				? cleanArtistName(String(d.artists[0].name))
+				: null,
+		title: d.title ? String(d.title) : null,
+		year: Number.isFinite(yearNum) ? yearNum : null,
+		label: firstLabel?.name ? String(firstLabel.name) : null,
+		genre: Array.isArray(d.genres) && d.genres[0] ? String(d.genres[0]) : null,
+		catno: firstLabel?.catno ? String(firstLabel.catno) : null,
+		size,
+		type,
 		formats: Array.isArray(d.formats)
 			? d.formats.map(formatLine).filter(Boolean).join(" / ") || null
 			: null,
@@ -123,6 +190,8 @@ export async function searchReleases(
 	const candidates = (data.results ?? []).map((r) => {
 		const parts = splitTitle(String(r.title ?? ""));
 		const yearNum = r.year ? Number.parseInt(String(r.year), 10) : null;
+		const formatArr = Array.isArray(r.format) ? r.format.map(String) : [];
+		const { size, type } = parseSizeAndType(formatArr);
 		return {
 			discogsId: String(r.id ?? ""),
 			artist: parts.artist,
@@ -130,7 +199,9 @@ export async function searchReleases(
 			year: Number.isFinite(yearNum) ? yearNum : null,
 			label: Array.isArray(r.label) ? String(r.label[0]) : null,
 			genre: Array.isArray(r.genre) ? String(r.genre[0]) : null,
-			format: Array.isArray(r.format) ? r.format.map(String).join(", ") : null,
+			format: formatArr.length ? formatArr.join(", ") : null,
+			size,
+			type,
 			country: r.country ? String(r.country) : null,
 			catno: r.catno ? String(r.catno) : null,
 			discogsUrl: r.uri ? `https://www.discogs.com${r.uri}` : "",

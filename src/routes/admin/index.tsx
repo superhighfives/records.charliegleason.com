@@ -22,7 +22,7 @@ import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import type { Record } from "#/db/schema";
-import { deleteRecord } from "#/lib/records";
+import { deleteRecord, rescanAllRecords } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
 type RecordStatus = NonNullable<Record["status"]>;
@@ -82,6 +82,12 @@ function AdminRecords() {
 		mutationFn: (id: number) => deleteRecord({ data: id }),
 		onSuccess: () =>
 			queryClient.invalidateQueries({ queryKey: recordsQueryOptions.queryKey }),
+	});
+
+	// Bulk "Rescan all": re-pull every published record from its stored Discogs
+	// release through the queue. Non-destructive; results land as the queue drains.
+	const rescanMutation = useMutation({
+		mutationFn: () => rescanAllRecords(),
 	});
 
 	// Hotkeys: "/" focuses the search box.
@@ -232,6 +238,27 @@ function AdminRecords() {
 						placeholder="Filter records…  ( / )"
 						className="w-full sm:w-56"
 					/>
+					<Button
+						type="button"
+						variant="outline"
+						className="flex-1 sm:flex-none"
+						disabled={rescanMutation.isPending}
+						onClick={() => {
+							if (
+								confirm(
+									"Re-pull every published record from Discogs? This runs in the background.",
+								)
+							) {
+								rescanMutation.mutate();
+							}
+						}}
+					>
+						{rescanMutation.isPending
+							? "Queuing…"
+							: rescanMutation.data
+								? `Queued ${rescanMutation.data.queued}`
+								: "Rescan all"}
+					</Button>
 					<Button asChild variant="outline" className="flex-1 sm:flex-none">
 						<Link to="/admin/records/new">Add manually</Link>
 					</Button>

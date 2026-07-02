@@ -19,6 +19,7 @@ import type { RecordFormValues } from "#/lib/record-schema";
 import {
 	getDiscogsRelease,
 	publishRecord,
+	refreshRecord,
 	reprocessRecord,
 	searchDiscogs,
 } from "#/lib/records";
@@ -49,7 +50,10 @@ function toForm(
 		title: picked?.title || record.title,
 		year: (picked?.year ?? record.year)?.toString() ?? "",
 		label: picked?.label ?? record.label ?? "",
-		format: record.format ?? "LP",
+		format: picked?.type ?? record.format ?? "LP",
+		size: picked?.size ?? record.size ?? "",
+		catno: picked?.catno ?? record.catno ?? "",
+		country: picked?.country ?? record.country ?? "",
 		genre: picked?.genre ?? record.genre ?? "",
 		pitchforkScore: record.pitchforkScore?.toString() ?? "",
 		notes: record.notes ?? "",
@@ -220,6 +224,17 @@ function RecordDetail() {
 		onSuccess: invalidate,
 	});
 
+	// Re-pull the enrichment fields from the stored Discogs release (no re-scan of
+	// the photo). Clears any locally picked candidate so the form shows fresh data.
+	const refresh = useMutation({
+		mutationFn: () => refreshRecord({ data: recordId }),
+		onSuccess: async () => {
+			setPicked(null);
+			setResults(null);
+			await invalidate();
+		},
+	});
+
 	if (!record) {
 		return <p className="text-muted-foreground">Record not found.</p>;
 	}
@@ -244,9 +259,22 @@ function RecordDetail() {
 					</Link>
 					<h1 className="mt-1 text-2xl font-semibold">{heading}</h1>
 				</div>
-				<div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-					{record.duplicateOf != null && <DuplicateBadge />}
-					<StatusBadge status={record.status} />
+				<div className="flex shrink-0 flex-col items-end gap-2">
+					<div className="flex flex-wrap items-center justify-end gap-1">
+						{record.duplicateOf != null && <DuplicateBadge />}
+						<StatusBadge status={record.status} />
+					</div>
+					{record.discogsId && !inFlight && (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={refresh.isPending}
+							onClick={() => refresh.mutate()}
+						>
+							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
+						</Button>
+					)}
 				</div>
 			</div>
 

@@ -26,6 +26,9 @@ const TEXT_FIELDS = [
 	{ name: "year", label: "Year", placeholder: "1992" },
 	{ name: "label", label: "Label", placeholder: "R&S Records" },
 	{ name: "format", label: "Format", placeholder: "LP" },
+	{ name: "size", label: "Size", placeholder: '12"' },
+	{ name: "catno", label: "Catalog number", placeholder: "R&S 92016" },
+	{ name: "country", label: "Country", placeholder: "UK" },
 	{ name: "genre", label: "Genre", placeholder: "Electronic" },
 	{ name: "pitchforkScore", label: "Pitchfork score", placeholder: "9.4" },
 ] as const;
