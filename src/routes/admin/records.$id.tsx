@@ -370,7 +370,23 @@ function RecordDetail() {
 					{/* Wrong match? reveal the manual Discogs search. */}
 					<button
 						type="button"
-						onClick={() => setShowSearch((v) => !v)}
+						onClick={() => {
+							setShowSearch((v) => {
+								// Seed the search with the record's artist/title when opening,
+								// unless the user has already entered a query.
+								if (!v) {
+									setQuery((q) =>
+										q.artist || q.title
+											? q
+											: {
+													artist: record.artist ?? "",
+													title: record.title ?? "",
+												},
+									);
+								}
+								return !v;
+							});
+						}}
 						className="text-sm text-muted-foreground underline underline-offset-4"
 					>
 						{showSearch ? "Hide Discogs search" : "Wrong match? Search Discogs"}
