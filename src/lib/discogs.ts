@@ -37,8 +37,10 @@ const SIZE_RE = /(\d{1,2})"/;
  *
  * Discogs also omits an explicit size for standard 12" LPs (their descriptions
  * are just "LP"/"Album" — the size is implied), only spelling it out for odd
- * sizes and singles/EPs. So when no explicit size matched but the type is LP,
- * default to 12"; explicit tokens (7" singles, 10" EPs) still win.
+ * sizes and singles/EPs. So when no explicit size matched on a vinyl/LP release,
+ * default to 12"; explicit tokens (7" singles, 10" EPs) still win. The vinyl
+ * guard matters because `type` folds "Album" to "LP" even for CDs — without it a
+ * CD album ("CD", "Album") would be mislabelled 12".
  */
 export function parseSizeAndType(
 	source: string | Array<string> | null | undefined,
@@ -55,7 +57,7 @@ export function parseSizeAndType(
 		type = "Single";
 	else if (/\bLP\b/i.test(text) || /\balbum\b/i.test(text)) type = "LP";
 
-	if (!size && type === "LP") size = '12"';
+	if (!size && type === "LP" && /\bLP\b|\bvinyl\b/i.test(text)) size = '12"';
 
 	return { size, type };
 }

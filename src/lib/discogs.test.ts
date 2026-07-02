@@ -33,6 +33,15 @@ describe("parseSizeAndType", () => {
 		});
 	});
 
+	it('does not default a non-vinyl "Album" to 12"', () => {
+		// "Album" folds to type LP, but a CD is not a 12" record — the vinyl guard
+		// keeps the size null here.
+		expect(parseSizeAndType(["CD", "Album", "Reissue"])).toEqual({
+			size: null,
+			type: "LP",
+		});
+	});
+
 	it("prefers EP and Single over LP/Album", () => {
 		expect(parseSizeAndType('12", EP').type).toBe("EP");
 		expect(parseSizeAndType('12", Maxi-Single, 45 RPM').type).toBe("Single");
