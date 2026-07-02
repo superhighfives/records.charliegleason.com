@@ -71,11 +71,19 @@ export function RecordPanel({
 		try {
 			await navigator.clipboard.writeText(record.catno);
 			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
 		} catch {
 			// Clipboard denied (insecure context / permissions) — nothing to do.
 		}
 	};
+
+	// Clear the "copied" tick after a moment. Driven by an effect so the timer is
+	// cancelled on unmount (paging remounts the panel), avoiding a state update on
+	// an unmounted component.
+	useEffect(() => {
+		if (!copied) return;
+		const t = setTimeout(() => setCopied(false), 1500);
+		return () => clearTimeout(t);
+	}, [copied]);
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
@@ -86,10 +94,21 @@ export function RecordPanel({
 		: null;
 
 	// Arrow keys page through the collection (Escape is handled by the Sheet).
+	// Ignore keys aimed at a text field / editable element so we don't hijack
+	// caret movement, and only swallow the event when we actually page.
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+			const el = e.target as HTMLElement | null;
+			if (
+				el?.isContentEditable ||
+				el?.closest("input, textarea, select, [contenteditable='true']")
+			) {
+				return;
+			}
+			e.preventDefault();
 			if (e.key === "ArrowLeft") onPrev();
-			else if (e.key === "ArrowRight") onNext();
+			else onNext();
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);

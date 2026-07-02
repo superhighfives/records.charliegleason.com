@@ -254,7 +254,11 @@ export const rescanAllRecords = createServerFn({ method: "POST" })
 				.where(
 					and(eq(records.status, "complete"), isNotNull(records.discogsId)),
 				);
-			for (const { id } of rows) await enqueueRefresh(id);
+			// Enqueue concurrently rather than awaiting each send in turn — this only
+			// fans out queue writes (the actual Discogs work happens in the consumer,
+			// rate-limited there), so a big collection won't serialize into a slow
+			// request that risks the Worker's CPU/time budget.
+			await Promise.all(rows.map(({ id }) => enqueueRefresh(id)));
 			return { queued: rows.length };
 		}),
 	);

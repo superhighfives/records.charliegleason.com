@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
@@ -34,10 +34,17 @@ function Home() {
 	}, [data, search]);
 
 	// Track the open record by id (not index) so re-filtering never jumps to the
-	// wrong one; if it drops out of the filtered set the drawer just closes.
+	// wrong one.
 	const selectedIndex =
 		selectedId == null ? -1 : filtered.findIndex((r) => r.id === selectedId);
 	const selected = selectedIndex >= 0 ? filtered[selectedIndex] : null;
+
+	// If the open record is filtered out (e.g. the search no longer matches it),
+	// forget it entirely — clearing the id, not just deriving it away, so it can't
+	// silently re-open when a later search brings the record back into view.
+	useEffect(() => {
+		if (selectedId != null && selectedIndex === -1) setSelectedId(null);
+	}, [selectedId, selectedIndex]);
 
 	return (
 		<div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
