@@ -2,7 +2,11 @@ import { env } from "cloudflare:workers";
 
 import type { Record } from "#/db/schema";
 import { runClaude } from "#/lib/ai";
-import { type DiscogsCandidate, searchReleases } from "#/lib/discogs";
+import {
+	type DiscogsCandidate,
+	getReleaseDetail,
+	searchReleases,
+} from "#/lib/discogs";
 import { bytesToBase64 } from "#/lib/image-data";
 import { sourceCoverFromDiscogs } from "#/lib/images";
 import { getPitchforkScore } from "#/lib/the-fork";
@@ -302,6 +306,14 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 
 	const best = candidates[0] ?? null;
 
+	// Search hits carry unreliable enrichment fields — Discogs' search `format`
+	// array often omits the size and the size-less 12" LP case can't be inferred
+	// from it. Pull the full release so the enrichment matches the refresh path
+	// (getReleaseDetail), falling back to the search hit if the fetch fails.
+	const detail = best?.discogsId
+		? await getReleaseDetail(best.discogsId).catch(() => null)
+		: null;
+
 	// 4. Pitchfork score (best-effort).
 	const pitchfork = await getPitchforkScore(
 		extraction.artist,
@@ -314,15 +326,15 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		: null;
 
 	return {
-		artist: best?.artist || extraction.artist,
-		title: best?.title || extraction.title,
-		year: best?.year ?? extraction.year,
-		label: best?.label ?? null,
-		format: best?.type ?? null,
-		size: best?.size ?? null,
-		catno: best?.catno ?? null,
-		country: best?.country ?? null,
-		genre: best?.genre ?? null,
+		artist: detail?.artist || best?.artist || extraction.artist,
+		title: detail?.title || best?.title || extraction.title,
+		year: detail?.year ?? best?.year ?? extraction.year,
+		label: detail?.label ?? best?.label ?? null,
+		format: detail?.type ?? best?.type ?? null,
+		size: detail?.size ?? best?.size ?? null,
+		catno: detail?.catno ?? best?.catno ?? null,
+		country: detail?.country ?? best?.country ?? null,
+		genre: detail?.genre ?? best?.genre ?? null,
 		pitchforkScore: pitchfork?.score ?? null,
 		pitchforkUrl: pitchfork?.url ?? null,
 		discogsId: best?.discogsId ?? null,
