@@ -24,6 +24,10 @@ export interface AnalysisResult {
 	title: string;
 	year: number | null;
 	label: string | null;
+	format: string | null; // release type — LP / EP / Single (from Discogs)
+	size: string | null; // physical size — e.g. '12"' (from Discogs)
+	catno: string | null; // catalog number (from Discogs)
+	country: string | null; // pressing country (from Discogs)
 	genre: string | null;
 	pitchforkScore: number | null;
 	pitchforkUrl: string | null;
@@ -314,6 +318,10 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		title: best?.title || extraction.title,
 		year: best?.year ?? extraction.year,
 		label: best?.label ?? null,
+		format: best?.type ?? null,
+		size: best?.size ?? null,
+		catno: best?.catno ?? null,
+		country: best?.country ?? null,
 		genre: best?.genre ?? null,
 		pitchforkScore: pitchfork?.score ?? null,
 		pitchforkUrl: pitchfork?.url ?? null,

@@ -16,7 +16,10 @@ export const records = sqliteTable("records", {
 	title: text("title").notNull(),
 	year: integer("year"),
 	label: text("label"),
+	// Record type — LP / EP / Single etc. (was always "LP"; now parsed from Discogs).
 	format: text("format").default("LP"),
+	// Physical size of the disc — e.g. '12"', '10"', '7"'. Parsed from Discogs.
+	size: text("size"),
 	genre: text("genre"),
 
 	// Enrichment
@@ -24,6 +27,8 @@ export const records = sqliteTable("records", {
 	pitchforkUrl: text("pitchfork_url"),
 	discogsId: text("discogs_id"),
 	discogsUrl: text("discogs_url"),
+	catno: text("catno"), // Discogs catalog number, e.g. "WIGLP450"
+	country: text("country"), // pressing country
 
 	// Storage / provenance
 	coverImageKey: text("cover_image_key"), // R2 key — good cover, sourced + resized (public)

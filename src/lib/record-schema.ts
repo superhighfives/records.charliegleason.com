@@ -12,6 +12,9 @@ export const recordInputSchema = z.object({
 	year: z.number().int().min(1860).max(2100).nullable(),
 	label: z.string().trim().min(1).nullable(),
 	format: z.string().trim().min(1),
+	size: z.string().trim().min(1).nullable(),
+	catno: z.string().trim().min(1).nullable(),
+	country: z.string().trim().min(1).nullable(),
 	genre: z.string().trim().min(1).nullable(),
 	pitchforkScore: z.number().min(0).max(10).nullable(),
 	notes: z.string().trim().min(1).nullable(),
@@ -46,6 +49,9 @@ export type RecordFormValues = {
 	year: string;
 	label: string;
 	format: string;
+	size: string;
+	catno: string;
+	country: string;
 	genre: string;
 	pitchforkScore: string;
 	notes: string;
@@ -65,6 +71,9 @@ export const recordFormSchema = z.object({
 	year: numericString,
 	label: z.string(),
 	format: z.string(),
+	size: z.string(),
+	catno: z.string(),
+	country: z.string(),
 	genre: z.string(),
 	pitchforkScore: numericString,
 	notes: z.string(),
@@ -76,6 +85,9 @@ export const emptyRecordForm: RecordFormValues = {
 	year: "",
 	label: "",
 	format: "LP",
+	size: "",
+	catno: "",
+	country: "",
 	genre: "",
 	pitchforkScore: "",
 	notes: "",
@@ -98,6 +110,9 @@ export function formValuesToInput(v: RecordFormValues): RecordInput {
 		year: optionalNumber(v.year),
 		label: optional(v.label),
 		format: v.format.trim() || "LP",
+		size: optional(v.size),
+		catno: optional(v.catno),
+		country: optional(v.country),
 		genre: optional(v.genre),
 		pitchforkScore: optionalNumber(v.pitchforkScore),
 		notes: optional(v.notes),
@@ -111,6 +126,9 @@ export function recordToFormValues(r: Record): RecordFormValues {
 		year: r.year?.toString() ?? "",
 		label: r.label ?? "",
 		format: r.format ?? "LP",
+		size: r.size ?? "",
+		catno: r.catno ?? "",
+		country: r.country ?? "",
 		genre: r.genre ?? "",
 		pitchforkScore: r.pitchforkScore?.toString() ?? "",
 		notes: r.notes ?? "",

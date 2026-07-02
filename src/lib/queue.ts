@@ -3,8 +3,9 @@ import * as Sentry from "@sentry/cloudflare";
 import { eq, ne } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { records } from "#/db/schema";
+import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
+import { getReleaseDetail } from "#/lib/discogs";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -15,6 +16,9 @@ import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 
 export interface AnalyzeMessage {
 	recordId: number;
+	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls
+	// the Discogs release for an already-identified record (used by "Rescan all").
+	mode?: "analyze" | "refresh";
 }
 
 /** `max_retries` from wrangler.jsonc — used only to label the row once retries run out. */
@@ -31,9 +35,68 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId });
 }
 
-async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
-	const { recordId } = message.body;
+/** Enqueue a published record to be re-pulled from its stored Discogs release. */
+export async function enqueueRefresh(recordId: number): Promise<void> {
+	await analyzeQueue().send({ recordId, mode: "refresh" });
+}
+
+/**
+ * Re-pull an already-identified record from its stored Discogs release id and
+ * update the enrichment fields (year, label, genre, format, size, catno,
+ * country). Only overwrites a field when Discogs returns a value, so it never
+ * nulls out good data. Leaves artist/title/status alone — identity was confirmed
+ * at publish. Returns the updated row, or null if the record is gone or has no
+ * Discogs id. Shared by the sync `refreshRecord` server fn and the bulk queue.
+ */
+export async function refreshRecordById(id: number): Promise<Record | null> {
 	const db = getDb(env.DB);
+	const [record] = await db
+		.select()
+		.from(records)
+		.where(eq(records.id, id))
+		.limit(1);
+	if (!record?.discogsId) return null;
+
+	const detail = await getReleaseDetail(record.discogsId);
+	if (!detail) return record;
+
+	const [row] = await db
+		.update(records)
+		.set({
+			year: detail.year ?? record.year,
+			label: detail.label ?? record.label,
+			genre: detail.genre ?? record.genre,
+			format: detail.type ?? record.format,
+			size: detail.size ?? record.size,
+			catno: detail.catno ?? record.catno,
+			country: detail.country ?? record.country,
+			updatedAt: new Date(),
+		})
+		.where(eq(records.id, id))
+		.returning();
+	return row ?? record;
+}
+
+async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
+	const { recordId, mode } = message.body;
+	const db = getDb(env.DB);
+
+	// Lightweight path: just re-pull the stored Discogs release. Best-effort —
+	// a refresh failure shouldn't retry-storm or touch the record's status.
+	if (mode === "refresh") {
+		try {
+			await refreshRecordById(recordId);
+		} catch (err) {
+			console.error(
+				`[queue] refresh failed for record ${recordId}: ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+			Sentry.captureException(err);
+		}
+		message.ack();
+		return;
+	}
 
 	try {
 		const [record] = await db
@@ -78,6 +141,10 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				title: result.title || "Untitled",
 				year: result.year,
 				label: result.label,
+				format: result.format ?? "LP",
+				size: result.size,
+				catno: result.catno,
+				country: result.country,
 				genre: result.genre,
 				pitchforkScore: result.pitchforkScore,
 				pitchforkUrl: result.pitchforkUrl,

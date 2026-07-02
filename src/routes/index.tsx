@@ -1,9 +1,11 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
+import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
@@ -19,6 +21,7 @@ export const Route = createFileRoute("/")({
 function Home() {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
 	const [search, setSearch] = useState("");
+	const [selectedId, setSelectedId] = useState<number | null>(null);
 
 	const filtered = useMemo(() => {
 		const q = search.trim().toLowerCase();
@@ -29,6 +32,19 @@ function Home() {
 				.some((v) => String(v).toLowerCase().includes(q)),
 		);
 	}, [data, search]);
+
+	// Track the open record by id (not index) so re-filtering never jumps to the
+	// wrong one.
+	const selectedIndex =
+		selectedId == null ? -1 : filtered.findIndex((r) => r.id === selectedId);
+	const selected = selectedIndex >= 0 ? filtered[selectedIndex] : null;
+
+	// If the open record is filtered out (e.g. the search no longer matches it),
+	// forget it entirely — clearing the id, not just deriving it away, so it can't
+	// silently re-open when a later search brings the record back into view.
+	useEffect(() => {
+		if (selectedId != null && selectedIndex === -1) setSelectedId(null);
+	}, [selectedId, selectedIndex]);
 
 	return (
 		<div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
@@ -86,41 +102,73 @@ function Home() {
 			) : (
 				<ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4">
 					{filtered.map((r) => (
-						<li key={r.id} className="group space-y-2">
-							<div className="album-card aspect-square overflow-hidden rounded-md">
-								{r.coverImageKey && (
-									<img
-										src={`/api/photos/${r.coverImageKey}`}
-										alt={`${r.artist} — ${r.title}`}
-										className="size-full object-cover"
-										loading="lazy"
-									/>
-								)}
-							</div>
-							<div className="text-sm leading-snug">
-								<p
-									className="truncate font-serif text-base font-medium"
-									title={r.title ?? undefined}
-								>
-									{r.title}
-								</p>
-								<p className="truncate font-serif text-muted-foreground">
-									{r.artist}
-									{r.year ? ` · ${r.year}` : ""}
-								</p>
-								{r.pitchforkScore != null && (
-									<p className="mt-1 text-xs font-medium text-brand tabular-nums">
-										{r.pitchforkScore}
-										<span className="ml-1 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-											on Pitchfork
-										</span>
+						<li key={r.id} className="group">
+							<button
+								type="button"
+								onClick={() => setSelectedId(r.id)}
+								className="w-full space-y-2 text-left"
+							>
+								<div className="album-card aspect-square overflow-hidden rounded-md">
+									{r.coverImageKey && (
+										<img
+											src={`/api/photos/${r.coverImageKey}`}
+											alt={`${r.artist} — ${r.title}`}
+											className="size-full object-cover"
+											loading="lazy"
+										/>
+									)}
+								</div>
+								<div className="text-sm leading-snug">
+									<p
+										className="truncate font-serif text-base font-medium"
+										title={r.title ?? undefined}
+									>
+										{r.title}
 									</p>
-								)}
-							</div>
+									<p className="truncate font-serif text-muted-foreground">
+										{r.artist}
+										{r.year ? ` · ${r.year}` : ""}
+									</p>
+									{r.pitchforkScore != null && (
+										<p className="mt-1 text-xs font-medium text-brand tabular-nums">
+											{r.pitchforkScore}
+											<span className="ml-1 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+												on Pitchfork
+											</span>
+										</p>
+									)}
+								</div>
+							</button>
 						</li>
 					))}
 				</ul>
 			)}
+
+			<Sheet
+				open={selected != null}
+				onOpenChange={(open) => {
+					if (!open) setSelectedId(null);
+				}}
+			>
+				<SheetContent className="p-0">
+					{selected && (
+						<RecordPanel
+							key={selected.id}
+							record={selected}
+							index={selectedIndex}
+							total={filtered.length}
+							onPrev={() =>
+								selectedIndex > 0 &&
+								setSelectedId(filtered[selectedIndex - 1].id)
+							}
+							onNext={() =>
+								selectedIndex < filtered.length - 1 &&
+								setSelectedId(filtered[selectedIndex + 1].id)
+							}
+						/>
+					)}
+				</SheetContent>
+			</Sheet>
 
 			<footer className="mt-16 border-t border-border pt-6 text-xs text-muted-foreground">
 				A corner of{" "}
