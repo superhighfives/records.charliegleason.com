@@ -25,6 +25,14 @@ describe("parseSizeAndType", () => {
 		});
 	});
 
+	it('defaults a size-less LP to 12" (Discogs omits it for standard LPs)', () => {
+		// e.g. Radiohead — In Rainbows: descriptions are ["LP", "Album", "Reissue"].
+		expect(parseSizeAndType(["LP", "Album", "Reissue"])).toEqual({
+			size: '12"',
+			type: "LP",
+		});
+	});
+
 	it("prefers EP and Single over LP/Album", () => {
 		expect(parseSizeAndType('12", EP').type).toBe("EP");
 		expect(parseSizeAndType('12", Maxi-Single, 45 RPM').type).toBe("Single");
