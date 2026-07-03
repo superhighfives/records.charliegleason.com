@@ -179,14 +179,25 @@ export async function getReleaseImageUrl(id: string): Promise<string | null> {
 const MAX_CANDIDATES = 5;
 const isVinyl = (c: DiscogsCandidate) => /vinyl/i.test(c.format ?? "");
 
-export async function searchReleases(
-	artist: string,
-	title: string,
-): Promise<Array<DiscogsCandidate>> {
+export type SearchParams = {
+	artist: string;
+	title: string;
+	country: string;
+	year: string;
+};
+
+export async function searchReleases({
+	artist,
+	title,
+	country,
+	year,
+}: SearchParams): Promise<Array<DiscogsCandidate>> {
 	const url = new URL(`${BASE}/database/search`);
 	url.searchParams.set("type", "release");
 	if (artist) url.searchParams.set("artist", artist);
 	if (title) url.searchParams.set("release_title", title);
+	if (country) url.searchParams.set("country", country);
+	if (year) url.searchParams.set("year", year);
 	// Pull a wider net so we can prefer vinyl below without losing other pressings.
 	url.searchParams.set("per_page", "25");
 

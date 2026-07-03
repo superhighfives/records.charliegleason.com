@@ -14,7 +14,7 @@ import {
 	TooltipTrigger,
 } from "#/components/ui/tooltip";
 import type { Record } from "#/db/schema";
-import type { DiscogsCandidate } from "#/lib/discogs";
+import type { DiscogsCandidate, SearchParams } from "#/lib/discogs";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
 	getDiscogsRelease,
@@ -202,7 +202,12 @@ function RecordDetail() {
 
 	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
 	const [results, setResults] = useState<Array<DiscogsCandidate> | null>(null);
-	const [query, setQuery] = useState({ artist: "", title: "" });
+	const [query, setQuery] = useState({
+		artist: "",
+		title: "",
+		country: "",
+		year: "",
+	});
 	const [showSearch, setShowSearch] = useState(false);
 
 	const invalidate = () =>
@@ -214,8 +219,7 @@ function RecordDetail() {
 		]);
 
 	const search = useMutation({
-		mutationFn: (q: { artist: string; title: string }) =>
-			searchDiscogs({ data: q }),
+		mutationFn: (q: SearchParams) => searchDiscogs({ data: q }),
 		onSuccess: setResults,
 	});
 
@@ -378,6 +382,7 @@ function RecordDetail() {
 									q.artist || q.title
 										? q
 										: {
+												...q,
 												artist: record.artist ?? "",
 												title: record.title ?? "",
 											},
@@ -391,45 +396,82 @@ function RecordDetail() {
 					</button>
 
 					{showSearch && (
-						<div className="flex items-end gap-2">
-							<div className="flex-1 space-y-1">
-								<label
-									htmlFor="q-artist"
-									className="text-xs text-muted-foreground"
-								>
-									Artist
-								</label>
-								<Input
-									id="q-artist"
-									value={query.artist}
-									onChange={(e) =>
-										setQuery((q) => ({ ...q, artist: e.target.value }))
-									}
-								/>
+						<div className="space-y-2">
+							<div className="flex items-end gap-2">
+								<div className="flex-1 space-y-1">
+									<label
+										htmlFor="q-artist"
+										className="text-xs text-muted-foreground"
+									>
+										Artist
+									</label>
+									<Input
+										id="q-artist"
+										value={query.artist}
+										onChange={(e) =>
+											setQuery((q) => ({ ...q, artist: e.target.value }))
+										}
+									/>
+								</div>
+								<div className="flex-1 space-y-1">
+									<label
+										htmlFor="q-title"
+										className="text-xs text-muted-foreground"
+									>
+										Title
+									</label>
+									<Input
+										id="q-title"
+										value={query.title}
+										onChange={(e) =>
+											setQuery((q) => ({ ...q, title: e.target.value }))
+										}
+									/>
+								</div>
 							</div>
-							<div className="flex-1 space-y-1">
-								<label
-									htmlFor="q-title"
-									className="text-xs text-muted-foreground"
+							<div className="flex items-end gap-2">
+								<div className="flex-1 space-y-1">
+									<label
+										htmlFor="q-country"
+										className="text-xs text-muted-foreground"
+									>
+										Country
+									</label>
+									<Input
+										id="q-country"
+										value={query.country}
+										placeholder="e.g. UK"
+										onChange={(e) =>
+											setQuery((q) => ({ ...q, country: e.target.value }))
+										}
+									/>
+								</div>
+								<div className="flex-1 space-y-1">
+									<label
+										htmlFor="q-year"
+										className="text-xs text-muted-foreground"
+									>
+										Year
+									</label>
+									<Input
+										id="q-year"
+										inputMode="numeric"
+										value={query.year}
+										placeholder="e.g. 1971"
+										onChange={(e) =>
+											setQuery((q) => ({ ...q, year: e.target.value }))
+										}
+									/>
+								</div>
+								<Button
+									type="button"
+									variant="outline"
+									disabled={search.isPending}
+									onClick={() => search.mutate(query)}
 								>
-									Title
-								</label>
-								<Input
-									id="q-title"
-									value={query.title}
-									onChange={(e) =>
-										setQuery((q) => ({ ...q, title: e.target.value }))
-									}
-								/>
+									{search.isPending ? "…" : "Search"}
+								</Button>
 							</div>
-							<Button
-								type="button"
-								variant="outline"
-								disabled={search.isPending}
-								onClick={() => search.mutate(query)}
-							>
-								{search.isPending ? "…" : "Search"}
-							</Button>
 						</div>
 					)}
 
