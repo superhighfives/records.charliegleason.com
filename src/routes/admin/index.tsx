@@ -173,7 +173,7 @@ function AdminRecords() {
 						<Link
 							to="/admin/records/$id"
 							params={{ id: String(row.original.id) }}
-							className="text-sm underline underline-offset-4"
+							className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
 						>
 							View
 						</Link>

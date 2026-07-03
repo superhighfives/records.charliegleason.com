@@ -259,15 +259,17 @@ function RecordDetail() {
 	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
 	const [results, setResults] = useState<Array<DiscogsCandidate> | null>(null);
 	const [query, setQuery] = useState({
-		artist: "",
-		title: "",
+		artist: record?.artist ?? "",
+		title: record?.title ?? "",
 		country: "",
 		year: "",
 	});
-	const [showSearch, setShowSearch] = useState(false);
-	const [tab, setTab] = useState<"search" | "url">("search");
+	// The Discogs box is always open; default to the URL tab (paste-and-go).
+	const [tab, setTab] = useState<"search" | "url">("url");
 	const [showAdvanced, setShowAdvanced] = useState(false);
 	const [discogsUrl, setDiscogsUrl] = useState("");
+	// Briefly shown after a refresh so the enrichment landing isn't silent.
+	const [justRefreshed, setJustRefreshed] = useState(false);
 	// A user-uploaded cover overrides the auto-sourced Discogs artwork on publish.
 	const [customCover, setCustomCover] = useState<{
 		key: string;
@@ -330,6 +332,9 @@ function RecordDetail() {
 			setPicked(null);
 			setResults(null);
 			await invalidate();
+			// Surface that fresh content landed, then let the message fade out.
+			setJustRefreshed(true);
+			setTimeout(() => setJustRefreshed(false), 2500);
 		},
 	});
 
@@ -351,28 +356,15 @@ function RecordDetail() {
 				<div>
 					<Link
 						to="/admin"
-						className="text-sm text-muted-foreground underline underline-offset-4"
+						className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
 					>
 						← Collection
 					</Link>
 					<h1 className="mt-1 text-2xl font-semibold">{heading}</h1>
 				</div>
-				<div className="flex shrink-0 flex-col items-end gap-2">
-					<div className="flex flex-wrap items-center justify-end gap-1">
-						{record.duplicateOf != null && <DuplicateBadge />}
-						<StatusBadge status={record.status} />
-					</div>
-					{record.discogsId && !inFlight && (
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							disabled={refresh.isPending}
-							onClick={() => refresh.mutate()}
-						>
-							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
-						</Button>
-					)}
+				<div className="flex flex-wrap items-center justify-end gap-1">
+					{record.duplicateOf != null && <DuplicateBadge />}
+					<StatusBadge status={record.status} />
 				</div>
 			</div>
 
@@ -467,6 +459,22 @@ function RecordDetail() {
 							Remove
 						</button>
 					)}
+					{record.discogsId && (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={refresh.isPending}
+							onClick={() => refresh.mutate()}
+						>
+							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
+						</Button>
+					)}
+					{justRefreshed && (
+						<span className="text-sm text-muted-foreground">
+							Updating content…
+						</span>
+					)}
 				</div>
 			)}
 
@@ -517,190 +525,161 @@ function RecordDetail() {
 						</p>
 					)}
 
-					{/* Wrong match? reveal the manual Discogs search. */}
-					<button
-						type="button"
-						onClick={() => {
-							// Seed the search with the record's artist/title when opening,
-							// unless the user has already entered a query.
-							if (!showSearch) {
-								setQuery((q) =>
-									q.artist || q.title
-										? q
-										: {
-												...q,
-												artist: record.artist ?? "",
-												title: record.title ?? "",
-											},
-								);
-							}
-							setShowSearch((v) => !v);
-						}}
-						className="text-sm text-muted-foreground underline underline-offset-4"
-					>
-						{showSearch ? "Hide Discogs search" : "Wrong match? Search Discogs"}
-					</button>
-
-					{showSearch && (
-						<div className="space-y-3 rounded-lg border p-3">
-							<div
-								role="tablist"
-								aria-label="Discogs lookup method"
-								className="flex gap-1 border-b"
+					{/* Wrong match? Search Discogs or paste a release URL. */}
+					<div className="space-y-3 rounded-lg border p-3">
+						<div
+							role="tablist"
+							aria-label="Discogs lookup method"
+							className="flex gap-1 border-b"
+						>
+							<TabButton
+								active={tab === "search"}
+								onClick={() => setTab("search")}
 							>
-								<TabButton
-									active={tab === "search"}
-									onClick={() => setTab("search")}
-								>
-									Search
-								</TabButton>
-								<TabButton active={tab === "url"} onClick={() => setTab("url")}>
-									Discogs URL
-								</TabButton>
-							</div>
+								Search
+							</TabButton>
+							<TabButton active={tab === "url"} onClick={() => setTab("url")}>
+								Discogs URL
+							</TabButton>
+						</div>
 
-							{tab === "search" ? (
-								<div className="space-y-2">
+						{tab === "search" ? (
+							<div className="space-y-2">
+								<div className="flex items-end gap-2">
+									<div className="flex-1 space-y-1">
+										<label
+											htmlFor="q-artist"
+											className="text-xs text-muted-foreground"
+										>
+											Artist
+										</label>
+										<Input
+											id="q-artist"
+											value={query.artist}
+											onChange={(e) =>
+												setQuery((q) => ({ ...q, artist: e.target.value }))
+											}
+										/>
+									</div>
+									<div className="flex-1 space-y-1">
+										<label
+											htmlFor="q-title"
+											className="text-xs text-muted-foreground"
+										>
+											Title
+										</label>
+										<Input
+											id="q-title"
+											value={query.title}
+											onChange={(e) =>
+												setQuery((q) => ({ ...q, title: e.target.value }))
+											}
+										/>
+									</div>
+								</div>
+
+								{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
+								<button
+									type="button"
+									aria-expanded={showAdvanced}
+									onClick={() => setShowAdvanced((v) => !v)}
+									className="text-xs text-muted-foreground underline underline-offset-4"
+								>
+									{showAdvanced ? "Hide advanced options" : "Advanced options"}
+								</button>
+
+								{showAdvanced && (
 									<div className="flex items-end gap-2">
 										<div className="flex-1 space-y-1">
 											<label
-												htmlFor="q-artist"
+												htmlFor="q-country"
 												className="text-xs text-muted-foreground"
 											>
-												Artist
+												Country
 											</label>
 											<Input
-												id="q-artist"
-												value={query.artist}
+												id="q-country"
+												value={query.country}
+												placeholder="e.g. UK"
 												onChange={(e) =>
-													setQuery((q) => ({ ...q, artist: e.target.value }))
+													setQuery((q) => ({ ...q, country: e.target.value }))
 												}
 											/>
 										</div>
 										<div className="flex-1 space-y-1">
 											<label
-												htmlFor="q-title"
+												htmlFor="q-year"
 												className="text-xs text-muted-foreground"
 											>
-												Title
+												Year
 											</label>
 											<Input
-												id="q-title"
-												value={query.title}
+												id="q-year"
+												inputMode="numeric"
+												value={query.year}
+												placeholder="e.g. 1971"
 												onChange={(e) =>
-													setQuery((q) => ({ ...q, title: e.target.value }))
+													setQuery((q) => ({ ...q, year: e.target.value }))
 												}
 											/>
 										</div>
 									</div>
+								)}
 
-									{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
-									<button
+								<div className="flex justify-end">
+									<Button
 										type="button"
-										aria-expanded={showAdvanced}
-										onClick={() => setShowAdvanced((v) => !v)}
-										className="text-xs text-muted-foreground underline underline-offset-4"
+										variant="outline"
+										disabled={search.isPending}
+										onClick={() => search.mutate(query)}
 									>
-										{showAdvanced
-											? "Hide advanced options"
-											: "Advanced options"}
-									</button>
-
-									{showAdvanced && (
-										<div className="flex items-end gap-2">
-											<div className="flex-1 space-y-1">
-												<label
-													htmlFor="q-country"
-													className="text-xs text-muted-foreground"
-												>
-													Country
-												</label>
-												<Input
-													id="q-country"
-													value={query.country}
-													placeholder="e.g. UK"
-													onChange={(e) =>
-														setQuery((q) => ({ ...q, country: e.target.value }))
-													}
-												/>
-											</div>
-											<div className="flex-1 space-y-1">
-												<label
-													htmlFor="q-year"
-													className="text-xs text-muted-foreground"
-												>
-													Year
-												</label>
-												<Input
-													id="q-year"
-													inputMode="numeric"
-													value={query.year}
-													placeholder="e.g. 1971"
-													onChange={(e) =>
-														setQuery((q) => ({ ...q, year: e.target.value }))
-													}
-												/>
-											</div>
-										</div>
-									)}
-
-									<div className="flex justify-end">
-										<Button
-											type="button"
-											variant="outline"
-											disabled={search.isPending}
-											onClick={() => search.mutate(query)}
-										>
-											{search.isPending ? "…" : "Search"}
-										</Button>
-									</div>
+										{search.isPending ? "…" : "Search"}
+									</Button>
 								</div>
-							) : (
-								<div className="space-y-2">
-									<div className="space-y-1">
-										<label
-											htmlFor="q-url"
-											className="text-xs text-muted-foreground"
-										>
-											Discogs release URL
-										</label>
-										<Input
-											id="q-url"
-											value={discogsUrl}
-											placeholder="https://www.discogs.com/release/…"
-											onChange={(e) => setDiscogsUrl(e.target.value)}
-											onKeyDown={(e) => {
-												if (
-													e.key === "Enter" &&
-													looksLikeReleaseId(discogsUrl) &&
-													!lookup.isPending
-												) {
-													lookup.mutate(discogsUrl);
-												}
-											}}
-										/>
-									</div>
-									{lookup.isError && (
-										<p className="text-xs text-red-600">
-											{lookup.error.message}
-										</p>
-									)}
-									<div className="flex justify-end">
-										<Button
-											type="button"
-											variant="outline"
-											disabled={
-												lookup.isPending || !looksLikeReleaseId(discogsUrl)
+							</div>
+						) : (
+							<div className="space-y-2">
+								<div className="space-y-1">
+									<label
+										htmlFor="q-url"
+										className="text-xs text-muted-foreground"
+									>
+										Discogs release URL
+									</label>
+									<Input
+										id="q-url"
+										value={discogsUrl}
+										placeholder="https://www.discogs.com/release/…"
+										onChange={(e) => setDiscogsUrl(e.target.value)}
+										onKeyDown={(e) => {
+											if (
+												e.key === "Enter" &&
+												looksLikeReleaseId(discogsUrl) &&
+												!lookup.isPending
+											) {
+												lookup.mutate(discogsUrl);
 											}
-											onClick={() => lookup.mutate(discogsUrl)}
-										>
-											{lookup.isPending ? "…" : "Fetch release"}
-										</Button>
-									</div>
+										}}
+									/>
 								</div>
-							)}
-						</div>
-					)}
+								{lookup.isError && (
+									<p className="text-xs text-red-600">{lookup.error.message}</p>
+								)}
+								<div className="flex justify-end">
+									<Button
+										type="button"
+										variant="outline"
+										disabled={
+											lookup.isPending || !looksLikeReleaseId(discogsUrl)
+										}
+										onClick={() => lookup.mutate(discogsUrl)}
+									>
+										{lookup.isPending ? "…" : "Fetch release"}
+									</Button>
+								</div>
+							</div>
+						)}
+					</div>
 
 					{/* Candidate pick-list. */}
 					{candidates.length > 0 && (
@@ -721,26 +700,28 @@ function RecordDetail() {
 						</ul>
 					)}
 
-					<RecordForm
-						key={picked?.discogsId ?? record.discogsId ?? "record"}
-						defaultValues={toForm(record, picked)}
-						submitLabel={
-							record.status === "complete" ? "Save changes" : "Save & publish"
-						}
-						onSubmit={async (input) => {
-							await publishRecord({
-								data: {
-									id: recordId,
-									data: input,
-									discogsId: picked?.discogsId ?? record.discogsId ?? null,
-									discogsUrl: picked?.discogsUrl ?? record.discogsUrl ?? null,
-									coverImageKey: customCover?.key ?? null,
-								},
-							});
-							await invalidate();
-							navigate({ to: "/admin" });
-						}}
-					/>
+					<div className="border-t pt-4">
+						<RecordForm
+							key={picked?.discogsId ?? record.discogsId ?? "record"}
+							defaultValues={toForm(record, picked)}
+							submitLabel={
+								record.status === "complete" ? "Save changes" : "Save & publish"
+							}
+							onSubmit={async (input) => {
+								await publishRecord({
+									data: {
+										id: recordId,
+										data: input,
+										discogsId: picked?.discogsId ?? record.discogsId ?? null,
+										discogsUrl: picked?.discogsUrl ?? record.discogsUrl ?? null,
+										coverImageKey: customCover?.key ?? null,
+									},
+								});
+								await invalidate();
+								navigate({ to: "/admin" });
+							}}
+						/>
+					</div>
 				</div>
 			)}
 		</div>
