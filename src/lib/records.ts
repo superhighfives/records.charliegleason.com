@@ -8,7 +8,7 @@ import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
 import {
 	getReleaseDetail,
-	type SearchParams,
+	searchParamsSchema,
 	searchReleases,
 } from "#/lib/discogs";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
@@ -298,7 +298,7 @@ export const getDiscogsRelease = createServerFn({ method: "GET" })
 /** Manual Discogs search for the review page's pick-list / "wrong match" fallback. */
 export const searchDiscogs = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator((q: SearchParams) => q)
+	.validator((data: unknown) => searchParamsSchema.parse(data))
 	.handler(({ data }) =>
 		Sentry.startSpan({ name: "searchDiscogs" }, () =>
 			searchReleases(data).catch(() => []),

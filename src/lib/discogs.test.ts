@@ -1,6 +1,54 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSizeAndType } from "./discogs";
+import { buildSearchUrl, parseSizeAndType } from "./discogs";
+
+describe("buildSearchUrl", () => {
+	const params = (over = {}) => ({
+		artist: "",
+		title: "",
+		country: "",
+		year: "",
+		...over,
+	});
+
+	it("maps artist/title to the Discogs param names", () => {
+		const url = buildSearchUrl(params({ artist: "Led Zeppelin", title: "IV" }));
+		expect(url.searchParams.get("type")).toBe("release");
+		expect(url.searchParams.get("artist")).toBe("Led Zeppelin");
+		expect(url.searchParams.get("release_title")).toBe("IV");
+	});
+
+	it("includes country and a valid 4-digit year", () => {
+		const url = buildSearchUrl(params({ country: "UK", year: "1971" }));
+		expect(url.searchParams.get("country")).toBe("UK");
+		expect(url.searchParams.get("year")).toBe("1971");
+	});
+
+	it("omits empty fields", () => {
+		const url = buildSearchUrl(params({ artist: "Pixies" }));
+		expect(url.searchParams.has("release_title")).toBe(false);
+		expect(url.searchParams.has("country")).toBe(false);
+		expect(url.searchParams.has("year")).toBe(false);
+	});
+
+	it("trims whitespace before setting params", () => {
+		const url = buildSearchUrl(
+			params({ artist: "  Björk  ", country: " IS ", year: " 1997 " }),
+		);
+		expect(url.searchParams.get("artist")).toBe("Björk");
+		expect(url.searchParams.get("country")).toBe("IS");
+		expect(url.searchParams.get("year")).toBe("1997");
+	});
+
+	it("drops a non-4-digit year rather than sending junk", () => {
+		expect(
+			buildSearchUrl(params({ year: "71" })).searchParams.has("year"),
+		).toBe(false);
+		expect(
+			buildSearchUrl(params({ year: "nineteen" })).searchParams.has("year"),
+		).toBe(false);
+	});
+});
 
 describe("parseSizeAndType", () => {
 	it("reads size and type from a descriptions array", () => {
