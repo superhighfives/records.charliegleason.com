@@ -6,7 +6,11 @@ import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
-import { getReleaseDetail, searchReleases } from "#/lib/discogs";
+import {
+	getReleaseDetail,
+	searchParamsSchema,
+	searchReleases,
+} from "#/lib/discogs";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
 import { sourceCoverFromDiscogs, storeCapturePhoto } from "#/lib/images";
 import { enqueueAnalyze, enqueueRefresh, refreshRecordById } from "#/lib/queue";
@@ -294,10 +298,10 @@ export const getDiscogsRelease = createServerFn({ method: "GET" })
 /** Manual Discogs search for the review page's pick-list / "wrong match" fallback. */
 export const searchDiscogs = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator((q: { artist: string; title: string }) => q)
+	.validator((data: unknown) => searchParamsSchema.parse(data))
 	.handler(({ data }) =>
 		Sentry.startSpan({ name: "searchDiscogs" }, () =>
-			searchReleases(data.artist, data.title).catch(() => []),
+			searchReleases(data).catch(() => []),
 		),
 	);
 

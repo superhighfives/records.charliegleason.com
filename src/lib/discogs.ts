@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { z } from "zod";
 
 /**
  * Discogs client. Uses a personal access token (no OAuth dance):
@@ -179,18 +180,49 @@ export async function getReleaseImageUrl(id: string): Promise<string | null> {
 const MAX_CANDIDATES = 5;
 const isVinyl = (c: DiscogsCandidate) => /vinyl/i.test(c.format ?? "");
 
-export async function searchReleases(
-	artist: string,
-	title: string,
-): Promise<Array<DiscogsCandidate>> {
+/**
+ * Manual/automated search inputs. Kept as trimmed, length-capped strings so
+ * the server boundary can reject junk (non-strings, missing keys, abuse-length
+ * values) before anything reaches Discogs. Empty string means "no filter".
+ */
+export const searchParamsSchema = z.object({
+	artist: z.string().trim().max(200).default(""),
+	title: z.string().trim().max(200).default(""),
+	country: z.string().trim().max(100).default(""),
+	year: z.string().trim().max(10).default(""),
+});
+
+export type SearchParams = z.infer<typeof searchParamsSchema>;
+
+/**
+ * Build the Discogs `/database/search` URL, normalising inputs so both the
+ * manual admin search and the automated `analyze` path avoid whitespace misses
+ * and never send an obviously-invalid `year`. Pure + exported for testing.
+ */
+export function buildSearchUrl({
+	artist,
+	title,
+	country,
+	year,
+}: SearchParams): URL {
 	const url = new URL(`${BASE}/database/search`);
 	url.searchParams.set("type", "release");
-	if (artist) url.searchParams.set("artist", artist);
-	if (title) url.searchParams.set("release_title", title);
+	const [a, t, c, y] = [artist, title, country, year].map((s) => s.trim());
+	if (a) url.searchParams.set("artist", a);
+	if (t) url.searchParams.set("release_title", t);
+	if (c) url.searchParams.set("country", c);
+	// Discogs expects a bare 4-digit year; ignore anything else rather than
+	// sending junk that just returns zero matches.
+	if (/^\d{4}$/.test(y)) url.searchParams.set("year", y);
 	// Pull a wider net so we can prefer vinyl below without losing other pressings.
 	url.searchParams.set("per_page", "25");
+	return url;
+}
 
-	const res = await fetch(url, { headers: headers() });
+export async function searchReleases(
+	params: SearchParams,
+): Promise<Array<DiscogsCandidate>> {
+	const res = await fetch(buildSearchUrl(params), { headers: headers() });
 	if (!res.ok) return [];
 
 	const data = (await res.json()) as {

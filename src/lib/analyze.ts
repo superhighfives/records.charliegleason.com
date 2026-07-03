@@ -283,7 +283,12 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 
 	// 2. Discogs lookup.
 	let candidates = extraction.artist
-		? await searchReleases(extraction.artist, extraction.title).catch(() => [])
+		? await searchReleases({
+				artist: extraction.artist,
+				title: extraction.title,
+				country: "",
+				year: "",
+			}).catch(() => [])
 		: [];
 
 	// 3. Escalate to web search when unsure or unmatched.
@@ -298,9 +303,12 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		);
 		if (refined) {
 			extraction = refined;
-			candidates = await searchReleases(refined.artist, refined.title).catch(
-				() => [],
-			);
+			candidates = await searchReleases({
+				artist: refined.artist,
+				title: refined.title,
+				country: "",
+				year: "",
+			}).catch(() => []);
 		}
 	}
 
