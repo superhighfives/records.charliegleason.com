@@ -396,7 +396,19 @@ function RecordDetail() {
 						</figcaption>
 					</figure>
 				)}
-				{customCover ? (
+				{record.coverImageKey && (
+					<figure className="space-y-1">
+						<img
+							src={`/api/photos/${record.coverImageKey}`}
+							alt="Sourced cover"
+							className="size-32 rounded-md border object-cover"
+						/>
+						<figcaption className="text-xs text-muted-foreground">
+							Cover
+						</figcaption>
+					</figure>
+				)}
+				{customCover && (
 					<figure className="space-y-1">
 						<img
 							src={customCover.preview}
@@ -404,22 +416,9 @@ function RecordDetail() {
 							className="size-32 rounded-md border object-cover"
 						/>
 						<figcaption className="text-xs text-muted-foreground">
-							New cover
+							Upload
 						</figcaption>
 					</figure>
-				) : (
-					record.coverImageKey && (
-						<figure className="space-y-1">
-							<img
-								src={`/api/photos/${record.coverImageKey}`}
-								alt="Sourced cover"
-								className="size-32 rounded-md border object-cover"
-							/>
-							<figcaption className="text-xs text-muted-foreground">
-								Cover
-							</figcaption>
-						</figure>
-					)
 				)}
 			</div>
 
@@ -437,6 +436,17 @@ function RecordDetail() {
 							e.target.value = "";
 						}}
 					/>
+					{record.discogsId && (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={refresh.isPending}
+							onClick={() => refresh.mutate()}
+						>
+							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
+						</Button>
+					)}
 					<Button
 						type="button"
 						size="sm"
@@ -458,17 +468,6 @@ function RecordDetail() {
 						>
 							Remove
 						</button>
-					)}
-					{record.discogsId && (
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							disabled={refresh.isPending}
-							onClick={() => refresh.mutate()}
-						>
-							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
-						</Button>
 					)}
 					{justRefreshed && (
 						<span className="text-sm text-muted-foreground">
@@ -532,14 +531,14 @@ function RecordDetail() {
 							aria-label="Discogs lookup method"
 							className="flex gap-1 border-b"
 						>
+							<TabButton active={tab === "url"} onClick={() => setTab("url")}>
+								Discogs URL
+							</TabButton>
 							<TabButton
 								active={tab === "search"}
 								onClick={() => setTab("search")}
 							>
 								Search
-							</TabButton>
-							<TabButton active={tab === "url"} onClick={() => setTab("url")}>
-								Discogs URL
 							</TabButton>
 						</div>
 
