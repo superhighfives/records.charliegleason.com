@@ -169,24 +169,6 @@ export function RecordPanel({
 					<Stat label="Format">{dash(record.format)}</Stat>
 					<Stat label="Size">{dash(record.size)}</Stat>
 					<Stat label="Genre">{dash(record.genre)}</Stat>
-					<Stat label="Pitchfork">
-						{record.pitchforkScore != null ? (
-							record.pitchforkUrl ? (
-								<a
-									href={record.pitchforkUrl}
-									target="_blank"
-									rel="noreferrer"
-									className="text-brand hover:text-brand-strong"
-								>
-									{record.pitchforkScore}
-								</a>
-							) : (
-								record.pitchforkScore
-							)
-						) : (
-							"—"
-						)}
-					</Stat>
 					<Stat label="Country">{dash(record.country)}</Stat>
 				</div>
 
@@ -213,6 +195,29 @@ export function RecordPanel({
 						<Spec label="Added">{dash(added)}</Spec>
 					</dl>
 				</div>
+
+				{record.pitchforkScore != null && (
+					<div>
+						<h3 className="mb-1 text-sm font-semibold">Critical reception</h3>
+						<p className="text-sm text-muted-foreground">
+							{record.pitchforkUrl ? (
+								<a
+									href={record.pitchforkUrl}
+									target="_blank"
+									rel="noreferrer"
+									className="font-bold tabular-nums text-brand hover:text-brand-strong"
+								>
+									{record.pitchforkScore}
+								</a>
+							) : (
+								<span className="font-bold tabular-nums text-brand">
+									{record.pitchforkScore}
+								</span>
+							)}{" "}
+							on Pitchfork
+						</p>
+					</div>
+				)}
 
 				{record.notes && (
 					<div>

@@ -165,6 +165,75 @@ export async function getReleaseDetail(
 	};
 }
 
+/**
+ * Extract a Discogs release id from whatever the user pasted — a full release
+ * URL (`https://www.discogs.com/release/30268103-Private-Life-Private-Life`),
+ * a bare `/release/30268103` path, or just the numeric id. Returns null when
+ * nothing looks like a release id (e.g. an artist/label/master URL).
+ */
+export function parseReleaseId(input: string): string | null {
+	const s = input.trim();
+	if (!s) return null;
+	if (/^\d+$/.test(s)) return s;
+	// Match /release/<id> or /releases/<id>, ignoring the trailing slug.
+	const m = s.match(/\/releases?\/(\d+)/);
+	return m ? m[1] : null;
+}
+
+/**
+ * Fetch a single release and shape it into a `DiscogsCandidate` so a pasted URL
+ * can drop straight into the same pick-list / publish flow as a search hit.
+ */
+export async function getReleaseCandidate(
+	id: string,
+): Promise<DiscogsCandidate | null> {
+	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });
+	if (!res.ok) return null;
+	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
+	const d = (await res.json()) as any;
+
+	const descriptions: Array<string> = Array.isArray(d.formats)
+		? // biome-ignore lint/suspicious/noExplicitAny: untyped Discogs format JSON
+			d.formats.flatMap((f: any) =>
+				Array.isArray(f?.descriptions) ? f.descriptions.map(String) : [],
+			)
+		: [];
+	const { size, type } = parseSizeAndType(descriptions);
+	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs label JSON
+	const firstLabel = Array.isArray(d.labels) ? (d.labels[0] as any) : null;
+	const yearNum = d.year ? Number.parseInt(String(d.year), 10) : null;
+	const images: Array<{ type?: string; uri?: string; uri150?: string }> =
+		Array.isArray(d.images) ? d.images : [];
+	const primary = images.find((i) => i.type === "primary") ?? images[0];
+	const uri = d.uri ? String(d.uri) : "";
+
+	return {
+		discogsId: String(d.id ?? id),
+		artist: d.artists_sort
+			? cleanArtistName(String(d.artists_sort))
+			: Array.isArray(d.artists) && d.artists[0]?.name
+				? cleanArtistName(String(d.artists[0].name))
+				: "",
+		title: d.title ? String(d.title) : "",
+		year: Number.isFinite(yearNum) ? yearNum : null,
+		label: firstLabel?.name ? String(firstLabel.name) : null,
+		genre: Array.isArray(d.genres) && d.genres[0] ? String(d.genres[0]) : null,
+		format: Array.isArray(d.formats)
+			? d.formats.map(formatLine).filter(Boolean).join(", ") || null
+			: null,
+		size,
+		type,
+		country: d.country ? String(d.country) : null,
+		catno: firstLabel?.catno ? String(firstLabel.catno) : null,
+		discogsUrl: uri
+			? uri.startsWith("http")
+				? uri
+				: `https://www.discogs.com${uri}`
+			: `https://www.discogs.com/release/${id}`,
+		thumb: primary?.uri150 ?? primary?.uri ?? null,
+	} satisfies DiscogsCandidate;
+}
+
 /** Highest-quality cover image URL for a release (primary image, full size). */
 export async function getReleaseImageUrl(id: string): Promise<string | null> {
 	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });

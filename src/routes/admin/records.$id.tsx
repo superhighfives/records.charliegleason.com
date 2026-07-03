@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Info, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { RecordForm } from "#/components/record-form";
@@ -15,15 +15,71 @@ import {
 } from "#/components/ui/tooltip";
 import type { Record } from "#/db/schema";
 import type { DiscogsCandidate, SearchParams } from "#/lib/discogs";
+import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
 	getDiscogsRelease,
+	lookupDiscogsRelease,
 	publishRecord,
 	refreshRecord,
 	reprocessRecord,
 	searchDiscogs,
+	uploadCover,
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
+import { cn } from "#/lib/utils";
+
+/** Does the pasted text look like it contains a Discogs release id? */
+function looksLikeReleaseId(input: string): boolean {
+	const s = input.trim();
+	return /^\d+$/.test(s) || /\/releases?\/\d+/.test(s);
+}
+
+/** Read a file to a data URL (fallback when the browser can't crop/decode it). */
+function readFileAsDataUrl(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => resolve(reader.result as string);
+		reader.onerror = () => reject(reader.error);
+		reader.readAsDataURL(file);
+	});
+}
+
+/** Square-crop + downscale a chosen cover, falling back to the raw file. */
+async function prepareCover(file: File): Promise<string> {
+	try {
+		return (await squareDownscale(file)).dataUrl;
+	} catch {
+		return readFileAsDataUrl(file);
+	}
+}
+
+function TabButton({
+	active,
+	onClick,
+	children,
+}: {
+	active: boolean;
+	onClick: () => void;
+	children: React.ReactNode;
+}) {
+	return (
+		<button
+			type="button"
+			role="tab"
+			aria-selected={active}
+			onClick={onClick}
+			className={cn(
+				"-mb-px border-b-2 px-3 py-1.5 text-sm",
+				active
+					? "border-foreground font-medium text-foreground"
+					: "border-transparent text-muted-foreground hover:text-foreground",
+			)}
+		>
+			{children}
+		</button>
+	);
+}
 
 export const Route = createFileRoute("/admin/records/$id")({
 	loader: ({ context, params }) =>
@@ -203,12 +259,24 @@ function RecordDetail() {
 	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
 	const [results, setResults] = useState<Array<DiscogsCandidate> | null>(null);
 	const [query, setQuery] = useState({
-		artist: "",
-		title: "",
+		artist: record?.artist ?? "",
+		title: record?.title ?? "",
 		country: "",
 		year: "",
 	});
-	const [showSearch, setShowSearch] = useState(false);
+	// The Discogs box is always open; default to the URL tab (paste-and-go).
+	const [tab, setTab] = useState<"search" | "url">("url");
+	const [showAdvanced, setShowAdvanced] = useState(false);
+	const [discogsUrl, setDiscogsUrl] = useState("");
+	// Briefly shown after a refresh so the enrichment landing isn't silent.
+	const [justRefreshed, setJustRefreshed] = useState(false);
+	// A user-uploaded cover overrides the auto-sourced Discogs artwork on publish.
+	const [customCover, setCustomCover] = useState<{
+		key: string;
+		preview: string;
+	} | null>(null);
+	const [uploadingCover, setUploadingCover] = useState(false);
+	const coverInputRef = useRef<HTMLInputElement>(null);
 
 	const invalidate = () =>
 		Promise.all([
@@ -223,6 +291,34 @@ function RecordDetail() {
 		onSuccess: setResults,
 	});
 
+	// Resolve a pasted Discogs release URL into a single candidate, then select it
+	// so the form populates and it publishes just like a search hit.
+	const lookup = useMutation({
+		mutationFn: async (url: string) => {
+			const candidate = await lookupDiscogsRelease({ data: url });
+			if (!candidate) {
+				throw new Error("Couldn’t find a Discogs release at that URL.");
+			}
+			return candidate;
+		},
+		onSuccess: (candidate) => {
+			setResults([candidate]);
+			setPicked(candidate);
+		},
+	});
+
+	async function handleCoverFile(file: File | undefined) {
+		if (!file || !file.type.startsWith("image/")) return;
+		setUploadingCover(true);
+		try {
+			const dataUrl = await prepareCover(file);
+			const key = await uploadCover({ data: { imageBase64: dataUrl } });
+			if (key) setCustomCover({ key, preview: dataUrl });
+		} finally {
+			setUploadingCover(false);
+		}
+	}
+
 	const retry = useMutation({
 		mutationFn: () => reprocessRecord({ data: recordId }),
 		onSuccess: invalidate,
@@ -236,6 +332,9 @@ function RecordDetail() {
 			setPicked(null);
 			setResults(null);
 			await invalidate();
+			// Surface that fresh content landed, then let the message fade out.
+			setJustRefreshed(true);
+			setTimeout(() => setJustRefreshed(false), 2500);
 		},
 	});
 
@@ -257,28 +356,15 @@ function RecordDetail() {
 				<div>
 					<Link
 						to="/admin"
-						className="text-sm text-muted-foreground underline underline-offset-4"
+						className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
 					>
 						← Collection
 					</Link>
 					<h1 className="mt-1 text-2xl font-semibold">{heading}</h1>
 				</div>
-				<div className="flex shrink-0 flex-col items-end gap-2">
-					<div className="flex flex-wrap items-center justify-end gap-1">
-						{record.duplicateOf != null && <DuplicateBadge />}
-						<StatusBadge status={record.status} />
-					</div>
-					{record.discogsId && !inFlight && (
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							disabled={refresh.isPending}
-							onClick={() => refresh.mutate()}
-						>
-							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
-						</Button>
-					)}
+				<div className="flex flex-wrap items-center justify-end gap-1">
+					{record.duplicateOf != null && <DuplicateBadge />}
+					<StatusBadge status={record.status} />
 				</div>
 			</div>
 
@@ -322,7 +408,74 @@ function RecordDetail() {
 						</figcaption>
 					</figure>
 				)}
+				{customCover && (
+					<figure className="space-y-1">
+						<img
+							src={customCover.preview}
+							alt="Uploaded cover"
+							className="size-32 rounded-md border object-cover"
+						/>
+						<figcaption className="text-xs text-muted-foreground">
+							Upload
+						</figcaption>
+					</figure>
+				)}
 			</div>
+
+			{/* Upload your own cover — overrides the Discogs artwork on publish. */}
+			{!inFlight && (
+				<div className="flex items-center gap-2">
+					<input
+						ref={coverInputRef}
+						type="file"
+						accept="image/*"
+						className="hidden"
+						onChange={(e) => {
+							handleCoverFile(e.target.files?.[0]);
+							// Allow re-selecting the same file after a remove.
+							e.target.value = "";
+						}}
+					/>
+					{record.discogsId && (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={refresh.isPending}
+							onClick={() => refresh.mutate()}
+						>
+							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
+						</Button>
+					)}
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						disabled={uploadingCover}
+						onClick={() => coverInputRef.current?.click()}
+					>
+						{uploadingCover
+							? "Uploading…"
+							: customCover
+								? "Replace cover"
+								: "Upload cover"}
+					</Button>
+					{customCover && (
+						<button
+							type="button"
+							onClick={() => setCustomCover(null)}
+							className="text-sm text-muted-foreground underline underline-offset-4"
+						>
+							Remove
+						</button>
+					)}
+					{justRefreshed && (
+						<span className="text-sm text-muted-foreground">
+							Updating content…
+						</span>
+					)}
+				</div>
+			)}
 
 			{record.captureContext && (
 				<p className="text-sm text-muted-foreground">
@@ -371,109 +524,161 @@ function RecordDetail() {
 						</p>
 					)}
 
-					{/* Wrong match? reveal the manual Discogs search. */}
-					<button
-						type="button"
-						onClick={() => {
-							// Seed the search with the record's artist/title when opening,
-							// unless the user has already entered a query.
-							if (!showSearch) {
-								setQuery((q) =>
-									q.artist || q.title
-										? q
-										: {
-												...q,
-												artist: record.artist ?? "",
-												title: record.title ?? "",
-											},
-								);
-							}
-							setShowSearch((v) => !v);
-						}}
-						className="text-sm text-muted-foreground underline underline-offset-4"
-					>
-						{showSearch ? "Hide Discogs search" : "Wrong match? Search Discogs"}
-					</button>
-
-					{showSearch && (
-						<div className="space-y-2">
-							<div className="flex items-end gap-2">
-								<div className="flex-1 space-y-1">
-									<label
-										htmlFor="q-artist"
-										className="text-xs text-muted-foreground"
-									>
-										Artist
-									</label>
-									<Input
-										id="q-artist"
-										value={query.artist}
-										onChange={(e) =>
-											setQuery((q) => ({ ...q, artist: e.target.value }))
-										}
-									/>
-								</div>
-								<div className="flex-1 space-y-1">
-									<label
-										htmlFor="q-title"
-										className="text-xs text-muted-foreground"
-									>
-										Title
-									</label>
-									<Input
-										id="q-title"
-										value={query.title}
-										onChange={(e) =>
-											setQuery((q) => ({ ...q, title: e.target.value }))
-										}
-									/>
-								</div>
-							</div>
-							<div className="flex items-end gap-2">
-								<div className="flex-1 space-y-1">
-									<label
-										htmlFor="q-country"
-										className="text-xs text-muted-foreground"
-									>
-										Country
-									</label>
-									<Input
-										id="q-country"
-										value={query.country}
-										placeholder="e.g. UK"
-										onChange={(e) =>
-											setQuery((q) => ({ ...q, country: e.target.value }))
-										}
-									/>
-								</div>
-								<div className="flex-1 space-y-1">
-									<label
-										htmlFor="q-year"
-										className="text-xs text-muted-foreground"
-									>
-										Year
-									</label>
-									<Input
-										id="q-year"
-										inputMode="numeric"
-										value={query.year}
-										placeholder="e.g. 1971"
-										onChange={(e) =>
-											setQuery((q) => ({ ...q, year: e.target.value }))
-										}
-									/>
-								</div>
-								<Button
-									type="button"
-									variant="outline"
-									disabled={search.isPending}
-									onClick={() => search.mutate(query)}
-								>
-									{search.isPending ? "…" : "Search"}
-								</Button>
-							</div>
+					{/* Wrong match? Search Discogs or paste a release URL. */}
+					<div className="space-y-3 rounded-lg border p-3">
+						<div
+							role="tablist"
+							aria-label="Discogs lookup method"
+							className="flex gap-1 border-b"
+						>
+							<TabButton active={tab === "url"} onClick={() => setTab("url")}>
+								Discogs URL
+							</TabButton>
+							<TabButton
+								active={tab === "search"}
+								onClick={() => setTab("search")}
+							>
+								Search
+							</TabButton>
 						</div>
-					)}
+
+						{tab === "search" ? (
+							<div className="space-y-2">
+								<div className="flex items-end gap-2">
+									<div className="flex-1 space-y-1">
+										<label
+											htmlFor="q-artist"
+											className="text-xs text-muted-foreground"
+										>
+											Artist
+										</label>
+										<Input
+											id="q-artist"
+											value={query.artist}
+											onChange={(e) =>
+												setQuery((q) => ({ ...q, artist: e.target.value }))
+											}
+										/>
+									</div>
+									<div className="flex-1 space-y-1">
+										<label
+											htmlFor="q-title"
+											className="text-xs text-muted-foreground"
+										>
+											Title
+										</label>
+										<Input
+											id="q-title"
+											value={query.title}
+											onChange={(e) =>
+												setQuery((q) => ({ ...q, title: e.target.value }))
+											}
+										/>
+									</div>
+								</div>
+
+								{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
+								<button
+									type="button"
+									aria-expanded={showAdvanced}
+									onClick={() => setShowAdvanced((v) => !v)}
+									className="text-xs text-muted-foreground underline underline-offset-4"
+								>
+									{showAdvanced ? "Hide advanced options" : "Advanced options"}
+								</button>
+
+								{showAdvanced && (
+									<div className="flex items-end gap-2">
+										<div className="flex-1 space-y-1">
+											<label
+												htmlFor="q-country"
+												className="text-xs text-muted-foreground"
+											>
+												Country
+											</label>
+											<Input
+												id="q-country"
+												value={query.country}
+												placeholder="e.g. UK"
+												onChange={(e) =>
+													setQuery((q) => ({ ...q, country: e.target.value }))
+												}
+											/>
+										</div>
+										<div className="flex-1 space-y-1">
+											<label
+												htmlFor="q-year"
+												className="text-xs text-muted-foreground"
+											>
+												Year
+											</label>
+											<Input
+												id="q-year"
+												inputMode="numeric"
+												value={query.year}
+												placeholder="e.g. 1971"
+												onChange={(e) =>
+													setQuery((q) => ({ ...q, year: e.target.value }))
+												}
+											/>
+										</div>
+									</div>
+								)}
+
+								<div className="flex justify-end">
+									<Button
+										type="button"
+										variant="outline"
+										disabled={search.isPending}
+										onClick={() => search.mutate(query)}
+									>
+										{search.isPending ? "…" : "Search"}
+									</Button>
+								</div>
+							</div>
+						) : (
+							<div className="space-y-2">
+								<div className="space-y-1">
+									<label
+										htmlFor="q-url"
+										className="text-xs text-muted-foreground"
+									>
+										Discogs release URL
+									</label>
+									<Input
+										id="q-url"
+										value={discogsUrl}
+										placeholder="https://www.discogs.com/release/…"
+										onChange={(e) => setDiscogsUrl(e.target.value)}
+										onKeyDown={(e) => {
+											if (
+												e.key === "Enter" &&
+												looksLikeReleaseId(discogsUrl) &&
+												!lookup.isPending
+											) {
+												lookup.mutate(discogsUrl);
+											}
+										}}
+									/>
+								</div>
+								{lookup.isError && (
+									<p className="text-xs text-red-600">{lookup.error.message}</p>
+								)}
+								<div className="flex justify-end">
+									<Button
+										type="button"
+										variant="outline"
+										disabled={
+											lookup.isPending || !looksLikeReleaseId(discogsUrl)
+										}
+										onClick={() => lookup.mutate(discogsUrl)}
+									>
+										{lookup.isPending ? "…" : "Fetch release"}
+									</Button>
+								</div>
+							</div>
+						)}
+					</div>
 
 					{/* Candidate pick-list. */}
 					{candidates.length > 0 && (
@@ -494,25 +699,28 @@ function RecordDetail() {
 						</ul>
 					)}
 
-					<RecordForm
-						key={picked?.discogsId ?? record.discogsId ?? "record"}
-						defaultValues={toForm(record, picked)}
-						submitLabel={
-							record.status === "complete" ? "Save changes" : "Save & publish"
-						}
-						onSubmit={async (input) => {
-							await publishRecord({
-								data: {
-									id: recordId,
-									data: input,
-									discogsId: picked?.discogsId ?? record.discogsId ?? null,
-									discogsUrl: picked?.discogsUrl ?? record.discogsUrl ?? null,
-								},
-							});
-							await invalidate();
-							navigate({ to: "/admin" });
-						}}
-					/>
+					<div className="border-t pt-4">
+						<RecordForm
+							key={picked?.discogsId ?? record.discogsId ?? "record"}
+							defaultValues={toForm(record, picked)}
+							submitLabel={
+								record.status === "complete" ? "Save changes" : "Save & publish"
+							}
+							onSubmit={async (input) => {
+								await publishRecord({
+									data: {
+										id: recordId,
+										data: input,
+										discogsId: picked?.discogsId ?? record.discogsId ?? null,
+										discogsUrl: picked?.discogsUrl ?? record.discogsUrl ?? null,
+										coverImageKey: customCover?.key ?? null,
+									},
+								});
+								await invalidate();
+								navigate({ to: "/admin" });
+							}}
+						/>
+					</div>
 				</div>
 			)}
 		</div>

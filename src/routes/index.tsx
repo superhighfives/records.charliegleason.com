@@ -130,7 +130,7 @@ function Home() {
 										{r.year ? ` · ${r.year}` : ""}
 									</p>
 									{r.pitchforkScore != null && (
-										<p className="mt-1 text-xs font-medium text-brand tabular-nums">
+										<p className="mt-1 text-xs font-bold text-brand tabular-nums">
 											{r.pitchforkScore}
 											<span className="ml-1 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
 												on Pitchfork

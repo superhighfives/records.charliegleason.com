@@ -1,6 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSearchUrl, parseSizeAndType } from "./discogs";
+import { buildSearchUrl, parseReleaseId, parseSizeAndType } from "./discogs";
+
+describe("parseReleaseId", () => {
+	it("pulls the id from a full release URL with a slug", () => {
+		expect(
+			parseReleaseId(
+				"https://www.discogs.com/release/30268103-Private-Life-Private-Life",
+			),
+		).toBe("30268103");
+	});
+
+	it("accepts bare /release/<id> and plural /releases/<id> paths", () => {
+		expect(parseReleaseId("/release/30268103")).toBe("30268103");
+		expect(parseReleaseId("/releases/30268103")).toBe("30268103");
+	});
+
+	it("accepts a bare numeric id, trimming whitespace", () => {
+		expect(parseReleaseId("  30268103  ")).toBe("30268103");
+	});
+
+	it("returns null for non-release URLs and empty input", () => {
+		expect(parseReleaseId("https://www.discogs.com/artist/12345-Wire")).toBe(
+			null,
+		);
+		expect(parseReleaseId("https://www.discogs.com/master/98765")).toBe(null);
+		expect(parseReleaseId("")).toBe(null);
+	});
+});
 
 describe("buildSearchUrl", () => {
 	const params = (over = {}) => ({

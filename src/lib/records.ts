@@ -7,12 +7,18 @@ import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
 import {
+	getReleaseCandidate,
 	getReleaseDetail,
+	parseReleaseId,
 	searchParamsSchema,
 	searchReleases,
 } from "#/lib/discogs";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
-import { sourceCoverFromDiscogs, storeCapturePhoto } from "#/lib/images";
+import {
+	sourceCoverFromDiscogs,
+	storeCapturePhoto,
+	storeUploadedCover,
+} from "#/lib/images";
 import { enqueueAnalyze, enqueueRefresh, refreshRecordById } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 
@@ -172,44 +178,57 @@ export const publishRecord = createServerFn({ method: "POST" })
 			data: unknown;
 			discogsId?: string | null;
 			discogsUrl?: string | null;
+			coverImageKey?: string | null;
 		}) => ({
 			id: input.id,
 			data: recordInputSchema.parse(input.data),
 			discogsId: input.discogsId ?? null,
 			discogsUrl: input.discogsUrl ?? null,
+			// Only accept keys minted by the cover pipeline. Without this an override
+			// could point the public cover at an admin-only `captures/...` object (or
+			// any other R2 key) and leak it.
+			coverImageKey:
+				typeof input.coverImageKey === "string" &&
+				input.coverImageKey.startsWith("covers/")
+					? input.coverImageKey
+					: null,
 		}),
 	)
-	.handler(({ data: { id, data, discogsId, discogsUrl } }) =>
-		Sentry.startSpan({ name: "publishRecord" }, async () => {
-			const db = getDb(env.DB);
-			const [current] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!current) return null;
+	.handler(
+		({ data: { id, data, discogsId, discogsUrl, coverImageKey: uploaded } }) =>
+			Sentry.startSpan({ name: "publishRecord" }, async () => {
+				const db = getDb(env.DB);
+				const [current] = await db
+					.select()
+					.from(records)
+					.where(eq(records.id, id))
+					.limit(1);
+				if (!current) return null;
 
-			let coverImageKey = current.coverImageKey;
-			if (discogsId && discogsId !== current.discogsId) {
-				coverImageKey =
-					(await sourceCoverFromDiscogs(discogsId)) ?? coverImageKey;
-			}
+				let coverImageKey = current.coverImageKey;
+				if (uploaded) {
+					// A user-uploaded cover always wins over the Discogs artwork.
+					coverImageKey = uploaded;
+				} else if (discogsId && discogsId !== current.discogsId) {
+					coverImageKey =
+						(await sourceCoverFromDiscogs(discogsId)) ?? coverImageKey;
+				}
 
-			const [row] = await db
-				.update(records)
-				.set({
-					...data,
-					discogsId,
-					discogsUrl,
-					coverImageKey,
-					status: "complete",
-					error: null,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, id))
-				.returning();
-			return row ?? null;
-		}),
+				const [row] = await db
+					.update(records)
+					.set({
+						...data,
+						discogsId,
+						discogsUrl,
+						coverImageKey,
+						status: "complete",
+						error: null,
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, id))
+					.returning();
+				return row ?? null;
+			}),
 	);
 
 /** Re-run the background analysis for a failed (or any) captured record. */
@@ -302,6 +321,46 @@ export const searchDiscogs = createServerFn({ method: "POST" })
 	.handler(({ data }) =>
 		Sentry.startSpan({ name: "searchDiscogs" }, () =>
 			searchReleases(data).catch(() => []),
+		),
+	);
+
+/**
+ * Resolve a pasted Discogs release URL (or bare id) into a single candidate, so
+ * the review page can pick a specific pressing without searching. Returns null
+ * for anything that isn't a resolvable release.
+ */
+export const lookupDiscogsRelease = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => {
+		if (typeof data !== "string") {
+			throw new Error("Expected a Discogs release URL or id");
+		}
+		return data;
+	})
+	.handler(({ data: input }) =>
+		Sentry.startSpan({ name: "lookupDiscogsRelease" }, () => {
+			const id = parseReleaseId(input);
+			if (!id) return null;
+			return getReleaseCandidate(id).catch(() => null);
+		}),
+	);
+
+/**
+ * Store a user-uploaded cover image (base64 data URL) in R2 and return its key,
+ * so the review page can override the auto-sourced Discogs artwork on publish.
+ */
+export const uploadCover = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => {
+		const d = (data ?? {}) as Record<string, unknown>;
+		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
+			throw new Error("imageBase64 must be a non-empty string");
+		}
+		return { imageBase64: d.imageBase64 };
+	})
+	.handler(({ data }) =>
+		Sentry.startSpan({ name: "uploadCover" }, () =>
+			storeUploadedCover(base64ToBytes(stripDataUrl(data.imageBase64))),
 		),
 	);
 
