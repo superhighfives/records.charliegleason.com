@@ -66,6 +66,8 @@ function TabButton({
 	return (
 		<button
 			type="button"
+			role="tab"
+			aria-selected={active}
 			onClick={onClick}
 			className={cn(
 				"-mb-px border-b-2 px-3 py-1.5 text-sm",
@@ -541,7 +543,11 @@ function RecordDetail() {
 
 					{showSearch && (
 						<div className="space-y-3 rounded-lg border p-3">
-							<div className="flex gap-1 border-b">
+							<div
+								role="tablist"
+								aria-label="Discogs lookup method"
+								className="flex gap-1 border-b"
+							>
 								<TabButton
 									active={tab === "search"}
 									onClick={() => setTab("search")}
@@ -591,6 +597,7 @@ function RecordDetail() {
 									{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
 									<button
 										type="button"
+										aria-expanded={showAdvanced}
 										onClick={() => setShowAdvanced((v) => !v)}
 										className="text-xs text-muted-foreground underline underline-offset-4"
 									>

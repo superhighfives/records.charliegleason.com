@@ -184,8 +184,14 @@ export const publishRecord = createServerFn({ method: "POST" })
 			data: recordInputSchema.parse(input.data),
 			discogsId: input.discogsId ?? null,
 			discogsUrl: input.discogsUrl ?? null,
+			// Only accept keys minted by the cover pipeline. Without this an override
+			// could point the public cover at an admin-only `captures/...` object (or
+			// any other R2 key) and leak it.
 			coverImageKey:
-				typeof input.coverImageKey === "string" ? input.coverImageKey : null,
+				typeof input.coverImageKey === "string" &&
+				input.coverImageKey.startsWith("covers/")
+					? input.coverImageKey
+					: null,
 		}),
 	)
 	.handler(
@@ -326,7 +332,9 @@ export const searchDiscogs = createServerFn({ method: "POST" })
 export const lookupDiscogsRelease = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator((data: unknown) => {
-		if (typeof data !== "string") throw new Error("Expected a Discogs URL");
+		if (typeof data !== "string") {
+			throw new Error("Expected a Discogs release URL or id");
+		}
 		return data;
 	})
 	.handler(({ data: input }) =>
