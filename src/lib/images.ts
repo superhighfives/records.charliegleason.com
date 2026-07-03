@@ -35,6 +35,30 @@ export async function storeResizedCover(
 	}
 }
 
+/**
+ * Store a user-uploaded cover. The browser already center-crops to a square and
+ * downscales for a fast upload; Cloudflare Images canonicalises it to a webp of
+ * the same size/format as the Discogs-sourced covers so they display uniformly.
+ * Returns the R2 key, or null on failure (the caller keeps the existing cover).
+ */
+export async function storeUploadedCover(
+	bytes: Uint8Array,
+): Promise<string | null> {
+	try {
+		const out = await env.IMAGES.input(new Blob([bytes as BlobPart]).stream())
+			.transform({ width: 600, height: 600, fit: "scale-down" })
+			.output({ format: "image/webp", quality: 82 });
+		const buffer = await out.response().arrayBuffer();
+		const key = `covers/${crypto.randomUUID()}.webp`;
+		await env.PHOTOS.put(key, buffer, {
+			httpMetadata: { contentType: "image/webp" },
+		});
+		return key;
+	} catch {
+		return null;
+	}
+}
+
 export async function sourceCoverFromDiscogs(
 	discogsId: string,
 ): Promise<string | null> {
