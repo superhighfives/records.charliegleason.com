@@ -7,6 +7,7 @@ import { DuplicateBadge } from "#/components/duplicate-badge";
 import { RecordForm } from "#/components/record-form";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
+import { ImageZoom } from "#/components/ui/image-zoom";
 import { Input } from "#/components/ui/input";
 import {
 	Tooltip,
@@ -386,10 +387,10 @@ function RecordDetail() {
 			<div className="flex gap-3">
 				{record.capturePhotoKey && (
 					<figure className="space-y-1">
-						<img
+						<ImageZoom
 							src={`/api/photos/${record.capturePhotoKey}`}
 							alt="Original capture"
-							className="size-32 rounded-md border object-cover"
+							className="size-32"
 						/>
 						<figcaption className="text-xs text-muted-foreground">
 							Capture
@@ -398,10 +399,10 @@ function RecordDetail() {
 				)}
 				{record.coverImageKey && (
 					<figure className="space-y-1">
-						<img
+						<ImageZoom
 							src={`/api/photos/${record.coverImageKey}`}
 							alt="Sourced cover"
-							className="size-32 rounded-md border object-cover"
+							className="size-32"
 						/>
 						<figcaption className="text-xs text-muted-foreground">
 							Cover
@@ -410,10 +411,10 @@ function RecordDetail() {
 				)}
 				{customCover && (
 					<figure className="space-y-1">
-						<img
+						<ImageZoom
 							src={customCover.preview}
 							alt="Uploaded cover"
-							className="size-32 rounded-md border object-cover"
+							className="size-32"
 						/>
 						<figcaption className="text-xs text-muted-foreground">
 							Upload

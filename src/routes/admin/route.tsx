@@ -65,7 +65,9 @@ function AdminGate() {
 						<Link to="/" className="font-semibold tracking-tight">
 							Records
 						</Link>
-						<span className="text-muted-foreground">/ admin</span>
+						<Link to="/admin" className="text-muted-foreground">
+							/ admin
+						</Link>
 					</nav>
 					<div className="flex items-center gap-3">
 						<ThemeToggle />

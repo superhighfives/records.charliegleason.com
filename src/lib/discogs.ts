@@ -104,6 +104,19 @@ function cleanArtistName(name: string): string {
 	return name.replace(/\s*\(\d+\)\s*$/, "").trim();
 }
 
+/**
+ * Discogs sometimes stores placeholder catalog numbers ("none", "N/A", etc.)
+ * instead of leaving the field blank. Normalise those to null so the UI shows
+ * an empty field rather than a meaningless value.
+ */
+function cleanCatno(catno: unknown): string | null {
+	if (catno == null) return null;
+	const trimmed = String(catno).trim();
+	if (!trimmed) return null;
+	if (/^(none|undefined|n\/?a|not applicable|n)$/i.test(trimmed)) return null;
+	return trimmed;
+}
+
 // biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
 function formatLine(f: any): string {
 	const head = f?.qty && String(f.qty) !== "1" ? `${f.qty}×${f.name}` : f?.name;
@@ -143,7 +156,7 @@ export async function getReleaseDetail(
 		year: Number.isFinite(yearNum) ? yearNum : null,
 		label: firstLabel?.name ? String(firstLabel.name) : null,
 		genre: Array.isArray(d.genres) && d.genres[0] ? String(d.genres[0]) : null,
-		catno: firstLabel?.catno ? String(firstLabel.catno) : null,
+		catno: cleanCatno(firstLabel?.catno),
 		size,
 		type,
 		formats: Array.isArray(d.formats)
@@ -224,7 +237,7 @@ export async function getReleaseCandidate(
 		size,
 		type,
 		country: d.country ? String(d.country) : null,
-		catno: firstLabel?.catno ? String(firstLabel.catno) : null,
+		catno: cleanCatno(firstLabel?.catno),
 		discogsUrl: uri
 			? uri.startsWith("http")
 				? uri
@@ -313,7 +326,7 @@ export async function searchReleases(
 			size,
 			type,
 			country: r.country ? String(r.country) : null,
-			catno: r.catno ? String(r.catno) : null,
+			catno: cleanCatno(r.catno),
 			discogsUrl: r.uri ? `https://www.discogs.com${r.uri}` : "",
 			thumb: r.thumb ? String(r.thumb) : null,
 		} satisfies DiscogsCandidate;
