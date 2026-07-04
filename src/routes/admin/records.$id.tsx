@@ -398,15 +398,18 @@ function RecordDetail() {
 						</figcaption>
 					</figure>
 				)}
-				{record.coverImageKey && (
+				{/* Preview the picked candidate's Discogs artwork immediately — the
+				    full-res cover isn't sourced until publish, so fall back to the
+				    stored cover when nothing is picked (or the pick has no thumb). */}
+				{(picked?.thumb || record.coverImageKey) && (
 					<figure className="space-y-1">
 						<ImageZoom
-							src={`/api/photos/${record.coverImageKey}`}
-							alt="Sourced cover"
+							src={picked?.thumb ?? `/api/photos/${record.coverImageKey}`}
+							alt={picked?.thumb ? "Selected Discogs cover" : "Sourced cover"}
 							className="size-32"
 						/>
 						<figcaption className="text-xs text-muted-foreground">
-							Cover
+							{picked?.thumb ? "Cover (selected)" : "Cover"}
 						</figcaption>
 					</figure>
 				)}
