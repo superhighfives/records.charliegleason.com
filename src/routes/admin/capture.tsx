@@ -94,6 +94,30 @@ async function prepareUpload(file: File): Promise<ProcessedImage> {
 	}
 }
 
+/** One-tap format hints appended to the context field. */
+const CONTEXT_PRESETS = ["Single LP", "2×LP", '7"', '10"', '12"', "EP"];
+
+/** Match a preset as a whole, comma-separated segment (case-insensitive). */
+function hasPreset(context: string, preset: string): boolean {
+	return context
+		.split(",")
+		.map((s) => s.trim().toLowerCase())
+		.includes(preset.toLowerCase());
+}
+
+/** Append the preset if absent, or strip it out if already present. */
+function togglePreset(context: string, preset: string): string {
+	if (hasPreset(context, preset)) {
+		return context
+			.split(",")
+			.map((s) => s.trim())
+			.filter((s) => s && s.toLowerCase() !== preset.toLowerCase())
+			.join(", ");
+	}
+	const trimmed = context.trim().replace(/,\s*$/, "");
+	return trimmed ? `${trimmed}, ${preset}` : preset;
+}
+
 function Capture() {
 	const queryClient = useQueryClient();
 
@@ -267,6 +291,25 @@ function Capture() {
 							onChange={(e) => setContext(e.target.value)}
 							placeholder="e.g. 2×LP reissue, or deluxe red vinyl"
 						/>
+						<div className="flex flex-wrap gap-1.5">
+							{CONTEXT_PRESETS.map((preset) => {
+								const active = hasPreset(context, preset);
+								return (
+									<Button
+										key={preset}
+										type="button"
+										size="xs"
+										variant="outline"
+										className={cn(
+											active && "bg-accent text-accent-foreground",
+										)}
+										onClick={() => setContext((c) => togglePreset(c, preset))}
+									>
+										{preset}
+									</Button>
+								);
+							})}
+						</div>
 						<p className="text-xs text-muted-foreground">
 							Used to help Claude read the cover and search Discogs.
 						</p>
