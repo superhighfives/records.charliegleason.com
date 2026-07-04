@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import * as Sentry from "@sentry/cloudflare";
 
 import { getReleaseImageUrl } from "#/lib/discogs";
 
@@ -18,7 +19,12 @@ export async function storeResizedCover(
 ): Promise<string | null> {
 	try {
 		const res = await fetch(imageUrl, { headers: { "User-Agent": UA } });
-		if (!res.ok || !res.body) return null;
+		if (!res.ok || !res.body) {
+			console.error(
+				`storeResizedCover: fetch failed (${res.status}) for ${imageUrl}`,
+			);
+			return null;
+		}
 
 		const out = await env.IMAGES.input(res.body)
 			.transform({ width: 600, height: 600, fit: "scale-down" })
@@ -30,7 +36,12 @@ export async function storeResizedCover(
 			httpMetadata: { contentType: "image/webp" },
 		});
 		return key;
-	} catch {
+	} catch (err) {
+		// The image fetch (network/DNS), the transform (Image Transformations
+		// disabled?), or the R2 put threw. Log it so a stale/missing cover is
+		// diagnosable rather than silent.
+		console.error("storeResizedCover: fetch/transform/store failed", err);
+		Sentry.captureException(err);
 		return null;
 	}
 }
@@ -62,8 +73,21 @@ export async function storeUploadedCover(
 export async function sourceCoverFromDiscogs(
 	discogsId: string,
 ): Promise<string | null> {
-	const url = await getReleaseImageUrl(discogsId).catch(() => null);
-	return url ? storeResizedCover(url) : null;
+	const url = await getReleaseImageUrl(discogsId).catch((err) => {
+		console.error(
+			`sourceCoverFromDiscogs: getReleaseImageUrl threw for ${discogsId}`,
+			err,
+		);
+		Sentry.captureException(err);
+		return null;
+	});
+	if (!url) {
+		console.error(
+			`sourceCoverFromDiscogs: no cover image URL for release ${discogsId}`,
+		);
+		return null;
+	}
+	return storeResizedCover(url);
 }
 
 /**

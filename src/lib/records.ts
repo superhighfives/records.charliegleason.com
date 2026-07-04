@@ -206,12 +206,17 @@ export const publishRecord = createServerFn({ method: "POST" })
 				if (!current) return null;
 
 				let coverImageKey = current.coverImageKey;
+				let coverFetchFailed = false;
 				if (uploaded) {
 					// A user-uploaded cover always wins over the Discogs artwork.
 					coverImageKey = uploaded;
 				} else if (discogsId && discogsId !== current.discogsId) {
-					coverImageKey =
-						(await sourceCoverFromDiscogs(discogsId)) ?? coverImageKey;
+					// New match → re-source its cover. If that fails, clear the cover
+					// rather than keep the previous release's artwork (which would now be
+					// wrong). The failure is logged in the cover pipeline and signalled
+					// back so the admin gets a toast and can retry or upload manually.
+					coverImageKey = await sourceCoverFromDiscogs(discogsId);
+					coverFetchFailed = !coverImageKey;
 				}
 
 				const [row] = await db
@@ -227,7 +232,7 @@ export const publishRecord = createServerFn({ method: "POST" })
 					})
 					.where(eq(records.id, id))
 					.returning();
-				return row ?? null;
+				return row ? { record: row, coverFetchFailed } : null;
 			}),
 	);
 

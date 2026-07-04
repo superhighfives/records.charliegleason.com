@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Info, Loader2 } from "lucide-react";
 import { useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { RecordForm } from "#/components/record-form";
@@ -711,7 +712,7 @@ function RecordDetail() {
 								record.status === "complete" ? "Save changes" : "Save & publish"
 							}
 							onSubmit={async (input) => {
-								await publishRecord({
+								const result = await publishRecord({
 									data: {
 										id: recordId,
 										data: input,
@@ -720,7 +721,23 @@ function RecordDetail() {
 										coverImageKey: customCover?.key ?? null,
 									},
 								});
+								if (!result) {
+									// The record no longer exists (deleted mid-edit) — nothing was
+									// saved. Surface it and stay put rather than navigating away.
+									toast.error("Couldn't save — this record no longer exists.");
+									return;
+								}
 								await invalidate();
+								if (result.coverFetchFailed) {
+									// The new match saved, but its cover couldn't be sourced from
+									// Discogs — the old artwork was cleared rather than kept. Point
+									// the admin at the manual upload as a fallback.
+									toast.error(
+										"Saved, but couldn't fetch the cover from Discogs. Upload one manually or try again.",
+									);
+								} else {
+									toast.success("Record saved.");
+								}
 								navigate({ to: "/admin" });
 							}}
 						/>
