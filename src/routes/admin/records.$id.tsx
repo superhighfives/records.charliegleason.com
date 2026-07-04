@@ -544,7 +544,13 @@ function RecordDetail() {
 						</div>
 
 						{tab === "search" ? (
-							<div className="space-y-2">
+							<form
+								className="space-y-2"
+								onSubmit={(e) => {
+									e.preventDefault();
+									if (!search.isPending) search.mutate(query);
+								}}
+							>
 								<div className="flex items-end gap-2">
 									<div className="flex-1 space-y-1">
 										<label
@@ -628,17 +634,24 @@ function RecordDetail() {
 
 								<div className="flex justify-end">
 									<Button
-										type="button"
+										type="submit"
 										variant="outline"
 										disabled={search.isPending}
-										onClick={() => search.mutate(query)}
 									>
 										{search.isPending ? "…" : "Search"}
 									</Button>
 								</div>
-							</div>
+							</form>
 						) : (
-							<div className="space-y-2">
+							<form
+								className="space-y-2"
+								onSubmit={(e) => {
+									e.preventDefault();
+									if (looksLikeReleaseId(discogsUrl) && !lookup.isPending) {
+										lookup.mutate(discogsUrl);
+									}
+								}}
+							>
 								<div className="space-y-1">
 									<label
 										htmlFor="q-url"
@@ -651,15 +664,6 @@ function RecordDetail() {
 										value={discogsUrl}
 										placeholder="https://www.discogs.com/release/…"
 										onChange={(e) => setDiscogsUrl(e.target.value)}
-										onKeyDown={(e) => {
-											if (
-												e.key === "Enter" &&
-												looksLikeReleaseId(discogsUrl) &&
-												!lookup.isPending
-											) {
-												lookup.mutate(discogsUrl);
-											}
-										}}
 									/>
 								</div>
 								{lookup.isError && (
@@ -667,17 +671,16 @@ function RecordDetail() {
 								)}
 								<div className="flex justify-end">
 									<Button
-										type="button"
+										type="submit"
 										variant="outline"
 										disabled={
 											lookup.isPending || !looksLikeReleaseId(discogsUrl)
 										}
-										onClick={() => lookup.mutate(discogsUrl)}
 									>
 										{lookup.isPending ? "…" : "Fetch release"}
 									</Button>
 								</div>
-							</div>
+							</form>
 						)}
 					</div>
 
