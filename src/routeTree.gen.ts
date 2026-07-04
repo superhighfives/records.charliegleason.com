@@ -15,6 +15,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as ApiRecordsRouteImport } from './routes/api/records'
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
+import { Route as ApiDiscogsCoverIdRouteImport } from './routes/api/discogs-cover.$id'
 import { Route as ApiCronDigestRouteImport } from './routes/api/cron.digest'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdRouteImport } from './routes/admin/records.$id'
@@ -49,6 +50,11 @@ const ApiPhotosSplatRoute = ApiPhotosSplatRouteImport.update({
   path: '/api/photos/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDiscogsCoverIdRoute = ApiDiscogsCoverIdRouteImport.update({
+  id: '/api/discogs-cover/$id',
+  path: '/api/discogs-cover/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiCronDigestRoute = ApiCronDigestRouteImport.update({
   id: '/api/cron/digest',
   path: '/api/cron/digest',
@@ -74,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
+  '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
 }
 export interface FileRoutesByTo {
@@ -84,6 +91,7 @@ export interface FileRoutesByTo {
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
+  '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
 }
 export interface FileRoutesById {
@@ -96,6 +104,7 @@ export interface FileRoutesById {
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
+  '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
 }
 export interface FileRouteTypes {
@@ -109,6 +118,7 @@ export interface FileRouteTypes {
     | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/cron/digest'
+    | '/api/discogs-cover/$id'
     | '/api/photos/$'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -119,6 +129,7 @@ export interface FileRouteTypes {
     | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/cron/digest'
+    | '/api/discogs-cover/$id'
     | '/api/photos/$'
   id:
     | '__root__'
@@ -130,6 +141,7 @@ export interface FileRouteTypes {
     | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/cron/digest'
+    | '/api/discogs-cover/$id'
     | '/api/photos/$'
   fileRoutesById: FileRoutesById
 }
@@ -138,6 +150,7 @@ export interface RootRouteChildren {
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
   ApiRecordsRoute: typeof ApiRecordsRoute
   ApiCronDigestRoute: typeof ApiCronDigestRoute
+  ApiDiscogsCoverIdRoute: typeof ApiDiscogsCoverIdRoute
   ApiPhotosSplatRoute: typeof ApiPhotosSplatRoute
 }
 
@@ -183,6 +196,13 @@ declare module '@tanstack/react-router' {
       path: '/api/photos/$'
       fullPath: '/api/photos/$'
       preLoaderRoute: typeof ApiPhotosSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/discogs-cover/$id': {
+      id: '/api/discogs-cover/$id'
+      path: '/api/discogs-cover/$id'
+      fullPath: '/api/discogs-cover/$id'
+      preLoaderRoute: typeof ApiDiscogsCoverIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/cron/digest': {
@@ -232,6 +252,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRouteRoute: AdminRouteRouteWithChildren,
   ApiRecordsRoute: ApiRecordsRoute,
   ApiCronDigestRoute: ApiCronDigestRoute,
+  ApiDiscogsCoverIdRoute: ApiDiscogsCoverIdRoute,
   ApiPhotosSplatRoute: ApiPhotosSplatRoute,
 }
 export const routeTree = rootRouteImport
