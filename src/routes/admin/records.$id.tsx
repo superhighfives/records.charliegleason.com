@@ -721,8 +721,14 @@ function RecordDetail() {
 										coverImageKey: customCover?.key ?? null,
 									},
 								});
+								if (!result) {
+									// The record no longer exists (deleted mid-edit) — nothing was
+									// saved. Surface it and stay put rather than navigating away.
+									toast.error("Couldn't save — this record no longer exists.");
+									return;
+								}
 								await invalidate();
-								if (result?.coverFetchFailed) {
+								if (result.coverFetchFailed) {
 									// The new match saved, but its cover couldn't be sourced from
 									// Discogs — the old artwork was cleared rather than kept. Point
 									// the admin at the manual upload as a fallback.

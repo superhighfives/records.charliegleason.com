@@ -37,9 +37,10 @@ export async function storeResizedCover(
 		});
 		return key;
 	} catch (err) {
-		// Transform (Image Transformations disabled?) or R2 put failed. Log it so
-		// a stale/missing cover is diagnosable rather than silent.
-		console.error("storeResizedCover: transform/store failed", err);
+		// The image fetch (network/DNS), the transform (Image Transformations
+		// disabled?), or the R2 put threw. Log it so a stale/missing cover is
+		// diagnosable rather than silent.
+		console.error("storeResizedCover: fetch/transform/store failed", err);
 		Sentry.captureException(err);
 		return null;
 	}
