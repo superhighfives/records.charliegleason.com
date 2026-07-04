@@ -6,6 +6,7 @@ import {
 	Scripts,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+import { Toaster } from "../components/ui/sonner";
 import ClerkProvider from "../integrations/clerk/provider";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
 import appCss from "../styles.css?url";
@@ -57,6 +58,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			<body>
 				<ClerkProvider>
 					{children}
+					<Toaster />
 					{/* Dev-only: keep the router/query devtools out of the production bundle. */}
 					{import.meta.env.DEV && (
 						<TanStackDevtools

@@ -250,12 +250,24 @@ export async function getReleaseCandidate(
 /** Highest-quality cover image URL for a release (primary image, full size). */
 export async function getReleaseImageUrl(id: string): Promise<string | null> {
 	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });
-	if (!res.ok) return null;
+	if (!res.ok) {
+		console.error(
+			`getReleaseImageUrl: Discogs ${res.status} for release ${id}`,
+		);
+		return null;
+	}
 	const data = (await res.json()) as {
 		images?: Array<{ type?: string; uri?: string }>;
 	};
 	const images = data.images ?? [];
 	const primary = images.find((i) => i.type === "primary") ?? images[0];
+	if (!primary?.uri) {
+		// Discogs only returns `images` for authenticated requests — a missing
+		// array usually means a token problem rather than an image-less release.
+		console.error(
+			`getReleaseImageUrl: no images in Discogs response for release ${id}`,
+		);
+	}
 	return primary?.uri ?? null;
 }
 
