@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Info, Loader2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
@@ -280,6 +280,53 @@ function RecordDetail() {
 	const [uploadingCover, setUploadingCover] = useState(false);
 	const coverInputRef = useRef<HTMLInputElement>(null);
 
+	// When a Discogs candidate is picked, grab its full-res cover through our own
+	// proxy so we can (a) show a zoomable preview of the actual artwork that will
+	// be published and (b) confirm the download succeeded before committing. The
+	// stored `record.coverImageKey` still shows until a pick is made.
+	const [coverProbe, setCoverProbe] = useState<
+		| { status: "idle" }
+		| { status: "loading" }
+		| { status: "ready"; url: string; bytes: number; type: string }
+		| { status: "error"; message: string }
+	>({ status: "idle" });
+
+	const pickedId = picked?.discogsId ?? null;
+	useEffect(() => {
+		if (!pickedId) {
+			setCoverProbe({ status: "idle" });
+			return;
+		}
+		let objectUrl: string | null = null;
+		let cancelled = false;
+		setCoverProbe({ status: "loading" });
+		fetch(`/api/discogs-cover/${pickedId}`)
+			.then(async (res) => {
+				if (!res.ok) throw new Error(`Download failed (HTTP ${res.status})`);
+				const blob = await res.blob();
+				if (cancelled) return;
+				objectUrl = URL.createObjectURL(blob);
+				setCoverProbe({
+					status: "ready",
+					url: objectUrl,
+					bytes: blob.size,
+					type: blob.type || "image",
+				});
+			})
+			.catch((err: unknown) => {
+				if (cancelled) return;
+				setCoverProbe({
+					status: "error",
+					message: err instanceof Error ? err.message : "Download failed",
+				});
+			});
+		return () => {
+			cancelled = true;
+			// Release the blob URL from this run — a new pick (or unmount) supersedes it.
+			if (objectUrl) URL.revokeObjectURL(objectUrl);
+		};
+	}, [pickedId]);
+
 	const invalidate = () =>
 		Promise.all([
 			queryClient.invalidateQueries({ queryKey: recordsQueryOptions.queryKey }),
@@ -347,6 +394,15 @@ function RecordDetail() {
 	const candidates = results ?? parseCandidates(record.candidatesJson);
 	const inFlight =
 		record.status === "pending" || record.status === "processing";
+
+	// Cover preview source, best-first: the freshly downloaded full-res artwork,
+	// then the picked candidate's thumbnail (instant, while the full-res loads or
+	// if it failed), then the stored cover when nothing is picked.
+	const coverPreviewSrc =
+		coverProbe.status === "ready"
+			? coverProbe.url
+			: (picked?.thumb ??
+				(record.coverImageKey ? `/api/photos/${record.coverImageKey}` : null));
 	const heading =
 		record.artist || record.title
 			? `${record.artist || "Unknown"} — ${record.title || "Untitled"}`
@@ -399,17 +455,17 @@ function RecordDetail() {
 					</figure>
 				)}
 				{/* Preview the picked candidate's Discogs artwork immediately — the
-				    full-res cover isn't sourced until publish, so fall back to the
-				    stored cover when nothing is picked (or the pick has no thumb). */}
-				{(picked?.thumb || record.coverImageKey) && (
+				    full-res cover isn't sourced into R2 until publish, so we grab it
+				    through the proxy for a zoomable, verified preview. */}
+				{coverPreviewSrc && (
 					<figure className="space-y-1">
 						<ImageZoom
-							src={picked?.thumb ?? `/api/photos/${record.coverImageKey}`}
-							alt={picked?.thumb ? "Selected Discogs cover" : "Sourced cover"}
+							src={coverPreviewSrc}
+							alt={picked ? "Selected Discogs cover" : "Sourced cover"}
 							className="size-32"
 						/>
 						<figcaption className="text-xs text-muted-foreground">
-							{picked?.thumb ? "Cover (selected)" : "Cover"}
+							{picked ? "Cover (selected)" : "Cover"}
 						</figcaption>
 					</figure>
 				)}
@@ -426,6 +482,22 @@ function RecordDetail() {
 					</figure>
 				)}
 			</div>
+
+			{/* Download status for the picked candidate's cover — confirms the grab
+			    worked (with size/type) or surfaces why it didn't. */}
+			{picked && coverProbe.status !== "idle" && (
+				<p className="text-xs text-muted-foreground" aria-live="polite">
+					{coverProbe.status === "loading" && "Downloading cover from Discogs…"}
+					{coverProbe.status === "ready" &&
+						`Cover downloaded — ${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}.`}
+					{coverProbe.status === "error" && (
+						<span className="text-red-600">
+							Couldn’t download cover: {coverProbe.message}. It’ll be re-sourced
+							on publish.
+						</span>
+					)}
+				</p>
+			)}
 
 			{/* Upload your own cover — overrides the Discogs artwork on publish. */}
 			{!inFlight && (
