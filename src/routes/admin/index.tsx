@@ -22,6 +22,7 @@ import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import type { Record } from "#/db/schema";
+import { describeAnalysisError } from "#/lib/analysis-error";
 import { deleteRecord, rescanAllRecords } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
@@ -49,6 +50,23 @@ const STATUS_PRIORITY: globalThis.Record<RecordStatus, number> = {
 };
 
 const isUnpublished = (status: RecordStatus) => status !== "complete";
+
+/**
+ * The title cell / card heading. A record has no title until analysis writes one,
+ * so fall back to the failure reason for `failed` rows (rather than the misleading
+ * "Processing…") and to "Processing…" while it's still in flight.
+ */
+function RecordTitle({ record }: { record: Record }) {
+	if (record.title) return <>{record.title}</>;
+	if (record.status === "failed") {
+		return (
+			<span className="italic text-destructive">
+				{describeAnalysisError(record.error).message}
+			</span>
+		);
+	}
+	return <span className="text-muted-foreground italic">Processing…</span>;
+}
 
 function matchesFilter(status: RecordStatus, filter: StatusFilter): boolean {
 	if (filter === "all") return true;
@@ -137,10 +155,7 @@ function AdminRecords() {
 			{
 				accessorKey: "title",
 				header: "Title",
-				cell: ({ getValue }) =>
-					getValue<string>() || (
-						<span className="text-muted-foreground italic">Processing…</span>
-					),
+				cell: ({ row }) => <RecordTitle record={row.original} />,
 			},
 			{ accessorKey: "year", header: "Year" },
 			{ accessorKey: "label", header: "Label" },
@@ -319,11 +334,7 @@ function AdminRecords() {
 								)}
 								<div className="min-w-0 flex-1">
 									<p className="truncate font-medium">
-										{r.title || (
-											<span className="text-muted-foreground italic">
-												Processing…
-											</span>
-										)}
+										<RecordTitle record={r} />
 									</p>
 									<p className="truncate text-sm text-muted-foreground">
 										{r.artist || "—"}

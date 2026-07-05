@@ -11,7 +11,7 @@ export function DuplicateBadge({ className }: { className?: string }) {
 	return (
 		<span
 			className={cn(
-				"inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800",
+				"inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800 dark:bg-orange-950 dark:text-orange-200",
 				className,
 			)}
 			title="This release is already in your collection"
