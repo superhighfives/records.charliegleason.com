@@ -76,7 +76,7 @@ function Home() {
 							records ·{" "}
 							<a
 								href="https://charliegleason.com"
-								className="text-brand underline decoration-brand/60 underline-offset-4 hover:text-brand-strong"
+								className="text-brand-strong underline decoration-brand-strong/60 underline-offset-4 hover:text-foreground"
 							>
 								charliegleason.com
 							</a>
@@ -130,7 +130,7 @@ function Home() {
 										{r.year ? ` · ${r.year}` : ""}
 									</p>
 									{r.pitchforkScore != null && (
-										<p className="mt-1 text-xs font-bold text-brand tabular-nums">
+										<p className="mt-1 text-xs font-bold text-brand-strong tabular-nums">
 											{r.pitchforkScore}
 											<span className="ml-1 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
 												on Pitchfork
@@ -174,7 +174,7 @@ function Home() {
 				A corner of{" "}
 				<a
 					href="https://charliegleason.com"
-					className="text-brand underline decoration-brand/60 underline-offset-4 hover:text-brand-strong"
+					className="text-brand-strong underline decoration-brand-strong/60 underline-offset-4 hover:text-foreground"
 				>
 					charliegleason.com
 				</a>{" "}
