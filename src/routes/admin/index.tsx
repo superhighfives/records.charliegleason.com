@@ -123,6 +123,25 @@ function StatusError({ record }: { record: Record }) {
 	);
 }
 
+/**
+ * Empty-list message. Distinguishes a genuinely empty collection from a tab /
+ * search that just happens to match nothing, so the copy is never misleading.
+ */
+function EmptyState({ filtered }: { filtered: boolean }) {
+	return (
+		<div className="space-y-1">
+			<p className="font-medium text-foreground">
+				{filtered ? "No records match your filters" : "No records yet"}
+			</p>
+			<p className="text-sm text-muted-foreground">
+				{filtered
+					? "Try a different tab, or clear the search."
+					: "Add one with “Add manually”, or capture a record."}
+			</p>
+		</div>
+	);
+}
+
 function matchesFilter(status: RecordStatus, filter: StatusFilter): boolean {
 	if (filter === "all") return true;
 	if (filter === "unpublished") return isUnpublished(status);
@@ -390,6 +409,13 @@ function AdminRecords() {
 		.getFilteredSelectedRowModel()
 		.rows.map((r) => r.original.id);
 	const hasSelection = selectedIds.length > 0;
+	// Rows visible under the current tab + search. Drives the empty state and
+	// whether the bulk toolbar is worth showing at all.
+	const visibleRowCount = table.getRowModel().rows.length;
+	// A search/tab filter is narrowing things when there's data but nothing shown.
+	const isFiltered =
+		data.length > 0 &&
+		(statusFilter !== "all" || debouncedFilter.trim() !== "");
 
 	// Run a bulk action against the current selection, confirming first for the
 	// destructive ones. Shared by the desktop buttons and the mobile menu.
@@ -483,73 +509,77 @@ function AdminRecords() {
 				})}
 			</div>
 
-			{/* Bulk actions. Always rendered — even at 0 selected — so ticking the
-			    first row doesn't shift the table down. Buttons disable when there's
-			    nothing selected (or a bulk action is in flight). */}
-			<div className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
-				<span className="text-sm font-medium whitespace-nowrap">
-					{selectedIds.length} selected
-				</span>
+			{/* Bulk actions. Rendered whenever there are rows to act on — even at
+			    0 selected (with disabled buttons) — so ticking the first row doesn't
+			    shift the table down. Hidden entirely when the list is empty. */}
+			{visibleRowCount > 0 && (
+				<div className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
+					<span className="text-sm font-medium whitespace-nowrap">
+						{selectedIds.length} selected
+					</span>
 
-				{/* Desktop: the actions inline. */}
-				<div className="hidden items-center gap-2 sm:flex">
-					{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
-						const { label, destructive } = BULK_ACTIONS[action];
-						return (
-							<Button
-								key={action}
-								type="button"
-								size="sm"
-								variant={destructive ? "destructive" : "outline"}
-								disabled={!hasSelection || bulkMutation.isPending}
-								onClick={() => runBulkAction(action)}
-							>
-								{label}
-							</Button>
-						);
-					})}
-				</div>
-
-				{/* Mobile: the same actions collapsed into a dropdown so the toolbar
-				    stays on one row. */}
-				<div className="sm:hidden">
-					<DropdownMenu>
-						<DropdownMenuTrigger asChild>
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={!hasSelection || bulkMutation.isPending}
-							>
-								Actions
-								<ChevronDownIcon className="opacity-50" />
-							</Button>
-						</DropdownMenuTrigger>
-						<DropdownMenuContent align="start">
-							{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => (
-								<DropdownMenuItem
+					{/* Desktop: the actions inline. */}
+					<div className="hidden items-center gap-2 sm:flex">
+						{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
+							const { label, destructive } = BULK_ACTIONS[action];
+							return (
+								<Button
 									key={action}
-									variant={
-										BULK_ACTIONS[action].destructive ? "destructive" : "default"
-									}
-									onSelect={() => runBulkAction(action)}
+									type="button"
+									size="sm"
+									variant={destructive ? "destructive" : "outline"}
+									disabled={!hasSelection || bulkMutation.isPending}
+									onClick={() => runBulkAction(action)}
 								>
-									{BULK_ACTIONS[action].label}
-								</DropdownMenuItem>
-							))}
-						</DropdownMenuContent>
-					</DropdownMenu>
-				</div>
+									{label}
+								</Button>
+							);
+						})}
+					</div>
 
-				<button
-					type="button"
-					className="ml-auto text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
-					disabled={!hasSelection}
-					onClick={() => setRowSelection({})}
-				>
-					Clear
-				</button>
-			</div>
+					{/* Mobile: the same actions collapsed into a dropdown so the toolbar
+				    stays on one row. */}
+					<div className="sm:hidden">
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									disabled={!hasSelection || bulkMutation.isPending}
+								>
+									Actions
+									<ChevronDownIcon className="opacity-50" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="start">
+								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => (
+									<DropdownMenuItem
+										key={action}
+										variant={
+											BULK_ACTIONS[action].destructive
+												? "destructive"
+												: "default"
+										}
+										onSelect={() => runBulkAction(action)}
+									>
+										{BULK_ACTIONS[action].label}
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
+
+					<button
+						type="button"
+						className="ml-auto text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+						disabled={!hasSelection}
+						onClick={() => setRowSelection({})}
+					>
+						Clear
+					</button>
+				</div>
+			)}
 
 			{/* Mobile: stacked cards (the wide table doesn't fit a phone). */}
 			<ul className="space-y-2 md:hidden">
@@ -623,9 +653,9 @@ function AdminRecords() {
 						</li>
 					);
 				})}
-				{table.getRowModel().rows.length === 0 && (
-					<li className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-muted-foreground">
-						No records yet. Add one with “Add manually”, or via the photo flow.
+				{visibleRowCount === 0 && (
+					<li className="rounded-lg border border-dashed border-border px-3 py-10 text-center">
+						<EmptyState filtered={isFiltered} />
 					</li>
 				)}
 			</ul>
@@ -715,14 +745,10 @@ function AdminRecords() {
 							))}
 						</tr>
 					))}
-					{table.getRowModel().rows.length === 0 && (
+					{visibleRowCount === 0 && (
 						<tr>
-							<td
-								colSpan={columns.length}
-								className="px-3 py-8 text-center text-muted-foreground"
-							>
-								No records yet. Add one with “New record”, or via the photo
-								flow.
+							<td colSpan={columns.length} className="px-3 py-12 text-center">
+								<EmptyState filtered={isFiltered} />
 							</td>
 						</tr>
 					)}
