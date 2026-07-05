@@ -16,6 +16,7 @@ import {
 	type SortingState,
 	useReactTable,
 } from "@tanstack/react-table";
+import { ChevronDownIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -23,6 +24,12 @@ import { DuplicateBadge } from "#/components/duplicate-badge";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Checkbox } from "#/components/ui/checkbox";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu";
 import { Input } from "#/components/ui/input";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
@@ -382,6 +389,23 @@ function AdminRecords() {
 	const selectedIds = table
 		.getFilteredSelectedRowModel()
 		.rows.map((r) => r.original.id);
+	const hasSelection = selectedIds.length > 0;
+
+	// Run a bulk action against the current selection, confirming first for the
+	// destructive ones. Shared by the desktop buttons and the mobile menu.
+	const runBulkAction = (action: BulkAction) => {
+		if (
+			BULK_ACTIONS[action].destructive &&
+			!confirm(
+				`Delete ${selectedIds.length} ${
+					selectedIds.length === 1 ? "record" : "records"
+				}? This can't be undone.`,
+			)
+		) {
+			return;
+		}
+		bulkMutation.mutate({ action, ids: selectedIds });
+	};
 
 	return (
 		<div className="space-y-4">
@@ -459,51 +483,73 @@ function AdminRecords() {
 				})}
 			</div>
 
-			{/* Bulk actions: appears once at least one row is ticked. Acts on the
-			    selected ids across whichever tab they were picked from. */}
-			{selectedIds.length > 0 && (
-				<div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
-					<span className="text-sm font-medium">
-						{selectedIds.length} selected
-					</span>
-					<div className="flex flex-wrap items-center gap-2">
-						{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
-							const { label, destructive } = BULK_ACTIONS[action];
-							return (
-								<Button
-									key={action}
-									type="button"
-									size="sm"
-									variant={destructive ? "destructive" : "outline"}
-									disabled={bulkMutation.isPending}
-									onClick={() => {
-										if (
-											destructive &&
-											!confirm(
-												`Delete ${selectedIds.length} ${
-													selectedIds.length === 1 ? "record" : "records"
-												}? This can't be undone.`,
-											)
-										) {
-											return;
-										}
-										bulkMutation.mutate({ action, ids: selectedIds });
-									}}
-								>
-									{label}
-								</Button>
-							);
-						})}
-					</div>
-					<button
-						type="button"
-						className="ml-auto text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
-						onClick={() => setRowSelection({})}
-					>
-						Clear
-					</button>
+			{/* Bulk actions. Always rendered — even at 0 selected — so ticking the
+			    first row doesn't shift the table down. Buttons disable when there's
+			    nothing selected (or a bulk action is in flight). */}
+			<div className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
+				<span className="text-sm font-medium whitespace-nowrap">
+					{selectedIds.length} selected
+				</span>
+
+				{/* Desktop: the actions inline. */}
+				<div className="hidden items-center gap-2 sm:flex">
+					{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
+						const { label, destructive } = BULK_ACTIONS[action];
+						return (
+							<Button
+								key={action}
+								type="button"
+								size="sm"
+								variant={destructive ? "destructive" : "outline"}
+								disabled={!hasSelection || bulkMutation.isPending}
+								onClick={() => runBulkAction(action)}
+							>
+								{label}
+							</Button>
+						);
+					})}
 				</div>
-			)}
+
+				{/* Mobile: the same actions collapsed into a dropdown so the toolbar
+				    stays on one row. */}
+				<div className="sm:hidden">
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button
+								type="button"
+								size="sm"
+								variant="outline"
+								disabled={!hasSelection || bulkMutation.isPending}
+							>
+								Actions
+								<ChevronDownIcon className="opacity-50" />
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="start">
+							{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => (
+								<DropdownMenuItem
+									key={action}
+									variant={
+										BULK_ACTIONS[action].destructive ? "destructive" : "default"
+									}
+									onSelect={() => runBulkAction(action)}
+								>
+									{BULK_ACTIONS[action].label}
+								</DropdownMenuItem>
+							))}
+						</DropdownMenuContent>
+					</DropdownMenu>
+				</div>
+
+				<button
+					type="button"
+					className="ml-auto text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+					disabled={!hasSelection}
+					onClick={() => setRowSelection({})}
+				>
+					Clear
+				</button>
+			</div>
 
 			{/* Mobile: stacked cards (the wide table doesn't fit a phone). */}
 			<ul className="space-y-2 md:hidden">
