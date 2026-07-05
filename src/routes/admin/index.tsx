@@ -137,10 +137,10 @@ function AdminRecords() {
 						<img
 							src={`/api/photos/${key}`}
 							alt=""
-							className="size-10 rounded object-cover"
+							className="size-10 min-w-10 rounded object-cover"
 						/>
 					) : (
-						<div className="size-10 rounded bg-muted" />
+						<div className="size-10 min-w-10 rounded bg-muted" />
 					);
 				},
 			},
