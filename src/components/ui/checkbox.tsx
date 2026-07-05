@@ -1,3 +1,4 @@
+import type * as React from "react";
 import { forwardRef, useEffect, useRef } from "react";
 
 import { cn } from "#/lib/utils";

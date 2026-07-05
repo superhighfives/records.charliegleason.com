@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn } from "@tanstack/react-start";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
@@ -383,5 +383,74 @@ export const deleteRecord = createServerFn({ method: "POST" })
 				.set({ duplicateOf: null, updatedAt: new Date() })
 				.where(eq(records.duplicateOf, id));
 			return { id };
+		}),
+	);
+
+/** Validator shared by the bulk actions below: a plain list of record ids. */
+const idList = (ids: number[]) => ids;
+
+/**
+ * Bulk delete. Removes every selected record in one statement and clears the
+ * `duplicateOf` back-references in a second, rather than issuing a request per
+ * row from the client. Returns how many ids were targeted.
+ */
+export const deleteRecords = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "deleteRecords" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			await db.delete(records).where(inArray(records.id, ids));
+			await db
+				.update(records)
+				.set({ duplicateOf: null, updatedAt: new Date() })
+				.where(inArray(records.duplicateOf, ids));
+			return { count: ids.length };
+		}),
+	);
+
+/**
+ * Bulk retry. Resets the selected rows to `pending` in a single statement, then
+ * fans the (cheap) queue writes out concurrently — the actual analysis happens
+ * in the consumer. Returns how many rows were re-queued.
+ */
+export const retryRecords = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "retryRecords" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const rows = await db
+				.update(records)
+				.set({ status: "pending", error: null, updatedAt: new Date() })
+				.where(inArray(records.id, ids))
+				.returning({ id: records.id });
+			await Promise.all(rows.map(({ id }) => enqueueAnalyze(id)));
+			return { count: rows.length };
+		}),
+	);
+
+/**
+ * Bulk refresh. Enqueues a Discogs re-pull for each selected record that has a
+ * stored Discogs id, through the queue so it respects Discogs' rate limit —
+ * rather than firing N synchronous Discogs fetches in parallel from the request.
+ * Returns how many refreshes were queued (records without a Discogs id are
+ * silently skipped).
+ */
+export const refreshRecords = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "refreshRecords" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const rows = await db
+				.select({ id: records.id })
+				.from(records)
+				.where(and(inArray(records.id, ids), isNotNull(records.discogsId)));
+			await Promise.all(rows.map(({ id }) => enqueueRefresh(id)));
+			return { count: rows.length };
 		}),
 	);

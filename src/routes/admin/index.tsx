@@ -28,9 +28,10 @@ import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import {
 	deleteRecord,
-	refreshRecord,
-	reprocessRecord,
+	deleteRecords,
+	refreshRecords,
 	rescanAllRecords,
+	retryRecords,
 } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
@@ -49,24 +50,25 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
 
-// Bulk row actions. Each runs the matching per-record server function across the
-// selected ids. `retry` re-queues analysis (for failed/captured rows), `refresh`
-// re-pulls the Discogs enrichment, `delete` removes them.
+// Bulk row actions. Each hands the selected ids to a single batched server
+// endpoint (one round trip, not N parallel calls). `retry` re-queues analysis
+// (for failed/captured rows), `refresh` enqueues a Discogs re-pull, `delete`
+// removes them. Each endpoint returns how many rows it actually acted on.
 type BulkAction = "retry" | "refresh" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
 		verb: string; // past tense, for the result toast: "3 records <verb>."
-		fn: (opts: { data: number }) => Promise<unknown>;
+		fn: (opts: { data: number[] }) => Promise<{ count: number }>;
 		destructive?: boolean;
 	};
 } = {
-	retry: { label: "Retry", verb: "queued for retry", fn: reprocessRecord },
-	refresh: { label: "Refresh", verb: "refreshed", fn: refreshRecord },
+	retry: { label: "Retry", verb: "queued for retry", fn: retryRecords },
+	refresh: { label: "Refresh", verb: "queued for refresh", fn: refreshRecords },
 	delete: {
 		label: "Delete",
 		verb: "deleted",
-		fn: deleteRecord,
+		fn: deleteRecords,
 		destructive: true,
 	},
 };
@@ -169,37 +171,21 @@ function AdminRecords() {
 		mutationFn: () => rescanAllRecords(),
 	});
 
-	// Selected-rows actions: fan the per-record server function out over the chosen
-	// ids, tolerate partial failure, then report a single summary toast.
+	// Selected-rows actions: hand the ids to the matching batched endpoint and
+	// report a single summary toast off the count it actually acted on.
 	const bulkMutation = useMutation({
-		mutationFn: async ({
-			action,
-			ids,
-		}: {
-			action: BulkAction;
-			ids: number[];
-		}) => {
-			const settled = await Promise.allSettled(
-				ids.map((id) => BULK_ACTIONS[action].fn({ data: id })),
-			);
-			const failed = settled.filter((s) => s.status === "rejected").length;
-			return { action, total: ids.length, failed };
-		},
-		onSuccess: async ({ action, total, failed }) => {
+		mutationFn: ({ action, ids }: { action: BulkAction; ids: number[] }) =>
+			BULK_ACTIONS[action].fn({ data: ids }),
+		onSuccess: async ({ count }, { action }) => {
 			await queryClient.invalidateQueries({
 				queryKey: recordsQueryOptions.queryKey,
 			});
 			setRowSelection({});
 			const { verb } = BULK_ACTIONS[action];
-			const ok = total - failed;
-			const plural = (n: number) => (n === 1 ? "record" : "records");
-			if (failed === 0) {
-				toast.success(`${ok} ${plural(ok)} ${verb}.`);
-			} else if (ok === 0) {
-				toast.error(`Couldn't ${action} ${failed} ${plural(failed)}.`);
-			} else {
-				toast.warning(`${ok} ${verb}, ${failed} failed.`);
-			}
+			toast.success(`${count} ${count === 1 ? "record" : "records"} ${verb}.`);
+		},
+		onError: (_error, { action }) => {
+			toast.error(`Couldn't ${action} the selected records.`);
 		},
 	});
 
@@ -389,10 +375,12 @@ function AdminRecords() {
 		getSortedRowModel: getSortedRowModel(),
 	});
 
-	// Selected ids for the bulk toolbar. `getSelectedRowModel` reflects only rows
-	// still present after filtering, so a hidden-then-reselected id can't linger.
+	// Selected ids for the bulk toolbar. `getSelectedRowModel` is built off the
+	// core row model and would include rows the text filter is hiding; the
+	// filtered variant keeps the toolbar in step with what's actually on screen
+	// (and with the visible-only select-all).
 	const selectedIds = table
-		.getSelectedRowModel()
+		.getFilteredSelectedRowModel()
 		.rows.map((r) => r.original.id);
 
 	return (
