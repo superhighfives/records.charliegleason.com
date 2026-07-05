@@ -313,11 +313,39 @@ export function buildSearchUrl({
 	return url;
 }
 
+/**
+ * Turn an unsuccessful Discogs response (any non-2xx) into a human-readable
+ * error. Discogs puts a
+ * useful reason in a JSON `message` field (e.g. "You must authenticate to access
+ * this resource." for a bad token, or a rate-limit note on a 429) — surface it so
+ * a failed search shows *why* instead of silently returning nothing.
+ */
+async function discogsError(res: Response, action: string): Promise<Error> {
+	let detail = "";
+	try {
+		const body = (await res.json()) as { message?: unknown };
+		if (typeof body.message === "string") detail = body.message;
+	} catch {
+		// Non-JSON body (HTML error page, empty) — the status alone will have to do.
+	}
+	const suffix = detail ? ` — ${detail}` : "";
+	if (res.status === 401)
+		return new Error(
+			`Discogs rejected the request (check DISCOGS_TOKEN)${suffix}`,
+		);
+	if (res.status === 429)
+		return new Error(`Discogs rate limit hit — try again shortly${suffix}`);
+	return new Error(`Discogs ${action} failed (HTTP ${res.status})${suffix}`);
+}
+
 export async function searchReleases(
 	params: SearchParams,
 ): Promise<Array<DiscogsCandidate>> {
 	const res = await fetch(buildSearchUrl(params), { headers: headers() });
-	if (!res.ok) return [];
+	// Don't swallow failures as an empty result — a bad token / rate limit / 5xx
+	// is not "no matches". Throw so the caller can surface it; the automated
+	// `analyze` path opts back into empty via its own `.catch(() => [])`.
+	if (!res.ok) throw await discogsError(res, "search");
 
 	const data = (await res.json()) as {
 		results?: Array<Record<string, unknown>>;

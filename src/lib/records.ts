@@ -324,9 +324,10 @@ export const searchDiscogs = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator((data: unknown) => searchParamsSchema.parse(data))
 	.handler(({ data }) =>
-		Sentry.startSpan({ name: "searchDiscogs" }, () =>
-			searchReleases(data).catch(() => []),
-		),
+		// Let Discogs failures (bad token, rate limit, 5xx) propagate to the client
+		// so the review page can show *why* a search came back empty, rather than
+		// silently degrading to "no results". Genuine zero-match still returns [].
+		Sentry.startSpan({ name: "searchDiscogs" }, () => searchReleases(data)),
 	);
 
 /**
