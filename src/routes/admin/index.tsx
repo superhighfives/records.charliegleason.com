@@ -521,14 +521,16 @@ function AdminRecords() {
 			{/* Bulk actions. The bar stays put whenever there are rows to act on (so
 			    ticking the first row doesn't shift the table down), but the action
 			    buttons + Clear only appear once something is selected — no row of
-			    greyed-out disabled controls at rest. Hidden entirely when empty. */}
+			    greyed-out disabled controls at rest. The min-height keeps the bar the
+			    same size whether or not the (button-height) actions are showing, so
+			    selecting a row doesn't resize it. Hidden entirely when empty. */}
 			{visibleRowCount > 0 && (
-				<div className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
-					<span className="text-sm font-medium whitespace-nowrap">
-						{hasSelection
-							? `${selectedIds.length} selected`
-							: "Select records to act on them"}
-					</span>
+				<div className="flex min-h-12 items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
+					{hasSelection && (
+						<span className="text-sm font-medium whitespace-nowrap">
+							{selectedIds.length} selected
+						</span>
+					)}
 
 					{hasSelection && (
 						<>
