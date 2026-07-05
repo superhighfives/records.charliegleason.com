@@ -314,7 +314,8 @@ export function buildSearchUrl({
 }
 
 /**
- * Turn a non-200 Discogs response into a human-readable error. Discogs puts a
+ * Turn an unsuccessful Discogs response (any non-2xx) into a human-readable
+ * error. Discogs puts a
  * useful reason in a JSON `message` field (e.g. "You must authenticate to access
  * this resource." for a bad token, or a rate-limit note on a 429) — surface it so
  * a failed search shows *why* instead of silently returning nothing.

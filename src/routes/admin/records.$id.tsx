@@ -719,14 +719,17 @@ function RecordDetail() {
 								)}
 
 								{search.isError && (
-									<p className="text-xs text-red-600">
+									<p className="text-xs text-red-600" role="alert">
 										{search.error instanceof Error
 											? search.error.message
 											: "Search failed. Try again."}
 									</p>
 								)}
 								{search.isSuccess && (search.data?.length ?? 0) === 0 && (
-									<p className="text-xs text-muted-foreground">
+									<p
+										className="text-xs text-muted-foreground"
+										aria-live="polite"
+									>
 										No matches on Discogs. Try a different spelling, drop the
 										title, or paste the release URL.
 									</p>
