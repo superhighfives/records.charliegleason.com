@@ -15,6 +15,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "#/components/ui/tooltip";
+import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import type { DiscogsCandidate, SearchParams } from "#/lib/discogs";
@@ -424,6 +425,9 @@ function RecordDetail() {
 					<h1 className="mt-1 text-2xl font-semibold">{heading}</h1>
 				</div>
 				<div className="flex flex-wrap items-center justify-end gap-1">
+					{record.status === "review" && !record.discogsId && (
+						<UnmatchedBadge />
+					)}
 					{record.duplicateOf != null && <DuplicateBadge />}
 					<StatusBadge status={record.status} />
 				</div>
@@ -516,7 +520,7 @@ function RecordDetail() {
 							e.target.value = "";
 						}}
 					/>
-					{record.discogsId && (
+					{record.discogsId ? (
 						<Button
 							type="button"
 							size="sm"
@@ -526,6 +530,21 @@ function RecordDetail() {
 						>
 							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
 						</Button>
+					) : (
+						// Unmatched: no release to refresh from yet. Re-run the analysis to
+						// take another shot at reading the cover and matching Discogs (the
+						// fetch retries mean a transient miss is worth retrying).
+						record.status === "review" && (
+							<Button
+								type="button"
+								size="sm"
+								variant="outline"
+								disabled={retry.isPending}
+								onClick={() => retry.mutate()}
+							>
+								{retry.isPending ? "Fetching…" : "Fetch from Discogs"}
+							</Button>
+						)
 					)}
 					<Button
 						type="button"

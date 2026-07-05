@@ -31,6 +31,7 @@ import {
 	DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu";
 import { Input } from "#/components/ui/input";
+import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import {
@@ -58,10 +59,11 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
 
 // Bulk row actions. Each hands the selected ids to a single batched server
-// endpoint (one round trip, not N parallel calls). `retry` re-queues analysis
-// (for failed/captured rows), `refresh` enqueues a Discogs re-pull, `delete`
-// removes them. Each endpoint returns how many rows it actually acted on.
-type BulkAction = "retry" | "refresh" | "delete";
+// endpoint (one round trip, not N parallel calls). `fetch` re-queues analysis
+// (for unmatched/failed/captured rows — re-reads the cover and re-searches
+// Discogs), `refresh` enqueues a Discogs re-pull for already-matched rows,
+// `delete` removes them. Each endpoint returns how many rows it acted on.
+type BulkAction = "fetch" | "refresh" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
@@ -70,7 +72,11 @@ const BULK_ACTIONS: {
 		destructive?: boolean;
 	};
 } = {
-	retry: { label: "Retry", verb: "queued for retry", fn: retryRecords },
+	fetch: {
+		label: "Fetch from Discogs",
+		verb: "queued to fetch from Discogs",
+		fn: retryRecords,
+	},
 	refresh: { label: "Refresh", verb: "queued for refresh", fn: refreshRecords },
 	delete: {
 		label: "Delete",
@@ -328,6 +334,9 @@ function AdminRecords() {
 						className="inline-flex flex-wrap items-center gap-1"
 					>
 						<StatusBadge status={row.original.status} />
+						{row.original.status === "review" && !row.original.discogsId && (
+							<UnmatchedBadge />
+						)}
 						{row.original.duplicateOf != null &&
 							liveIds.has(row.original.duplicateOf) && <DuplicateBadge />}
 						<StatusError record={row.original} />
@@ -509,75 +518,83 @@ function AdminRecords() {
 				})}
 			</div>
 
-			{/* Bulk actions. Rendered whenever there are rows to act on — even at
-			    0 selected (with disabled buttons) — so ticking the first row doesn't
-			    shift the table down. Hidden entirely when the list is empty. */}
+			{/* Bulk actions. The bar stays put whenever there are rows to act on (so
+			    ticking the first row doesn't shift the table down), but the action
+			    buttons + Clear only appear once something is selected — no row of
+			    greyed-out disabled controls at rest. Hidden entirely when empty. */}
 			{visibleRowCount > 0 && (
 				<div className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
 					<span className="text-sm font-medium whitespace-nowrap">
-						{selectedIds.length} selected
+						{hasSelection
+							? `${selectedIds.length} selected`
+							: "Select records to act on them"}
 					</span>
 
-					{/* Desktop: the actions inline. */}
-					<div className="hidden items-center gap-2 sm:flex">
-						{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
-							const { label, destructive } = BULK_ACTIONS[action];
-							return (
-								<Button
-									key={action}
-									type="button"
-									size="sm"
-									variant={destructive ? "destructive" : "outline"}
-									disabled={!hasSelection || bulkMutation.isPending}
-									onClick={() => runBulkAction(action)}
-								>
-									{label}
-								</Button>
-							);
-						})}
-					</div>
+					{hasSelection && (
+						<>
+							{/* Desktop: the actions inline. */}
+							<div className="hidden items-center gap-2 sm:flex">
+								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
+									const { label, destructive } = BULK_ACTIONS[action];
+									return (
+										<Button
+											key={action}
+											type="button"
+											size="sm"
+											variant={destructive ? "destructive" : "outline"}
+											disabled={bulkMutation.isPending}
+											onClick={() => runBulkAction(action)}
+										>
+											{label}
+										</Button>
+									);
+								})}
+							</div>
 
-					{/* Mobile: the same actions collapsed into a dropdown so the toolbar
-				    stays on one row. */}
-					<div className="sm:hidden">
-						<DropdownMenu>
-							<DropdownMenuTrigger asChild>
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									disabled={!hasSelection || bulkMutation.isPending}
-								>
-									Actions
-									<ChevronDownIcon className="opacity-50" />
-								</Button>
-							</DropdownMenuTrigger>
-							<DropdownMenuContent align="start">
-								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => (
-									<DropdownMenuItem
-										key={action}
-										variant={
-											BULK_ACTIONS[action].destructive
-												? "destructive"
-												: "default"
-										}
-										onSelect={() => runBulkAction(action)}
-									>
-										{BULK_ACTIONS[action].label}
-									</DropdownMenuItem>
-								))}
-							</DropdownMenuContent>
-						</DropdownMenu>
-					</div>
+							{/* Mobile: the same actions collapsed into a dropdown so the
+							    toolbar stays on one row. */}
+							<div className="sm:hidden">
+								<DropdownMenu>
+									<DropdownMenuTrigger asChild>
+										<Button
+											type="button"
+											size="sm"
+											variant="outline"
+											disabled={bulkMutation.isPending}
+										>
+											Actions
+											<ChevronDownIcon className="opacity-50" />
+										</Button>
+									</DropdownMenuTrigger>
+									<DropdownMenuContent align="start">
+										{(Object.keys(BULK_ACTIONS) as BulkAction[]).map(
+											(action) => (
+												<DropdownMenuItem
+													key={action}
+													variant={
+														BULK_ACTIONS[action].destructive
+															? "destructive"
+															: "default"
+													}
+													onSelect={() => runBulkAction(action)}
+												>
+													{BULK_ACTIONS[action].label}
+												</DropdownMenuItem>
+											),
+										)}
+									</DropdownMenuContent>
+								</DropdownMenu>
+							</div>
 
-					<button
-						type="button"
-						className="ml-auto text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
-						disabled={!hasSelection}
-						onClick={() => setRowSelection({})}
-					>
-						Clear
-					</button>
+							<button
+								type="button"
+								className="ml-auto text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+								onClick={() => setRowSelection({})}
+							>
+								Clear
+							</button>
+						</>
+					)}
 				</div>
 			)}
 
@@ -628,6 +645,9 @@ function AdminRecords() {
 									</p>
 									<div className="mt-1.5 flex flex-wrap items-center gap-1">
 										<StatusBadge status={r.status} />
+										{r.status === "review" && !r.discogsId && (
+											<UnmatchedBadge />
+										)}
 										{r.duplicateOf != null && <DuplicateBadge />}
 										{r.pitchforkScore != null && (
 											<span className="text-xs text-muted-foreground tabular-nums">

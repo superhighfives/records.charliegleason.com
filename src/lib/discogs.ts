@@ -70,6 +70,43 @@ function headers() {
 	};
 }
 
+/** HTTP statuses worth another try — transient rate-limit / upstream blips. */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const MAX_FETCH_ATTEMPTS = 3;
+const BASE_RETRY_DELAY_MS = 250;
+// Never block a request on a long Discogs `Retry-After`; the queue's own 15/30/60s
+// backoff covers the longer waits, so cap what we'll wait inline.
+const MAX_RETRY_DELAY_MS = 2000;
+
+/**
+ * Fetch a Discogs endpoint with the auth headers, retrying transient failures
+ * (429 rate-limit, 5xx) a few times with backoff. Discogs allows 60 req/min
+ * authenticated, so a burst can trip a 429 that clears within a second or two —
+ * a bounded retry turns those blips into a success instead of a swallowed "no
+ * match". Honors `Retry-After` when present (capped), else backs off
+ * exponentially. Non-retryable statuses (401, 404) and a genuine 2xx return on
+ * the first response; the caller decides what to do with them.
+ */
+async function discogsFetch(url: string | URL): Promise<Response> {
+	let res!: Response;
+	for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+		res = await fetch(url, { headers: headers() });
+		if (res.ok || !RETRYABLE_STATUS.has(res.status)) return res;
+		if (attempt === MAX_FETCH_ATTEMPTS) return res;
+
+		const retryAfter = Number(res.headers.get("Retry-After"));
+		const delayMs =
+			Number.isFinite(retryAfter) && retryAfter > 0
+				? Math.min(retryAfter * 1000, MAX_RETRY_DELAY_MS)
+				: Math.min(
+						BASE_RETRY_DELAY_MS * 2 ** (attempt - 1),
+						MAX_RETRY_DELAY_MS,
+					);
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+	}
+	return res;
+}
+
 /** Split a Discogs "Artist - Title" search result title into parts. */
 function splitTitle(combined: string): { artist: string; title: string } {
 	const idx = combined.indexOf(" - ");
@@ -129,7 +166,7 @@ function formatLine(f: any): string {
 export async function getReleaseDetail(
 	id: string,
 ): Promise<DiscogsReleaseDetail | null> {
-	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });
+	const res = await discogsFetch(`${BASE}/releases/${id}`);
 	if (!res.ok) return null;
 	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
 	const d = (await res.json()) as any;
@@ -200,7 +237,7 @@ export function parseReleaseId(input: string): string | null {
 export async function getReleaseCandidate(
 	id: string,
 ): Promise<DiscogsCandidate | null> {
-	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });
+	const res = await discogsFetch(`${BASE}/releases/${id}`);
 	if (!res.ok) return null;
 	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
 	const d = (await res.json()) as any;
@@ -249,7 +286,7 @@ export async function getReleaseCandidate(
 
 /** Highest-quality cover image URL for a release (primary image, full size). */
 export async function getReleaseImageUrl(id: string): Promise<string | null> {
-	const res = await fetch(`${BASE}/releases/${id}`, { headers: headers() });
+	const res = await discogsFetch(`${BASE}/releases/${id}`);
 	if (!res.ok) {
 		console.error(
 			`getReleaseImageUrl: Discogs ${res.status} for release ${id}`,
@@ -341,7 +378,7 @@ async function discogsError(res: Response, action: string): Promise<Error> {
 export async function searchReleases(
 	params: SearchParams,
 ): Promise<Array<DiscogsCandidate>> {
-	const res = await fetch(buildSearchUrl(params), { headers: headers() });
+	const res = await discogsFetch(buildSearchUrl(params));
 	// Don't swallow failures as an empty result — a bad token / rate limit / 5xx
 	// is not "no matches". Throw so the caller can surface it; the automated
 	// `analyze` path opts back into empty via its own `.catch(() => [])`.

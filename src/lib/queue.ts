@@ -113,6 +113,17 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 
 		const result = await analyzeCapture(record);
 
+		if (!result.discogsId) {
+			// Identified the sleeve but couldn't attach a Discogs release — either a
+			// genuine gap in Discogs or a transient failure that outlived the fetch
+			// retries. Surface it so "Unmatched" records are observable rather than
+			// silently landing in review with no release linked.
+			Sentry.captureMessage(
+				`[analyze] no Discogs match for record ${recordId} (${result.artist} — ${result.title})`,
+				"warning",
+			);
+		}
+
 		// Flag the record if the collection already holds this release. Compared
 		// against every other row (the capture itself is excluded by id), matching
 		// on Discogs id first, then on normalized artist + title.

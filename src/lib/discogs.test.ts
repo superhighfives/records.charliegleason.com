@@ -115,6 +115,35 @@ describe("searchReleases", () => {
 		respond({ status: 500 }, {});
 		await expect(searchReleases(noParams)).rejects.toThrow(/HTTP 500/);
 	});
+
+	it("retries a transient 503 and succeeds on a later attempt", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(new Response("{}", { status: 503 }))
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ results: [] }), { status: 200 }),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(searchReleases(noParams)).resolves.toEqual([]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("gives up after a few attempts on a persistent 500", async () => {
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 500 }));
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(searchReleases(noParams)).rejects.toThrow(/HTTP 500/);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("does not retry a 401 — a bad token won't fix itself", async () => {
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ message: "nope" }), { status: 401 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(searchReleases(noParams)).rejects.toThrow(/DISCOGS_TOKEN/);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe("parseSizeAndType", () => {
