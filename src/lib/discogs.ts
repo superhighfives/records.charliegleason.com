@@ -78,33 +78,54 @@ const BASE_RETRY_DELAY_MS = 250;
 // backoff covers the longer waits, so cap what we'll wait inline.
 const MAX_RETRY_DELAY_MS = 2000;
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
- * Fetch a Discogs endpoint with the auth headers, retrying transient failures
- * (429 rate-limit, 5xx) a few times with backoff. Discogs allows 60 req/min
- * authenticated, so a burst can trip a 429 that clears within a second or two —
- * a bounded retry turns those blips into a success instead of a swallowed "no
- * match". Honors `Retry-After` when present (capped), else backs off
- * exponentially. Non-retryable statuses (401, 404) and a genuine 2xx return on
- * the first response; the caller decides what to do with them.
+ * Backoff before the next attempt: honor Discogs' `Retry-After` (seconds) when it
+ * sends one on a 429, otherwise back off exponentially from a small base. Both
+ * are capped so an inline request never stalls on a long rate-limit window.
+ */
+function retryDelayMs(attempt: number, retryAfter: string | null): number {
+	const seconds = Number(retryAfter);
+	if (Number.isFinite(seconds) && seconds > 0) {
+		return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS);
+	}
+	return Math.min(BASE_RETRY_DELAY_MS * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+}
+
+/**
+ * Fetch a Discogs endpoint with the auth headers, retrying transient failures a
+ * few times with backoff. Discogs allows 60 req/min authenticated, so a burst can
+ * trip a 429 that clears within a second or two — a bounded retry turns those
+ * blips into a success instead of a swallowed "no match". Retries on 429/5xx and
+ * on a thrown `fetch` (network/DNS/TLS reset) alike; a thrown fetch is rethrown on
+ * the final attempt so it surfaces as an error rather than a swallowed empty
+ * result. Non-retryable statuses (401, 404) and a genuine 2xx return on the first
+ * response; the caller decides what to do with them.
  */
 async function discogsFetch(url: string | URL): Promise<Response> {
-	let res!: Response;
 	for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
-		res = await fetch(url, { headers: headers() });
-		if (res.ok || !RETRYABLE_STATUS.has(res.status)) return res;
-		if (attempt === MAX_FETCH_ATTEMPTS) return res;
+		const last = attempt === MAX_FETCH_ATTEMPTS;
+		let res: Response;
+		try {
+			res = await fetch(url, { headers: headers() });
+		} catch (err) {
+			// Network-level failure — transient too. Rethrow on the last attempt so
+			// callers see a real error (not an empty result they'd treat as no-match).
+			if (last) throw err;
+			await sleep(retryDelayMs(attempt, null));
+			continue;
+		}
 
-		const retryAfter = Number(res.headers.get("Retry-After"));
-		const delayMs =
-			Number.isFinite(retryAfter) && retryAfter > 0
-				? Math.min(retryAfter * 1000, MAX_RETRY_DELAY_MS)
-				: Math.min(
-						BASE_RETRY_DELAY_MS * 2 ** (attempt - 1),
-						MAX_RETRY_DELAY_MS,
-					);
-		await new Promise((resolve) => setTimeout(resolve, delayMs));
+		if (res.ok || !RETRYABLE_STATUS.has(res.status) || last) return res;
+
+		// Drain the discarded error body so the connection can be reused rather than
+		// left dangling while we wait to retry.
+		await res.body?.cancel().catch(() => {});
+		await sleep(retryDelayMs(attempt, res.headers.get("Retry-After")));
 	}
-	return res;
+	// Unreachable — the final attempt always returns or throws — but satisfies TS.
+	throw new Error("discogsFetch: exhausted retries");
 }
 
 /** Split a Discogs "Artist - Title" search result title into parts. */
