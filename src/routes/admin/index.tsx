@@ -12,18 +12,34 @@ import {
 	getCoreRowModel,
 	getFilteredRowModel,
 	getSortedRowModel,
+	type RowSelectionState,
 	type SortingState,
 	useReactTable,
 } from "@tanstack/react-table";
+import { ChevronDownIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
+import { Checkbox } from "#/components/ui/checkbox";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu";
 import { Input } from "#/components/ui/input";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
-import { deleteRecord, rescanAllRecords } from "#/lib/records";
+import {
+	deleteRecord,
+	deleteRecords,
+	refreshRecords,
+	rescanAllRecords,
+	retryRecords,
+} from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
 type RecordStatus = NonNullable<Record["status"]>;
@@ -39,6 +55,31 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "complete", label: "Published" },
 ];
 
+const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
+
+// Bulk row actions. Each hands the selected ids to a single batched server
+// endpoint (one round trip, not N parallel calls). `retry` re-queues analysis
+// (for failed/captured rows), `refresh` enqueues a Discogs re-pull, `delete`
+// removes them. Each endpoint returns how many rows it actually acted on.
+type BulkAction = "retry" | "refresh" | "delete";
+const BULK_ACTIONS: {
+	[K in BulkAction]: {
+		label: string;
+		verb: string; // past tense, for the result toast: "3 records <verb>."
+		fn: (opts: { data: number[] }) => Promise<{ count: number }>;
+		destructive?: boolean;
+	};
+} = {
+	retry: { label: "Retry", verb: "queued for retry", fn: retryRecords },
+	refresh: { label: "Refresh", verb: "queued for refresh", fn: refreshRecords },
+	delete: {
+		label: "Delete",
+		verb: "deleted",
+		fn: deleteRecords,
+		destructive: true,
+	},
+};
+
 // Float the records that still need attention to the top of the default view,
 // newest first, so a capture session lands ready to review without sorting.
 const STATUS_PRIORITY: globalThis.Record<RecordStatus, number> = {
@@ -52,20 +93,53 @@ const STATUS_PRIORITY: globalThis.Record<RecordStatus, number> = {
 const isUnpublished = (status: RecordStatus) => status !== "complete";
 
 /**
- * The title cell / card heading. A record has no title until analysis writes one,
- * so fall back to the failure reason for `failed` rows (rather than the misleading
- * "Processing…") and to "Processing…" while it's still in flight.
+ * The title cell / card heading. A record has no title until analysis writes one.
+ * For `failed` rows we show a neutral placeholder (rather than the misleading
+ * "Processing…") — the failure reason rides alongside the status badge instead,
+ * see {@link StatusError} — and "Processing…" while it's still in flight.
  */
 function RecordTitle({ record }: { record: Record }) {
 	if (record.title) return <>{record.title}</>;
-	if (record.status === "failed") {
-		return (
-			<span className="italic text-destructive">
-				{describeAnalysisError(record.error).message}
-			</span>
-		);
-	}
+	if (record.status === "failed")
+		return <span className="text-muted-foreground">—</span>;
 	return <span className="text-muted-foreground italic">Processing…</span>;
+}
+
+/**
+ * The failure reason, as quiet supplementary text next to the status badge — so a
+ * failed row reads as "[Failed] why it failed" rather than a wall of red in the
+ * title column. Empty for any non-failed row.
+ */
+function StatusError({ record }: { record: Record }) {
+	if (record.status !== "failed") return null;
+	const { message } = describeAnalysisError(record.error);
+	return (
+		<span
+			className="min-w-0 max-w-[20rem] truncate text-xs text-muted-foreground"
+			title={message}
+		>
+			{message}
+		</span>
+	);
+}
+
+/**
+ * Empty-list message. Distinguishes a genuinely empty collection from a tab /
+ * search that just happens to match nothing, so the copy is never misleading.
+ */
+function EmptyState({ filtered }: { filtered: boolean }) {
+	return (
+		<div className="space-y-1">
+			<p className="font-medium text-foreground">
+				{filtered ? "No records match your filters" : "No records yet"}
+			</p>
+			<p className="text-sm text-muted-foreground">
+				{filtered
+					? "Try a different tab, or clear the search."
+					: "Add one with “Add manually”, or capture a record."}
+			</p>
+		</div>
+	);
 }
 
 function matchesFilter(status: RecordStatus, filter: StatusFilter): boolean {
@@ -75,6 +149,16 @@ function matchesFilter(status: RecordStatus, filter: StatusFilter): boolean {
 }
 
 export const Route = createFileRoute("/admin/")({
+	// Deep-link the active tab so back/forward and shared URLs restore the filter.
+	// `all` is the default, so we drop it from the URL to keep things clean.
+	validateSearch: (
+		search: globalThis.Record<string, unknown>,
+	): { status?: StatusFilter } => {
+		const status = search.status as StatusFilter | undefined;
+		return status && status !== "all" && STATUS_FILTER_VALUES.includes(status)
+			? { status }
+			: {};
+	},
 	loader: ({ context }) =>
 		context.queryClient.ensureQueryData(recordsQueryOptions),
 	component: AdminRecords,
@@ -90,9 +174,14 @@ function AdminRecords() {
 	const navigate = useNavigate();
 	const searchRef = useRef<HTMLInputElement>(null);
 
+	// The active tab lives in the URL (?status=…) so it survives navigating into a
+	// record and pressing back, and can be shared/bookmarked.
+	const { status: statusFilter = "all" } = Route.useSearch();
 	const [filter, setFilter] = useState("");
-	const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 	const [sorting, setSorting] = useState<SortingState>([]);
+	// Bulk selection, keyed by record id (see `getRowId`) so a selection survives
+	// re-sorts and tab switches rather than tracking to whatever row an index lands on.
+	const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
 
@@ -106,6 +195,24 @@ function AdminRecords() {
 	// release through the queue. Non-destructive; results land as the queue drains.
 	const rescanMutation = useMutation({
 		mutationFn: () => rescanAllRecords(),
+	});
+
+	// Selected-rows actions: hand the ids to the matching batched endpoint and
+	// report a single summary toast off the count it actually acted on.
+	const bulkMutation = useMutation({
+		mutationFn: ({ action, ids }: { action: BulkAction; ids: number[] }) =>
+			BULK_ACTIONS[action].fn({ data: ids }),
+		onSuccess: async ({ count }, { action }) => {
+			await queryClient.invalidateQueries({
+				queryKey: recordsQueryOptions.queryKey,
+			});
+			setRowSelection({});
+			const { verb } = BULK_ACTIONS[action];
+			toast.success(`${count} ${count === 1 ? "record" : "records"} ${verb}.`);
+		},
+		onError: (_error, { action }) => {
+			toast.error(`Couldn't ${action} the selected records.`);
+		},
 	});
 
 	// Hotkeys: "/" focuses the search box.
@@ -125,6 +232,53 @@ function AdminRecords() {
 	// — so both are memoised to a stable reference.
 	const columns: Array<ColumnDef<Record>> = useMemo(
 		() => [
+			{
+				id: "select",
+				enableSorting: false,
+				// Header toggles every currently-visible (filtered) row, so "select all"
+				// never reaches into rows the text filter is hiding.
+				header: ({ table }) => {
+					const rows = table.getRowModel().rows;
+					const allSelected =
+						rows.length > 0 && rows.every((r) => r.getIsSelected());
+					const someSelected = rows.some((r) => r.getIsSelected());
+					return (
+						// Absolutely fills the (padding-free, `relative`) header cell so the
+						// entire box is a hit target for select-all.
+						<label
+							htmlFor="select-all"
+							className="absolute inset-0 flex cursor-pointer items-center justify-center"
+						>
+							<Checkbox
+								id="select-all"
+								aria-label="Select all"
+								checked={allSelected}
+								indeterminate={someSelected && !allSelected}
+								onChange={(e) => {
+									const value = e.target.checked;
+									for (const r of rows) r.toggleSelected(value);
+								}}
+							/>
+						</label>
+					);
+				},
+				cell: ({ row }) => (
+					// Absolutely fills the whole cell so clicking anywhere in the first
+					// column toggles the row. The row's navigate-to-detail guard skips
+					// clicks landing on a <label>, so this doesn't also open the record.
+					<label
+						htmlFor={`select-${row.id}`}
+						className="absolute inset-0 flex cursor-pointer items-center justify-center"
+					>
+						<Checkbox
+							id={`select-${row.id}`}
+							aria-label="Select record"
+							checked={row.getIsSelected()}
+							onChange={row.getToggleSelectedHandler()}
+						/>
+					</label>
+				),
+			},
 			{
 				id: "cover",
 				header: "",
@@ -176,6 +330,7 @@ function AdminRecords() {
 						<StatusBadge status={row.original.status} />
 						{row.original.duplicateOf != null &&
 							liveIds.has(row.original.duplicateOf) && <DuplicateBadge />}
+						<StatusError record={row.original} />
 					</Link>
 				),
 			},
@@ -230,16 +385,53 @@ function AdminRecords() {
 	const table = useReactTable({
 		data: rows,
 		columns,
+		// Key rows by record id so a selection stays pinned to the record, not the
+		// slot, when the list re-sorts or the tab changes.
+		getRowId: (r) => String(r.id),
+		enableRowSelection: true,
 		// `globalFilter` is a read-only controlled value fed by the debounced search
 		// box. We deliberately don't wire `onGlobalFilterChange` back to `setFilter`:
 		// the table reads the *debounced* value but the setter writes the *raw* one,
 		// and that 200ms mismatch let react-table re-fire the setter in a loop.
-		state: { globalFilter: debouncedFilter, sorting },
+		state: { globalFilter: debouncedFilter, sorting, rowSelection },
 		onSortingChange: setSorting,
+		onRowSelectionChange: setRowSelection,
 		getCoreRowModel: getCoreRowModel(),
 		getFilteredRowModel: getFilteredRowModel(),
 		getSortedRowModel: getSortedRowModel(),
 	});
+
+	// Selected ids for the bulk toolbar. `getSelectedRowModel` is built off the
+	// core row model and would include rows the text filter is hiding; the
+	// filtered variant keeps the toolbar in step with what's actually on screen
+	// (and with the visible-only select-all).
+	const selectedIds = table
+		.getFilteredSelectedRowModel()
+		.rows.map((r) => r.original.id);
+	const hasSelection = selectedIds.length > 0;
+	// Rows visible under the current tab + search. Drives the empty state and
+	// whether the bulk toolbar is worth showing at all.
+	const visibleRowCount = table.getRowModel().rows.length;
+	// A search/tab filter is narrowing things when there's data but nothing shown.
+	const isFiltered =
+		data.length > 0 &&
+		(statusFilter !== "all" || debouncedFilter.trim() !== "");
+
+	// Run a bulk action against the current selection, confirming first for the
+	// destructive ones. Shared by the desktop buttons and the mobile menu.
+	const runBulkAction = (action: BulkAction) => {
+		if (
+			BULK_ACTIONS[action].destructive &&
+			!confirm(
+				`Delete ${selectedIds.length} ${
+					selectedIds.length === 1 ? "record" : "records"
+				}? This can't be undone.`,
+			)
+		) {
+			return;
+		}
+		bulkMutation.mutate({ action, ids: selectedIds });
+	};
 
 	return (
 		<div className="space-y-4">
@@ -293,7 +485,18 @@ function AdminRecords() {
 						<button
 							key={f.value}
 							type="button"
-							onClick={() => setStatusFilter(f.value)}
+							onClick={() =>
+								navigate({
+									to: "/admin",
+									// Switching tabs replaces history so it doesn't pile up entries;
+									// only navigating into a record pushes, so back returns here.
+									search: (prev) => ({
+										...prev,
+										status: f.value === "all" ? undefined : f.value,
+									}),
+									replace: true,
+								})
+							}
 							className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs ${
 								active
 									? "border-foreground bg-foreground text-background"
@@ -306,6 +509,78 @@ function AdminRecords() {
 				})}
 			</div>
 
+			{/* Bulk actions. Rendered whenever there are rows to act on — even at
+			    0 selected (with disabled buttons) — so ticking the first row doesn't
+			    shift the table down. Hidden entirely when the list is empty. */}
+			{visibleRowCount > 0 && (
+				<div className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
+					<span className="text-sm font-medium whitespace-nowrap">
+						{selectedIds.length} selected
+					</span>
+
+					{/* Desktop: the actions inline. */}
+					<div className="hidden items-center gap-2 sm:flex">
+						{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
+							const { label, destructive } = BULK_ACTIONS[action];
+							return (
+								<Button
+									key={action}
+									type="button"
+									size="sm"
+									variant={destructive ? "destructive" : "outline"}
+									disabled={!hasSelection || bulkMutation.isPending}
+									onClick={() => runBulkAction(action)}
+								>
+									{label}
+								</Button>
+							);
+						})}
+					</div>
+
+					{/* Mobile: the same actions collapsed into a dropdown so the toolbar
+				    stays on one row. */}
+					<div className="sm:hidden">
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									disabled={!hasSelection || bulkMutation.isPending}
+								>
+									Actions
+									<ChevronDownIcon className="opacity-50" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="start">
+								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => (
+									<DropdownMenuItem
+										key={action}
+										variant={
+											BULK_ACTIONS[action].destructive
+												? "destructive"
+												: "default"
+										}
+										onSelect={() => runBulkAction(action)}
+									>
+										{BULK_ACTIONS[action].label}
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
+
+					<button
+						type="button"
+						className="ml-auto text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+						disabled={!hasSelection}
+						onClick={() => setRowSelection({})}
+					>
+						Clear
+					</button>
+				</div>
+			)}
+
 			{/* Mobile: stacked cards (the wide table doesn't fit a phone). */}
 			<ul className="space-y-2 md:hidden">
 				{table.getRowModel().rows.map((row) => {
@@ -316,6 +591,17 @@ function AdminRecords() {
 							key={row.id}
 							className="flex items-center gap-3 rounded-lg border border-border p-3 hover:bg-accent/40"
 						>
+							<label
+								htmlFor={`select-m-${row.id}`}
+								className="-m-1 flex shrink-0 cursor-pointer items-center p-1"
+							>
+								<Checkbox
+									id={`select-m-${row.id}`}
+									aria-label="Select record"
+									checked={row.getIsSelected()}
+									onChange={row.getToggleSelectedHandler()}
+								/>
+							</label>
 							{/* Link wraps only the non-destructive content; the Delete button is
 							    a sibling so we don't nest interactive elements inside an <a>. */}
 							<Link
@@ -348,6 +634,7 @@ function AdminRecords() {
 												Pitchfork {r.pitchforkScore}
 											</span>
 										)}
+										<StatusError record={r} />
 									</div>
 								</div>
 							</Link>
@@ -366,9 +653,9 @@ function AdminRecords() {
 						</li>
 					);
 				})}
-				{table.getRowModel().rows.length === 0 && (
-					<li className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-muted-foreground">
-						No records yet. Add one with “Add manually”, or via the photo flow.
+				{visibleRowCount === 0 && (
+					<li className="rounded-lg border border-dashed border-border px-3 py-10 text-center">
+						<EmptyState filtered={isFiltered} />
 					</li>
 				)}
 			</ul>
@@ -379,12 +666,21 @@ function AdminRecords() {
 					{table.getHeaderGroups().map((hg) => (
 						<tr key={hg.id} className="border-b text-left">
 							{hg.headers.map((header) => (
-								<th key={header.id} className="px-3 py-2 font-medium">
-									{header.isPlaceholder ? null : (
+								<th
+									key={header.id}
+									className={
+										// The select column drops its padding and goes `relative` so the
+										// checkbox label can absolutely fill it; a fixed width keeps the
+										// padding-free cell from collapsing.
+										header.column.id === "select"
+											? "relative w-12 p-0 font-medium"
+											: "px-3 py-2 font-medium"
+									}
+								>
+									{header.isPlaceholder ? null : header.column.getCanSort() ? (
 										<button
 											type="button"
-											className="flex items-center gap-1 disabled:cursor-default"
-											disabled={!header.column.getCanSort()}
+											className="flex items-center gap-1"
 											onClick={header.column.getToggleSortingHandler()}
 										>
 											{flexRender(
@@ -395,6 +691,14 @@ function AdminRecords() {
 												header.column.getIsSorted() as string
 											] ?? null}
 										</button>
+									) : (
+										// Non-sortable headers (the select checkbox, cover, actions)
+										// render bare — wrapping them in a disabled <button> both nests
+										// interactive controls illegally and swallows the checkbox's clicks.
+										flexRender(
+											header.column.columnDef.header,
+											header.getContext(),
+										)
 									)}
 								</th>
 							))}
@@ -415,7 +719,7 @@ function AdminRecords() {
 									e.metaKey ||
 									e.ctrlKey ||
 									e.shiftKey ||
-									(e.target as HTMLElement).closest("a, button, input")
+									(e.target as HTMLElement).closest("a, button, input, label")
 								) {
 									return;
 								}
@@ -426,20 +730,25 @@ function AdminRecords() {
 							}}
 						>
 							{row.getVisibleCells().map((cell) => (
-								<td key={cell.id} className="px-3 py-2">
+								<td
+									key={cell.id}
+									className={
+										// Padding-free + `relative` so the checkbox label fills the cell;
+										// the fixed width stops the otherwise-empty cell collapsing.
+										cell.column.id === "select"
+											? "relative w-12 p-0"
+											: "px-3 py-2"
+									}
+								>
 									{flexRender(cell.column.columnDef.cell, cell.getContext())}
 								</td>
 							))}
 						</tr>
 					))}
-					{table.getRowModel().rows.length === 0 && (
+					{visibleRowCount === 0 && (
 						<tr>
-							<td
-								colSpan={columns.length}
-								className="px-3 py-8 text-center text-muted-foreground"
-							>
-								No records yet. Add one with “New record”, or via the photo
-								flow.
+							<td colSpan={columns.length} className="px-3 py-12 text-center">
+								<EmptyState filtered={isFiltered} />
 							</td>
 						</tr>
 					)}
