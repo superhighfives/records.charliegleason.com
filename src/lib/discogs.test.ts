@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildSearchUrl, parseReleaseId, parseSizeAndType } from "./discogs";
+import {
+	buildSearchUrl,
+	parseReleaseId,
+	parseSizeAndType,
+	searchReleases,
+} from "./discogs";
+
+const noParams = { artist: "x", title: "", country: "", year: "" };
 
 describe("parseReleaseId", () => {
 	it("pulls the id from a full release URL with a slug", () => {
@@ -74,6 +81,39 @@ describe("buildSearchUrl", () => {
 		expect(
 			buildSearchUrl(params({ year: "nineteen" })).searchParams.has("year"),
 		).toBe(false);
+	});
+});
+
+describe("searchReleases", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const respond = (init: ResponseInit, body: unknown = {}) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify(body), init)),
+		);
+	};
+
+	it("returns [] for a genuine zero-match (200 with no results)", async () => {
+		respond({ status: 200 }, { results: [] });
+		await expect(searchReleases(noParams)).resolves.toEqual([]);
+	});
+
+	it("throws — not [] — on a 401 so a bad token surfaces", async () => {
+		respond({ status: 401 }, { message: "You must authenticate…" });
+		await expect(searchReleases(noParams)).rejects.toThrow(/DISCOGS_TOKEN/);
+	});
+
+	it("throws a rate-limit message on a 429", async () => {
+		respond({ status: 429 }, {});
+		await expect(searchReleases(noParams)).rejects.toThrow(/rate limit/i);
+	});
+
+	it("throws with the status for other failures", async () => {
+		respond({ status: 500 }, {});
+		await expect(searchReleases(noParams)).rejects.toThrow(/HTTP 500/);
 	});
 });
 

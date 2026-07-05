@@ -718,6 +718,19 @@ function RecordDetail() {
 									</div>
 								)}
 
+								{search.isError && (
+									<p className="text-xs text-red-600">
+										{search.error instanceof Error
+											? search.error.message
+											: "Search failed. Try again."}
+									</p>
+								)}
+								{search.isSuccess && (search.data?.length ?? 0) === 0 && (
+									<p className="text-xs text-muted-foreground">
+										No matches on Discogs. Try a different spelling, drop the
+										title, or paste the release URL.
+									</p>
+								)}
 								<div className="flex justify-end">
 									<Button
 										type="submit"
