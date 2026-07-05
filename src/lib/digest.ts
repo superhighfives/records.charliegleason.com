@@ -13,7 +13,7 @@ import { findCheapestVinyl, type SellerSummary } from "#/lib/sellers";
  * be on the domain onboarded for Email Sending (apex, not the worker subdomain).
  */
 
-const FROM = "digest@charliegleason.com";
+const FROM = { name: "Records Weekly", email: "digest@charliegleason.com" };
 const TO = "hi@charliegleason.com";
 
 function normalize(s: string): string {
