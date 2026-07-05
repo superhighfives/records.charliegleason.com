@@ -211,11 +211,24 @@ async function identifyWithWebSearch(
 	// so the first real capture tells us whether web_search rides through Unified
 	// Billing (env.AI.run), without needing a curl pre-flight.
 	try {
-		for (let i = 0; i < 5; i++) {
+		// This loop is turn *resumption*, not retries: a single call already lets
+		// web_search run several times internally, and once Claude ends its turn
+		// without a `record` call we break (re-asking wouldn't help). The only reason
+		// to iterate is to continue a paused/truncated turn — so 2 (turn + one
+		// continuation) is plenty. Each pass re-sends the image + growing history, and
+		// web_search injects fetched page content as input tokens, so extra iterations
+		// are the most expensive thing in the whole pipeline. Don't raise this.
+		for (let i = 0; i < 2; i++) {
 			const r = await runClaude({
 				max_tokens: 2048,
 				tools: [
-					{ type: "web_search_20260209", name: "web_search" },
+					{
+						type: "web_search_20260209",
+						name: "web_search",
+						// Cap searches per turn — the injected page content dominates the
+						// token cost (a single escalation can hit ~48k input tokens).
+						max_uses: 3,
+					},
 					EXTRACT_TOOL,
 				],
 				messages,
@@ -292,7 +305,7 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		: [];
 
 	// 3. Escalate to web search when unsure or unmatched.
-	if (extraction.confidence < 0.6 || candidates.length === 0) {
+	if (extraction.confidence < 0.3 || candidates.length === 0) {
 		console.info(
 			`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs matches=${candidates.length})`,
 		);

@@ -181,8 +181,15 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			.where(eq(records.id, recordId))
 			.catch(() => {});
 
-		if (willRetry) message.retry();
-		else message.ack();
+		if (willRetry) {
+			// Exponential backoff (15s, 30s, 60s) so a transient rate-limit or
+			// exhausted-AI-credit blip has room to clear before we retry, instead of
+			// burning all three attempts inside the same throttled window.
+			const delaySeconds = Math.min(60, 15 * 2 ** (message.attempts - 1));
+			message.retry({ delaySeconds });
+		} else {
+			message.ack();
+		}
 	}
 }
 

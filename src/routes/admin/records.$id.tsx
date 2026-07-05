@@ -16,6 +16,7 @@ import {
 	TooltipTrigger,
 } from "#/components/ui/tooltip";
 import type { Record } from "#/db/schema";
+import { describeAnalysisError } from "#/lib/analysis-error";
 import type { DiscogsCandidate, SearchParams } from "#/lib/discogs";
 import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
@@ -394,6 +395,8 @@ function RecordDetail() {
 	const candidates = results ?? parseCandidates(record.candidatesJson);
 	const inFlight =
 		record.status === "pending" || record.status === "processing";
+	const failure =
+		record.status === "failed" ? describeAnalysisError(record.error) : null;
 
 	// Cover preview source, best-first: the freshly downloaded full-res artwork,
 	// then the picked candidate's thumbnail (instant, while the full-res loads or
@@ -428,7 +431,7 @@ function RecordDetail() {
 
 			{/* Flagged by analysis as already in the collection — link to the original. */}
 			{record.duplicateOf != null && (
-				<div className="flex items-center gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800">
+				<div className="flex items-center gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-200">
 					<span>This release looks like it’s already in your collection.</span>
 					<Link
 						to="/admin/records/$id"
@@ -491,7 +494,7 @@ function RecordDetail() {
 					{coverProbe.status === "ready" &&
 						`Cover downloaded — ${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}.`}
 					{coverProbe.status === "error" && (
-						<span className="text-red-600">
+						<span className="text-red-600 dark:text-red-400">
 							Couldn’t download cover: {coverProbe.message}. It’ll be re-sourced
 							on publish.
 						</span>
@@ -572,12 +575,19 @@ function RecordDetail() {
 			)}
 
 			{/* Failed: show the error and let the user retry or fill it in by hand. */}
-			{record.status === "failed" && (
-				<div className="space-y-3 rounded-md border border-red-200 bg-red-50 p-4">
-					<p className="text-sm text-red-800">
-						<span className="font-medium">Analysis failed.</span>{" "}
-						{record.error ?? "Unknown error."}
-					</p>
+			{failure && (
+				<div className="space-y-3 rounded-md border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/40">
+					<div className="space-y-1">
+						<p className="text-sm text-red-800 dark:text-red-200">
+							<span className="font-medium">Analysis failed.</span>{" "}
+							{failure.message}
+						</p>
+						{failure.hint && (
+							<p className="text-sm text-red-700 dark:text-red-300">
+								{failure.hint}
+							</p>
+						)}
+					</div>
 					<Button
 						type="button"
 						variant="outline"
