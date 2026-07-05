@@ -57,6 +57,11 @@
 				"max_batch_size": 1,
 				"max_batch_timeout": 5,
 				"max_retries": 3,
+				// Throttle: cap simultaneous consumer invocations so a bulk "Rescan
+				// all" (or a big capture session) drains steadily instead of fanning
+				// out into a burst of parallel AI Gateway / Discogs calls that trips
+				// rate limits and AI-credit caps all at once.
+				"max_concurrency": 2,
 				"dead_letter_queue": "records-analyze-dlq"
 			}
 		]
