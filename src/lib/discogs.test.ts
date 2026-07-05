@@ -87,6 +87,7 @@ describe("buildSearchUrl", () => {
 describe("searchReleases", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	});
 
 	const respond = (init: ResponseInit, body: unknown = {}) => {
@@ -114,6 +115,61 @@ describe("searchReleases", () => {
 	it("throws with the status for other failures", async () => {
 		respond({ status: 500 }, {});
 		await expect(searchReleases(noParams)).rejects.toThrow(/HTTP 500/);
+	});
+
+	it("retries a transient 503 and succeeds on a later attempt", async () => {
+		// Fake timers so the backoff sleep doesn't run in real time — advance them
+		// while the retry loop is awaiting, then assert the settled result.
+		vi.useFakeTimers();
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(new Response("{}", { status: 503 }))
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ results: [] }), { status: 200 }),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		const promise = searchReleases(noParams);
+		await vi.runAllTimersAsync();
+		await expect(promise).resolves.toEqual([]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries a thrown fetch (network blip) then succeeds", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError("network error"))
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ results: [] }), { status: 200 }),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		const promise = searchReleases(noParams);
+		await vi.runAllTimersAsync();
+		await expect(promise).resolves.toEqual([]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("gives up after a few attempts on a persistent 500", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 500 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const promise = searchReleases(noParams);
+		// Attach a rejection handler before advancing timers so the eventual throw
+		// isn't flagged as an unhandled rejection mid-run.
+		const settled = expect(promise).rejects.toThrow(/HTTP 500/);
+		await vi.runAllTimersAsync();
+		await settled;
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("does not retry a 401 — a bad token won't fix itself", async () => {
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ message: "nope" }), { status: 401 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(searchReleases(noParams)).rejects.toThrow(/DISCOGS_TOKEN/);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });
 
