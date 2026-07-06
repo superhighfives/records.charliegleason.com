@@ -66,11 +66,11 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
 
 // Bulk row actions. Each hands the selected ids to a single batched server
-// endpoint (one round trip, not N parallel calls). `fetch` re-queues analysis
+// endpoint (one round trip, not N parallel calls). `identify` re-queues analysis
 // (for unmatched/failed/captured rows — re-reads the cover and re-searches
 // Discogs), `refresh` enqueues a Discogs re-pull for already-matched rows,
 // `delete` removes them. Each endpoint returns how many rows it acted on.
-type BulkAction = "fetch" | "refresh" | "delete";
+type BulkAction = "identify" | "refresh" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
@@ -79,7 +79,7 @@ const BULK_ACTIONS: {
 		destructive?: boolean;
 	};
 } = {
-	fetch: {
+	identify: {
 		label: "Identify",
 		verb: "queued for identification",
 		fn: retryRecords,
