@@ -44,7 +44,12 @@ import {
 import { recordsQueryOptions } from "#/lib/records-queries";
 
 type RecordStatus = NonNullable<Record["status"]>;
-type StatusFilter = RecordStatus | "all" | "unpublished";
+type StatusFilter =
+	| RecordStatus
+	| "all"
+	| "unpublished"
+	| "unmatched"
+	| "duplicate";
 
 const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "all", label: "All" },
@@ -52,8 +57,10 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "pending", label: "Queued" },
 	{ value: "processing", label: "Analyzing" },
 	{ value: "review", label: "Needs review" },
+	{ value: "unmatched", label: "Unmatched" },
 	{ value: "failed", label: "Failed" },
 	{ value: "complete", label: "Published" },
+	{ value: "duplicate", label: "Duplicate" },
 ];
 
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
@@ -73,8 +80,8 @@ const BULK_ACTIONS: {
 	};
 } = {
 	fetch: {
-		label: "Fetch from Discogs",
-		verb: "queued to fetch from Discogs",
+		label: "Identify",
+		verb: "queued for identification",
 		fn: retryRecords,
 	},
 	refresh: { label: "Refresh", verb: "queued for refresh", fn: refreshRecords },
@@ -148,9 +155,20 @@ function EmptyState({ filtered }: { filtered: boolean }) {
 	);
 }
 
-function matchesFilter(status: RecordStatus, filter: StatusFilter): boolean {
+function matchesFilter(
+	record: Record,
+	filter: StatusFilter,
+	liveIds: Set<number>,
+): boolean {
+	const status = record.status ?? "complete";
 	if (filter === "all") return true;
 	if (filter === "unpublished") return isUnpublished(status);
+	// "Unmatched" and "Duplicate" aren't real statuses — they're derived flags.
+	// Mirror the badge conditions (see UnmatchedBadge / DuplicateBadge in the
+	// status cell) so a tab and its badge always agree on what counts.
+	if (filter === "unmatched") return status === "review" && !record.discogsId;
+	if (filter === "duplicate")
+		return record.duplicateOf != null && liveIds.has(record.duplicateOf);
 	return status === filter;
 }
 
@@ -381,14 +399,14 @@ function AdminRecords() {
 	const rows = useMemo(
 		() =>
 			data
-				.filter((r) => matchesFilter(r.status ?? "complete", statusFilter))
+				.filter((r) => matchesFilter(r, statusFilter, liveIds))
 				.sort((a, b) => {
 					const pa = STATUS_PRIORITY[a.status ?? "complete"];
 					const pb = STATUS_PRIORITY[b.status ?? "complete"];
 					if (pa !== pb) return pa - pb;
 					return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
 				}),
-		[data, statusFilter],
+		[data, statusFilter, liveIds],
 	);
 
 	const table = useReactTable({
@@ -487,7 +505,7 @@ function AdminRecords() {
 			<div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible">
 				{STATUS_FILTERS.map((f) => {
 					const count = data.filter((r) =>
-						matchesFilter(r.status ?? "complete", f.value),
+						matchesFilter(r, f.value, liveIds),
 					).length;
 					const active = statusFilter === f.value;
 					return (
@@ -525,10 +543,14 @@ function AdminRecords() {
 			    same size whether or not the (button-height) actions are showing, so
 			    selecting a row doesn't resize it. Hidden entirely when empty. */}
 			{visibleRowCount > 0 && (
-				<div className="flex min-h-12 items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2">
-					{hasSelection && (
+				<div className="flex min-h-14 sticky top-4 z-10 items-center gap-2 rounded-lg border border-sidebar-accent bg-sidebar/50 backdrop-blur px-3 py-2">
+					{hasSelection ? (
 						<span className="text-sm font-medium whitespace-nowrap">
 							{selectedIds.length} selected
+						</span>
+					) : (
+						<span className="text-sm font-medium whitespace-nowrap text-muted-foreground">
+							No items selected
 						</span>
 					)}
 
