@@ -837,9 +837,11 @@ function RecordDetail() {
 						)}
 					</div>
 
-					{/* Candidate pick-list. */}
+					{/* Candidate pick-list. A manual search can return every pressing, so
+					    cap the height and let it scroll rather than pushing the form
+					    off-screen. */}
 					{candidates.length > 0 && (
-						<ul className="divide-y rounded-md border">
+						<ul className="max-h-96 divide-y overflow-y-auto rounded-md border">
 							{candidates.map((c) => {
 								const active =
 									picked?.discogsId === c.discogsId ||

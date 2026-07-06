@@ -329,7 +329,15 @@ export async function getReleaseImageUrl(id: string): Promise<string | null> {
 	return primary?.uri ?? null;
 }
 
+// The automated analyze path only needs a short shortlist (it publishes the top
+// hit and stores the rest for the review pick-list), so it caps at MAX_CANDIDATES.
+// A manual search opts into the full result set — see `searchReleases`.
 const MAX_CANDIDATES = 5;
+// Discogs allows up to 100 results per page. The automated path pulls a modest
+// page (enough to prefer vinyl without losing other pressings); a manual search
+// asks for a full page so it can list as many pressings as one request returns.
+const DEFAULT_PER_PAGE = 25;
+export const MAX_PER_PAGE = 100;
 const isVinyl = (c: DiscogsCandidate) => /vinyl/i.test(c.format ?? "");
 
 /**
@@ -355,13 +363,10 @@ export type SearchParams = z.infer<typeof searchParamsSchema>;
  * manual admin search and the automated `analyze` path avoid whitespace misses
  * and never send an obviously-invalid `year`. Pure + exported for testing.
  */
-export function buildSearchUrl({
-	artist,
-	title,
-	country,
-	year,
-	q,
-}: SearchParams): URL {
+export function buildSearchUrl(
+	{ artist, title, country, year, q }: SearchParams,
+	perPage: number = DEFAULT_PER_PAGE,
+): URL {
 	const url = new URL(`${BASE}/database/search`);
 	url.searchParams.set("type", "release");
 	const [a, t, c, y, query] = [artist, title, country, year, q ?? ""].map((s) =>
@@ -376,7 +381,7 @@ export function buildSearchUrl({
 	// General keyword search — AND-ed with the structured filters above.
 	if (query) url.searchParams.set("q", query);
 	// Pull a wider net so we can prefer vinyl below without losing other pressings.
-	url.searchParams.set("per_page", "25");
+	url.searchParams.set("per_page", String(perPage));
 	return url;
 }
 
@@ -405,10 +410,23 @@ async function discogsError(res: Response, action: string): Promise<Error> {
 	return new Error(`Discogs ${action} failed (HTTP ${res.status})${suffix}`);
 }
 
+/**
+ * Search Discogs for release candidates, vinyl pressings first.
+ *
+ * `limit` caps how many candidates come back (default `MAX_CANDIDATES`, the short
+ * shortlist the automated analyze path stores). The manual review search passes
+ * `MAX_PER_PAGE` so the admin can scroll a page of pressings and pick the exact
+ * one. Only a single Discogs page is fetched, so at most `MAX_PER_PAGE` (100)
+ * candidates come back even when Discogs reports more — that page is
+ * relevance-ordered, so the closest matches are the ones kept.
+ */
 export async function searchReleases(
 	params: SearchParams,
+	limit: number = MAX_CANDIDATES,
 ): Promise<Array<DiscogsCandidate>> {
-	const res = await discogsFetch(buildSearchUrl(params));
+	// Fetch a page big enough to satisfy the limit, clamped to Discogs' 100/page.
+	const perPage = Math.min(Math.max(limit, DEFAULT_PER_PAGE), MAX_PER_PAGE);
+	const res = await discogsFetch(buildSearchUrl(params, perPage));
 	// Don't swallow failures as an empty result — a bad token / rate limit / 5xx
 	// is not "no matches". Throw so the caller can surface it; the automated
 	// `analyze` path opts back into empty via its own `.catch(() => [])`.
@@ -443,5 +461,5 @@ export async function searchReleases(
 	// title still returns matches. Discogs' relevance order is preserved per group.
 	const vinyl = candidates.filter(isVinyl);
 	const rest = candidates.filter((c) => !isVinyl(c));
-	return [...vinyl, ...rest].slice(0, MAX_CANDIDATES);
+	return [...vinyl, ...rest].slice(0, limit);
 }
