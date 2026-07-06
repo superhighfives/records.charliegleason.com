@@ -66,25 +66,33 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
 
 // Bulk row actions. Each hands the selected ids to a single batched server
-// endpoint (one round trip, not N parallel calls). `identify` re-queues analysis
+// endpoint (one round trip, not N parallel calls). `match` re-queues analysis
 // (for unmatched/failed/captured rows — re-reads the cover and re-searches
 // Discogs), `refresh` enqueues a Discogs re-pull for already-matched rows,
 // `delete` removes them. Each endpoint returns how many rows it acted on.
-type BulkAction = "identify" | "refresh" | "delete";
+type BulkAction = "match" | "refresh" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
 		verb: string; // past tense, for the result toast: "3 records <verb>."
 		fn: (opts: { data: number[] }) => Promise<{ count: number }>;
 		destructive?: boolean;
+		// Only meaningful for already-matched rows (those with a Discogs release);
+		// the button disables when the selection contains none.
+		requiresMatch?: boolean;
 	};
 } = {
-	identify: {
-		label: "Identify",
-		verb: "queued for identification",
+	match: {
+		label: "Match",
+		verb: "queued for matching",
 		fn: retryRecords,
 	},
-	refresh: { label: "Refresh", verb: "queued for refresh", fn: refreshRecords },
+	refresh: {
+		label: "Refresh",
+		verb: "queued for refresh",
+		fn: refreshRecords,
+		requiresMatch: true,
+	},
 	delete: {
 		label: "Delete",
 		verb: "deleted",
@@ -432,10 +440,14 @@ function AdminRecords() {
 	// core row model and would include rows the text filter is hiding; the
 	// filtered variant keeps the toolbar in step with what's actually on screen
 	// (and with the visible-only select-all).
-	const selectedIds = table
-		.getFilteredSelectedRowModel()
-		.rows.map((r) => r.original.id);
+	const selectedRows = table.getFilteredSelectedRowModel().rows;
+	const selectedIds = selectedRows.map((r) => r.original.id);
 	const hasSelection = selectedIds.length > 0;
+	// Refresh only re-pulls Discogs metadata for already-matched rows, so it's
+	// disabled unless the selection contains at least one record with a match.
+	const hasMatchedSelection = selectedRows.some(
+		(r) => r.original.discogsId != null,
+	);
 	// Rows visible under the current tab + search. Drives the empty state and
 	// whether the bulk toolbar is worth showing at all.
 	const visibleRowCount = table.getRowModel().rows.length;
@@ -559,14 +571,21 @@ function AdminRecords() {
 							{/* Desktop: the actions inline. */}
 							<div className="hidden items-center gap-2 sm:flex">
 								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
-									const { label, destructive } = BULK_ACTIONS[action];
+									const { label, destructive, requiresMatch } =
+										BULK_ACTIONS[action];
+									const needsMatch = requiresMatch && !hasMatchedSelection;
 									return (
 										<Button
 											key={action}
 											type="button"
 											size="sm"
 											variant={destructive ? "destructive" : "outline"}
-											disabled={bulkMutation.isPending}
+											disabled={bulkMutation.isPending || needsMatch}
+											title={
+												needsMatch
+													? "Only matched records can be refreshed from Discogs."
+													: undefined
+											}
 											onClick={() => runBulkAction(action)}
 										>
 											{label}
@@ -599,6 +618,10 @@ function AdminRecords() {
 														BULK_ACTIONS[action].destructive
 															? "destructive"
 															: "default"
+													}
+													disabled={
+														BULK_ACTIONS[action].requiresMatch &&
+														!hasMatchedSelection
 													}
 													onSelect={() => runBulkAction(action)}
 												>

@@ -542,7 +542,7 @@ function RecordDetail() {
 								disabled={retry.isPending}
 								onClick={() => retry.mutate()}
 							>
-								{retry.isPending ? "Identifying…" : "Identify"}
+								{retry.isPending ? "Matching…" : "Match"}
 							</Button>
 						)
 					)}
