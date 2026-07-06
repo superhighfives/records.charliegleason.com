@@ -36,9 +36,11 @@ import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
+import { displayCoverKey } from "#/lib/cover";
 import {
 	deleteRecord,
 	deleteRecords,
+	generateProfessionalPhotos,
 	refreshRecords,
 	rescanAllRecords,
 	retryRecords,
@@ -75,7 +77,7 @@ const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
 // (for unmatched/failed/captured rows — re-reads the cover and re-searches
 // Discogs), `refresh` enqueues a Discogs re-pull for already-matched rows,
 // `delete` removes them. Each endpoint returns how many rows it acted on.
-type BulkAction = "match" | "refresh" | "delete";
+type BulkAction = "match" | "refresh" | "professional" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
@@ -85,6 +87,9 @@ const BULK_ACTIONS: {
 		// Only meaningful for already-matched rows (those with a Discogs release);
 		// the button disables when the selection contains none.
 		requiresMatch?: boolean;
+		// Only meaningful for rows with an iPhone capture to work from; the button
+		// disables when the selection contains none.
+		requiresCapture?: boolean;
 	};
 } = {
 	match: {
@@ -97,6 +102,12 @@ const BULK_ACTIONS: {
 		verb: "queued for refresh",
 		fn: refreshRecords,
 		requiresMatch: true,
+	},
+	professional: {
+		label: "Professional",
+		verb: "queued for a professional photo",
+		fn: generateProfessionalPhotos,
+		requiresCapture: true,
 	},
 	delete: {
 		label: "Delete",
@@ -318,9 +329,9 @@ function AdminRecords() {
 				header: "",
 				enableSorting: false,
 				cell: ({ row }) => {
-					// Prefer the sourced/resized cover; fall back to the capture (admin only).
-					const key =
-						row.original.coverImageKey ?? row.original.capturePhotoKey;
+					// Approved professional photo, then the sourced cover, then the
+					// capture (admin only) — same order the public site uses.
+					const key = displayCoverKey(row.original, { includeCapture: true });
 					// The thumbnail opens the quick-view drawer (a <button>, so the row's
 					// navigate-to-detail guard skips it).
 					return (
@@ -498,6 +509,11 @@ function AdminRecords() {
 	const hasMatchedSelection = selectedRows.some(
 		(r) => r.original.discogsId != null,
 	);
+	// The professional photo is generated from the iPhone capture, so it's
+	// disabled unless the selection contains at least one record with one.
+	const hasCaptureSelection = selectedRows.some(
+		(r) => r.original.capturePhotoKey != null,
+	);
 	// Rows visible under the current tab + search. Drives the empty state and
 	// whether the bulk toolbar is worth showing at all.
 	const visibleRowCount = table.getRowModel().rows.length;
@@ -664,20 +680,25 @@ function AdminRecords() {
 							{/* Desktop: the actions inline. */}
 							<div className="hidden items-center gap-2 sm:flex">
 								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
-									const { label, destructive, requiresMatch } =
+									const { label, destructive, requiresMatch, requiresCapture } =
 										BULK_ACTIONS[action];
 									const needsMatch = requiresMatch && !hasMatchedSelection;
+									const needsCapture = requiresCapture && !hasCaptureSelection;
 									return (
 										<Button
 											key={action}
 											type="button"
 											size="sm"
 											variant={destructive ? "destructive" : "outline"}
-											disabled={bulkMutation.isPending || needsMatch}
+											disabled={
+												bulkMutation.isPending || needsMatch || needsCapture
+											}
 											title={
 												needsMatch
 													? "Only matched records can be refreshed from Discogs."
-													: undefined
+													: needsCapture
+														? "Only records with a capture photo can get a professional photo."
+														: undefined
 											}
 											onClick={() => runBulkAction(action)}
 										>
@@ -713,8 +734,10 @@ function AdminRecords() {
 															: "default"
 													}
 													disabled={
-														BULK_ACTIONS[action].requiresMatch &&
-														!hasMatchedSelection
+														(BULK_ACTIONS[action].requiresMatch &&
+															!hasMatchedSelection) ||
+														(BULK_ACTIONS[action].requiresCapture &&
+															!hasCaptureSelection)
 													}
 													onSelect={() => runBulkAction(action)}
 												>
@@ -758,7 +781,7 @@ function AdminRecords() {
 			<ul className="space-y-2 md:hidden">
 				{table.getRowModel().rows.map((row) => {
 					const r = row.original;
-					const thumb = r.coverImageKey ?? r.capturePhotoKey;
+					const thumb = displayCoverKey(r, { includeCapture: true });
 					return (
 						<li
 							key={row.id}

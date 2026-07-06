@@ -20,6 +20,7 @@ interface __BaseEnv_Env {
 	LASTFM_USER: string;
 	CRON_SECRET: string;
 	SERPAPI_KEY?: string;
+	REPLICATE_API_KEY?: string;
 	EMAIL?: SendEmail;
 }
 declare namespace Cloudflare {

@@ -24,6 +24,8 @@ import {
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
+	enqueueProfessional,
+	enqueueProfessionalBatch,
 	enqueueRefreshBatch,
 	fetchValueForRecord,
 	refreshRecordById,
@@ -51,6 +53,10 @@ const ADMIN_ONLY_FIELDS = [
 	"discogsValueCurrency",
 	"discogsValueJson",
 	"discogsValueFetchedAt",
+	// Internal professional-photo job bookkeeping — the last error and the
+	// Replicate prediction id are never public.
+	"professionalError",
+	"professionalPredictionId",
 ] as const;
 
 /** The public shape of a record — the full row minus the admin-only fields. */
@@ -66,9 +72,18 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 		discogsValueCurrency: _currency,
 		discogsValueJson: _valueJson,
 		discogsValueFetchedAt: _fetchedAt,
+		professionalError: _proError,
+		professionalPredictionId: _proPrediction,
 		...rest
 	} = row;
-	return rest;
+	return {
+		...rest,
+		// Only expose the professional image once it's approved. `/api/photos/$`
+		// serves any R2 key by passthrough, so leaking a `ready` (unreviewed) key
+		// here would make the generation publicly fetchable and bypass the review gate.
+		professionalImageKey:
+			rest.professionalStatus === "approved" ? rest.professionalImageKey : null,
+	};
 }
 
 export const listRecords = createServerFn({ method: "GET" }).handler(() =>
@@ -308,6 +323,74 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Kick off (or re-run) professional studio-photo generation for a captured
+ * record. Marks it `pending` and enqueues the Replicate work on the queue (its
+ * own `professional` mode). Returns the updated row, or null if the record is
+ * gone. Throws if there's no capture to work from so the UI can say why.
+ */
+export const generateProfessional = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "generateProfessional" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+			if (!record.capturePhotoKey) {
+				throw new Error("This record has no capture photo to work from.");
+			}
+			const [row] = await db
+				.update(records)
+				.set({
+					professionalStatus: "pending",
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			await enqueueProfessional(id);
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Approve (promote) or unapprove the generated professional photo. Only
+ * `approved` makes it the displayed cover (see displayCoverKey); unapproving
+ * drops it back to `ready` — kept in R2, just not shown — so the site falls back
+ * to the Discogs cover. No-op (returns null) if nothing's been generated yet.
+ */
+export const setProfessionalApproved = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((input: { id: number; approved: boolean }) => ({
+		id: input.id,
+		approved: Boolean(input.approved),
+	}))
+	.handler(({ data: { id, approved } }) =>
+		Sentry.startSpan({ name: "setProfessionalApproved" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record?.professionalImageKey) return null;
+			const [row] = await db
+				.update(records)
+				.set({
+					professionalStatus: approved ? "approved" : "ready",
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
+		}),
+	);
+
+/**
  * Fetch just the Discogs value estimate for a single record (seller price
  * suggestions, falling back to the lowest listing) and store it. Runs
  * synchronously so the detail page gets the updated row straight back. Returns
@@ -528,5 +611,40 @@ export const refreshRecords = createServerFn({ method: "POST" })
 			}
 			await enqueueRefreshBatch(matched);
 			return { count: matched.length };
+		}),
+	);
+
+/**
+ * Bulk professional photos. Marks every selected record that has a capture photo
+ * `pending` and enqueues the Replicate work through the queue (rate-limited by
+ * its concurrency cap) rather than firing N synchronous generations. Records
+ * without a capture to work from are silently skipped. Returns how many were
+ * queued.
+ */
+export const generateProfessionalPhotos = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "generateProfessionalPhotos" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const now = new Date();
+			const queued: number[] = [];
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.update(records)
+					.set({
+						professionalStatus: "pending",
+						professionalError: null,
+						updatedAt: now,
+					})
+					.where(
+						and(inArray(records.id, batch), isNotNull(records.capturePhotoKey)),
+					)
+					.returning({ id: records.id });
+				queued.push(...rows.map(({ id }) => id));
+			}
+			await enqueueProfessionalBatch(queued);
+			return { count: queued.length };
 		}),
 	);

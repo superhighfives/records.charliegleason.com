@@ -96,6 +96,7 @@ production and live in `.env.local` for dev. See `.env.example`.
 | `VITE_SENTRY_ORG`/`_PROJECT`/`SENTRY_AUTH_TOKEN` | build-time | Sentry source-map upload (Vite plugin) |
 | D1 binding `DB`              | binding      | Database, dev + prod (`wrangler.jsonc`)  |
 | `DISCOGS_TOKEN`              | secret       | Discogs API                              |
+| `REPLICATE_API_KEY`          | secret       | Replicate — professional studio photo generation |
 | `LASTFM_API_KEY` / `LASTFM_USER` | secret  | daily digest suggestions                 |
 | `CRON_SECRET`               | secret       | guards `POST /api/cron/digest`           |
 | Workers AI binding `AI`      | binding      | Workers AI / AI Gateway (`wrangler.jsonc`)|
@@ -155,12 +156,29 @@ production and live in `.env.local` for dev. See `.env.example`.
   Claude's server-side tools.)
 - **Photo flow** (`src/lib/analyze.ts`): vision read → Discogs lookup → web-search
   escalation when unsure → Pitchfork. `/api/photos/$` serves R2 objects.
-- **Two images per record.** `capturePhotoKey` = the iPhone shot (R2 `captures/`,
-  **admin only** — omitted from `/api/records`). `coverImageKey` = the *displayed*
-  cover, sourced from the chosen Discogs release and resized with the Cloudflare
-  **Images binding** (`env.IMAGES` → webp ≤600px) at `createRecord` time
-  (`src/lib/images.ts`). Needs Image Transformations enabled on the account; fails
-  closed to no cover. Admin table thumbnail prefers the cover, falls back to capture.
+- **Three images per record.** `capturePhotoKey` = the iPhone shot (R2 `captures/`,
+  **admin only** — omitted from `/api/records`). `coverImageKey` = the Discogs-
+  sourced cover, resized with the Cloudflare **Images binding** (`env.IMAGES` → webp
+  ≤600px) at `createRecord` time (`src/lib/images.ts`). `professionalImageKey` = a
+  studio product shot **generated from the capture** via Replicate (see below).
+  Which one displays is one shared helper — `displayCoverKey` (`src/lib/cover.ts`):
+  an **approved** professional photo wins, else the Discogs cover, else (admin only)
+  the capture. Needs Image Transformations enabled on the account; fails closed to
+  no cover. Public payloads go through `toPublicRecord` (same file), which drops the
+  capture key + the internal `professionalError`/`professionalPredictionId`.
+- **Professional photo** (`src/lib/professional.ts` + `src/lib/replicate.ts`): a
+  new `professional` **queue mode** (alongside `analyze`/`refresh`) reads the capture
+  from R2 and runs two Replicate passes — **Flux Kontext** (`black-forest-labs/
+  flux-kontext-pro`, identity-preserving relight/straighten/crop on a plain bg) then
+  **BiRefNet** (`men1scus/birefnet`, background matting → transparent) — canonicalises
+  to a webp-with-alpha under `professional/`, and lands the row at
+  `professionalStatus: 'ready'`. It's **best-effort and always acks** (no auto-retry →
+  no repeat Replicate charge); regeneration is a manual action. Review gate: a `ready`
+  photo isn't shown until an admin clicks **Use as cover** (`approved`) on the detail
+  page; **Stop using** reverts to `ready` (kept in R2, not shown). Model ids/prompt
+  are constants at the top of `professional.ts` — the exact Replicate input schemas
+  need a real-key smoke test. `REPLICATE_API_KEY` is a runtime secret (`wrangler
+  secret put`).
 - **The Fork** (`src/lib/the-fork.ts`) has no query API — it ships a 20 MB static
   `albums.json` (28k Pitchfork reviews: `{artist,title,score,url,...}`). We fetch it
   (edge + isolate cached), normalize, and match locally. Fails closed (null).

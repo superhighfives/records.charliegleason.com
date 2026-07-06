@@ -50,6 +50,20 @@ export const records = sqliteTable("records", {
 	// Storage / provenance
 	coverImageKey: text("cover_image_key"), // R2 key — good cover, sourced + resized (public)
 	capturePhotoKey: text("capture_photo_key"), // R2 key — the original iPhone shot (admin only)
+
+	// Professional studio photo — generated from the iPhone capture via Replicate
+	// (Flux Kontext relight + BiRefNet cutout → a transparent webp under
+	// `professional/`). Reviewed before it goes live: `ready` = generated, awaiting
+	// approval; `approved` = promoted and preferred over the Discogs cover for
+	// display (see displayCoverKey). Runs in its own queue mode, best-effort, so it
+	// never blocks the main capture status machine.
+	professionalImageKey: text("professional_image_key"), // R2 key — pro cutout (public once approved)
+	professionalStatus: text("professional_status", {
+		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
+	}).default("idle"),
+	professionalError: text("professional_error"), // last generation error, surfaced in admin
+	professionalPredictionId: text("professional_prediction_id"), // Replicate prediction id (debug)
+
 	notes: text("notes"),
 	source: text("source", { enum: ["photo", "manual", "import"] }).default(
 		"manual",

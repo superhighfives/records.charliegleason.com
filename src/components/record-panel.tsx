@@ -16,6 +16,7 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import type { Record } from "#/db/schema";
+import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
 
@@ -205,13 +206,16 @@ export function RecordPanel({
 		<>
 			<SheetHeader className="flex-row items-start gap-4 pb-2 pr-10">
 				<div className="size-16 shrink-0 overflow-hidden rounded-md border border-border bg-muted">
-					{record.coverImageKey && (
-						<img
-							src={`/api/photos/${record.coverImageKey}`}
-							alt=""
-							className="size-full object-cover"
-						/>
-					)}
+					{(() => {
+						const cover = displayCoverKey(record);
+						return cover ? (
+							<img
+								src={`/api/photos/${cover}`}
+								alt=""
+								className="size-full object-cover"
+							/>
+						) : null;
+					})()}
 				</div>
 				<div className="min-w-0 flex-1">
 					<SheetTitle className="font-serif text-lg leading-tight">
