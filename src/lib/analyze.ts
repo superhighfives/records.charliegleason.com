@@ -301,6 +301,7 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 				title: extraction.title,
 				country: "",
 				year: "",
+				q: "",
 			}).catch(() => [])
 		: [];
 
@@ -321,6 +322,7 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 				title: refined.title,
 				country: "",
 				year: "",
+				q: "",
 			}).catch(() => []);
 		}
 	}

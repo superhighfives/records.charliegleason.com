@@ -275,6 +275,7 @@ function RecordDetail() {
 		title: record?.title ?? "",
 		country: "",
 		year: "",
+		q: "",
 	});
 	// The Discogs box is always open; default to the URL tab (paste-and-go).
 	const [tab, setTab] = useState<"search" | "url">("url");
@@ -742,6 +743,27 @@ function RecordDetail() {
 												}
 											/>
 										</div>
+									</div>
+								)}
+
+								{/* Free-text catch-all — passed to Discogs' general search for
+								    anything the structured fields miss (label, catalog number). */}
+								{showAdvanced && (
+									<div className="space-y-1">
+										<label
+											htmlFor="q-keywords"
+											className="text-xs text-muted-foreground"
+										>
+											Discogs search
+										</label>
+										<Input
+											id="q-keywords"
+											value={query.q}
+											placeholder="e.g. label, catalog number, or any keywords"
+											onChange={(e) =>
+												setQuery((q) => ({ ...q, q: e.target.value }))
+											}
+										/>
 									</div>
 								)}
 
