@@ -49,5 +49,13 @@ export function toPublicRecord(record: Record): PublicRecord {
 		professionalPredictionId: _prediction,
 		...rest
 	} = record;
-	return rest;
+	return {
+		...rest,
+		// Only expose the professional image once it's approved. `/api/photos/$`
+		// serves any R2 key by passthrough, so leaking a `ready` (unreviewed) key
+		// here would make the generation publicly fetchable and bypass the review
+		// gate — even though the site's displayCoverKey wouldn't show it yet.
+		professionalImageKey:
+			rest.professionalStatus === "approved" ? rest.professionalImageKey : null,
+	};
 }

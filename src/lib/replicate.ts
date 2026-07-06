@@ -24,7 +24,9 @@ function authHeaders(): HeadersInit {
 	const token = env.REPLICATE_API_KEY;
 	if (!token) throw new Error("REPLICATE_API_KEY is not set");
 	return {
-		Authorization: `Bearer ${token}`,
+		// Replicate's canonical scheme is `Token <token>` (not `Bearer`) — supported
+		// across every endpoint, so it's the safe choice.
+		Authorization: `Token ${token}`,
 		"Content-Type": "application/json",
 		"User-Agent": UA,
 	};
