@@ -60,9 +60,14 @@ describe("pickSuggestedValue", () => {
 		expect(value).toBe(30);
 	});
 
-	it("drops malformed entries and returns null when nothing is usable", () => {
+	it("drops malformed, null, empty and non-positive entries", () => {
 		const { value, suggestions } = pickSuggestedValue({
 			"Mint (M)": { value: "not a number", currency: "USD" },
+			// `Number(null)`/`Number("")` are 0 (finite) — these must not slip through
+			// as a bogus $0 suggestion.
+			"Near Mint (NM or M-)": { value: null, currency: "USD" },
+			"Very Good Plus (VG+)": { value: "", currency: "USD" },
+			"Good (G)": { value: 0, currency: "USD" },
 			"Very Good (VG)": null,
 		});
 		expect(value).toBe(null);

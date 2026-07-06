@@ -132,9 +132,14 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 	if (!record?.discogsId) return null;
 
 	const value = await getReleaseValue(record.discogsId).catch(() => null);
+	const cols = valueColumns(value);
+	// Nothing usable came back — leave the record (and its `updatedAt`) untouched so
+	// a failed fetch doesn't masquerade as a successful edit.
+	if (Object.keys(cols).length === 0) return record;
+
 	const [row] = await db
 		.update(records)
-		.set({ ...valueColumns(value), updatedAt: new Date() })
+		.set({ ...cols, updatedAt: new Date() })
 		.where(eq(records.id, id))
 		.returning();
 	return row ?? record;

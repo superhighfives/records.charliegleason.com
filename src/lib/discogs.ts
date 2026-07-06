@@ -358,8 +358,14 @@ export function pickSuggestedValue(raw: PriceSuggestions): {
 	const suggestions: Record<string, number> = {};
 	let currency: string | null = null;
 	for (const [grade, entry] of Object.entries(raw ?? {})) {
-		const v = Number(entry?.value);
-		if (!Number.isFinite(v)) continue;
+		const rawValue = entry?.value;
+		// Guard null/empty explicitly before coercing: `Number(null)` and
+		// `Number("")` are both `0` (finite), which would otherwise record a bogus
+		// $0 suggestion for a grade Discogs simply has no price for. A real
+		// marketplace price is always positive, so drop non-positive values too.
+		if (rawValue == null || rawValue === "") continue;
+		const v = Number(rawValue);
+		if (!Number.isFinite(v) || v <= 0) continue;
 		suggestions[grade] = v;
 		if (!currency && typeof entry?.currency === "string") {
 			currency = entry.currency;
@@ -394,10 +400,15 @@ export async function getReleaseValue(
 	if (suggestRes.ok) {
 		const raw = (await suggestRes.json()) as PriceSuggestions;
 		const { value, currency, suggestions } = pickSuggestedValue(raw);
-		if (value != null) {
+		// Suggestions come back in the authenticated *account's* currency, which
+		// isn't necessarily the one we total in. Only trust them when they match
+		// `curr` (or don't declare a currency); otherwise fall through to the stats
+		// endpoint below, which we explicitly request in `curr`. This keeps every
+		// stored value in a single currency so the admin total sums correctly.
+		if (value != null && (currency == null || currency === curr)) {
 			return {
 				value,
-				currency: currency ?? curr,
+				currency: curr,
 				source: "suggestions",
 				numForSale: null,
 				suggestions,
