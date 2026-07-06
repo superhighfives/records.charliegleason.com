@@ -332,7 +332,11 @@ export const searchDiscogs = createServerFn({ method: "POST" })
 		// Let Discogs failures (bad token, rate limit, 5xx) propagate to the client
 		// so the review page can show *why* a search came back empty, rather than
 		// silently degrading to "no results". Genuine zero-match still returns [].
-		Sentry.startSpan({ name: "searchDiscogs" }, () => searchReleases(data)),
+		// Return every pressing (not the automated 5-hit shortlist) so the review
+		// page can list them all in a scrollable pick-list.
+		Sentry.startSpan({ name: "searchDiscogs" }, () =>
+			searchReleases(data, Infinity),
+		),
 	);
 
 /**
