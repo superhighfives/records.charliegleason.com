@@ -292,33 +292,10 @@ function AdminRecords() {
 			{
 				id: "select",
 				enableSorting: false,
-				// Header toggles every currently-visible (filtered) row, so "select all"
-				// never reaches into rows the text filter is hiding.
-				header: ({ table }) => {
-					const rows = table.getRowModel().rows;
-					const allSelected =
-						rows.length > 0 && rows.every((r) => r.getIsSelected());
-					const someSelected = rows.some((r) => r.getIsSelected());
-					return (
-						// Absolutely fills the (padding-free, `relative`) header cell so the
-						// entire box is a hit target for select-all.
-						<label
-							htmlFor="select-all"
-							className="absolute inset-0 flex cursor-pointer items-center justify-center"
-						>
-							<Checkbox
-								id="select-all"
-								aria-label="Select all"
-								checked={allSelected}
-								indeterminate={someSelected && !allSelected}
-								onChange={(e) => {
-									const value = e.target.checked;
-									for (const r of rows) r.toggleSelected(value);
-								}}
-							/>
-						</label>
-					);
-				},
+				// Select-all lives in the bulk toolbar (see the "Select all" button
+				// there), so the header is visually empty — but keep a screen-reader
+				// label so the column still has an accessible name.
+				header: () => <span className="sr-only">Select</span>,
 				cell: ({ row }) => (
 					// Absolutely fills the whole cell so clicking anywhere in the first
 					// column toggles the row. The row's navigate-to-detail guard skips
@@ -524,6 +501,15 @@ function AdminRecords() {
 	// Rows visible under the current tab + search. Drives the empty state and
 	// whether the bulk toolbar is worth showing at all.
 	const visibleRowCount = table.getRowModel().rows.length;
+	// True once every currently-visible (filtered) row is selected — hides the
+	// toolbar's "Select all" once there's nothing left for it to add.
+	const allVisibleSelected =
+		visibleRowCount > 0 && selectedRows.length === visibleRowCount;
+	// Selects every currently-visible (filtered) row, so "select all" never
+	// reaches into rows the tab/search filter is hiding.
+	const selectAllVisible = () => {
+		for (const r of table.getRowModel().rows) r.toggleSelected(true);
+	};
 	// A search/tab filter is narrowing things when there's data but nothing shown.
 	const isFiltered =
 		data.length > 0 &&
@@ -739,16 +725,32 @@ function AdminRecords() {
 									</DropdownMenuContent>
 								</DropdownMenu>
 							</div>
+						</>
+					)}
 
+					{/* Right-aligned selection controls. "Select all" grabs every
+					    filtered row; it drops away once they're all selected. "Clear"
+					    only shows when there's something to clear. */}
+					<div className="ml-auto flex items-center gap-3">
+						{!allVisibleSelected && (
 							<button
 								type="button"
-								className="ml-auto text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+								className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+								onClick={selectAllVisible}
+							>
+								Select all
+							</button>
+						)}
+						{hasSelection && (
+							<button
+								type="button"
+								className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
 								onClick={() => setRowSelection({})}
 							>
 								Clear
 							</button>
-						</>
-					)}
+						)}
+					</div>
 				</div>
 			)}
 
