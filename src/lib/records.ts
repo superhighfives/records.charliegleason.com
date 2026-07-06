@@ -407,11 +407,14 @@ export const deleteRecords = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "deleteRecords" }, async () => {
 			if (ids.length === 0) return { count: 0 };
 			const db = getDb(env.DB);
+			// One timestamp for the whole action so every row touched by this bulk
+			// delete shares an `updatedAt`, regardless of how it chunks.
+			const now = new Date();
 			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
 				await db.delete(records).where(inArray(records.id, batch));
 				await db
 					.update(records)
-					.set({ duplicateOf: null, updatedAt: new Date() })
+					.set({ duplicateOf: null, updatedAt: now })
 					.where(inArray(records.duplicateOf, batch));
 			}
 			return { count: ids.length };
@@ -430,11 +433,14 @@ export const retryRecords = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "retryRecords" }, async () => {
 			if (ids.length === 0) return { count: 0 };
 			const db = getDb(env.DB);
+			// Single retry timestamp shared across chunks, so callers reading
+			// `updatedAt` as "when this batch was retried" get one consistent value.
+			const now = new Date();
 			const updated: number[] = [];
 			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
 				const rows = await db
 					.update(records)
-					.set({ status: "pending", error: null, updatedAt: new Date() })
+					.set({ status: "pending", error: null, updatedAt: now })
 					.where(inArray(records.id, batch))
 					.returning({ id: records.id });
 				updated.push(...rows.map(({ id }) => id));
