@@ -7,7 +7,7 @@ import {
 	searchReleases,
 } from "./discogs";
 
-const noParams = { artist: "x", title: "", country: "", year: "" };
+const noParams = { artist: "x", title: "", country: "", year: "", q: "" };
 
 describe("parseReleaseId", () => {
 	it("pulls the id from a full release URL with a slug", () => {
@@ -42,6 +42,7 @@ describe("buildSearchUrl", () => {
 		title: "",
 		country: "",
 		year: "",
+		q: "",
 		...over,
 	});
 
@@ -63,6 +64,12 @@ describe("buildSearchUrl", () => {
 		expect(url.searchParams.has("release_title")).toBe(false);
 		expect(url.searchParams.has("country")).toBe(false);
 		expect(url.searchParams.has("year")).toBe(false);
+		expect(url.searchParams.has("q")).toBe(false);
+	});
+
+	it("maps free-text keywords to the general q param, trimming whitespace", () => {
+		const url = buildSearchUrl(params({ q: "  4AD CAD 2007  " }));
+		expect(url.searchParams.get("q")).toBe("4AD CAD 2007");
 	});
 
 	it("trims whitespace before setting params", () => {
