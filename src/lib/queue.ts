@@ -35,9 +35,35 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId });
 }
 
-/** Enqueue a published record to be re-pulled from its stored Discogs release. */
-export async function enqueueRefresh(recordId: number): Promise<void> {
-	await analyzeQueue().send({ recordId, mode: "refresh" });
+/** A single `sendBatch` accepts at most 100 messages (Cloudflare Queues limit). */
+const QUEUE_BATCH_SIZE = 100;
+
+/**
+ * Enqueue many ids as `sendBatch` calls rather than one `send` per id — a bulk
+ * "Match"/"Refresh"/"Rescan" over a large selection would otherwise fan out into
+ * hundreds of individual queue writes (one subrequest each). Chunked to respect
+ * the per-batch cap. `mode` picks the analyze (default) vs refresh pipeline.
+ */
+async function enqueueBatch(
+	recordIds: number[],
+	mode?: AnalyzeMessage["mode"],
+): Promise<void> {
+	for (let i = 0; i < recordIds.length; i += QUEUE_BATCH_SIZE) {
+		const slice = recordIds.slice(i, i + QUEUE_BATCH_SIZE);
+		await analyzeQueue().sendBatch(
+			slice.map((recordId) => ({ body: { recordId, mode } })),
+		);
+	}
+}
+
+/** Enqueue many captured records for background analysis. */
+export function enqueueAnalyzeBatch(recordIds: number[]): Promise<void> {
+	return enqueueBatch(recordIds);
+}
+
+/** Enqueue many published records to be re-pulled from their Discogs releases. */
+export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
+	return enqueueBatch(recordIds, "refresh");
 }
 
 /**

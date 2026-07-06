@@ -19,7 +19,12 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
-import { enqueueAnalyze, enqueueRefresh, refreshRecordById } from "#/lib/queue";
+import {
+	enqueueAnalyze,
+	enqueueAnalyzeBatch,
+	enqueueRefreshBatch,
+	refreshRecordById,
+} from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 
 /**
@@ -282,11 +287,10 @@ export const rescanAllRecords = createServerFn({ method: "POST" })
 				.where(
 					and(eq(records.status, "complete"), isNotNull(records.discogsId)),
 				);
-			// Enqueue concurrently rather than awaiting each send in turn — this only
-			// fans out queue writes (the actual Discogs work happens in the consumer,
-			// rate-limited there), so a big collection won't serialize into a slow
-			// request that risks the Worker's CPU/time budget.
-			await Promise.all(rows.map(({ id }) => enqueueRefresh(id)));
+			// Batch the queue writes (the actual Discogs work happens in the consumer,
+			// rate-limited there) so a big collection turns into a handful of sendBatch
+			// calls rather than hundreds of individual sends against the subrequest cap.
+			await enqueueRefreshBatch(rows.map(({ id }) => id));
 			return { queued: rows.length };
 		}),
 	);
@@ -391,6 +395,20 @@ export const deleteRecord = createServerFn({ method: "POST" })
 const idList = (ids: number[]) => ids;
 
 /**
+ * D1 rejects a query with more than 100 bound parameters, so a bulk
+ * `inArray(id, ids)` over a large selection has to be split. We chunk well under
+ * 100 to leave headroom for the columns a companion `.set(...)` also binds.
+ */
+const D1_PARAM_CHUNK = 90;
+function chunk<T>(items: T[], size: number): T[][] {
+	const out: T[][] = [];
+	for (let i = 0; i < items.length; i += size) {
+		out.push(items.slice(i, i + size));
+	}
+	return out;
+}
+
+/**
  * Bulk delete. Removes every selected record in one statement and clears the
  * `duplicateOf` back-references in a second, rather than issuing a request per
  * row from the client. Returns how many ids were targeted.
@@ -402,11 +420,13 @@ export const deleteRecords = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "deleteRecords" }, async () => {
 			if (ids.length === 0) return { count: 0 };
 			const db = getDb(env.DB);
-			await db.delete(records).where(inArray(records.id, ids));
-			await db
-				.update(records)
-				.set({ duplicateOf: null, updatedAt: new Date() })
-				.where(inArray(records.duplicateOf, ids));
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				await db.delete(records).where(inArray(records.id, batch));
+				await db
+					.update(records)
+					.set({ duplicateOf: null, updatedAt: new Date() })
+					.where(inArray(records.duplicateOf, batch));
+			}
 			return { count: ids.length };
 		}),
 	);
@@ -423,13 +443,17 @@ export const retryRecords = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "retryRecords" }, async () => {
 			if (ids.length === 0) return { count: 0 };
 			const db = getDb(env.DB);
-			const rows = await db
-				.update(records)
-				.set({ status: "pending", error: null, updatedAt: new Date() })
-				.where(inArray(records.id, ids))
-				.returning({ id: records.id });
-			await Promise.all(rows.map(({ id }) => enqueueAnalyze(id)));
-			return { count: rows.length };
+			const updated: number[] = [];
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.update(records)
+					.set({ status: "pending", error: null, updatedAt: new Date() })
+					.where(inArray(records.id, batch))
+					.returning({ id: records.id });
+				updated.push(...rows.map(({ id }) => id));
+			}
+			await enqueueAnalyzeBatch(updated);
+			return { count: updated.length };
 		}),
 	);
 
@@ -447,11 +471,15 @@ export const refreshRecords = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "refreshRecords" }, async () => {
 			if (ids.length === 0) return { count: 0 };
 			const db = getDb(env.DB);
-			const rows = await db
-				.select({ id: records.id })
-				.from(records)
-				.where(and(inArray(records.id, ids), isNotNull(records.discogsId)));
-			await Promise.all(rows.map(({ id }) => enqueueRefresh(id)));
-			return { count: rows.length };
+			const matched: number[] = [];
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.select({ id: records.id })
+					.from(records)
+					.where(and(inArray(records.id, batch), isNotNull(records.discogsId)));
+				matched.push(...rows.map(({ id }) => id));
+			}
+			await enqueueRefreshBatch(matched);
+			return { count: matched.length };
 		}),
 	);
