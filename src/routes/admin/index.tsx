@@ -268,8 +268,9 @@ function AdminRecords() {
 				id: "select",
 				enableSorting: false,
 				// Select-all lives in the bulk toolbar (see the "Select all" button
-				// there), so the header stays empty.
-				header: () => null,
+				// there), so the header is visually empty — but keep a screen-reader
+				// label so the column still has an accessible name.
+				header: () => <span className="sr-only">Select</span>,
 				cell: ({ row }) => (
 					// Absolutely fills the whole cell so clicking anywhere in the first
 					// column toggles the row. The row's navigate-to-detail guard skips
