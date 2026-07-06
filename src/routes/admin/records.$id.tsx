@@ -528,7 +528,7 @@ function RecordDetail() {
 							disabled={refresh.isPending}
 							onClick={() => refresh.mutate()}
 						>
-							{refresh.isPending ? "Refreshing…" : "Refresh from Discogs"}
+							{refresh.isPending ? "Refreshing…" : "Refresh"}
 						</Button>
 					) : (
 						// Unmatched: no release to refresh from yet. Re-run the analysis to
