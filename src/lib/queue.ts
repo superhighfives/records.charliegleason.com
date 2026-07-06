@@ -5,6 +5,7 @@ import { eq, ne } from "drizzle-orm";
 import { getDb } from "#/db";
 import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
+import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
 import { getReleaseDetail } from "#/lib/discogs";
 
 /**
@@ -14,12 +15,7 @@ import { getReleaseDetail } from "#/lib/discogs";
  * queue's retries are exhausted. The DLQ catches anything that still fails.
  */
 
-export interface AnalyzeMessage {
-	recordId: number;
-	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls
-	// the Discogs release for an already-identified record (used by "Rescan all").
-	mode?: "analyze" | "refresh";
-}
+export type { AnalyzeMessage } from "#/lib/batching";
 
 /** `max_retries` from wrangler.jsonc — used only to label the row once retries run out. */
 const MAX_RETRIES = 3;
@@ -35,24 +31,18 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId });
 }
 
-/** A single `sendBatch` accepts at most 100 messages (Cloudflare Queues limit). */
-const QUEUE_BATCH_SIZE = 100;
-
 /**
  * Enqueue many ids as `sendBatch` calls rather than one `send` per id — a bulk
  * "Match"/"Refresh"/"Rescan" over a large selection would otherwise fan out into
- * hundreds of individual queue writes (one subrequest each). Chunked to respect
- * the per-batch cap. `mode` picks the analyze (default) vs refresh pipeline.
+ * hundreds of individual queue writes (one subrequest each). {@link toQueueBatches}
+ * chunks to the per-batch cap; `mode` picks the analyze (default) vs refresh pipeline.
  */
 async function enqueueBatch(
 	recordIds: number[],
 	mode?: AnalyzeMessage["mode"],
 ): Promise<void> {
-	for (let i = 0; i < recordIds.length; i += QUEUE_BATCH_SIZE) {
-		const slice = recordIds.slice(i, i + QUEUE_BATCH_SIZE);
-		await analyzeQueue().sendBatch(
-			slice.map((recordId) => ({ body: { recordId, mode } })),
-		);
+	for (const batch of toQueueBatches(recordIds, mode)) {
+		await analyzeQueue().sendBatch(batch);
 	}
 }
 

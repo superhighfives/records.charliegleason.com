@@ -6,6 +6,7 @@ import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
+import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
 import {
 	getReleaseCandidate,
 	getReleaseDetail,
@@ -393,20 +394,6 @@ export const deleteRecord = createServerFn({ method: "POST" })
 
 /** Validator shared by the bulk actions below: a plain list of record ids. */
 const idList = (ids: number[]) => ids;
-
-/**
- * D1 rejects a query with more than 100 bound parameters, so a bulk
- * `inArray(id, ids)` over a large selection has to be split. We chunk well under
- * 100 to leave headroom for the columns a companion `.set(...)` also binds.
- */
-const D1_PARAM_CHUNK = 90;
-function chunk<T>(items: T[], size: number): T[][] {
-	const out: T[][] = [];
-	for (let i = 0; i < items.length; i += size) {
-		out.push(items.slice(i, i + size));
-	}
-	return out;
-}
 
 /**
  * Bulk delete. Removes every selected record in one statement and clears the
