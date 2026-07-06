@@ -14,10 +14,10 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
-import type { Record } from "#/db/schema";
+import { displayCoverKey, type PublicRecord } from "#/lib/cover";
 
 /** The public shape — the homepage never sees the admin-only capture photo. */
-export type PanelRecord = Omit<Record, "capturePhotoKey">;
+export type PanelRecord = PublicRecord;
 
 /** A headline fact rendered as a bordered card (the OpenRouter-style stat grid). */
 function Stat({ label, children }: { label: string; children: ReactNode }) {
@@ -118,13 +118,16 @@ export function RecordPanel({
 		<>
 			<SheetHeader className="flex-row items-start gap-4 pb-2 pr-10">
 				<div className="size-16 shrink-0 overflow-hidden rounded-md border border-border bg-muted">
-					{record.coverImageKey && (
-						<img
-							src={`/api/photos/${record.coverImageKey}`}
-							alt=""
-							className="size-full object-cover"
-						/>
-					)}
+					{(() => {
+						const cover = displayCoverKey(record);
+						return cover ? (
+							<img
+								src={`/api/photos/${cover}`}
+								alt=""
+								className="size-full object-cover"
+							/>
+						) : null;
+					})()}
 				</div>
 				<div className="min-w-0 flex-1">
 					<SheetTitle className="font-serif text-lg leading-tight">

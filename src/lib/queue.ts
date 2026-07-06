@@ -7,6 +7,7 @@ import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
 import { getReleaseDetail } from "#/lib/discogs";
+import { generateProfessionalPhoto } from "#/lib/professional";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -54,6 +55,16 @@ export function enqueueAnalyzeBatch(recordIds: number[]): Promise<void> {
 /** Enqueue many published records to be re-pulled from their Discogs releases. */
 export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
 	return enqueueBatch(recordIds, "refresh");
+}
+
+/** Enqueue a captured record for professional studio-photo generation. */
+export async function enqueueProfessional(recordId: number): Promise<void> {
+	await analyzeQueue().send({ recordId, mode: "professional" });
+}
+
+/** Enqueue many captured records for professional studio-photo generation. */
+export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
+	return enqueueBatch(recordIds, "professional");
 }
 
 /**
@@ -109,6 +120,65 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				}`,
 			);
 			Sentry.captureException(err);
+		}
+		message.ack();
+		return;
+	}
+
+	// Professional studio photo via Replicate. Like refresh, this is best-effort
+	// and self-contained — it tracks its own `professional*` fields and never
+	// touches the record's main `status`. We always ack (even on failure) so a
+	// paid Replicate run is never silently retried; regeneration is a manual action.
+	if (mode === "professional") {
+		try {
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, recordId))
+				.limit(1);
+			// Deleted between enqueue and delivery — nothing to do.
+			if (!record) {
+				message.ack();
+				return;
+			}
+
+			await db
+				.update(records)
+				.set({
+					professionalStatus: "processing",
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, recordId));
+
+			const { key, predictionId } = await generateProfessionalPhoto(record);
+
+			await db
+				.update(records)
+				.set({
+					professionalImageKey: key,
+					professionalPredictionId: predictionId,
+					// Generated, but not shown until an admin approves it (review gate).
+					professionalStatus: "ready",
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, recordId));
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			console.error(
+				`[queue] professional photo failed for record ${recordId}: ${detail}`,
+			);
+			Sentry.captureException(err);
+			await db
+				.update(records)
+				.set({
+					professionalStatus: "failed",
+					professionalError: detail,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, recordId))
+				.catch(() => {});
 		}
 		message.ack();
 		return;

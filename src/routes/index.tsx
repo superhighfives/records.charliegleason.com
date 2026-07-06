@@ -6,6 +6,7 @@ import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import { displayCoverKey } from "#/lib/cover";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
@@ -109,14 +110,17 @@ function Home() {
 								className="w-full space-y-2 text-left"
 							>
 								<div className="album-card aspect-square overflow-hidden rounded-md">
-									{r.coverImageKey && (
-										<img
-											src={`/api/photos/${r.coverImageKey}`}
-											alt={`${r.artist} — ${r.title}`}
-											className="size-full object-cover"
-											loading="lazy"
-										/>
-									)}
+									{(() => {
+										const cover = displayCoverKey(r);
+										return cover ? (
+											<img
+												src={`/api/photos/${cover}`}
+												alt={`${r.artist} — ${r.title}`}
+												className="size-full object-cover"
+												loading="lazy"
+											/>
+										) : null;
+									})()}
 								</div>
 								<div className="text-sm leading-snug">
 									<p

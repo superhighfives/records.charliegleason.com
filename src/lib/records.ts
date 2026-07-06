@@ -7,6 +7,7 @@ import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
+import { toPublicRecord } from "#/lib/cover";
 import {
 	getReleaseCandidate,
 	getReleaseDetail,
@@ -24,6 +25,8 @@ import {
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
+	enqueueProfessional,
+	enqueueProfessionalBatch,
 	enqueueRefreshBatch,
 	refreshRecordById,
 } from "#/lib/queue";
@@ -56,7 +59,7 @@ export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
 			.from(records)
 			.where(eq(records.status, "complete"))
 			.orderBy(desc(records.createdAt));
-		return rows.map(({ capturePhotoKey: _omit, ...r }) => r);
+		return rows.map(toPublicRecord);
 	}),
 );
 
@@ -274,6 +277,74 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Kick off (or re-run) professional studio-photo generation for a captured
+ * record. Marks it `pending` and enqueues the Replicate work on the queue (its
+ * own `professional` mode). Returns the updated row, or null if the record is
+ * gone. Throws if there's no capture to work from so the UI can say why.
+ */
+export const generateProfessional = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "generateProfessional" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+			if (!record.capturePhotoKey) {
+				throw new Error("This record has no capture photo to work from.");
+			}
+			const [row] = await db
+				.update(records)
+				.set({
+					professionalStatus: "pending",
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			await enqueueProfessional(id);
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Approve (promote) or unapprove the generated professional photo. Only
+ * `approved` makes it the displayed cover (see displayCoverKey); unapproving
+ * drops it back to `ready` — kept in R2, just not shown — so the site falls back
+ * to the Discogs cover. No-op (returns null) if nothing's been generated yet.
+ */
+export const setProfessionalApproved = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((input: { id: number; approved: boolean }) => ({
+		id: input.id,
+		approved: Boolean(input.approved),
+	}))
+	.handler(({ data: { id, approved } }) =>
+		Sentry.startSpan({ name: "setProfessionalApproved" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record?.professionalImageKey) return null;
+			const [row] = await db
+				.update(records)
+				.set({
+					professionalStatus: approved ? "approved" : "ready",
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
+		}),
+	);
+
+/**
  * Bulk "Rescan all": enqueue a Discogs refresh for every record that has a
  * stored Discogs id. Runs through the queue so it respects Discogs' rate limit.
  * Returns how many refreshes were queued.
@@ -479,5 +550,40 @@ export const refreshRecords = createServerFn({ method: "POST" })
 			}
 			await enqueueRefreshBatch(matched);
 			return { count: matched.length };
+		}),
+	);
+
+/**
+ * Bulk professional photos. Marks every selected record that has a capture photo
+ * `pending` and enqueues the Replicate work through the queue (rate-limited by
+ * its concurrency cap) rather than firing N synchronous generations. Records
+ * without a capture to work from are silently skipped. Returns how many were
+ * queued.
+ */
+export const generateProfessionalPhotos = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "generateProfessionalPhotos" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const now = new Date();
+			const queued: number[] = [];
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.update(records)
+					.set({
+						professionalStatus: "pending",
+						professionalError: null,
+						updatedAt: now,
+					})
+					.where(
+						and(inArray(records.id, batch), isNotNull(records.capturePhotoKey)),
+					)
+					.returning({ id: records.id });
+				queued.push(...rows.map(({ id }) => id));
+			}
+			await enqueueProfessionalBatch(queued);
+			return { count: queued.length };
 		}),
 	);

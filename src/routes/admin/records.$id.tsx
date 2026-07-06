@@ -22,12 +22,14 @@ import type { DiscogsCandidate, SearchParams } from "#/lib/discogs";
 import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
+	generateProfessional,
 	getDiscogsRelease,
 	lookupDiscogsRelease,
 	publishRecord,
 	refreshRecord,
 	reprocessRecord,
 	searchDiscogs,
+	setProfessionalApproved,
 	uploadCover,
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
@@ -261,10 +263,16 @@ function RecordDetail() {
 
 	const { data: record } = useQuery({
 		...recordQueryOptions(recordId),
-		// Poll while the background analysis is in flight.
+		// Poll while the background analysis or a professional-photo job is in flight.
 		refetchInterval: (query) => {
 			const status = query.state.data?.status;
-			return status === "pending" || status === "processing" ? 2000 : false;
+			const pro = query.state.data?.professionalStatus;
+			const active =
+				status === "pending" ||
+				status === "processing" ||
+				pro === "pending" ||
+				pro === "processing";
+			return active ? 2000 : false;
 		},
 	});
 
@@ -381,6 +389,24 @@ function RecordDetail() {
 
 	const retry = useMutation({
 		mutationFn: () => reprocessRecord({ data: recordId }),
+		onSuccess: invalidate,
+	});
+
+	// Queue (or re-queue) the professional studio photo. Lands via the queue, so
+	// the detail page polls itself to `ready` while `professionalStatus` is in flight.
+	const generatePro = useMutation({
+		mutationFn: () => generateProfessional({ data: recordId }),
+		onSuccess: invalidate,
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't start the photo.",
+			),
+	});
+
+	// Approve (promote) or unapprove the generated professional photo.
+	const approvePro = useMutation({
+		mutationFn: (approved: boolean) =>
+			setProfessionalApproved({ data: { id: recordId, approved } }),
 		onSuccess: invalidate,
 	});
 
@@ -581,6 +607,106 @@ function RecordDetail() {
 						<span className="text-sm text-muted-foreground">
 							Updating content…
 						</span>
+					)}
+				</div>
+			)}
+
+			{/* Professional studio photo — generated from the capture via Replicate,
+			    reviewed here, then preferred over the Discogs cover once approved. */}
+			{!inFlight && record.capturePhotoKey && (
+				<div className="space-y-3 rounded-lg border p-3">
+					<div className="flex items-start justify-between gap-2">
+						<div>
+							<h2 className="text-sm font-semibold">Professional photo</h2>
+							<p className="text-xs text-muted-foreground">
+								A studio-lit, tight-cropped cutout generated from your capture.
+								Once approved it’s shown across the site in place of the cover.
+							</p>
+						</div>
+						{record.professionalStatus === "approved" && (
+							<span className="shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
+								Live
+							</span>
+						)}
+					</div>
+
+					{record.professionalStatus === "pending" ||
+					record.professionalStatus === "processing" ? (
+						<div className="flex items-center gap-2 text-sm text-muted-foreground">
+							<Loader2 className="size-4 shrink-0 animate-spin" />
+							Generating the professional photo — this page updates itself when
+							it’s ready.
+						</div>
+					) : record.professionalImageKey &&
+						(record.professionalStatus === "ready" ||
+							record.professionalStatus === "approved") ? (
+						<div className="space-y-3">
+							<figure className="space-y-1">
+								<ImageZoom
+									src={`/api/photos/${record.professionalImageKey}`}
+									alt="Professional photo"
+									className="size-40 bg-muted"
+								/>
+								<figcaption className="text-xs text-muted-foreground">
+									{record.professionalStatus === "approved"
+										? "Approved — shown on the site"
+										: "Generated — not shown until approved"}
+								</figcaption>
+							</figure>
+							<div className="flex flex-wrap gap-2">
+								{record.professionalStatus === "ready" ? (
+									<Button
+										type="button"
+										size="sm"
+										disabled={approvePro.isPending}
+										onClick={() => approvePro.mutate(true)}
+									>
+										{approvePro.isPending ? "…" : "Use as cover"}
+									</Button>
+								) : (
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										disabled={approvePro.isPending}
+										onClick={() => approvePro.mutate(false)}
+									>
+										{approvePro.isPending ? "…" : "Stop using"}
+									</Button>
+								)}
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									disabled={generatePro.isPending}
+									onClick={() => generatePro.mutate()}
+								>
+									{generatePro.isPending ? "…" : "Regenerate"}
+								</Button>
+							</div>
+						</div>
+					) : (
+						<div className="space-y-2">
+							{record.professionalStatus === "failed" &&
+								record.professionalError && (
+									<p className="text-xs text-red-600 dark:text-red-400">
+										Generation failed: {record.professionalError}
+									</p>
+								)}
+							<Button
+								type="button"
+								size="sm"
+								variant="outline"
+								disabled={generatePro.isPending}
+								onClick={() => generatePro.mutate()}
+							>
+								{generatePro.isPending
+									? "Queuing…"
+									: record.professionalStatus === "failed"
+										? "Try again"
+										: "Generate professional photo"}
+							</Button>
+						</div>
 					)}
 				</div>
 			)}
