@@ -42,7 +42,6 @@ import {
 	deleteRecords,
 	generateProfessionalPhotos,
 	refreshRecords,
-	rescanAllRecords,
 	retryRecords,
 } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
@@ -257,12 +256,6 @@ function AdminRecords() {
 		mutationFn: (id: number) => deleteRecord({ data: id }),
 		onSuccess: () =>
 			queryClient.invalidateQueries({ queryKey: recordsQueryOptions.queryKey }),
-	});
-
-	// Bulk "Rescan all": re-pull every published record from its stored Discogs
-	// release through the queue. Non-destructive; results land as the queue drains.
-	const rescanMutation = useMutation({
-		mutationFn: () => rescanAllRecords(),
 	});
 
 	// Selected-rows actions: hand the ids to the matching batched endpoint and
@@ -593,27 +586,6 @@ function AdminRecords() {
 						placeholder="Filter records…  ( / )"
 						className="w-full sm:w-56"
 					/>
-					<Button
-						type="button"
-						variant="outline"
-						className="flex-1 sm:flex-none"
-						disabled={rescanMutation.isPending}
-						onClick={() => {
-							if (
-								confirm(
-									"Re-pull every published record from Discogs? This runs in the background.",
-								)
-							) {
-								rescanMutation.mutate();
-							}
-						}}
-					>
-						{rescanMutation.isPending
-							? "Queuing…"
-							: rescanMutation.data
-								? `Queued ${rescanMutation.data.queued}`
-								: "Rescan all"}
-					</Button>
 					<Button asChild variant="outline" className="flex-1 sm:flex-none">
 						<Link to="/admin/records/new">Add manually</Link>
 					</Button>

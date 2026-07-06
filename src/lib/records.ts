@@ -405,30 +405,6 @@ export const fetchRecordValue = createServerFn({ method: "POST" })
 		),
 	);
 
-/**
- * Bulk "Rescan all": enqueue a Discogs refresh for every record that has a
- * stored Discogs id. Runs through the queue so it respects Discogs' rate limit.
- * Returns how many refreshes were queued.
- */
-export const rescanAllRecords = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.handler(() =>
-		Sentry.startSpan({ name: "rescanAllRecords" }, async () => {
-			const db = getDb(env.DB);
-			const rows = await db
-				.select({ id: records.id })
-				.from(records)
-				.where(
-					and(eq(records.status, "complete"), isNotNull(records.discogsId)),
-				);
-			// Batch the queue writes (the actual Discogs work happens in the consumer,
-			// rate-limited there) so a big collection turns into a handful of sendBatch
-			// calls rather than hundreds of individual sends against the subrequest cap.
-			await enqueueRefreshBatch(rows.map(({ id }) => id));
-			return { queued: rows.length };
-		}),
-	);
-
 export const updateRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator((input: { id: number; data: unknown }) => ({
