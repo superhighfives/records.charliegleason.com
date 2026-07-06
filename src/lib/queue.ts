@@ -5,6 +5,7 @@ import { eq, ne } from "drizzle-orm";
 import { getDb } from "#/db";
 import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
+import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
 import { getReleaseDetail } from "#/lib/discogs";
 
 /**
@@ -14,12 +15,7 @@ import { getReleaseDetail } from "#/lib/discogs";
  * queue's retries are exhausted. The DLQ catches anything that still fails.
  */
 
-export interface AnalyzeMessage {
-	recordId: number;
-	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls
-	// the Discogs release for an already-identified record (used by "Rescan all").
-	mode?: "analyze" | "refresh";
-}
+export type { AnalyzeMessage } from "#/lib/batching";
 
 /** `max_retries` from wrangler.jsonc — used only to label the row once retries run out. */
 const MAX_RETRIES = 3;
@@ -35,9 +31,29 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId });
 }
 
-/** Enqueue a published record to be re-pulled from its stored Discogs release. */
-export async function enqueueRefresh(recordId: number): Promise<void> {
-	await analyzeQueue().send({ recordId, mode: "refresh" });
+/**
+ * Enqueue many ids as `sendBatch` calls rather than one `send` per id — a bulk
+ * "Match"/"Refresh"/"Rescan" over a large selection would otherwise fan out into
+ * hundreds of individual queue writes (one subrequest each). {@link toQueueBatches}
+ * chunks to the per-batch cap; `mode` picks the analyze (default) vs refresh pipeline.
+ */
+async function enqueueBatch(
+	recordIds: number[],
+	mode?: AnalyzeMessage["mode"],
+): Promise<void> {
+	for (const batch of toQueueBatches(recordIds, mode)) {
+		await analyzeQueue().sendBatch(batch);
+	}
+}
+
+/** Enqueue many captured records for background analysis. */
+export function enqueueAnalyzeBatch(recordIds: number[]): Promise<void> {
+	return enqueueBatch(recordIds);
+}
+
+/** Enqueue many published records to be re-pulled from their Discogs releases. */
+export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
+	return enqueueBatch(recordIds, "refresh");
 }
 
 /**
