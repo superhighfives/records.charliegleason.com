@@ -350,6 +350,10 @@ export const searchParamsSchema = z.object({
 	title: z.string().trim().max(200).default(""),
 	country: z.string().trim().max(100).default(""),
 	year: z.string().trim().max(10).default(""),
+	// Free-text keywords passed straight to Discogs' general `q` search — a
+	// catch-all for anything the structured fields don't cover (label, catalog
+	// number, format notes). Empty string means "no filter".
+	q: z.string().trim().max(200).default(""),
 });
 
 export type SearchParams = z.infer<typeof searchParamsSchema>;
@@ -360,18 +364,22 @@ export type SearchParams = z.infer<typeof searchParamsSchema>;
  * and never send an obviously-invalid `year`. Pure + exported for testing.
  */
 export function buildSearchUrl(
-	{ artist, title, country, year }: SearchParams,
+	{ artist, title, country, year, q }: SearchParams,
 	perPage: number = DEFAULT_PER_PAGE,
 ): URL {
 	const url = new URL(`${BASE}/database/search`);
 	url.searchParams.set("type", "release");
-	const [a, t, c, y] = [artist, title, country, year].map((s) => s.trim());
+	const [a, t, c, y, query] = [artist, title, country, year, q ?? ""].map((s) =>
+		s.trim(),
+	);
 	if (a) url.searchParams.set("artist", a);
 	if (t) url.searchParams.set("release_title", t);
 	if (c) url.searchParams.set("country", c);
 	// Discogs expects a bare 4-digit year; ignore anything else rather than
 	// sending junk that just returns zero matches.
 	if (/^\d{4}$/.test(y)) url.searchParams.set("year", y);
+	// General keyword search — AND-ed with the structured filters above.
+	if (query) url.searchParams.set("q", query);
 	// Pull a wider net so we can prefer vinyl below without losing other pressings.
 	url.searchParams.set("per_page", String(perPage));
 	return url;
