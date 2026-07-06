@@ -1,4 +1,5 @@
 import {
+	BadgeCheck,
 	Check,
 	ChevronLeft,
 	ChevronRight,
@@ -14,10 +15,29 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
-import { displayCoverKey, type PublicRecord } from "#/lib/cover";
+import type { Record } from "#/db/schema";
+import { displayCoverKey } from "#/lib/cover";
+import type { PublicRecord } from "#/lib/records";
+import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
 
-/** The public shape — the homepage never sees the admin-only capture photo. */
-export type PanelRecord = PublicRecord;
+/**
+ * What the panel renders. Public callers pass a {@link PublicRecord} (no
+ * capture photo, no valuation); the admin drawer passes a full row and sets
+ * `admin` to surface the private valuation fields, which are optional here so
+ * both shapes fit.
+ */
+export type PanelRecord = PublicRecord &
+	Partial<
+		Pick<
+			Record,
+			| "confirmedRelease"
+			| "manualValue"
+			| "discogsValue"
+			| "discogsValueCurrency"
+			| "discogsValueJson"
+			| "discogsValueFetchedAt"
+		>
+	>;
 
 /** A headline fact rendered as a bordered card (the OpenRouter-style stat grid). */
 function Stat({ label, children }: { label: string; children: ReactNode }) {
@@ -45,6 +65,71 @@ function dash(value: string | number | null | undefined): ReactNode {
 }
 
 /**
+ * Admin-only valuation block: the headline value (confirmed manual figure if the
+ * collector entered one, else the Discogs guess), both underlying numbers, and
+ * the per-condition Discogs breakdown when we have it.
+ */
+function AdminValuation({ record }: { record: PanelRecord }) {
+	const currency = record.discogsValueCurrency ?? "USD";
+	const effective = effectiveValue(record);
+	const confirmed = record.manualValue != null;
+	const breakdown = parseValueBreakdown(record.discogsValueJson);
+
+	if (effective == null && record.discogsValue == null) {
+		return (
+			<div>
+				<h3 className="mb-1 text-sm font-semibold">Valuation</h3>
+				<p className="text-sm text-muted-foreground">
+					No value yet — fetch it from Discogs or enter one manually on the
+					record page.
+				</p>
+			</div>
+		);
+	}
+
+	return (
+		<div>
+			<h3 className="mb-1 text-sm font-semibold">Valuation</h3>
+			<p className="text-2xl font-semibold tabular-nums">
+				{formatMoney(effective, currency)}
+				<span className="ml-2 align-middle text-xs font-normal text-muted-foreground">
+					{confirmed ? "confirmed" : "estimated"}
+				</span>
+			</p>
+			<dl className="mt-2 divide-y divide-border">
+				<Spec label="Manual value">
+					{record.manualValue != null
+						? formatMoney(record.manualValue, currency)
+						: "—"}
+				</Spec>
+				<Spec label="Discogs guess">
+					{record.discogsValue != null
+						? formatMoney(record.discogsValue, currency)
+						: "—"}
+				</Spec>
+			</dl>
+			{breakdown.length > 0 && (
+				<div className="mt-2 rounded-md border border-border p-2">
+					<p className="mb-1 text-xs text-muted-foreground">
+						Discogs price by condition
+					</p>
+					<ul className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
+						{breakdown.map(({ grade, price }) => (
+							<li key={grade} className="flex justify-between gap-2">
+								<span className="truncate text-muted-foreground">{grade}</span>
+								<span className="tabular-nums">
+									{formatMoney(price, currency)}
+								</span>
+							</li>
+						))}
+					</ul>
+				</div>
+			)}
+		</div>
+	);
+}
+
+/**
  * The record detail drawer body — a cover + title header, a grid of headline
  * facts, a specifications list, notes, and prev/next paging through the current
  * (filtered) collection. Rendered inside a `<SheetContent>`.
@@ -55,12 +140,15 @@ export function RecordPanel({
 	total,
 	onPrev,
 	onNext,
+	admin = false,
 }: {
 	record: PanelRecord;
 	index: number;
 	total: number;
 	onPrev: () => void;
 	onNext: () => void;
+	/** Admin drawer: surface the private valuation + confirmed-release status. */
+	admin?: boolean;
 }) {
 	// `copied` resets on its own: the panel is keyed by record id at the call site,
 	// so paging to another record remounts this component with a fresh state.
@@ -149,6 +237,12 @@ export function RecordPanel({
 						{record.artist}
 						{record.year ? ` · ${record.year}` : ""}
 					</SheetDescription>
+					{admin && record.confirmedRelease && (
+						<span className="mt-1 inline-flex items-center gap-1 rounded-full bg-brand/15 px-2 py-0.5 text-xs font-medium text-brand-strong">
+							<BadgeCheck className="size-3.5" />
+							Confirmed release
+						</span>
+					)}
 					{record.catno && (
 						<button
 							type="button"
@@ -198,6 +292,8 @@ export function RecordPanel({
 						<Spec label="Added">{dash(added)}</Spec>
 					</dl>
 				</div>
+
+				{admin && <AdminValuation record={record} />}
 
 				{record.pitchforkScore != null && (
 					<div>

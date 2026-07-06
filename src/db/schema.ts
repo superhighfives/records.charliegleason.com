@@ -30,6 +30,23 @@ export const records = sqliteTable("records", {
 	catno: text("catno"), // Discogs catalog number, e.g. "WIGLP450"
 	country: text("country"), // pressing country
 
+	// Valuation (admin only — never exposed on the public homepage / API).
+	// `confirmedRelease` marks a Discogs match the collector has vouched for (the
+	// automated match isn't always right); the admin can sort/filter by it. The
+	// "guessed" value comes from Discogs' seller price suggestions (VG+ grade,
+	// stored in `discogsValue`, full per-condition breakdown in `discogsValueJson`);
+	// `manualValue` is a hand-entered "confirmed" value that overrides the guess.
+	confirmedRelease: integer("confirmed_release", { mode: "boolean" }).default(
+		false,
+	),
+	manualValue: real("manual_value"), // hand-entered confirmed value, USD
+	discogsValue: real("discogs_value"), // guessed value from Discogs, USD
+	discogsValueCurrency: text("discogs_value_currency"), // currency of the guess, e.g. "USD"
+	discogsValueJson: text("discogs_value_json"), // JSON per-condition price breakdown
+	discogsValueFetchedAt: integer("discogs_value_fetched_at", {
+		mode: "timestamp",
+	}),
+
 	// Storage / provenance
 	coverImageKey: text("cover_image_key"), // R2 key — good cover, sourced + resized (public)
 	capturePhotoKey: text("capture_photo_key"), // R2 key — the original iPhone shot (admin only)

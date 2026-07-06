@@ -305,6 +305,146 @@ export async function getReleaseCandidate(
 	} satisfies DiscogsCandidate;
 }
 
+/**
+ * A record's estimated value, sourced from Discogs.
+ *
+ * `value`/`currency` are the single headline figure used for the collection
+ * total; `suggestions` holds the full per-condition breakdown (only present when
+ * the figure came from seller price suggestions). `source` records where the
+ * number came from so the UI can caveat it: `suggestions` is Discogs' median
+ * sale price for a grade (needs a Discogs Seller account), `stats` is the lowest
+ * copy currently listed (the resilient fallback that works for any token).
+ */
+export interface DiscogsValue {
+	value: number | null;
+	currency: string;
+	source: "suggestions" | "stats";
+	numForSale: number | null; // copies currently for sale (from marketplace stats)
+	suggestions: Record<string, number> | null; // condition label → price
+}
+
+/**
+ * Which grade's suggested price we treat as *the* value. Discogs returns a price
+ * per media condition; VG+ is the common resale baseline, so prefer it and walk
+ * down (then up) to the next-best available grade if VG+ is missing.
+ */
+const VALUE_GRADE_PRIORITY = [
+	"Very Good Plus (VG+)",
+	"Near Mint (NM or M-)",
+	"Very Good (VG)",
+	"Mint (M)",
+	"Good Plus (G+)",
+	"Good (G)",
+	"Fair (F)",
+	"Poor (P)",
+];
+
+/** Raw Discogs price-suggestions payload: grade label → { value, currency }. */
+type PriceSuggestions = Record<
+	string,
+	{ value?: unknown; currency?: unknown } | null | undefined
+>;
+
+/**
+ * Reduce a Discogs price-suggestions payload to a flat `{ grade: price }` map
+ * (dropping malformed entries) and the single headline grade we value against.
+ * Pure + exported for testing.
+ */
+export function pickSuggestedValue(raw: PriceSuggestions): {
+	value: number | null;
+	currency: string | null;
+	suggestions: Record<string, number>;
+} {
+	const suggestions: Record<string, number> = {};
+	let currency: string | null = null;
+	for (const [grade, entry] of Object.entries(raw ?? {})) {
+		const rawValue = entry?.value;
+		// Guard null/empty explicitly before coercing: `Number(null)` and
+		// `Number("")` are both `0` (finite), which would otherwise record a bogus
+		// $0 suggestion for a grade Discogs simply has no price for. A real
+		// marketplace price is always positive, so drop non-positive values too.
+		if (rawValue == null || rawValue === "") continue;
+		const v = Number(rawValue);
+		if (!Number.isFinite(v) || v <= 0) continue;
+		suggestions[grade] = v;
+		if (!currency && typeof entry?.currency === "string") {
+			currency = entry.currency;
+		}
+	}
+	const grade =
+		VALUE_GRADE_PRIORITY.find((g) => g in suggestions) ??
+		Object.keys(suggestions)[0];
+	return {
+		value: grade ? suggestions[grade] : null,
+		currency,
+		suggestions,
+	};
+}
+
+/**
+ * Estimate a release's value. Tries Discogs' seller price suggestions first (a
+ * per-grade median that needs a Seller account) and falls back to marketplace
+ * stats (the lowest copy currently listed) so the feature still returns a number
+ * for tokens without seller access. Returns null only when neither endpoint
+ * yields a usable figure. `curr` is the currency for the stats fallback; price
+ * suggestions come back in the authenticated account's own currency.
+ */
+export async function getReleaseValue(
+	id: string,
+	curr = "USD",
+): Promise<DiscogsValue | null> {
+	// Seller price suggestions — the richer, grade-aware figure.
+	const suggestRes = await discogsFetch(
+		`${BASE}/marketplace/price_suggestions/${id}`,
+	);
+	if (suggestRes.ok) {
+		const raw = (await suggestRes.json()) as PriceSuggestions;
+		const { value, currency, suggestions } = pickSuggestedValue(raw);
+		// Suggestions come back in the authenticated *account's* currency, which
+		// isn't necessarily the one we total in. Only trust them when they match
+		// `curr` (or don't declare a currency); otherwise fall through to the stats
+		// endpoint below, which we explicitly request in `curr`. This keeps every
+		// stored value in a single currency so the admin total sums correctly.
+		if (value != null && (currency == null || currency === curr)) {
+			return {
+				value,
+				currency: curr,
+				source: "suggestions",
+				numForSale: null,
+				suggestions,
+			};
+		}
+	} else {
+		// 401/403 (no seller access), 404 (no suggestions) — drain and fall through.
+		await suggestRes.body?.cancel().catch(() => {});
+	}
+
+	// Fallback: lowest copy currently for sale. Works for any authenticated token.
+	const statsRes = await discogsFetch(
+		`${BASE}/marketplace/stats/${id}?curr_abbr=${encodeURIComponent(curr)}`,
+	);
+	if (!statsRes.ok) {
+		await statsRes.body?.cancel().catch(() => {});
+		return null;
+	}
+	const stats = (await statsRes.json()) as {
+		lowest_price?: { value?: unknown; currency?: unknown } | null;
+		num_for_sale?: unknown;
+	};
+	const low = Number(stats.lowest_price?.value);
+	const numForSale = Number(stats.num_for_sale);
+	return {
+		value: Number.isFinite(low) ? low : null,
+		currency:
+			typeof stats.lowest_price?.currency === "string"
+				? stats.lowest_price.currency
+				: curr,
+		source: "stats",
+		numForSale: Number.isFinite(numForSale) ? numForSale : null,
+		suggestions: null,
+	};
+}
+
 /** Highest-quality cover image URL for a release (primary image, full size). */
 export async function getReleaseImageUrl(id: string): Promise<string | null> {
 	const res = await discogsFetch(`${BASE}/releases/${id}`);

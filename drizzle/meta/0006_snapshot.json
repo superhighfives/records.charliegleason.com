@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "1944da09-2169-496a-9cbe-2e97a0e7405c",
-  "prevId": "5bc8e6f7-f2f1-4691-aa4a-10a0cd6669ae",
+  "id": "b87994b5-b0e0-4b70-8643-0b76d80b795c",
+  "prevId": "1944da09-2169-496a-9cbe-2e97a0e7405c",
   "tables": {
     "records": {
       "name": "records",
@@ -158,6 +158,35 @@
         },
         "capture_photo_key": {
           "name": "capture_photo_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "professional_image_key": {
+          "name": "professional_image_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "professional_status": {
+          "name": "professional_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "'idle'"
+        },
+        "professional_error": {
+          "name": "professional_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "professional_prediction_id": {
+          "name": "professional_prediction_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

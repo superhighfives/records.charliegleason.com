@@ -4,10 +4,9 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { records } from "#/db/schema";
+import { type Record as RecordRow, records } from "#/db/schema";
 import { authMiddleware } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
-import { toPublicRecord } from "#/lib/cover";
 import {
 	getReleaseCandidate,
 	getReleaseDetail,
@@ -28,6 +27,7 @@ import {
 	enqueueProfessional,
 	enqueueProfessionalBatch,
 	enqueueRefreshBatch,
+	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
@@ -39,6 +39,52 @@ import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
  * D1 binding via `cloudflare:workers`. Each is wrapped in a Sentry span per the
  * project convention (see `.cursorrules`).
  */
+
+/**
+ * Fields never sent to the public homepage / API. The iPhone capture is
+ * admin-only, and so is everything to do with valuation — the collector's
+ * manual/confirmed value and the Discogs price guess are private.
+ */
+const ADMIN_ONLY_FIELDS = [
+	"capturePhotoKey",
+	"confirmedRelease",
+	"manualValue",
+	"discogsValue",
+	"discogsValueCurrency",
+	"discogsValueJson",
+	"discogsValueFetchedAt",
+	// Internal professional-photo job bookkeeping — the last error and the
+	// Replicate prediction id are never public.
+	"professionalError",
+	"professionalPredictionId",
+] as const;
+
+/** The public shape of a record — the full row minus the admin-only fields. */
+export type PublicRecord = Omit<RecordRow, (typeof ADMIN_ONLY_FIELDS)[number]>;
+
+/** Drop the admin-only fields from a row so it's safe to return publicly. */
+export function toPublicRecord(row: RecordRow): PublicRecord {
+	const {
+		capturePhotoKey: _capture,
+		confirmedRelease: _confirmed,
+		manualValue: _manual,
+		discogsValue: _value,
+		discogsValueCurrency: _currency,
+		discogsValueJson: _valueJson,
+		discogsValueFetchedAt: _fetchedAt,
+		professionalError: _proError,
+		professionalPredictionId: _proPrediction,
+		...rest
+	} = row;
+	return {
+		...rest,
+		// Only expose the professional image once it's approved. `/api/photos/$`
+		// serves any R2 key by passthrough, so leaking a `ready` (unreviewed) key
+		// here would make the generation publicly fetchable and bypass the review gate.
+		professionalImageKey:
+			rest.professionalStatus === "approved" ? rest.professionalImageKey : null,
+	};
+}
 
 export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 	Sentry.startSpan({ name: "listRecords" }, async () => {
@@ -342,6 +388,21 @@ export const setProfessionalApproved = createServerFn({ method: "POST" })
 				.returning();
 			return row ?? null;
 		}),
+	);
+
+/**
+ * Fetch just the Discogs value estimate for a single record (seller price
+ * suggestions, falling back to the lowest listing) and store it. Runs
+ * synchronously so the detail page gets the updated row straight back. Returns
+ * null if the record is gone or has no Discogs id to value.
+ */
+export const fetchRecordValue = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "fetchRecordValue" }, () =>
+			fetchValueForRecord(id),
+		),
 	);
 
 /**

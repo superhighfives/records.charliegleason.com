@@ -18,6 +18,10 @@ export const recordInputSchema = z.object({
 	genre: z.string().trim().min(1).nullable(),
 	pitchforkScore: z.number().min(0).max(10).nullable(),
 	notes: z.string().trim().min(1).nullable(),
+	// Admin valuation fields. `manualValue` is a hand-entered confirmed value that
+	// overrides the Discogs guess; `confirmedRelease` marks a vouched-for match.
+	manualValue: z.number().min(0).nullable(),
+	confirmedRelease: z.boolean(),
 });
 
 export type RecordInput = z.infer<typeof recordInputSchema>;
@@ -55,6 +59,8 @@ export type RecordFormValues = {
 	genre: string;
 	pitchforkScore: string;
 	notes: string;
+	manualValue: string;
+	confirmedRelease: boolean;
 };
 
 const numericString = z
@@ -77,6 +83,8 @@ export const recordFormSchema = z.object({
 	genre: z.string(),
 	pitchforkScore: numericString,
 	notes: z.string(),
+	manualValue: numericString,
+	confirmedRelease: z.boolean(),
 });
 
 export const emptyRecordForm: RecordFormValues = {
@@ -91,6 +99,8 @@ export const emptyRecordForm: RecordFormValues = {
 	genre: "",
 	pitchforkScore: "",
 	notes: "",
+	manualValue: "",
+	confirmedRelease: false,
 };
 
 const optional = (s: string) => {
@@ -116,6 +126,8 @@ export function formValuesToInput(v: RecordFormValues): RecordInput {
 		genre: optional(v.genre),
 		pitchforkScore: optionalNumber(v.pitchforkScore),
 		notes: optional(v.notes),
+		manualValue: optionalNumber(v.manualValue),
+		confirmedRelease: v.confirmedRelease,
 	};
 }
 
@@ -132,5 +144,7 @@ export function recordToFormValues(r: Record): RecordFormValues {
 		genre: r.genre ?? "",
 		pitchforkScore: r.pitchforkScore?.toString() ?? "",
 		notes: r.notes ?? "",
+		manualValue: r.manualValue?.toString() ?? "",
+		confirmedRelease: r.confirmedRelease ?? false,
 	};
 }

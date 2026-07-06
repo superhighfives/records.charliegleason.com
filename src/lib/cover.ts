@@ -1,9 +1,10 @@
 import type { Record } from "#/db/schema";
 
 /**
- * Cover-selection + public-serialisation helpers. Pure and dependency-light (only
- * the `Record` type), so both the server data layer and client components can
- * share one definition of "which image displays" and "what's safe to expose".
+ * Cover-selection helper. Pure and dependency-light (only the `Record` type), so
+ * both the server data layer and client components share one definition of "which
+ * image displays". (Public serialisation — `toPublicRecord`/`PublicRecord` — lives
+ * in `#/lib/records` alongside the rest of the admin-only field policy.)
  */
 
 /**
@@ -28,34 +29,4 @@ export function displayCoverKey(
 		return record.capturePhotoKey;
 	}
 	return null;
-}
-
-/**
- * The public record shape. Drops the admin-only iPhone capture key and the
- * internal professional-job bookkeeping (error text + Replicate prediction id),
- * while keeping `professionalImageKey`/`professionalStatus` so the public views
- * can prefer an approved studio photo.
- */
-export type PublicRecord = Omit<
-	Record,
-	"capturePhotoKey" | "professionalError" | "professionalPredictionId"
->;
-
-/** Strip admin-only + internal fields from a record for a public payload. */
-export function toPublicRecord(record: Record): PublicRecord {
-	const {
-		capturePhotoKey: _capture,
-		professionalError: _error,
-		professionalPredictionId: _prediction,
-		...rest
-	} = record;
-	return {
-		...rest,
-		// Only expose the professional image once it's approved. `/api/photos/$`
-		// serves any R2 key by passthrough, so leaking a `ready` (unreviewed) key
-		// here would make the generation publicly fetchable and bypass the review
-		// gate — even though the site's displayCoverKey wouldn't show it yet.
-		professionalImageKey:
-			rest.professionalStatus === "approved" ? rest.professionalImageKey : null,
-	};
 }
