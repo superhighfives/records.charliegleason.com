@@ -10,6 +10,7 @@ import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
 import {
 	getReleaseCandidate,
 	getReleaseDetail,
+	MAX_PER_PAGE,
 	parseReleaseId,
 	searchParamsSchema,
 	searchReleases,
@@ -332,10 +333,10 @@ export const searchDiscogs = createServerFn({ method: "POST" })
 		// Let Discogs failures (bad token, rate limit, 5xx) propagate to the client
 		// so the review page can show *why* a search came back empty, rather than
 		// silently degrading to "no results". Genuine zero-match still returns [].
-		// Return every pressing (not the automated 5-hit shortlist) so the review
-		// page can list them all in a scrollable pick-list.
+		// Return a full page of pressings (not the automated 5-hit shortlist) so the
+		// review page can list them in a scrollable pick-list.
 		Sentry.startSpan({ name: "searchDiscogs" }, () =>
-			searchReleases(data, Infinity),
+			searchReleases(data, MAX_PER_PAGE),
 		),
 	);
 

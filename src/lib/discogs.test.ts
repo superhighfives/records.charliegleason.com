@@ -82,6 +82,13 @@ describe("buildSearchUrl", () => {
 			buildSearchUrl(params({ year: "nineteen" })).searchParams.has("year"),
 		).toBe(false);
 	});
+
+	it("requests the default page size, or a custom one", () => {
+		expect(buildSearchUrl(params()).searchParams.get("per_page")).toBe("25");
+		expect(buildSearchUrl(params(), 100).searchParams.get("per_page")).toBe(
+			"100",
+		);
+	});
 });
 
 describe("searchReleases", () => {
@@ -100,6 +107,20 @@ describe("searchReleases", () => {
 	it("returns [] for a genuine zero-match (200 with no results)", async () => {
 		respond({ status: 200 }, { results: [] });
 		await expect(searchReleases(noParams)).resolves.toEqual([]);
+	});
+
+	it("caps results at the limit — the default shortlist, or a larger page", async () => {
+		const results = Array.from({ length: 10 }, (_, i) => ({
+			id: i,
+			title: `Artist - Title ${i}`,
+			format: ["Vinyl", "LP"],
+		}));
+		// Default limit is the short analyze-path shortlist.
+		respond({ status: 200 }, { results });
+		await expect(searchReleases(noParams)).resolves.toHaveLength(5);
+		// A larger limit (the manual search) returns the whole page.
+		respond({ status: 200 }, { results });
+		await expect(searchReleases(noParams, 100)).resolves.toHaveLength(10);
 	});
 
 	it("throws — not [] — on a 401 so a bad token surfaces", async () => {

@@ -335,9 +335,9 @@ export async function getReleaseImageUrl(id: string): Promise<string | null> {
 const MAX_CANDIDATES = 5;
 // Discogs allows up to 100 results per page. The automated path pulls a modest
 // page (enough to prefer vinyl without losing other pressings); a manual search
-// asks for the full page so it can list every pressing.
+// asks for a full page so it can list as many pressings as one request returns.
 const DEFAULT_PER_PAGE = 25;
-const MAX_PER_PAGE = 100;
+export const MAX_PER_PAGE = 100;
 const isVinyl = (c: DiscogsCandidate) => /vinyl/i.test(c.format ?? "");
 
 /**
@@ -406,19 +406,18 @@ async function discogsError(res: Response, action: string): Promise<Error> {
  * Search Discogs for release candidates, vinyl pressings first.
  *
  * `limit` caps how many candidates come back (default `MAX_CANDIDATES`, the short
- * shortlist the automated analyze path stores). Pass `Infinity` to return every
- * pressing Discogs found — the manual review search does this so the admin can
- * scroll the full list and pick the exact pressing. When returning everything we
- * also request the largest page so "all results" really is all of them.
+ * shortlist the automated analyze path stores). The manual review search passes
+ * `MAX_PER_PAGE` so the admin can scroll a page of pressings and pick the exact
+ * one. Only a single Discogs page is fetched, so at most `MAX_PER_PAGE` (100)
+ * candidates come back even when Discogs reports more — that page is
+ * relevance-ordered, so the closest matches are the ones kept.
  */
 export async function searchReleases(
 	params: SearchParams,
 	limit: number = MAX_CANDIDATES,
 ): Promise<Array<DiscogsCandidate>> {
-	const perPage =
-		Number.isFinite(limit) && limit <= DEFAULT_PER_PAGE
-			? DEFAULT_PER_PAGE
-			: MAX_PER_PAGE;
+	// Fetch a page big enough to satisfy the limit, clamped to Discogs' 100/page.
+	const perPage = Math.min(Math.max(limit, DEFAULT_PER_PAGE), MAX_PER_PAGE);
 	const res = await discogsFetch(buildSearchUrl(params, perPage));
 	// Don't swallow failures as an empty result — a bad token / rate limit / 5xx
 	// is not "no matches". Throw so the caller can surface it; the automated
