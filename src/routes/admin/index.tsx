@@ -16,11 +16,12 @@ import {
 	type SortingState,
 	useReactTable,
 } from "@tanstack/react-table";
-import { ChevronDownIcon } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { BadgeCheck, ChevronDownIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
+import { RecordPanel } from "#/components/record-panel";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Checkbox } from "#/components/ui/checkbox";
@@ -31,6 +32,7 @@ import {
 	DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu";
 import { Input } from "#/components/ui/input";
+import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
@@ -42,6 +44,7 @@ import {
 	retryRecords,
 } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
+import { effectiveValue, formatMoney } from "#/lib/value";
 
 type RecordStatus = NonNullable<Record["status"]>;
 type StatusFilter =
@@ -49,7 +52,8 @@ type StatusFilter =
 	| "all"
 	| "unpublished"
 	| "unmatched"
-	| "duplicate";
+	| "duplicate"
+	| "confirmed";
 
 const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "all", label: "All" },
@@ -61,6 +65,7 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "failed", label: "Failed" },
 	{ value: "complete", label: "Published" },
 	{ value: "duplicate", label: "Duplicate" },
+	{ value: "confirmed", label: "Confirmed" },
 ];
 
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
@@ -177,6 +182,7 @@ function matchesFilter(
 	if (filter === "unmatched") return status === "review" && !record.discogsId;
 	if (filter === "duplicate")
 		return record.duplicateOf != null && liveIds.has(record.duplicateOf);
+	if (filter === "confirmed") return record.confirmedRelease === true;
 	return status === filter;
 }
 
@@ -214,6 +220,25 @@ function AdminRecords() {
 	// Bulk selection, keyed by record id (see `getRowId`) so a selection survives
 	// re-sorts and tab switches rather than tracking to whatever row an index lands on.
 	const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+	// Quick-view drawer, tracked by record id so paging/re-sorting can't desync it.
+	const [previewId, setPreviewId] = useState<number | null>(null);
+
+	// Collection value totals (USD). `total` sums every record's effective value
+	// (manual if set, else the Discogs guess); `confirmedTotal` counts only records
+	// with a hand-entered value. Drives the header summary.
+	const totals = useMemo(() => {
+		let total = 0;
+		let confirmedTotal = 0;
+		let valued = 0;
+		for (const r of data) {
+			const v = effectiveValue(r);
+			if (v == null) continue;
+			total += v;
+			valued += 1;
+			if (r.manualValue != null) confirmedTotal += v;
+		}
+		return { total, confirmedTotal, valued };
+	}, [data]);
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
 
@@ -319,14 +344,25 @@ function AdminRecords() {
 					// Prefer the sourced/resized cover; fall back to the capture (admin only).
 					const key =
 						row.original.coverImageKey ?? row.original.capturePhotoKey;
-					return key ? (
-						<img
-							src={`/api/photos/${key}`}
-							alt=""
-							className="size-10 min-w-10 rounded object-cover"
-						/>
-					) : (
-						<div className="size-10 min-w-10 rounded bg-muted" />
+					// The thumbnail opens the quick-view drawer (a <button>, so the row's
+					// navigate-to-detail guard skips it).
+					return (
+						<button
+							type="button"
+							aria-label="Quick view"
+							onClick={() => setPreviewId(row.original.id)}
+							className="block rounded transition-opacity hover:opacity-80"
+						>
+							{key ? (
+								<img
+									src={`/api/photos/${key}`}
+									alt=""
+									className="size-10 min-w-10 rounded object-cover"
+								/>
+							) : (
+								<div className="size-10 min-w-10 rounded bg-muted" />
+							)}
+						</button>
 					);
 				},
 			},
@@ -349,6 +385,43 @@ function AdminRecords() {
 				accessorKey: "pitchforkScore",
 				header: "Pitchfork",
 				cell: ({ getValue }) => getValue<number | null>() ?? "—",
+			},
+			{
+				id: "value",
+				header: "Value",
+				// The effective value: manual (confirmed) figure if set, else the guess.
+				accessorFn: (row) => effectiveValue(row),
+				cell: ({ row }) => {
+					const value = effectiveValue(row.original);
+					if (value == null)
+						return <span className="text-muted-foreground">—</span>;
+					return (
+						<span
+							className="tabular-nums"
+							title={
+								row.original.manualValue != null
+									? "Confirmed (manual) value"
+									: "Estimated from Discogs"
+							}
+						>
+							{formatMoney(value, row.original.discogsValueCurrency ?? "USD")}
+						</span>
+					);
+				},
+			},
+			{
+				id: "confirmed",
+				header: "Confirmed",
+				accessorFn: (row) => (row.confirmedRelease ? 1 : 0),
+				cell: ({ row }) =>
+					row.original.confirmedRelease ? (
+						<BadgeCheck
+							className="size-4 text-brand-strong"
+							aria-label="Confirmed release"
+						/>
+					) : (
+						<span className="text-muted-foreground">—</span>
+					),
 			},
 			{
 				accessorKey: "status",
@@ -456,6 +529,21 @@ function AdminRecords() {
 		data.length > 0 &&
 		(statusFilter !== "all" || debouncedFilter.trim() !== "");
 
+	// Quick-view drawer: page through exactly what's on screen (the table's sorted +
+	// filtered rows), tracked by id so re-sorting never jumps to the wrong record.
+	const previewRecords = table.getRowModel().rows.map((r) => r.original);
+	const previewIndex =
+		previewId == null
+			? -1
+			: previewRecords.findIndex((r) => r.id === previewId);
+	const previewRecord = previewIndex >= 0 ? previewRecords[previewIndex] : null;
+
+	// If the previewed record drops out of the filtered view, forget it entirely so
+	// a later search can't silently re-open it.
+	useEffect(() => {
+		if (previewId != null && previewIndex === -1) setPreviewId(null);
+	}, [previewId, previewIndex]);
+
 	// Run a bulk action against the current selection, confirming first for the
 	// destructive ones. Shared by the desktop buttons and the mobile menu.
 	const runBulkAction = (action: BulkAction) => {
@@ -475,7 +563,26 @@ function AdminRecords() {
 	return (
 		<div className="space-y-4">
 			<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-				<h1 className="text-2xl font-semibold">Collection</h1>
+				<div>
+					<h1 className="text-2xl font-semibold">Collection</h1>
+					<p className="mt-0.5 text-sm text-muted-foreground">
+						Total value{" "}
+						<span className="font-medium tabular-nums text-foreground">
+							{formatMoney(totals.total, "USD")}
+						</span>{" "}
+						across {totals.valued} {totals.valued === 1 ? "record" : "records"}
+						{totals.confirmedTotal > 0 && (
+							<>
+								{" "}
+								·{" "}
+								<span className="tabular-nums">
+									{formatMoney(totals.confirmedTotal, "USD")}
+								</span>{" "}
+								confirmed
+							</>
+						)}
+					</p>
+				</div>
 				<div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
 					<Input
 						ref={searchRef}
@@ -668,10 +775,11 @@ function AdminRecords() {
 							</label>
 							{/* Link wraps only the non-destructive content; the Delete button is
 							    a sibling so we don't nest interactive elements inside an <a>. */}
-							<Link
-								to="/admin/records/$id"
-								params={{ id: String(r.id) }}
-								className="flex min-w-0 flex-1 items-center gap-3"
+							<button
+								type="button"
+								aria-label="Quick view"
+								onClick={() => setPreviewId(r.id)}
+								className="shrink-0 rounded"
 							>
 								{thumb ? (
 									<img
@@ -682,6 +790,12 @@ function AdminRecords() {
 								) : (
 									<div className="size-14 shrink-0 rounded bg-muted" />
 								)}
+							</button>
+							<Link
+								to="/admin/records/$id"
+								params={{ id: String(r.id) }}
+								className="flex min-w-0 flex-1 items-center gap-3"
+							>
 								<div className="min-w-0 flex-1">
 									<p className="truncate font-medium">
 										<RecordTitle record={r} />
@@ -821,6 +935,35 @@ function AdminRecords() {
 					)}
 				</tbody>
 			</table>
+
+			{/* Quick-view drawer — the same panel the public site uses, in admin mode
+			    so it surfaces the private valuation + confirmed-release status. */}
+			<Sheet
+				open={previewRecord != null}
+				onOpenChange={(open) => {
+					if (!open) setPreviewId(null);
+				}}
+			>
+				<SheetContent className="p-0">
+					{previewRecord && (
+						<RecordPanel
+							key={previewRecord.id}
+							admin
+							record={previewRecord}
+							index={previewIndex}
+							total={previewRecords.length}
+							onPrev={() =>
+								previewIndex > 0 &&
+								setPreviewId(previewRecords[previewIndex - 1].id)
+							}
+							onNext={() =>
+								previewIndex < previewRecords.length - 1 &&
+								setPreviewId(previewRecords[previewIndex + 1].id)
+							}
+						/>
+					)}
+				</SheetContent>
+			</Sheet>
 		</div>
 	);
 }

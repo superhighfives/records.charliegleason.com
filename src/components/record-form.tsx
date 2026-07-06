@@ -1,6 +1,7 @@
 import { useForm } from "@tanstack/react-form";
 
 import { Button } from "#/components/ui/button";
+import { Checkbox } from "#/components/ui/checkbox";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
@@ -31,6 +32,11 @@ const TEXT_FIELDS = [
 	{ name: "country", label: "Country", placeholder: "UK" },
 	{ name: "genre", label: "Genre", placeholder: "Electronic" },
 	{ name: "pitchforkScore", label: "Pitchfork score", placeholder: "9.4" },
+	{
+		name: "manualValue",
+		label: "Manual value (USD)",
+		placeholder: "e.g. 45",
+	},
 ] as const;
 
 export function RecordForm({
@@ -81,6 +87,26 @@ export function RecordForm({
 					)}
 				</form.Field>
 			))}
+
+			<form.Field name="confirmedRelease">
+				{(field) => (
+					<div className="flex items-center gap-2">
+						<Checkbox
+							id={field.name}
+							name={field.name}
+							checked={field.state.value}
+							onBlur={field.handleBlur}
+							onChange={(e) => field.handleChange(e.target.checked)}
+						/>
+						<Label htmlFor={field.name}>
+							Confirmed release
+							<span className="ml-1 font-normal text-muted-foreground">
+								— this is the correct Discogs match
+							</span>
+						</Label>
+					</div>
+				)}
+			</form.Field>
 
 			<form.Field name="notes">
 				{(field) => (

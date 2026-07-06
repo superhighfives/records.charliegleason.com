@@ -22,6 +22,7 @@ import type { DiscogsCandidate, SearchParams } from "#/lib/discogs";
 import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
+	fetchRecordValue,
 	getDiscogsRelease,
 	lookupDiscogsRelease,
 	publishRecord,
@@ -32,6 +33,7 @@ import {
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 import { cn } from "#/lib/utils";
+import { effectiveValue, formatMoney } from "#/lib/value";
 
 /** Does the pasted text look like it contains a Discogs release id? */
 function looksLikeReleaseId(input: string): boolean {
@@ -125,6 +127,8 @@ function toForm(
 		genre: picked?.genre ?? record.genre ?? "",
 		pitchforkScore: record.pitchforkScore?.toString() ?? "",
 		notes: record.notes ?? "",
+		manualValue: record.manualValue?.toString() ?? "",
+		confirmedRelease: record.confirmedRelease ?? false,
 	};
 }
 
@@ -384,6 +388,21 @@ function RecordDetail() {
 		onSuccess: invalidate,
 	});
 
+	// Pull a fresh Discogs value estimate (seller price suggestions, falling back
+	// to the lowest listing) for this record, leaving all other metadata alone.
+	const fetchValue = useMutation({
+		mutationFn: () => fetchRecordValue({ data: recordId }),
+		onSuccess: async (row) => {
+			await invalidate();
+			if (!row || row.discogsValue == null) {
+				toast.error("Couldn’t fetch a value from Discogs for this release.");
+			} else {
+				toast.success("Value updated from Discogs.");
+			}
+		},
+		onError: () => toast.error("Couldn’t fetch a value from Discogs."),
+	});
+
 	// Re-pull the enrichment fields from the stored Discogs release (no re-scan of
 	// the photo). Clears any locally picked candidate so the form shows fresh data.
 	const refresh = useMutation({
@@ -638,6 +657,56 @@ function RecordDetail() {
 								: ""}
 						</p>
 					)}
+
+					{/* Valuation. The headline is the manual (confirmed) value if set,
+					    else the Discogs guess; both are entered/edited in the form below.
+					    "Fetch value" pulls a fresh estimate from Discogs. */}
+					<div className="rounded-lg border p-3">
+						<div className="flex items-start justify-between gap-3">
+							<div>
+								<p className="text-xs text-muted-foreground">Value</p>
+								<p className="text-xl font-semibold tabular-nums">
+									{formatMoney(
+										effectiveValue(record),
+										record.discogsValueCurrency ?? "USD",
+									)}
+									<span className="ml-2 align-middle text-xs font-normal text-muted-foreground">
+										{record.manualValue != null ? "confirmed" : "estimated"}
+									</span>
+								</p>
+								<p className="mt-1 text-xs text-muted-foreground">
+									Manual{" "}
+									{record.manualValue != null
+										? formatMoney(
+												record.manualValue,
+												record.discogsValueCurrency ?? "USD",
+											)
+										: "—"}{" "}
+									· Discogs guess{" "}
+									{record.discogsValue != null
+										? formatMoney(
+												record.discogsValue,
+												record.discogsValueCurrency ?? "USD",
+											)
+										: "—"}
+								</p>
+							</div>
+							<Button
+								type="button"
+								size="sm"
+								variant="outline"
+								disabled={!record.discogsId || fetchValue.isPending}
+								title={
+									record.discogsId
+										? undefined
+										: "Match a Discogs release first to fetch a value."
+								}
+								onClick={() => fetchValue.mutate()}
+							>
+								{fetchValue.isPending ? "Fetching…" : "Fetch value"}
+							</Button>
+						</div>
+					</div>
 
 					{/* Wrong match? Search Discogs or paste a release URL. */}
 					<div className="space-y-3 rounded-lg border p-3">
