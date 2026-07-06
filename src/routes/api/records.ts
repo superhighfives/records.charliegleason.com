@@ -5,6 +5,7 @@ import { desc, eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
+import { toPublicRecord } from "#/lib/records";
 
 /**
  * Public, read-only JSON API for the collection.
@@ -23,8 +24,9 @@ export const Route = createFileRoute("/api/records")({
 					.where(eq(records.status, "complete"))
 					.orderBy(desc(records.createdAt));
 
-				// The iPhone capture is admin-only; never expose it publicly.
-				const publicRows = rows.map(({ capturePhotoKey: _omit, ...r }) => r);
+				// The iPhone capture and all valuation fields are admin-only; never
+				// expose them publicly.
+				const publicRows = rows.map(toPublicRecord);
 
 				return json(
 					{ records: publicRows, count: publicRows.length },

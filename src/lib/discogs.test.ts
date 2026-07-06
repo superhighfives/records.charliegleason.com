@@ -4,6 +4,7 @@ import {
 	buildSearchUrl,
 	parseReleaseId,
 	parseSizeAndType,
+	pickSuggestedValue,
 	searchReleases,
 } from "./discogs";
 
@@ -33,6 +34,39 @@ describe("parseReleaseId", () => {
 		);
 		expect(parseReleaseId("https://www.discogs.com/master/98765")).toBe(null);
 		expect(parseReleaseId("")).toBe(null);
+	});
+});
+
+describe("pickSuggestedValue", () => {
+	it("prefers the VG+ grade and reports its currency", () => {
+		const { value, currency, suggestions } = pickSuggestedValue({
+			"Mint (M)": { value: 40, currency: "USD" },
+			"Near Mint (NM or M-)": { value: 30, currency: "USD" },
+			"Very Good Plus (VG+)": { value: 22.5, currency: "USD" },
+			"Very Good (VG)": { value: 15, currency: "USD" },
+		});
+		expect(value).toBe(22.5);
+		expect(currency).toBe("USD");
+		// Every well-formed grade is kept in the flat breakdown.
+		expect(suggestions["Mint (M)"]).toBe(40);
+		expect(Object.keys(suggestions)).toHaveLength(4);
+	});
+
+	it("falls back down the grade priority when VG+ is absent", () => {
+		const { value } = pickSuggestedValue({
+			"Near Mint (NM or M-)": { value: 30, currency: "USD" },
+			"Very Good (VG)": { value: 15, currency: "USD" },
+		});
+		expect(value).toBe(30);
+	});
+
+	it("drops malformed entries and returns null when nothing is usable", () => {
+		const { value, suggestions } = pickSuggestedValue({
+			"Mint (M)": { value: "not a number", currency: "USD" },
+			"Very Good (VG)": null,
+		});
+		expect(value).toBe(null);
+		expect(suggestions).toEqual({});
 	});
 });
 

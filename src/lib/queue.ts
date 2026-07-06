@@ -6,7 +6,7 @@ import { getDb } from "#/db";
 import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
-import { getReleaseDetail } from "#/lib/discogs";
+import { getReleaseDetail, getReleaseValue } from "#/lib/discogs";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -59,10 +59,11 @@ export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
 /**
  * Re-pull an already-identified record from its stored Discogs release id and
  * update the enrichment fields (year, label, genre, format, size, catno,
- * country). Only overwrites a field when Discogs returns a value, so it never
- * nulls out good data. Leaves artist/title/status alone — identity was confirmed
- * at publish. Returns the updated row, or null if the record is gone or has no
- * Discogs id. Shared by the sync `refreshRecord` server fn and the bulk queue.
+ * country) plus a fresh value estimate. Only overwrites a field when Discogs
+ * returns a value, so it never nulls out good data. Leaves artist/title/status
+ * alone — identity was confirmed at publish. Returns the updated row, or null if
+ * the record is gone or has no Discogs id. Shared by the sync `refreshRecord`
+ * server fn and the bulk queue.
  */
 export async function refreshRecordById(id: number): Promise<Record | null> {
 	const db = getDb(env.DB);
@@ -76,6 +77,10 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 	const detail = await getReleaseDetail(record.discogsId);
 	if (!detail) return record;
 
+	// Value is best-effort — a missing/failed price lookup shouldn't block the
+	// metadata refresh, so fetch it separately and keep the previous figure on miss.
+	const value = await getReleaseValue(record.discogsId).catch(() => null);
+
 	const [row] = await db
 		.update(records)
 		.set({
@@ -86,8 +91,50 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 			size: detail.size ?? record.size,
 			catno: detail.catno ?? record.catno,
 			country: detail.country ?? record.country,
+			...valueColumns(value),
 			updatedAt: new Date(),
 		})
+		.where(eq(records.id, id))
+		.returning();
+	return row ?? record;
+}
+
+/**
+ * The value-related column updates for a fetched Discogs value. A miss (no
+ * usable figure) returns no changes, so a transient failure leaves any
+ * previously-fetched value untouched rather than wiping it. Shared by the
+ * refresh path and the standalone value fetch.
+ */
+function valueColumns(value: Awaited<ReturnType<typeof getReleaseValue>>) {
+	if (!value || value.value == null) return {};
+	return {
+		discogsValue: value.value,
+		discogsValueCurrency: value.currency,
+		discogsValueJson: value.suggestions
+			? JSON.stringify(value.suggestions)
+			: null,
+		discogsValueFetchedAt: new Date(),
+	};
+}
+
+/**
+ * Fetch just the Discogs value estimate for a record and store it, leaving all
+ * other metadata untouched. Returns the updated row, or null if the record is
+ * gone or has no Discogs id to value.
+ */
+export async function fetchValueForRecord(id: number): Promise<Record | null> {
+	const db = getDb(env.DB);
+	const [record] = await db
+		.select()
+		.from(records)
+		.where(eq(records.id, id))
+		.limit(1);
+	if (!record?.discogsId) return null;
+
+	const value = await getReleaseValue(record.discogsId).catch(() => null);
+	const [row] = await db
+		.update(records)
+		.set({ ...valueColumns(value), updatedAt: new Date() })
 		.where(eq(records.id, id))
 		.returning();
 	return row ?? record;
