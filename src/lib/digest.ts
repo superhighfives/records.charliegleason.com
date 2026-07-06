@@ -81,23 +81,26 @@ function renderBadge(count: number): string {
 }
 
 /**
- * The "where to buy" block under a suggestion: a primary line for the cheapest
- * vinyl seller (with a sellers badge), plus a second line for the Amazon Prime
- * option when one's available. Returns "" when no pricing is available.
+ * The "where to buy" block under a suggestion: the Amazon Prime option first
+ * when one's available (in the title text color), followed by the cheapest
+ * vinyl seller line (with a sellers badge). Returns "" when no pricing is
+ * available.
  */
 function renderOffer(offer: SellerSummary | null): string {
 	if (!offer) return "";
 	const { cheapest, offerCount, prime } = offer;
 
-	const main = `From ${formatCost(cheapest)} at ${escapeHtml(cheapest.seller)}`;
-	let html = `
-  <a href="${escapeHtml(cheapest.url)}" style="display:block;margin-top:2px;color:#aaa;text-decoration:none;font-size:13px">${main}${renderBadge(offerCount)}</a>`;
+	let html = "";
 
 	if (prime) {
 		const label = `Amazon Prime · ${formatCost(prime)}`;
 		html += `
-  <a href="${escapeHtml(prime.url)}" style="display:block;margin-top:1px;color:#aaa;text-decoration:none;font-size:13px">${label}</a>`;
+  <a href="${escapeHtml(prime.url)}" style="display:block;margin-top:2px;color:#111;text-decoration:none;font-size:13px">${label}</a>`;
 	}
+
+	const main = `From ${formatCost(cheapest)} at ${escapeHtml(cheapest.seller)}`;
+	html += `
+  <a href="${escapeHtml(cheapest.url)}" style="display:block;margin-top:${prime ? "1px" : "2px"};color:#aaa;text-decoration:none;font-size:13px">${main}${renderBadge(offerCount)}</a>`;
 
 	return html;
 }
