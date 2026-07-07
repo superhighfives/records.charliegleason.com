@@ -12,3 +12,5 @@ dist-ssr
 __unconfig*
 todos.json
 mcp-todos.json
+# Cached fonts for scripts/generate-og.mjs (re-downloaded on demand)
+scripts/.fonts/
