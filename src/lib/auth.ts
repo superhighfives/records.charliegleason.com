@@ -17,6 +17,34 @@ import { isAdmin } from "#/lib/roles";
  * customization needed — just set `publicMetadata.role = "admin"` on the user.
  * A custom-mapped `metadata` claim is also honoured as a fallback.
  */
+/**
+ * Resolve the current request's Clerk session and return the admin's user id, or
+ * `null` if the request isn't a signed-in admin. Non-throwing counterpart to
+ * {@link authMiddleware}: for a *read* that gets embedded in an SSR loader (like
+ * `getRecord`), a thrown 401 would blow up the render instead of letting the
+ * client-side signed-out redirect take over — so the caller checks this and
+ * degrades softly (e.g. returns `null`). Writes should still use `authMiddleware`,
+ * which rejects with 401/403.
+ */
+export async function getAdminSession(): Promise<{ userId: string } | null> {
+	const clerk = createClerkClient({
+		secretKey: env.CLERK_SECRET_KEY,
+		// Build-time inlined (Vite) — no runtime Wrangler var needed for this one.
+		publishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+	});
+
+	const requestState = await clerk.authenticateRequest(getRequest());
+	const auth = requestState.toAuth();
+	if (!auth?.userId) return null;
+
+	const role =
+		auth.sessionClaims?.public_metadata?.role ??
+		auth.sessionClaims?.metadata?.role;
+	if (!isAdmin(role)) return null;
+
+	return { userId: auth.userId };
+}
+
 export const authMiddleware = createMiddleware({ type: "function" }).server(
 	async ({ next }) => {
 		const clerk = createClerkClient({
