@@ -124,8 +124,14 @@ export const getRecord = createServerFn({ method: "GET" })
 			if (!row) return null;
 			// Self-heal a professional-photo job wedged in pending/processing: since the
 			// detail page polls this fn while a job is in flight, a stale one flips to
-			// `failed` here and surfaces a "Try again" button on the next poll.
-			return failStaleProfessional(row);
+			// `failed` here and surfaces a "Try again" button on the next poll. The
+			// watchdog is best-effort — never let its write break the read, so fall back
+			// to the row as-is if it throws.
+			try {
+				return await failStaleProfessional(row);
+			} catch {
+				return row;
+			}
 		}),
 	);
 

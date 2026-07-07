@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { eq, ne } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type Record, records } from "#/db/schema";
@@ -109,6 +109,17 @@ export function isProfessionalStale(
 export async function failStaleProfessional(record: Record): Promise<Record> {
 	if (!isProfessionalStale(record, Date.now())) return record;
 
+	// Compare-and-swap: only reclaim the exact stuck row we read. If the consumer
+	// landed a terminal `ready`/`failed` (or a manual regenerate bumped it to a
+	// fresh `pending`) in the gap between our read and this write, the status/
+	// `updatedAt` guards below won't match — so we leave that newer state alone
+	// rather than clobbering a good photo back to `failed`.
+	const guards = [
+		eq(records.id, record.id),
+		inArray(records.professionalStatus, ["pending", "processing"]),
+	];
+	if (record.updatedAt) guards.push(eq(records.updatedAt, record.updatedAt));
+
 	const db = getDb(env.DB);
 	const [row] = await db
 		.update(records)
@@ -118,8 +129,9 @@ export async function failStaleProfessional(record: Record): Promise<Record> {
 				"Generation timed out — the job stalled before finishing. Try again.",
 			updatedAt: new Date(),
 		})
-		.where(eq(records.id, record.id))
+		.where(and(...guards))
 		.returning();
+	// No match → someone advanced the row first; keep what we read, next poll re-syncs.
 	return row ?? record;
 }
 
