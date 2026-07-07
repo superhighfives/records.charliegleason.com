@@ -337,9 +337,22 @@ a {
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
   body {
     @apply bg-background text-foreground;
+  }
+
+  /*
+   * One consistent focus treatment for the whole app: a soft brand-yellow ring
+   * on keyboard focus only. Buttons and inputs opt out with `outline-none` and
+   * render their own matching `ring` (same colour, same weight); everything else
+   * — links, cover tiles, the copy button — picks this up automatically. Uses an
+   * outline (not a box-shadow ring) so it's never clipped by an `overflow:hidden`
+   * ancestor and never clobbers an element's own shadow.
+   */
+  :focus-visible {
+    outline: 3px solid color-mix(in oklab, var(--ring) 50%, transparent);
+    outline-offset: 1px;
   }
 }
