@@ -10,6 +10,7 @@ import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
 import {
 	getReleaseCandidate,
 	getReleaseDetail,
+	getReleaseValue,
 	MAX_PER_PAGE,
 	parseReleaseId,
 	searchParamsSchema,
@@ -402,6 +403,20 @@ export const fetchRecordValue = createServerFn({ method: "POST" })
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "fetchRecordValue" }, () =>
 			fetchValueForRecord(id),
+		),
+	);
+
+/**
+ * Estimate a value for a Discogs release id without touching any record. Lets the
+ * admin preview pricing for a picked-but-unpublished edition inline before
+ * committing to it. Returns null if Discogs yields no usable figure.
+ */
+export const previewReleaseValue = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((discogsId: string) => discogsId)
+	.handler(({ data: discogsId }) =>
+		Sentry.startSpan({ name: "previewReleaseValue" }, () =>
+			getReleaseValue(discogsId).catch(() => null),
 		),
 	);
 
