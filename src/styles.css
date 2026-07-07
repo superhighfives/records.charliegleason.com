@@ -255,7 +255,7 @@ a {
   position: absolute;
   inset: -75%;
   pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='180'%20height='180'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.7'%20numOctaves='3'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='2.4'%20intercept='-0.7'/%3E%3CfeFuncG%20type='linear'%20slope='2.4'%20intercept='-0.7'/%3E%3CfeFuncB%20type='linear'%20slope='2.4'%20intercept='-0.7'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='180'%20height='180'%20filter='url(%23n)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='200'%20height='200'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='4'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='3'%20intercept='-1'/%3E%3CfeFuncG%20type='linear'%20slope='3'%20intercept='-1'/%3E%3CfeFuncB%20type='linear'%20slope='3'%20intercept='-1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='200'%20height='200'%20filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   opacity: 0.5;
   mix-blend-mode: multiply;
@@ -344,15 +344,34 @@ a {
   }
 
   /*
-   * One consistent focus treatment for the whole app: a soft brand-yellow ring
-   * on keyboard focus only. Buttons and inputs opt out with `outline-none` and
-   * render their own matching `ring` (same colour, same weight); everything else
-   * — links, cover tiles, the copy button — picks this up automatically. Uses an
-   * outline (not a box-shadow ring) so it's never clipped by an `overflow:hidden`
-   * ancestor and never clobbers an element's own shadow.
+   * One consistent focus treatment for the whole app, matching the inputs: a
+   * bright 1px brand-yellow line hugging the element plus a wider, dimmer ring
+   * outside it, on keyboard focus only. Buttons and inputs opt out with
+   * `outline-none` and render their own matching `border` + `ring`; everything
+   * else — links, the copy button — picks this up automatically. The transparent
+   * outline keeps a visible indicator under forced-colours / high-contrast mode,
+   * where box-shadows are dropped.
    */
   :focus-visible {
-    outline: 3px solid color-mix(in oklab, var(--ring) 50%, transparent);
-    outline-offset: 1px;
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 1px var(--ring),
+      0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+
+  /*
+   * Cover tiles are wrapped in an `.group` list item that carries
+   * `content-visibility` (→ paint containment), which would clip a ring drawn on
+   * the inner button. Draw it on the list item instead — an element's own shadow
+   * isn't clipped by its own containment — and cancel the (clipped) inner ring.
+   */
+  .cv-auto:has(:focus-visible) {
+    box-shadow:
+      0 0 0 1px var(--ring),
+      0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+  .cv-auto > button:focus-visible {
+    box-shadow: none;
   }
 }
