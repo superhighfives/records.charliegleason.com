@@ -56,7 +56,9 @@ type StatusFilter =
 	| "duplicate"
 	| "confirmed"
 	| "valued"
-	| "unvalued";
+	| "unvalued"
+	| "professional"
+	| "unprofessional";
 
 const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "all", label: "All" },
@@ -71,6 +73,8 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "confirmed", label: "Confirmed" },
 	{ value: "valued", label: "Valued" },
 	{ value: "unvalued", label: "Unvalued" },
+	{ value: "professional", label: "Pro photo" },
+	{ value: "unprofessional", label: "No pro photo" },
 ];
 
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
@@ -201,6 +205,11 @@ function matchesFilter(
 	// all (manual figure or Discogs guess) — mirroring the Value column's em dash.
 	if (filter === "valued") return effectiveValue(record) != null;
 	if (filter === "unvalued") return effectiveValue(record) == null;
+	// "Pro photo" / "No pro photo" split on whether a professional studio photo has
+	// actually been generated (the stored image key), regardless of whether it's
+	// been approved for public display yet.
+	if (filter === "professional") return record.professionalImageKey != null;
+	if (filter === "unprofessional") return record.professionalImageKey == null;
 	return status === filter;
 }
 
