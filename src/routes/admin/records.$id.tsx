@@ -18,7 +18,11 @@ import {
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
-import type { DiscogsCandidate, SearchParams } from "#/lib/discogs";
+import type {
+	DiscogsCandidate,
+	DiscogsValue,
+	SearchParams,
+} from "#/lib/discogs";
 import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
@@ -26,6 +30,7 @@ import {
 	generateProfessional,
 	getDiscogsRelease,
 	lookupDiscogsRelease,
+	previewReleaseValue,
 	publishRecord,
 	refreshRecord,
 	reprocessRecord,
@@ -282,6 +287,15 @@ function RecordDetail() {
 
 	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
 	const [results, setResults] = useState<Array<DiscogsCandidate> | null>(null);
+	// A non-persisted Discogs value estimate for a picked-but-unpublished edition,
+	// so the admin can compare pricing across editions before committing. Cleared
+	// whenever the picked candidate changes so it never shows a stale edition's price.
+	const [preview, setPreview] = useState<DiscogsValue | null>(null);
+	// Any change to the picked edition invalidates a previously previewed price.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the id only.
+	useEffect(() => {
+		setPreview(null);
+	}, [picked?.discogsId]);
 	const [query, setQuery] = useState({
 		artist: record?.artist ?? "",
 		title: record?.title ?? "",
@@ -429,6 +443,24 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn’t fetch a value from Discogs."),
 	});
 
+	// Preview a picked edition's value without saving it. Used when the admin has
+	// selected a candidate that isn't yet published, so "Fetch value" can't persist
+	// to it — we show the estimate inline instead and let publishing commit it.
+	const previewValue = useMutation({
+		mutationFn: (discogsId: string) => previewReleaseValue({ data: discogsId }),
+		onSuccess: (value, discogsId) => {
+			// A newer pick may have landed while this request was in flight. Ignore a
+			// result for an edition that's no longer selected so we never overwrite the
+			// display with a stale edition's price.
+			if (discogsId !== picked?.discogsId) return;
+			setPreview(value);
+			if (!value || value.value == null) {
+				toast.error("Couldn’t fetch a value from Discogs for this release.");
+			}
+		},
+		onError: () => toast.error("Couldn’t fetch a value from Discogs."),
+	});
+
 	// Re-pull the enrichment fields from the stored Discogs release (no re-scan of
 	// the photo). Clears any locally picked candidate so the form shows fresh data.
 	const refresh = useMutation({
@@ -446,6 +478,14 @@ function RecordDetail() {
 	if (!record) {
 		return <p className="text-muted-foreground">Record not found.</p>;
 	}
+
+	// The edition a value fetch should target: the picked candidate if the admin
+	// has chosen one, otherwise the record's saved release. Previewing (rather than
+	// persisting) applies when the pick differs from what's saved — we can't write a
+	// value to an unpublished edition, so we show it inline until they publish.
+	const activeDiscogsId = picked?.discogsId ?? record.discogsId;
+	const isPreviewing = picked != null && picked.discogsId !== record.discogsId;
+	const valuePending = fetchValue.isPending || previewValue.isPending;
 
 	const candidates = results ?? parseCandidates(record.candidatesJson);
 	const inFlight =
@@ -1050,20 +1090,37 @@ function RecordDetail() {
 											)
 										: "—"}
 								</p>
+								{isPreviewing && preview?.value != null && (
+									<p className="mt-1 text-xs font-medium text-foreground">
+										Picked edition{" "}
+										{formatMoney(preview.value, preview.currency)}
+										<span className="ml-1 font-normal text-muted-foreground">
+											— preview, save to keep
+										</span>
+									</p>
+								)}
 							</div>
 							<Button
 								type="button"
 								size="sm"
 								variant="outline"
-								disabled={!record.discogsId || fetchValue.isPending}
+								disabled={!activeDiscogsId || valuePending}
 								title={
-									record.discogsId
+									activeDiscogsId
 										? undefined
 										: "Match a Discogs release first to fetch a value."
 								}
-								onClick={() => fetchValue.mutate()}
+								onClick={() =>
+									isPreviewing && activeDiscogsId
+										? previewValue.mutate(activeDiscogsId)
+										: fetchValue.mutate()
+								}
 							>
-								{fetchValue.isPending ? "Fetching…" : "Fetch value"}
+								{valuePending
+									? "Fetching…"
+									: isPreviewing
+										? "Preview value"
+										: "Fetch value"}
 							</Button>
 						</div>
 					</div>
