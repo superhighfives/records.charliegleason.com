@@ -54,7 +54,9 @@ type StatusFilter =
 	| "unpublished"
 	| "unmatched"
 	| "duplicate"
-	| "confirmed";
+	| "confirmed"
+	| "valued"
+	| "unvalued";
 
 const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "all", label: "All" },
@@ -67,6 +69,8 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "complete", label: "Published" },
 	{ value: "duplicate", label: "Duplicate" },
 	{ value: "confirmed", label: "Confirmed" },
+	{ value: "valued", label: "Valued" },
+	{ value: "unvalued", label: "Unvalued" },
 ];
 
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
@@ -193,6 +197,10 @@ function matchesFilter(
 	if (filter === "duplicate")
 		return record.duplicateOf != null && liveIds.has(record.duplicateOf);
 	if (filter === "confirmed") return record.confirmedRelease === true;
+	// "Valued" / "Unvalued" split on whether the record has an effective value at
+	// all (manual figure or Discogs guess) — mirroring the Value column's em dash.
+	if (filter === "valued") return effectiveValue(record) != null;
+	if (filter === "unvalued") return effectiveValue(record) == null;
 	return status === filter;
 }
 
