@@ -28,6 +28,7 @@ import {
 	enqueueProfessional,
 	enqueueProfessionalBatch,
 	enqueueRefreshBatch,
+	failStaleProfessional,
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
@@ -120,7 +121,11 @@ export const getRecord = createServerFn({ method: "GET" })
 				.from(records)
 				.where(eq(records.id, id))
 				.limit(1);
-			return row ?? null;
+			if (!row) return null;
+			// Self-heal a professional-photo job wedged in pending/processing: since the
+			// detail page polls this fn while a job is in flight, a stale one flips to
+			// `failed` here and surfaces a "Try again" button on the next poll.
+			return failStaleProfessional(row);
 		}),
 	);
 
