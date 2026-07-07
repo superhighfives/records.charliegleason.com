@@ -218,10 +218,75 @@ a {
     border-color 160ms ease;
 }
 
-/* Cover tiles: a simple bordered card, no hover treatment. */
+/* Cover tiles: a simple bordered card with an animated film-grain overlay. */
 .album-card {
+  position: relative;
   border: 1px solid var(--border);
   background: var(--card);
+}
+
+/*
+ * Animated grain, the analog/VHS speckle circularruin.com gets from a looping
+ * video — but generated on the fly from an SVG fractal-noise filter, so there's
+ * no asset to ship. The noise layer is deliberately larger than the card and
+ * jittered a frame at a time (steps(1)) so the same static texture reads as
+ * living grain. `overlay` blends it into the cover's own tones; the whole thing
+ * sits above the image but ignores pointer events so the tile stays clickable.
+ */
+.album-card::after {
+  content: "";
+  position: absolute;
+  inset: -75%;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='160'%20height='160'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.8'%20numOctaves='2'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3C/filter%3E%3Crect%20width='160'%20height='160'%20filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  opacity: 0.32;
+  mix-blend-mode: overlay;
+  will-change: transform;
+  animation: grain 0.7s steps(1) infinite;
+}
+
+@keyframes grain {
+  0% {
+    transform: translate(0, 0);
+  }
+  10% {
+    transform: translate(-4%, -6%);
+  }
+  20% {
+    transform: translate(-8%, 2%);
+  }
+  30% {
+    transform: translate(6%, -8%);
+  }
+  40% {
+    transform: translate(-2%, 8%);
+  }
+  50% {
+    transform: translate(-8%, 4%);
+  }
+  60% {
+    transform: translate(8%, 0);
+  }
+  70% {
+    transform: translate(0, 6%);
+  }
+  80% {
+    transform: translate(4%, -4%);
+  }
+  90% {
+    transform: translate(-6%, -2%);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+/* Respect a reduced-motion preference: keep the texture, drop the flicker. */
+@media (prefers-reduced-motion: reduce) {
+  .album-card::after {
+    animation: none;
+  }
 }
 
 .rise-in {
