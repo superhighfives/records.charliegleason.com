@@ -48,14 +48,6 @@ function looksLikeReleaseId(input: string): boolean {
 	return /^\d+$/.test(s) || /\/releases?\/\d+/.test(s);
 }
 
-// Collapse a pasted Discogs release URL to its canonical form, dropping the
-// decorative trailing slug: "…/release/12126690-Joe-Goddard-So-Much" →
-// "…/release/12126690". A bare id or already-clean URL passes through unchanged.
-function cleanDiscogsUrl(input: string): string {
-	const m = input.match(/\/releases?\/(\d+)/);
-	return m ? `https://www.discogs.com/release/${m[1]}` : input;
-}
-
 /** Read a file to a data URL (fallback when the browser can't crop/decode it). */
 function readFileAsDataUrl(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -1004,9 +996,7 @@ function RecordDetail() {
 											id="q-url"
 											value={discogsUrl}
 											placeholder="https://www.discogs.com/release/…"
-											onChange={(e) =>
-												setDiscogsUrl(cleanDiscogsUrl(e.target.value))
-											}
+											onChange={(e) => setDiscogsUrl(e.target.value)}
 										/>
 									</div>
 									{lookup.isError && (
