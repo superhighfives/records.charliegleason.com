@@ -218,12 +218,8 @@ a {
     border-color 160ms ease;
 }
 
-/* Cover tiles: a simple bordered card with an animated film-grain overlay. */
+/* Cover tiles: a simple bordered card. */
 .album-card {
-  position: relative;
-  /* Confine the overlay's blend to the card's own contents, so the grain reads
-   * the same regardless of whatever sits behind the tile in the page. */
-  isolation: isolate;
   border: 1px solid var(--border);
   background: var(--card);
 }
@@ -231,19 +227,27 @@ a {
 /*
  * Animated grain, the analog/VHS speckle circularruin.com gets from a looping
  * video — but generated on the fly from an SVG fractal-noise filter, so there's
- * no asset to ship. The noise layer is deliberately larger than the card and
- * jittered a frame at a time (steps(1)) so the same static texture reads as
- * living grain. `overlay` blends it into the cover's own tones; the whole thing
- * sits above the image but ignores pointer events so the tile stays clickable.
+ * no asset to ship. A reusable overlay: any element with `overflow: hidden`
+ * gets living grain by adding the class. The noise layer is deliberately larger
+ * than its host and jittered a frame at a time (steps(1)) so a single static
+ * texture reads as motion; `overlay` blends it into the cover's own tones; the
+ * whole thing ignores pointer events so the host stays interactive.
  */
-.album-card::after {
+.grain {
+  position: relative;
+  /* Confine the overlay's blend to this element's own contents, so the grain
+   * reads the same regardless of whatever sits behind it in the page. */
+  isolation: isolate;
+}
+
+.grain::after {
   content: "";
   position: absolute;
   inset: -75%;
   pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='180'%20height='180'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.7'%20numOctaves='3'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='2.4'%20intercept='-0.7'/%3E%3CfeFuncG%20type='linear'%20slope='2.4'%20intercept='-0.7'/%3E%3CfeFuncB%20type='linear'%20slope='2.4'%20intercept='-0.7'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='180'%20height='180'%20filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
-  opacity: 1;
+  opacity: 0.5;
   mix-blend-mode: overlay;
   animation: grain 0.5s steps(1) infinite;
 }
@@ -286,7 +290,7 @@ a {
 
 /* Respect a reduced-motion preference: keep the texture, drop the flicker. */
 @media (prefers-reduced-motion: reduce) {
-  .album-card::after {
+  .grain::after {
     animation: none;
   }
 }

@@ -205,7 +205,7 @@ export function RecordPanel({
 	return (
 		<>
 			<SheetHeader className="flex-row items-start gap-4 pb-2 pr-10">
-				<div className="size-16 shrink-0 overflow-hidden rounded-md border border-border bg-muted">
+				<div className="grain size-16 shrink-0 overflow-hidden rounded-md border border-border bg-muted">
 					{(() => {
 						const cover = displayCoverKey(record);
 						return cover ? (
