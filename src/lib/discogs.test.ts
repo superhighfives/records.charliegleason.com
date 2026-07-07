@@ -156,17 +156,17 @@ describe("searchReleases", () => {
 	});
 
 	it("caps results at the limit — the default shortlist, or a larger page", async () => {
-		const results = Array.from({ length: 10 }, (_, i) => ({
+		const results = Array.from({ length: 20 }, (_, i) => ({
 			id: i,
 			title: `Artist - Title ${i}`,
 			format: ["Vinyl", "LP"],
 		}));
-		// Default limit is the short analyze-path shortlist.
+		// Default limit is the analyze-path shortlist.
 		respond({ status: 200 }, { results });
-		await expect(searchReleases(noParams)).resolves.toHaveLength(5);
+		await expect(searchReleases(noParams)).resolves.toHaveLength(15);
 		// A larger limit (the manual search) returns the whole page.
 		respond({ status: 200 }, { results });
-		await expect(searchReleases(noParams, 100)).resolves.toHaveLength(10);
+		await expect(searchReleases(noParams, 100)).resolves.toHaveLength(20);
 	});
 
 	it("throws — not [] — on a 401 so a bad token surfaces", async () => {

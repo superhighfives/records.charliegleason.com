@@ -469,10 +469,11 @@ export async function getReleaseImageUrl(id: string): Promise<string | null> {
 	return primary?.uri ?? null;
 }
 
-// The automated analyze path only needs a short shortlist (it publishes the top
-// hit and stores the rest for the review pick-list), so it caps at MAX_CANDIDATES.
-// A manual search opts into the full result set — see `searchReleases`.
-const MAX_CANDIDATES = 5;
+// The automated analyze path publishes the top hit and stores the rest for the
+// review pick-list, so it caps at MAX_CANDIDATES — a shortlist long enough to
+// hold the alternate pressings worth picking from without bloating every row's
+// stored JSON. A manual search opts into the full result set — see `searchReleases`.
+const MAX_CANDIDATES = 15;
 // Discogs allows up to 100 results per page. The automated path pulls a modest
 // page (enough to prefer vinyl without losing other pressings); a manual search
 // asks for a full page so it can list as many pressings as one request returns.
