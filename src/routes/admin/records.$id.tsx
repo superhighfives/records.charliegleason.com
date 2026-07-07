@@ -177,7 +177,7 @@ function CandidateRow({
 			<button
 				type="button"
 				onClick={onToggle}
-				className={`				flex w-full items-center gap-3 px-3 py-2 text-left text-sm min-h-[68px] line-clamp-2 ${
+				className={`flex min-h-[68px] w-full items-center gap-3 px-3 py-2 text-left text-sm ${
 					active ? "bg-accent" : "hover:bg-accent/50"
 				}`}
 			>
