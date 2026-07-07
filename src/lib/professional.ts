@@ -24,8 +24,9 @@ import { firstOutputUrl, runModel } from "#/lib/replicate";
 // kept while lighting, angle and background are cleaned up. Bump to `-max` for
 // higher fidelity, or swap the model, in this one place.
 const KONTEXT_MODEL = "black-forest-labs/flux-kontext-pro";
-// Background matting → transparent cutout ("zero background").
-const CUTOUT_MODEL = "men1scus/birefnet";
+// Background matting → transparent cutout ("zero background"). An official model,
+// run at its latest version (see `runModel` — only official models work there).
+const CUTOUT_MODEL = "bria/remove-background";
 
 const STUDIO_PROMPT =
 	"Restyle this photograph of a vinyl record sleeve as a high-end studio product " +

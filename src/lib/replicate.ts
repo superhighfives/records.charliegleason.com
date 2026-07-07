@@ -39,6 +39,10 @@ function authHeaders(): HeadersInit {
  * or a timeout — the caller decides how to surface it. Both image passes in the
  * professional pipeline are just fetches awaiting a remote GPU, so the wall-clock
  * wait (not CPU) is fine inside a queue consumer.
+ *
+ * Only official models work here: the `/models/{model}/predictions` endpoint 404s
+ * for community models (those must be pinned to a version and run via a different
+ * endpoint), so keep both models in the professional pipeline official.
  */
 export async function runModel(
 	model: string,
