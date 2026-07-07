@@ -448,7 +448,11 @@ function RecordDetail() {
 	// to it — we show the estimate inline instead and let publishing commit it.
 	const previewValue = useMutation({
 		mutationFn: (discogsId: string) => previewReleaseValue({ data: discogsId }),
-		onSuccess: (value) => {
+		onSuccess: (value, discogsId) => {
+			// A newer pick may have landed while this request was in flight. Ignore a
+			// result for an edition that's no longer selected so we never overwrite the
+			// display with a stale edition's price.
+			if (discogsId !== picked?.discogsId) return;
 			setPreview(value);
 			if (!value || value.value == null) {
 				toast.error("Couldn’t fetch a value from Discogs for this release.");

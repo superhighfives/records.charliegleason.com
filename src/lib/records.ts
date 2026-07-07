@@ -409,14 +409,15 @@ export const fetchRecordValue = createServerFn({ method: "POST" })
 /**
  * Estimate a value for a Discogs release id without touching any record. Lets the
  * admin preview pricing for a picked-but-unpublished edition inline before
- * committing to it. Returns null if Discogs yields no usable figure.
+ * committing to it. Returns null when Discogs yields no usable figure; genuine
+ * failures (rate limit, auth, network) propagate so the client can surface them.
  */
 export const previewReleaseValue = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator((discogsId: string) => discogsId)
 	.handler(({ data: discogsId }) =>
 		Sentry.startSpan({ name: "previewReleaseValue" }, () =>
-			getReleaseValue(discogsId).catch(() => null),
+			getReleaseValue(discogsId),
 		),
 	);
 
