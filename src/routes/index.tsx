@@ -103,7 +103,7 @@ function Home() {
 			) : (
 				<ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4">
 					{filtered.map((r) => (
-						<li key={r.id} className="group">
+						<li key={r.id} className="group cv-auto">
 							<button
 								type="button"
 								onClick={() => setSelectedId(r.id)}

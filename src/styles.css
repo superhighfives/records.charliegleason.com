@@ -225,6 +225,17 @@ a {
 }
 
 /*
+ * Skip rendering (and animating the grain on) tiles scrolled off-screen. Cheap
+ * insurance for a large collection: the browser only paints tiles near the
+ * viewport. `auto` remembers each tile's real size once rendered, falling back
+ * to ~300px so the scrollbar doesn't jump before first paint.
+ */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
+}
+
+/*
  * Animated grain, the analog/VHS speckle circularruin.com gets from a looping
  * video — but generated on the fly from an SVG fractal-noise filter, so there's
  * no asset to ship. A reusable overlay: any element with `overflow: hidden`
