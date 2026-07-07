@@ -177,7 +177,7 @@ function CandidateRow({
 			<button
 				type="button"
 				onClick={onToggle}
-				className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
+				className={`				flex w-full items-center gap-3 px-3 py-2 text-left text-sm min-h-[68px] line-clamp-2 ${
 					active ? "bg-accent" : "hover:bg-accent/50"
 				}`}
 			>
@@ -477,6 +477,12 @@ function RecordDetail() {
 						← Collection
 					</Link>
 					<h1 className="mt-1 text-2xl font-semibold">{heading}</h1>
+					{record.captureContext && (
+						<p className="mt-1 text-sm text-muted-foreground">
+							<span className="font-medium text-foreground">Context:</span>{" "}
+							{record.captureContext}
+						</p>
+					)}
 				</div>
 				<div className="flex flex-wrap items-center justify-end gap-1">
 					{record.status === "review" && !record.discogsId && (
@@ -730,13 +736,6 @@ function RecordDetail() {
 				</div>
 			)}
 
-			{record.captureContext && (
-				<p className="text-sm text-muted-foreground">
-					<span className="font-medium text-foreground">Context:</span>{" "}
-					{record.captureContext}
-				</p>
-			)}
-
 			{/* In-flight: just wait and poll. */}
 			{inFlight && (
 				<div className="flex items-start gap-3 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
@@ -775,22 +774,257 @@ function RecordDetail() {
 			{/* Review / failed / complete: confirm, edit, re-pick, publish. */}
 			{!inFlight && (
 				<div className="space-y-4">
-					{record.confidence != null && (
-						<p className="text-sm text-muted-foreground">
-							Identified with {Math.round(record.confidence * 100)}% confidence.
-							{record.status === "review"
-								? " Confirm the details and pick the right Discogs release before publishing."
-								: ""}
-						</p>
-					)}
+					{/* Discogs match: a confidence banner, the search / paste-a-URL
+					    controls, and the candidate pick-list — one panel, divided. */}
+					<div className="overflow-hidden rounded-lg border">
+						{record.confidence != null && (
+							<div className="border-b bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+								Identified with {Math.round(record.confidence * 100)}%
+								confidence.
+								{record.status === "review"
+									? " Confirm the details and pick the right Discogs release before publishing."
+									: ""}
+							</div>
+						)}
+
+						{/* Wrong match? Search Discogs or paste a release URL. */}
+						<div className="space-y-3 p-3">
+							<div
+								role="tablist"
+								aria-label="Discogs lookup method"
+								className="flex gap-1 border-b"
+							>
+								<TabButton active={tab === "url"} onClick={() => setTab("url")}>
+									Discogs URL
+								</TabButton>
+								<TabButton
+									active={tab === "search"}
+									onClick={() => setTab("search")}
+								>
+									Search
+								</TabButton>
+							</div>
+
+							{tab === "search" ? (
+								<form
+									className="space-y-2"
+									onSubmit={(e) => {
+										e.preventDefault();
+										if (!search.isPending) search.mutate(query);
+									}}
+								>
+									<div className="flex items-end gap-2">
+										<div className="flex-1 space-y-1">
+											<label
+												htmlFor="q-artist"
+												className="text-xs text-muted-foreground"
+											>
+												Artist
+											</label>
+											<Input
+												id="q-artist"
+												value={query.artist}
+												onChange={(e) =>
+													setQuery((q) => ({ ...q, artist: e.target.value }))
+												}
+											/>
+										</div>
+										<div className="flex-1 space-y-1">
+											<label
+												htmlFor="q-title"
+												className="text-xs text-muted-foreground"
+											>
+												Title
+											</label>
+											<Input
+												id="q-title"
+												value={query.title}
+												onChange={(e) =>
+													setQuery((q) => ({ ...q, title: e.target.value }))
+												}
+											/>
+										</div>
+									</div>
+
+									{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
+									<button
+										type="button"
+										aria-expanded={showAdvanced}
+										onClick={() => setShowAdvanced((v) => !v)}
+										className="text-xs text-muted-foreground underline underline-offset-4"
+									>
+										{showAdvanced
+											? "Hide advanced options"
+											: "Advanced options"}
+									</button>
+
+									{showAdvanced && (
+										<div className="flex items-end gap-2">
+											<div className="flex-1 space-y-1">
+												<label
+													htmlFor="q-country"
+													className="text-xs text-muted-foreground"
+												>
+													Country
+												</label>
+												<Input
+													id="q-country"
+													value={query.country}
+													placeholder="e.g. UK"
+													onChange={(e) =>
+														setQuery((q) => ({ ...q, country: e.target.value }))
+													}
+												/>
+											</div>
+											<div className="flex-1 space-y-1">
+												<label
+													htmlFor="q-year"
+													className="text-xs text-muted-foreground"
+												>
+													Year
+												</label>
+												<Input
+													id="q-year"
+													inputMode="numeric"
+													value={query.year}
+													placeholder="e.g. 1971"
+													onChange={(e) =>
+														setQuery((q) => ({ ...q, year: e.target.value }))
+													}
+												/>
+											</div>
+										</div>
+									)}
+
+									{/* Free-text catch-all — passed to Discogs' general search for
+								    anything the structured fields miss (label, catalog number). */}
+									{showAdvanced && (
+										<div className="space-y-1">
+											<label
+												htmlFor="q-keywords"
+												className="text-xs text-muted-foreground"
+											>
+												Discogs search
+											</label>
+											<Input
+												id="q-keywords"
+												value={query.q}
+												placeholder="e.g. label, catalog number, or any keywords"
+												onChange={(e) =>
+													setQuery((q) => ({ ...q, q: e.target.value }))
+												}
+											/>
+										</div>
+									)}
+
+									{search.isError && (
+										<p className="text-xs text-red-600" role="alert">
+											{search.error instanceof Error
+												? search.error.message
+												: "Search failed. Try again."}
+										</p>
+									)}
+									{search.isSuccess && (search.data?.length ?? 0) === 0 && (
+										<p
+											className="text-xs text-muted-foreground"
+											aria-live="polite"
+										>
+											No matches on Discogs. Try a different spelling, drop the
+											title, or paste the release URL.
+										</p>
+									)}
+									<div className="flex justify-end">
+										<Button
+											type="submit"
+											variant="outline"
+											disabled={search.isPending}
+										>
+											{search.isPending ? "…" : "Search"}
+										</Button>
+									</div>
+								</form>
+							) : (
+								<form
+									className="space-y-2"
+									onSubmit={(e) => {
+										e.preventDefault();
+										if (looksLikeReleaseId(discogsUrl) && !lookup.isPending) {
+											lookup.mutate(discogsUrl);
+										}
+									}}
+								>
+									<div className="space-y-1">
+										<label
+											htmlFor="q-url"
+											className="text-xs text-muted-foreground"
+										>
+											Discogs release URL
+										</label>
+										<Input
+											id="q-url"
+											value={discogsUrl}
+											placeholder="https://www.discogs.com/release/…"
+											onChange={(e) =>
+												setDiscogsUrl(cleanDiscogsUrl(e.target.value))
+											}
+										/>
+									</div>
+									{lookup.isError && (
+										<p className="text-xs text-red-600">
+											{lookup.error.message}
+										</p>
+									)}
+									<div className="flex justify-end">
+										<Button
+											type="submit"
+											variant="outline"
+											disabled={
+												lookup.isPending || !looksLikeReleaseId(discogsUrl)
+											}
+										>
+											{lookup.isPending ? "…" : "Fetch release"}
+										</Button>
+									</div>
+								</form>
+							)}
+						</div>
+
+						{/* Candidate pick-list — the lower half of the panel, divided from
+						    the controls above. A manual search can return every pressing,
+						    so cap the height and let it scroll rather than pushing the form
+						    off-screen. */}
+						{candidates.length > 0 && (
+							<ul className="max-h-[345px] divide-y overflow-y-auto border-t">
+								{candidates.map((c) => {
+									const active =
+										picked?.discogsId === c.discogsId ||
+										(!picked && record.discogsId === c.discogsId);
+									return (
+										<CandidateRow
+											key={c.discogsId}
+											candidate={c}
+											active={active}
+											onToggle={() => setPicked(active ? null : c)}
+										/>
+									);
+								})}
+							</ul>
+						)}
+					</div>
 
 					{/* Valuation. The headline is the manual (confirmed) value if set,
 					    else the Discogs guess; both are entered/edited in the form below.
 					    "Fetch value" pulls a fresh estimate from Discogs. */}
-					<div className="rounded-lg border p-3">
+					<div className="space-y-3 rounded-lg border p-3">
+						<div>
+							<h2 className="text-sm font-semibold">Value</h2>
+							<p className="text-xs text-muted-foreground">
+								The confirmed price if you’ve set one, otherwise Discogs’
+								estimate. Edit it in the form below.
+							</p>
+						</div>
 						<div className="flex items-start justify-between gap-3">
 							<div>
-								<p className="text-xs text-muted-foreground">Value</p>
 								<p className="text-xl font-semibold tabular-nums">
 									{formatMoney(
 										effectiveValue(record),
@@ -833,225 +1067,6 @@ function RecordDetail() {
 							</Button>
 						</div>
 					</div>
-
-					{/* Wrong match? Search Discogs or paste a release URL. */}
-					<div className="space-y-3 rounded-lg border p-3">
-						<div
-							role="tablist"
-							aria-label="Discogs lookup method"
-							className="flex gap-1 border-b"
-						>
-							<TabButton active={tab === "url"} onClick={() => setTab("url")}>
-								Discogs URL
-							</TabButton>
-							<TabButton
-								active={tab === "search"}
-								onClick={() => setTab("search")}
-							>
-								Search
-							</TabButton>
-						</div>
-
-						{tab === "search" ? (
-							<form
-								className="space-y-2"
-								onSubmit={(e) => {
-									e.preventDefault();
-									if (!search.isPending) search.mutate(query);
-								}}
-							>
-								<div className="flex items-end gap-2">
-									<div className="flex-1 space-y-1">
-										<label
-											htmlFor="q-artist"
-											className="text-xs text-muted-foreground"
-										>
-											Artist
-										</label>
-										<Input
-											id="q-artist"
-											value={query.artist}
-											onChange={(e) =>
-												setQuery((q) => ({ ...q, artist: e.target.value }))
-											}
-										/>
-									</div>
-									<div className="flex-1 space-y-1">
-										<label
-											htmlFor="q-title"
-											className="text-xs text-muted-foreground"
-										>
-											Title
-										</label>
-										<Input
-											id="q-title"
-											value={query.title}
-											onChange={(e) =>
-												setQuery((q) => ({ ...q, title: e.target.value }))
-											}
-										/>
-									</div>
-								</div>
-
-								{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
-								<button
-									type="button"
-									aria-expanded={showAdvanced}
-									onClick={() => setShowAdvanced((v) => !v)}
-									className="text-xs text-muted-foreground underline underline-offset-4"
-								>
-									{showAdvanced ? "Hide advanced options" : "Advanced options"}
-								</button>
-
-								{showAdvanced && (
-									<div className="flex items-end gap-2">
-										<div className="flex-1 space-y-1">
-											<label
-												htmlFor="q-country"
-												className="text-xs text-muted-foreground"
-											>
-												Country
-											</label>
-											<Input
-												id="q-country"
-												value={query.country}
-												placeholder="e.g. UK"
-												onChange={(e) =>
-													setQuery((q) => ({ ...q, country: e.target.value }))
-												}
-											/>
-										</div>
-										<div className="flex-1 space-y-1">
-											<label
-												htmlFor="q-year"
-												className="text-xs text-muted-foreground"
-											>
-												Year
-											</label>
-											<Input
-												id="q-year"
-												inputMode="numeric"
-												value={query.year}
-												placeholder="e.g. 1971"
-												onChange={(e) =>
-													setQuery((q) => ({ ...q, year: e.target.value }))
-												}
-											/>
-										</div>
-									</div>
-								)}
-
-								{/* Free-text catch-all — passed to Discogs' general search for
-								    anything the structured fields miss (label, catalog number). */}
-								{showAdvanced && (
-									<div className="space-y-1">
-										<label
-											htmlFor="q-keywords"
-											className="text-xs text-muted-foreground"
-										>
-											Discogs search
-										</label>
-										<Input
-											id="q-keywords"
-											value={query.q}
-											placeholder="e.g. label, catalog number, or any keywords"
-											onChange={(e) =>
-												setQuery((q) => ({ ...q, q: e.target.value }))
-											}
-										/>
-									</div>
-								)}
-
-								{search.isError && (
-									<p className="text-xs text-red-600" role="alert">
-										{search.error instanceof Error
-											? search.error.message
-											: "Search failed. Try again."}
-									</p>
-								)}
-								{search.isSuccess && (search.data?.length ?? 0) === 0 && (
-									<p
-										className="text-xs text-muted-foreground"
-										aria-live="polite"
-									>
-										No matches on Discogs. Try a different spelling, drop the
-										title, or paste the release URL.
-									</p>
-								)}
-								<div className="flex justify-end">
-									<Button
-										type="submit"
-										variant="outline"
-										disabled={search.isPending}
-									>
-										{search.isPending ? "…" : "Search"}
-									</Button>
-								</div>
-							</form>
-						) : (
-							<form
-								className="space-y-2"
-								onSubmit={(e) => {
-									e.preventDefault();
-									if (looksLikeReleaseId(discogsUrl) && !lookup.isPending) {
-										lookup.mutate(discogsUrl);
-									}
-								}}
-							>
-								<div className="space-y-1">
-									<label
-										htmlFor="q-url"
-										className="text-xs text-muted-foreground"
-									>
-										Discogs release URL
-									</label>
-									<Input
-										id="q-url"
-										value={discogsUrl}
-										placeholder="https://www.discogs.com/release/…"
-										onChange={(e) =>
-											setDiscogsUrl(cleanDiscogsUrl(e.target.value))
-										}
-									/>
-								</div>
-								{lookup.isError && (
-									<p className="text-xs text-red-600">{lookup.error.message}</p>
-								)}
-								<div className="flex justify-end">
-									<Button
-										type="submit"
-										variant="outline"
-										disabled={
-											lookup.isPending || !looksLikeReleaseId(discogsUrl)
-										}
-									>
-										{lookup.isPending ? "…" : "Fetch release"}
-									</Button>
-								</div>
-							</form>
-						)}
-					</div>
-
-					{/* Candidate pick-list. A manual search can return every pressing, so
-					    cap the height and let it scroll rather than pushing the form
-					    off-screen. */}
-					{candidates.length > 0 && (
-						<ul className="max-h-96 divide-y overflow-y-auto rounded-md border">
-							{candidates.map((c) => {
-								const active =
-									picked?.discogsId === c.discogsId ||
-									(!picked && record.discogsId === c.discogsId);
-								return (
-									<CandidateRow
-										key={c.discogsId}
-										candidate={c}
-										active={active}
-										onToggle={() => setPicked(active ? null : c)}
-									/>
-								);
-							})}
-						</ul>
-					)}
 
 					<div className="border-t pt-4">
 						<RecordForm

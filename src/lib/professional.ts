@@ -54,6 +54,79 @@ async function fetchAsDataUri(url: string): Promise<string> {
 	return `data:${type};base64,${bytesToBase64(bytes)}`;
 }
 
+/** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
+function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+	return new Blob([bytes as BlobPart]).stream();
+}
+
+// Resolution of the proxy we scan for the artwork's bounding box. A small fixed
+// square keeps the alpha scan cheap; per-axis fractions map back to the original
+// exactly despite the squeeze distortion.
+const SCAN_SIZE = 400;
+// Ignore the anti-aliased fringe when deciding what counts as "the artwork".
+const ALPHA_MIN = 16;
+
+/**
+ * Reframe the transparent cutout so the artwork fills the frame with a small, even
+ * margin, and canonicalise to a webp-with-alpha for R2.
+ *
+ * The background-removal model returns *straight* alpha — transparent pixels keep
+ * their original background RGB — so Cloudflare's colour-based `trim: "border"`
+ * sees no uniform border and trims nothing. Instead we read the alpha channel off a
+ * small proxy, find the artwork's bounding box ourselves, crop to it with explicit
+ * insets, then scale into a CONTENT_SIZE square and pad back out to the CANVAS_SIZE
+ * canvas — an even transparent margin regardless of how much empty space was left.
+ */
+async function reframeCutout(bytes: Uint8Array): Promise<ArrayBuffer> {
+	const info = await env.IMAGES.info(blobStream(bytes));
+	if (!("width" in info)) throw new Error("cutout has no raster dimensions");
+	const { width, height } = info;
+
+	const scan = await env.IMAGES.input(blobStream(bytes))
+		.transform({ width: SCAN_SIZE, height: SCAN_SIZE, fit: "squeeze" })
+		.output({ format: "rgba" });
+	const rgba = new Uint8Array(await scan.response().arrayBuffer());
+
+	let minX = SCAN_SIZE;
+	let minY = SCAN_SIZE;
+	let maxX = -1;
+	let maxY = -1;
+	for (let y = 0; y < SCAN_SIZE; y++) {
+		for (let x = 0; x < SCAN_SIZE; x++) {
+			if (rgba[(y * SCAN_SIZE + x) * 4 + 3] >= ALPHA_MIN) {
+				if (x < minX) minX = x;
+				if (x > maxX) maxX = x;
+				if (y < minY) minY = y;
+				if (y > maxY) maxY = y;
+			}
+		}
+	}
+
+	// Pixels to trim off each side of the original. Fall back to no trim if the
+	// cutout came back fully transparent (shouldn't happen, but don't crash on it).
+	const trim =
+		maxX < minX || maxY < minY
+			? { top: 0, right: 0, bottom: 0, left: 0 }
+			: {
+					left: Math.round((minX / SCAN_SIZE) * width),
+					right: width - Math.round(((maxX + 1) / SCAN_SIZE) * width),
+					top: Math.round((minY / SCAN_SIZE) * height),
+					bottom: height - Math.round(((maxY + 1) / SCAN_SIZE) * height),
+				};
+
+	const out = await env.IMAGES.input(blobStream(bytes))
+		.transform({ trim })
+		.transform({ width: CONTENT_SIZE, height: CONTENT_SIZE, fit: "contain" })
+		.transform({
+			width: CANVAS_SIZE,
+			height: CANVAS_SIZE,
+			fit: "pad",
+			background: "rgba(0,0,0,0)",
+		})
+		.output({ format: "image/webp", quality: 90 });
+	return out.response().arrayBuffer();
+}
+
 export interface ProfessionalResult {
 	key: string;
 	predictionId: string;
@@ -91,28 +164,15 @@ export async function generateProfessionalPhoto(
 	const cutoutUrl = firstOutputUrl(cutout.output);
 	if (!cutoutUrl) throw new Error("background removal returned no image");
 
-	// 3. Canonicalise to a webp-with-alpha and store in R2 (mirrors the cover
-	// pipeline; webp keeps the transparency from the cutout). The cutout arrives
-	// with a wide, uneven transparent margin, so reframe it: `trim: "border"`
-	// crops the transparent surround down to the artwork's bounding box, then we
-	// fit that into a slightly smaller square and pad back out to the full canvas
-	// with a transparent background — leaving a small, even margin so the edge
-	// isn't flush against the frame.
+	// 3. Reframe the cutout to an even margin and canonicalise to a webp-with-alpha
+	// (mirrors the cover pipeline; webp keeps the transparency), then store in R2.
 	const finalRes = await fetch(cutoutUrl);
-	if (!finalRes.ok || !finalRes.body) {
+	if (!finalRes.ok) {
 		throw new Error(`cutout fetch failed (${finalRes.status})`);
 	}
-	const out = await env.IMAGES.input(finalRes.body)
-		.transform({ trim: "border" })
-		.transform({ width: CONTENT_SIZE, height: CONTENT_SIZE, fit: "contain" })
-		.transform({
-			width: CANVAS_SIZE,
-			height: CANVAS_SIZE,
-			fit: "pad",
-			background: "rgba(0,0,0,0)",
-		})
-		.output({ format: "image/webp", quality: 90 });
-	const buffer = await out.response().arrayBuffer();
+	const buffer = await reframeCutout(
+		new Uint8Array(await finalRes.arrayBuffer()),
+	);
 
 	const key = `professional/${crypto.randomUUID()}.webp`;
 	await env.PHOTOS.put(key, buffer, {
