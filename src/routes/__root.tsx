@@ -32,6 +32,35 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 			{
 				title: "Records · charliegleason.com",
 			},
+			{
+				name: "theme-color",
+				content: "#fbe047",
+			},
+			// Open Graph
+			{ property: "og:type", content: "website" },
+			{ property: "og:title", content: "Records · charliegleason.com" },
+			{
+				property: "og:description",
+				content: "Charlie Gleason's vinyl record collection.",
+			},
+			{ property: "og:url", content: "https://records.charliegleason.com/" },
+			{
+				property: "og:image",
+				content: "https://records.charliegleason.com/og-image.png",
+			},
+			{ property: "og:image:width", content: "1200" },
+			{ property: "og:image:height", content: "630" },
+			// Twitter
+			{ name: "twitter:card", content: "summary_large_image" },
+			{ name: "twitter:title", content: "Records · charliegleason.com" },
+			{
+				name: "twitter:description",
+				content: "Charlie Gleason's vinyl record collection.",
+			},
+			{
+				name: "twitter:image",
+				content: "https://records.charliegleason.com/og-image.png",
+			},
 		],
 		links: [
 			{
@@ -51,6 +80,10 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 			{
 				rel: "apple-touch-icon",
 				href: "/apple-touch-icon.png",
+			},
+			{
+				rel: "manifest",
+				href: "/manifest.json",
 			},
 		],
 	}),
