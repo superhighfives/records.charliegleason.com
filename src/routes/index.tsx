@@ -109,7 +109,7 @@ function Home() {
 								onClick={() => setSelectedId(r.id)}
 								className="w-full cursor-pointer space-y-2 text-left"
 							>
-								<div className="album-card grain aspect-square overflow-hidden rounded-md">
+								<div className="album-card grain aspect-square overflow-hidden">
 									{(() => {
 										const cover = displayCoverKey(r);
 										return cover ? (
