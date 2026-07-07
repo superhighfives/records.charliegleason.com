@@ -5,7 +5,7 @@ import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type Record as RecordRow, records } from "#/db/schema";
-import { authMiddleware } from "#/lib/auth";
+import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
 import {
 	getReleaseCandidate,
@@ -28,6 +28,7 @@ import {
 	enqueueProfessional,
 	enqueueProfessionalBatch,
 	enqueueRefreshBatch,
+	failStaleProfessional,
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
@@ -114,13 +115,30 @@ export const getRecord = createServerFn({ method: "GET" })
 	.validator((id: number) => id)
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "getRecord" }, async () => {
+			// Admin-only: this returns the full row (capture key, valuation, professional*
+			// bookkeeping) and now also drives the watchdog write below, so it must not be
+			// callable unauthenticated. Fail soft — it runs inside the /admin SSR loader,
+			// where a thrown 401 would break the render rather than fall through to the
+			// client-side signed-out redirect.
+			if (!(await getAdminSession())) return null;
+
 			const db = getDb(env.DB);
 			const [row] = await db
 				.select()
 				.from(records)
 				.where(eq(records.id, id))
 				.limit(1);
-			return row ?? null;
+			if (!row) return null;
+			// Self-heal a professional-photo job wedged in pending/processing: since the
+			// detail page polls this fn while a job is in flight, a stale one flips to
+			// `failed` here and surfaces a "Try again" button on the next poll. The
+			// watchdog is best-effort — never let its write break the read, so fall back
+			// to the row as-is if it throws.
+			try {
+				return await failStaleProfessional(row);
+			} catch {
+				return row;
+			}
 		}),
 	);
 

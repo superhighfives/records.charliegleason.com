@@ -689,10 +689,34 @@ function RecordDetail() {
 
 					{record.professionalStatus === "pending" ||
 					record.professionalStatus === "processing" ? (
-						<div className="flex items-center gap-2 text-sm text-muted-foreground">
-							<Loader2 className="size-4 shrink-0 animate-spin" />
-							Generating the professional photo — this page updates itself when
-							it’s ready.
+						<div className="space-y-2">
+							<div className="flex items-center gap-2 text-sm text-muted-foreground">
+								<Loader2 className="size-4 shrink-0 animate-spin" />
+								Generating the professional photo — this page updates itself
+								when it’s ready.
+							</div>
+							{/* Escape hatch: a job can wedge if its worker dies mid-run, and the
+							    server-side watchdog only reclaims it after a timeout. Always let
+							    the admin start over so they're never stuck watching the spinner —
+							    but confirm first, since the original job may still be running and
+							    a second run is a fresh (paid) Replicate charge. */}
+							<Button
+								type="button"
+								size="sm"
+								variant="outline"
+								disabled={generatePro.isPending}
+								onClick={() => {
+									if (
+										confirm(
+											"The current generation may still be running. Start a new one anyway? This can take a few minutes and counts as a new run.",
+										)
+									) {
+										generatePro.mutate();
+									}
+								}}
+							>
+								{generatePro.isPending ? "…" : "Taking too long? Regenerate"}
+							</Button>
 						</div>
 					) : record.professionalImageKey &&
 						(record.professionalStatus === "ready" ||

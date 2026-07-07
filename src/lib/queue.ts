@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { eq, ne } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type Record, records } from "#/db/schema";
@@ -65,6 +65,74 @@ export async function enqueueProfessional(recordId: number): Promise<void> {
 /** Enqueue many captured records for professional studio-photo generation. */
 export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
 	return enqueueBatch(recordIds, "professional");
+}
+
+/**
+ * How long a professional job may sit in `pending`/`processing` before a reader
+ * treats it as dead. Comfortably above a healthy run — two Replicate passes capped
+ * at ~2 min each ({@link runModel}'s `timeoutMs`) plus the fetches and Images
+ * reframe — so a still-working job is never falsely failed, while a wedged one is
+ * caught promptly.
+ */
+export const PROFESSIONAL_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Whether a professional-photo row has wedged: it's still `pending`/`processing`
+ * but hasn't advanced in {@link PROFESSIONAL_STALE_MS}. Pure (takes `now`) so the
+ * threshold can be tested without a clock or the DB. A missing `updatedAt` counts
+ * as epoch, i.e. always stale.
+ */
+export function isProfessionalStale(
+	record: Pick<Record, "professionalStatus" | "updatedAt">,
+	now: number,
+): boolean {
+	if (
+		record.professionalStatus !== "pending" &&
+		record.professionalStatus !== "processing"
+	) {
+		return false;
+	}
+	const updatedAt = record.updatedAt?.getTime() ?? 0;
+	return now - updatedAt >= PROFESSIONAL_STALE_MS;
+}
+
+/**
+ * Watchdog for a wedged professional-photo job. The consumer always writes a
+ * terminal `ready`/`failed` (even on a caught error), so the only way a row stays
+ * `pending`/`processing` is a failure *outside* that try/catch: an isolate evicted
+ * or over its wall-clock/subrequest limit, a deploy landing mid-run, or an enqueue
+ * that never delivered. Nothing else reconciles those, so the admin page would spin
+ * forever. When a reader sees such a stale row (see {@link isProfessionalStale}),
+ * flip it to `failed` so the page self-heals to a "Try again" button. Returns the
+ * (possibly updated) row; a no-op for anything that isn't actually stale.
+ */
+export async function failStaleProfessional(record: Record): Promise<Record> {
+	if (!isProfessionalStale(record, Date.now())) return record;
+
+	// Compare-and-swap: only reclaim the exact stuck row we read. If the consumer
+	// landed a terminal `ready`/`failed` (or a manual regenerate bumped it to a
+	// fresh `pending`) in the gap between our read and this write, the status/
+	// `updatedAt` guards below won't match — so we leave that newer state alone
+	// rather than clobbering a good photo back to `failed`.
+	const guards = [
+		eq(records.id, record.id),
+		inArray(records.professionalStatus, ["pending", "processing"]),
+	];
+	if (record.updatedAt) guards.push(eq(records.updatedAt, record.updatedAt));
+
+	const db = getDb(env.DB);
+	const [row] = await db
+		.update(records)
+		.set({
+			professionalStatus: "failed",
+			professionalError:
+				"Generation timed out — the job stalled before finishing. Try again.",
+			updatedAt: new Date(),
+		})
+		.where(and(...guards))
+		.returning();
+	// No match → someone advanced the row first; keep what we read, next poll re-syncs.
+	return row ?? record;
 }
 
 /**
