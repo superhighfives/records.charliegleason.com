@@ -116,7 +116,7 @@ function Home() {
 											<img
 												src={`/api/photos/${cover}`}
 												alt={`${r.artist} — ${r.title}`}
-												className="size-full object-cover"
+												className="size-full object-cover grayscale transition-[filter] duration-500 ease-out group-hover:grayscale-0"
 												loading="lazy"
 											/>
 										) : null;
