@@ -66,26 +66,34 @@ const SCAN_SIZE = 400;
 // Ignore the anti-aliased fringe when deciding what counts as "the artwork".
 const ALPHA_MIN = 16;
 
+type Insets = { top: number; right: number; bottom: number; left: number };
+
 /**
- * Reframe the transparent cutout so the artwork fills the frame with a small, even
- * margin, and canonicalise to a webp-with-alpha for R2.
+ * Pixels to trim off each side of the cutout to reach the artwork's bounding box.
  *
  * The background-removal model returns *straight* alpha — transparent pixels keep
  * their original background RGB — so Cloudflare's colour-based `trim: "border"`
  * sees no uniform border and trims nothing. Instead we read the alpha channel off a
- * small proxy, find the artwork's bounding box ourselves, crop to it with explicit
- * insets, then scale into a CONTENT_SIZE square and pad back out to the CANVAS_SIZE
- * canvas — an even transparent margin regardless of how much empty space was left.
+ * small proxy and find the box ourselves.
+ *
+ * Returns `null` when the raw `rgba` decode isn't available — notably `wrangler dev`,
+ * where it errors with `IMAGES_TRANSFORM_ERROR 9520` — so the caller can fall back to
+ * an untrimmed reframe. The real (deployed) Images binding always resolves.
  */
-async function reframeCutout(bytes: Uint8Array): Promise<ArrayBuffer> {
-	const info = await env.IMAGES.info(blobStream(bytes));
-	if (!("width" in info)) throw new Error("cutout has no raster dimensions");
-	const { width, height } = info;
-
-	const scan = await env.IMAGES.input(blobStream(bytes))
-		.transform({ width: SCAN_SIZE, height: SCAN_SIZE, fit: "squeeze" })
-		.output({ format: "rgba" });
-	const rgba = new Uint8Array(await scan.response().arrayBuffer());
+async function contentInsets(
+	bytes: Uint8Array,
+	width: number,
+	height: number,
+): Promise<Insets | null> {
+	let rgba: Uint8Array;
+	try {
+		const scan = await env.IMAGES.input(blobStream(bytes))
+			.transform({ width: SCAN_SIZE, height: SCAN_SIZE, fit: "squeeze" })
+			.output({ format: "rgba" });
+		rgba = new Uint8Array(await scan.response().arrayBuffer());
+	} catch {
+		return null;
+	}
 
 	let minX = SCAN_SIZE;
 	let minY = SCAN_SIZE;
@@ -102,17 +110,33 @@ async function reframeCutout(bytes: Uint8Array): Promise<ArrayBuffer> {
 		}
 	}
 
-	// Pixels to trim off each side of the original. Fall back to no trim if the
-	// cutout came back fully transparent (shouldn't happen, but don't crash on it).
+	// Fully transparent (shouldn't happen) — treat as nothing to trim.
+	if (maxX < minX || maxY < minY)
+		return { top: 0, right: 0, bottom: 0, left: 0 };
+
+	return {
+		left: Math.round((minX / SCAN_SIZE) * width),
+		right: width - Math.round(((maxX + 1) / SCAN_SIZE) * width),
+		top: Math.round((minY / SCAN_SIZE) * height),
+		bottom: height - Math.round(((maxY + 1) / SCAN_SIZE) * height),
+	};
+}
+
+/**
+ * Reframe the transparent cutout so the artwork fills the frame with a small, even
+ * margin, and canonicalise to a webp-with-alpha for R2: crop to the artwork's
+ * bounding box (see `contentInsets`), scale into a CONTENT_SIZE square, then pad back
+ * out to the CANVAS_SIZE canvas. When the bounding box can't be measured (local dev),
+ * skip the crop — the image is still square and valid, just with the model's original
+ * margin.
+ */
+async function reframeCutout(bytes: Uint8Array): Promise<ArrayBuffer> {
+	const info = await env.IMAGES.info(blobStream(bytes));
+	if (!("width" in info)) throw new Error("cutout has no raster dimensions");
+
 	const trim =
-		maxX < minX || maxY < minY
-			? { top: 0, right: 0, bottom: 0, left: 0 }
-			: {
-					left: Math.round((minX / SCAN_SIZE) * width),
-					right: width - Math.round(((maxX + 1) / SCAN_SIZE) * width),
-					top: Math.round((minY / SCAN_SIZE) * height),
-					bottom: height - Math.round(((maxY + 1) / SCAN_SIZE) * height),
-				};
+		(await contentInsets(bytes, info.width, info.height)) ??
+		({ top: 0, right: 0, bottom: 0, left: 0 } satisfies Insets);
 
 	const out = await env.IMAGES.input(blobStream(bytes))
 		.transform({ trim })
