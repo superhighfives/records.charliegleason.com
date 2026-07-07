@@ -7,13 +7,13 @@ import { firstOutputUrl, runModel } from "#/lib/replicate";
 /**
  * Turn a rough iPhone capture into a studio product shot of the physical sleeve.
  *
- * Two Replicate passes: Flux Kontext restyles the photo as a straight-on,
- * evenly-lit studio shot on a plain seamless background (instruction-based and
+ * Two Replicate passes: an instruction-based editor restyles the photo as a
+ * straight-on, evenly-lit studio shot on a plain seamless background (it's
  * identity-preserving, so it keeps the actual artwork rather than inventing new
- * art), then BiRefNet mattes the background out to transparency for a true "zero
- * background" cutout. The result is canonicalised to a webp-with-alpha via the
- * Cloudflare Images binding (like the cover pipeline) and stored under
- * `professional/` in R2.
+ * art), then a background-matting model cuts the background out to transparency
+ * for a true "zero background" cutout. The result is canonicalised to a
+ * webp-with-alpha via the Cloudflare Images binding (like the cover pipeline) and
+ * stored under `professional/` in R2.
  *
  * Returns the R2 key plus the Replicate prediction id (kept on the row for
  * debugging). Throws on any failure — the queue consumer records it on the row.
@@ -21,12 +21,19 @@ import { firstOutputUrl, runModel } from "#/lib/replicate";
  */
 
 // Instruction-based editor. Identity-preserving, so the sleeve's artwork/text is
-// kept while lighting, angle and background are cleaned up. Bump to `-max` for
-// higher fidelity, or swap the model, in this one place.
+// kept while lighting, angle and background are cleaned up. Swap the model here
+// for higher fidelity, in this one place.
 const KONTEXT_MODEL = "black-forest-labs/flux-kontext-pro";
 // Background matting → transparent cutout ("zero background"). An official model,
 // run at its latest version (see `runModel` — only official models work there).
 const CUTOUT_MODEL = "bria/remove-background";
+
+// Final framing — always a square canvas. The trimmed sleeve is fit into a
+// CONTENT_SIZE square, then padded out to a CANVAS_SIZE square; the even gap is the
+// transparent margin on each side (here (1000-960)/2 = 20px, 2%). Shrink
+// CONTENT_SIZE for more breathing room.
+const CANVAS_SIZE = 1000;
+const CONTENT_SIZE = 960;
 
 const STUDIO_PROMPT =
 	"Restyle this photograph of a vinyl record sleeve as a high-end studio product " +
@@ -67,7 +74,7 @@ export async function generateProfessionalPhoto(
 	const mediaType = object.httpMetadata?.contentType || "image/webp";
 	const captureDataUri = `data:${mediaType};base64,${bytesToBase64(bytes)}`;
 
-	// 1. Studio restyle (Flux Kontext) — keeps the artwork, fixes lighting/angle.
+	// 1. Studio restyle — keeps the artwork, fixes lighting/angle.
 	const studio = await runModel(KONTEXT_MODEL, {
 		prompt: STUDIO_PROMPT,
 		input_image: captureDataUri,
@@ -75,23 +82,35 @@ export async function generateProfessionalPhoto(
 		aspect_ratio: "match_input_image",
 	});
 	const studioUrl = firstOutputUrl(studio.output);
-	if (!studioUrl) throw new Error("Flux Kontext returned no image");
+	if (!studioUrl) throw new Error("studio restyle returned no image");
 
-	// 2. Background cutout (BiRefNet) → transparent PNG.
+	// 2. Background cutout → transparent PNG.
 	const cutout = await runModel(CUTOUT_MODEL, {
 		image: await fetchAsDataUri(studioUrl),
 	});
 	const cutoutUrl = firstOutputUrl(cutout.output);
-	if (!cutoutUrl) throw new Error("BiRefNet returned no image");
+	if (!cutoutUrl) throw new Error("background removal returned no image");
 
 	// 3. Canonicalise to a webp-with-alpha and store in R2 (mirrors the cover
-	// pipeline; webp keeps the transparency from the cutout).
+	// pipeline; webp keeps the transparency from the cutout). The cutout arrives
+	// with a wide, uneven transparent margin, so reframe it: `trim: "border"`
+	// crops the transparent surround down to the artwork's bounding box, then we
+	// fit that into a slightly smaller square and pad back out to the full canvas
+	// with a transparent background — leaving a small, even margin so the edge
+	// isn't flush against the frame.
 	const finalRes = await fetch(cutoutUrl);
 	if (!finalRes.ok || !finalRes.body) {
 		throw new Error(`cutout fetch failed (${finalRes.status})`);
 	}
 	const out = await env.IMAGES.input(finalRes.body)
-		.transform({ width: 1000, height: 1000, fit: "scale-down" })
+		.transform({ trim: "border" })
+		.transform({ width: CONTENT_SIZE, height: CONTENT_SIZE, fit: "contain" })
+		.transform({
+			width: CANVAS_SIZE,
+			height: CANVAS_SIZE,
+			fit: "pad",
+			background: "rgba(0,0,0,0)",
+		})
 		.output({ format: "image/webp", quality: 90 });
 	const buffer = await out.response().arrayBuffer();
 
