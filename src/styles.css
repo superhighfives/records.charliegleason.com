@@ -221,6 +221,9 @@ a {
 /* Cover tiles: a simple bordered card with an animated film-grain overlay. */
 .album-card {
   position: relative;
+  /* Confine the overlay's blend to the card's own contents, so the grain reads
+   * the same regardless of whatever sits behind the tile in the page. */
+  isolation: isolate;
   border: 1px solid var(--border);
   background: var(--card);
 }
@@ -242,7 +245,6 @@ a {
   background-repeat: repeat;
   opacity: 0.32;
   mix-blend-mode: overlay;
-  will-change: transform;
   animation: grain 0.7s steps(1) infinite;
 }
 
