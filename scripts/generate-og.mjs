@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import sharp from "sharp";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -94,6 +94,17 @@ const svgPath = join(fontsDir, "og.svg");
 writeFileSync(svgPath, svg);
 
 // ---- render (2x via rsvg-convert for crisp text) ---------------------------
+// rsvg-convert is an external binary (librsvg). Fail early with an actionable
+// message instead of a raw ENOENT from execFileSync below.
+if (spawnSync("rsvg-convert", ["--version"]).error) {
+	console.error(
+		"rsvg-convert not found. Install librsvg:\n" +
+			"  macOS:  brew install librsvg\n" +
+			"  Debian: apt-get install librsvg2-bin",
+	);
+	process.exit(1);
+}
+
 const S = 2;
 const pngRaw = join(fontsDir, "og@2x.png");
 execFileSync(

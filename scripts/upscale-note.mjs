@@ -3,8 +3,12 @@
 // The glyph ships as a 160px raster embedded in public/favicon.svg; upscaling
 // it 4x gives a crisp source for the og:image and larger icons.
 //
-// Usage: REPLICATE_API_KEY=... node scripts/upscale-note.mjs
-import { readFileSync, writeFileSync } from "node:fs";
+// Usage: REPLICATE_API_KEY=... node scripts/upscale-note.mjs [input] [output]
+//   input  defaults to <tmpdir>/note-orig.png
+//   output defaults to <tmpdir>/note-upscaled.png
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const token = process.env.REPLICATE_API_KEY || process.env.REPLICATE_API_TOKEN;
 if (!token) {
@@ -13,8 +17,16 @@ if (!token) {
 }
 
 const SCALE = 4;
-const IN = "/tmp/note-orig.png";
-const OUT = "/tmp/note-upscaled.png";
+const IN = process.argv[2] ?? join(tmpdir(), "note-orig.png");
+const OUT = process.argv[3] ?? join(tmpdir(), "note-upscaled.png");
+
+if (!existsSync(IN)) {
+	console.error(
+		`Input image not found: ${IN}\n` +
+			"Pass a path as the first argument, or place the source PNG there.",
+	);
+	process.exit(1);
+}
 
 const dataUri = `data:image/png;base64,${readFileSync(IN).toString("base64")}`;
 
