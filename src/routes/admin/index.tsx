@@ -54,7 +54,12 @@ type StatusFilter =
 	| "unpublished"
 	| "unmatched"
 	| "duplicate"
-	| "confirmed";
+	| "confirmed"
+	| "valued"
+	| "unvalued"
+	| "professionalNone"
+	| "professionalReady"
+	| "professionalLive";
 
 const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "all", label: "All" },
@@ -67,6 +72,11 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "complete", label: "Published" },
 	{ value: "duplicate", label: "Duplicate" },
 	{ value: "confirmed", label: "Confirmed" },
+	{ value: "valued", label: "Valued" },
+	{ value: "unvalued", label: "Unvalued" },
+	{ value: "professionalNone", label: "No pro photo" },
+	{ value: "professionalReady", label: "Pro photo ready" },
+	{ value: "professionalLive", label: "Pro photo live" },
 ];
 
 const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
@@ -193,6 +203,25 @@ function matchesFilter(
 	if (filter === "duplicate")
 		return record.duplicateOf != null && liveIds.has(record.duplicateOf);
 	if (filter === "confirmed") return record.confirmedRelease === true;
+	// "Valued" / "Unvalued" split on whether the record has an effective value at
+	// all (manual figure or Discogs guess) — mirroring the Value column's em dash.
+	if (filter === "valued") return effectiveValue(record) != null;
+	if (filter === "unvalued") return effectiveValue(record) == null;
+	// Professional studio photo, in three states: none generated at all; generated
+	// but still awaiting approval (a photo exists yet the site keeps showing the
+	// Discogs cover); and live — approved, so it's the image actually displayed
+	// (mirroring displayCoverKey's approved-and-present promotion rule).
+	if (filter === "professionalNone") return record.professionalImageKey == null;
+	if (filter === "professionalReady")
+		return (
+			record.professionalImageKey != null &&
+			record.professionalStatus !== "approved"
+		);
+	if (filter === "professionalLive")
+		return (
+			record.professionalImageKey != null &&
+			record.professionalStatus === "approved"
+		);
 	return status === filter;
 }
 
