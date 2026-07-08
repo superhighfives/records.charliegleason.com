@@ -10,8 +10,10 @@ import { firstOutputUrl, runModel } from "#/lib/replicate";
  * Two Replicate passes: an instruction-based editor restyles the photo as a
  * straight-on, evenly-lit studio shot on a plain seamless background (it's
  * identity-preserving, so it keeps the actual artwork rather than inventing new
- * art), then a background-matting model cuts the background out to transparency
- * for a true "zero background" cutout. The result is canonicalised to a
+ * art), then a background-matting model cuts the background out to transparency for
+ * a true "zero background" cutout. The editor runs at 4 MP so fine print detail —
+ * small text, halftone dots — survives the restyle rather than being smoothed away
+ * (the reason the old 1 MP model looked soft). The result is canonicalised to a
  * webp-with-alpha via the Cloudflare Images binding (like the cover pipeline) and
  * stored under `professional/` in R2.
  *
@@ -21,19 +23,28 @@ import { firstOutputUrl, runModel } from "#/lib/replicate";
  */
 
 // Instruction-based editor. Identity-preserving, so the sleeve's artwork/text is
-// kept while lighting, angle and background are cleaned up. Swap the model here
+// kept while lighting, angle and background are cleaned up. FLUX.2 [pro] edits at
+// up to 4 MP (vs flux-kontext-pro's ~1 MP), which is what keeps small text and the
+// halftone crisp instead of smoothed — see EDITOR_RESOLUTION. Swap the model here
 // for higher fidelity, in this one place.
-const KONTEXT_MODEL = "black-forest-labs/flux-kontext-pro";
+const EDITOR_MODEL = "black-forest-labs/flux-2-pro";
+// Output resolution for the restyle. FLUX.2 accepts up to "4 MP"; that's the point
+// of using it here — enough pixels to hold the print detail through to the final
+// CANVAS_SIZE frame. (BFL suggests ≤2 MP for complex scenes, but a flat sleeve is
+// simple geometry, so 4 MP is safe and maximises fidelity.)
+const EDITOR_RESOLUTION = "4 MP";
 // Background matting → transparent cutout ("zero background"). An official model,
 // run at its latest version (see `runModel` — only official models work there).
 const CUTOUT_MODEL = "bria/remove-background";
 
 // Final framing — always a square canvas. The trimmed sleeve is fit into a
 // CONTENT_SIZE square, then padded out to a CANVAS_SIZE square; the even gap is the
-// transparent margin on each side (here (1000-960)/2 = 20px, 2%). Shrink
-// CONTENT_SIZE for more breathing room.
-const CANVAS_SIZE = 1000;
-const CONTENT_SIZE = 960;
+// transparent margin on each side (here (2000-1920)/2 = 40px, 2%). Shrink
+// CONTENT_SIZE for more breathing room. Sized to hold the 4 MP restyle's ~2K output
+// so the reframe doesn't throw that detail away — the store step is the last resize,
+// and everything above it now feeds it a genuinely high-res cutout.
+const CANVAS_SIZE = 2000;
+const CONTENT_SIZE = 1920;
 
 const STUDIO_PROMPT =
 	"Restyle this photograph of a vinyl record sleeve as a high-end studio product " +
@@ -147,7 +158,7 @@ async function reframeCutout(bytes: Uint8Array): Promise<ArrayBuffer> {
 			fit: "pad",
 			background: "rgba(0,0,0,0)",
 		})
-		.output({ format: "image/webp", quality: 90 });
+		.output({ format: "image/webp", quality: 92 });
 	return out.response().arrayBuffer();
 }
 
@@ -171,12 +182,14 @@ export async function generateProfessionalPhoto(
 	const mediaType = object.httpMetadata?.contentType || "image/webp";
 	const captureDataUri = `data:${mediaType};base64,${bytesToBase64(bytes)}`;
 
-	// 1. Studio restyle — keeps the artwork, fixes lighting/angle.
-	const studio = await runModel(KONTEXT_MODEL, {
+	// 1. Studio restyle at 4 MP — keeps the artwork, fixes lighting/angle, and
+	// retains the print detail. Opaque PNG so the cutout matte is clean.
+	const studio = await runModel(EDITOR_MODEL, {
 		prompt: STUDIO_PROMPT,
-		input_image: captureDataUri,
-		output_format: "png",
+		input_images: [captureDataUri],
+		resolution: EDITOR_RESOLUTION,
 		aspect_ratio: "match_input_image",
+		output_format: "png",
 	});
 	const studioUrl = firstOutputUrl(studio.output);
 	if (!studioUrl) throw new Error("studio restyle returned no image");

@@ -106,8 +106,8 @@ export async function storeCapturePhoto(
 ): Promise<{ key: string; contentType: string }> {
 	try {
 		const out = await env.IMAGES.input(new Blob([bytes as BlobPart]).stream())
-			.transform({ width: 1280, height: 1280, fit: "cover" })
-			.output({ format: "image/webp", quality: 82 });
+			.transform({ width: 2048, height: 2048, fit: "cover" })
+			.output({ format: "image/webp", quality: 90 });
 		const buffer = await out.response().arrayBuffer();
 		const key = `captures/${crypto.randomUUID()}.webp`;
 		await env.PHOTOS.put(key, buffer, {

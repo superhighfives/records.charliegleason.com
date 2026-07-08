@@ -9,10 +9,13 @@
  * the browser (event handlers), never at module top level or during SSR.
  */
 
-// Big enough for Claude to read the cover and for a crisp thumbnail, small
-// enough to upload quickly.
-const TARGET_SIZE = 1280;
-const QUALITY = 0.85;
+// Big enough to feed the professional-photo pipeline's 4 MP restyle a clean,
+// detailed source — and for Claude to read the cover — while still shrinking a
+// 4–8 MB iPhone HEIC to a quick sub-MB upload. Raised from 1280/0.85: the studio
+// editor preserves the detail it's given, so a sharper capture carries through to
+// a sharper final photo.
+const TARGET_SIZE = 2048;
+const QUALITY = 0.92;
 
 export type ProcessedImage = { dataUrl: string; mediaType: string };
 
