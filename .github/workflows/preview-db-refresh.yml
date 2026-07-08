@@ -1,0 +1,54 @@
+name: Preview DB refresh
+
+# Nightly rebuild of the isolated `records-preview` D1 from a fresh production
+# export, so per-PR previews (preview.yml) run on up-to-date but isolated data.
+# This replaces the per-PR clone the Preview workflow used to do: with many PRs
+# each keeping their own preview URL on the one shared preview DB, cloning
+# production per PR would stomp on other open previews' data — so the clone moves
+# to a single scheduled job instead. Production D1 is only ever *read* (export).
+# Runnable on demand from the Actions tab. See SETUP.md → "PR previews".
+on:
+  schedule:
+    - cron: "0 7 * * *"  # 07:00 UTC daily
+  workflow_dispatch: {}
+
+# One rebuild at a time; a manual run supersedes a scheduled one.
+concurrency:
+  group: preview-db-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # Clone production → preview. Production D1 is only ever *read* (export).
+      - name: Refresh preview database from production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # 1. Export production (schema + data).
+          bunx wrangler d1 export records --remote --output /tmp/prod.sql
+          # 2. Reset the preview DB so the rebuild starts clean.
+          bunx wrangler d1 execute records-preview --remote --env preview --yes \
+            --command "DROP TABLE IF EXISTS records; DROP TABLE IF EXISTS d1_migrations;"
+          # 3. Load the fresh copy of production (production's current schema).
+          bunx wrangler d1 execute records-preview --remote --env preview --yes \
+            --file /tmp/prod.sql
+          # 4. Bring the preview schema up to the migrations on main. The clone
+          #    includes production's d1_migrations table, so this applies only the
+          #    migrations production doesn't have yet — a no-op when prod is already
+          #    current.
+          bunx wrangler d1 migrations apply records-preview --remote --env preview
