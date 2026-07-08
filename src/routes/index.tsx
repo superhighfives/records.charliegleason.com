@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
@@ -39,6 +39,18 @@ function Home() {
 	const selectedIndex =
 		selectedId == null ? -1 : filtered.findIndex((r) => r.id === selectedId);
 	const selected = selectedIndex >= 0 ? filtered[selectedIndex] : null;
+
+	// Keep rendering the last-open record while the drawer slides shut. Radix keeps
+	// the sheet mounted through its exit animation, but `selected` goes null the
+	// instant we close — without this, the body would vanish before the slide-out.
+	const lastShown = useRef<{
+		record: (typeof filtered)[number];
+		index: number;
+	}>(null);
+	if (selected) lastShown.current = { record: selected, index: selectedIndex };
+	const shown = selected
+		? { record: selected, index: selectedIndex }
+		: lastShown.current;
 
 	// If the open record is filtered out (e.g. the search no longer matches it),
 	// forget it entirely — clearing the id, not just deriving it away, so it can't
@@ -109,18 +121,20 @@ function Home() {
 								onClick={() => setSelectedId(r.id)}
 								className="w-full cursor-pointer space-y-2 text-left"
 							>
-								<div className="album-card grain aspect-square overflow-hidden">
-									{(() => {
-										const cover = displayCoverKey(r);
-										return cover ? (
-											<img
-												src={`/api/photos/${cover}`}
-												alt={`${r.artist} — ${r.title}`}
-												className="size-full object-cover grayscale transition-[filter] duration-500 ease-out group-hover:grayscale-0"
-												loading="lazy"
-											/>
-										) : null;
-									})()}
+								<div className="cover-lift">
+									<div className="album-card grain aspect-square overflow-hidden">
+										{(() => {
+											const cover = displayCoverKey(r);
+											return cover ? (
+												<img
+													src={`/api/photos/${cover}`}
+													alt={`${r.artist} — ${r.title}`}
+													className="size-full object-cover grayscale transition-[filter] duration-500 ease-out group-hover:grayscale-0"
+													loading="lazy"
+												/>
+											) : null;
+										})()}
+									</div>
 								</div>
 								<div className="text-sm leading-snug">
 									<p
@@ -155,19 +169,18 @@ function Home() {
 				}}
 			>
 				<SheetContent className="p-0">
-					{selected && (
+					{shown && (
 						<RecordPanel
-							key={selected.id}
-							record={selected}
-							index={selectedIndex}
+							key={shown.record.id}
+							record={shown.record}
+							index={shown.index}
 							total={filtered.length}
 							onPrev={() =>
-								selectedIndex > 0 &&
-								setSelectedId(filtered[selectedIndex - 1].id)
+								shown.index > 0 && setSelectedId(filtered[shown.index - 1].id)
 							}
 							onNext={() =>
-								selectedIndex < filtered.length - 1 &&
-								setSelectedId(filtered[selectedIndex + 1].id)
+								shown.index < filtered.length - 1 &&
+								setSelectedId(filtered[shown.index + 1].id)
 							}
 						/>
 					)}
