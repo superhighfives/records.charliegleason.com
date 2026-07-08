@@ -69,10 +69,10 @@ export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
 
 /**
  * How long a professional job may sit in `pending`/`processing` before a reader
- * treats it as dead. Comfortably above a healthy run — two Replicate passes capped
- * at ~2 min each ({@link runModel}'s `timeoutMs`) plus the fetches and Images
- * reframe — so a still-working job is never falsely failed, while a wedged one is
- * caught promptly.
+ * treats it as dead. Comfortably above a healthy run — two Replicate passes (a
+ * 4 MP restyle, then the cutout) capped at ~2 min each ({@link runModel}'s
+ * `timeoutMs`) plus the fetches and Images reframe — so a still-working job is
+ * never falsely failed, while a wedged one is caught promptly.
  */
 export const PROFESSIONAL_STALE_MS = 10 * 60 * 1000;
 
