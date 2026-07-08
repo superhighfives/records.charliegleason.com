@@ -89,9 +89,16 @@ jobs:
           bunx wrangler versions upload \
             --preview-alias "pr-${{ github.event.pull_request.number }}" \
             2>&1 | tee /tmp/upload.log
-          url=$(grep -oiE 'https://pr-[0-9a-z.-]+\.workers\.dev' /tmp/upload.log | head -1)
+          # `|| true` so a no-match grep doesn't trip `set -e` before the
+          # explicit check below can print a useful message.
+          url=$(grep -oiE 'https://pr-[0-9a-z.-]+\.workers\.dev' /tmp/upload.log | head -1 || true)
           if [ -z "$url" ]; then
-            echo "Could not find the preview alias URL in the wrangler output" >&2
+            echo "The version uploaded but no preview URL was minted." >&2
+            echo "Enable version preview URLs for the records-preview Worker:" >&2
+            echo "claim a workers.dev subdomain on the account and turn Preview" >&2
+            echo "URLs on once (a dashboard toggle / one 'wrangler versions" >&2
+            echo "deploy' — versions upload can't flip this non-versioned" >&2
+            echo "setting). See SETUP.md -> PR previews." >&2
             exit 1
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"

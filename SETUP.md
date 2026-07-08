@@ -244,7 +244,12 @@ Then paste the new `database_id` into the `env.preview.d1_databases` block in
 `wrangler.jsonc` (it ships with a `REPLACE_WITH_…` placeholder). Version preview
 URLs need a **workers.dev subdomain claimed on the account** (Cloudflare dashboard
 → Workers & Pages → Subdomain) — that's what `pr-<n>-records-preview.<subdomain>.workers.dev`
-hangs off. The URLs appear the first time CI runs `wrangler versions upload`.
+hangs off — **and Preview URLs enabled on the `records-preview` Worker**. Whether
+Preview URLs are on is *non-versioned* settings, so `wrangler versions upload`
+(what CI runs) can't turn them on: flip them once via the dashboard
+(records-preview → Settings → enable Preview URLs) or a single `wrangler versions
+deploy`. Until then the Preview workflow fails with "no preview URL was minted"
+— the version uploads fine, but no `pr-<n>-…` URL comes back.
 
 > Migrating from the old single-domain preview? The former
 > `preview.records.charliegleason.com` custom domain is no longer used and can be

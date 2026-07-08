@@ -12,7 +12,8 @@ on:
     - cron: "0 7 * * *"  # 07:00 UTC daily
   workflow_dispatch: {}
 
-# One rebuild at a time; a manual run supersedes a scheduled one.
+# One rebuild at a time. A newer run queues behind the current one rather than
+# cancelling it — never interrupt an in-progress drop-and-reload of the DB.
 concurrency:
   group: preview-db-refresh
   cancel-in-progress: false
