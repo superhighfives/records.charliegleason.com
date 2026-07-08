@@ -991,14 +991,14 @@ function AdminRecords() {
 							record={shownPreview.record}
 							index={shownPreview.index}
 							total={previewRecords.length}
-							onPrev={() =>
-								shownPreview.index > 0 &&
-								setPreviewId(previewRecords[shownPreview.index - 1].id)
-							}
-							onNext={() =>
-								shownPreview.index < previewRecords.length - 1 &&
-								setPreviewId(previewRecords[shownPreview.index + 1].id)
-							}
+							onPrev={() => {
+								const prev = previewRecords[shownPreview.index - 1];
+								if (prev) setPreviewId(prev.id);
+							}}
+							onNext={() => {
+								const next = previewRecords[shownPreview.index + 1];
+								if (next) setPreviewId(next.id);
+							}}
 						/>
 					)}
 				</SheetContent>

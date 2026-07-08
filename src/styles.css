@@ -281,7 +281,7 @@ a {
  * no asset to ship. A reusable overlay: any element with `overflow: hidden`
  * gets living grain by adding the class. The noise layer is deliberately larger
  * than its host and jittered a frame at a time (steps(1)) so a single static
- * texture reads as motion; `overlay` blends it into the cover's own tones; the
+ * texture reads as motion; `multiply` blends it into the cover's own tones; the
  * whole thing ignores pointer events so the host stays interactive.
  */
 .grain {
@@ -465,12 +465,17 @@ a {
    * the inner button. Draw it on the list item instead — an element's own shadow
    * isn't clipped by its own containment — and cancel the (clipped) inner ring.
    */
-  .cv-auto:has(:focus-visible) {
-    box-shadow:
-      0 0 0 1px var(--ring),
-      0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
-  }
-  .cv-auto > button:focus-visible {
-    box-shadow: none;
+  @supports selector(:has(*)) {
+    .cv-auto:has(:focus-visible) {
+      box-shadow:
+        0 0 0 1px var(--ring),
+        0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
+    }
+    /* Only cancel the inner ring where the wrapper can replace it. Without
+     * `:has()` the wrapper never lights up, so leaving the button's own ring in
+     * place keeps a visible focus indicator. */
+    .cv-auto > button:focus-visible {
+      box-shadow: none;
+    }
   }
 }

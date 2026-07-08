@@ -175,13 +175,14 @@ function Home() {
 							record={shown.record}
 							index={shown.index}
 							total={filtered.length}
-							onPrev={() =>
-								shown.index > 0 && setSelectedId(filtered[shown.index - 1].id)
-							}
-							onNext={() =>
-								shown.index < filtered.length - 1 &&
-								setSelectedId(filtered[shown.index + 1].id)
-							}
+							onPrev={() => {
+								const prev = filtered[shown.index - 1];
+								if (prev) setSelectedId(prev.id);
+							}}
+							onNext={() => {
+								const next = filtered[shown.index + 1];
+								if (next) setSelectedId(next.id);
+							}}
 						/>
 					)}
 				</SheetContent>
