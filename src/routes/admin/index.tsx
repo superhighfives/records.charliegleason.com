@@ -562,6 +562,19 @@ function AdminRecords() {
 			: previewRecords.findIndex((r) => r.id === previewId);
 	const previewRecord = previewIndex >= 0 ? previewRecords[previewIndex] : null;
 
+	// Keep rendering the last-open record while the drawer slides shut. Radix keeps
+	// the sheet mounted through its exit animation, but `previewRecord` goes null the
+	// instant we close — without this, the body would vanish before the slide-out.
+	const lastPreview = useRef<{
+		record: (typeof previewRecords)[number];
+		index: number;
+	}>(null);
+	if (previewRecord)
+		lastPreview.current = { record: previewRecord, index: previewIndex };
+	const shownPreview = previewRecord
+		? { record: previewRecord, index: previewIndex }
+		: lastPreview.current;
+
 	// If the previewed record drops out of the filtered view, forget it entirely so
 	// a later search can't silently re-open it.
 	useEffect(() => {
@@ -665,7 +678,7 @@ function AdminRecords() {
 			    same size whether or not the (button-height) actions are showing, so
 			    selecting a row doesn't resize it. Hidden entirely when empty. */}
 			{visibleRowCount > 0 && (
-				<div className="flex min-h-14 sticky top-4 z-10 items-center gap-2 rounded-lg border border-sidebar-accent bg-sidebar/50 backdrop-blur px-3 py-2">
+				<div className="flex min-h-14 sticky top-4 z-10 items-center gap-2 rounded-lg border border-sidebar-accent bg-sidebar/80 px-3 py-2">
 					{hasSelection ? (
 						<span className="text-sm font-medium whitespace-nowrap">
 							{selectedIds.length} selected
@@ -971,21 +984,21 @@ function AdminRecords() {
 				}}
 			>
 				<SheetContent className="p-0">
-					{previewRecord && (
+					{shownPreview && (
 						<RecordPanel
-							key={previewRecord.id}
+							key={shownPreview.record.id}
 							admin
-							record={previewRecord}
-							index={previewIndex}
+							record={shownPreview.record}
+							index={shownPreview.index}
 							total={previewRecords.length}
-							onPrev={() =>
-								previewIndex > 0 &&
-								setPreviewId(previewRecords[previewIndex - 1].id)
-							}
-							onNext={() =>
-								previewIndex < previewRecords.length - 1 &&
-								setPreviewId(previewRecords[previewIndex + 1].id)
-							}
+							onPrev={() => {
+								const prev = previewRecords[shownPreview.index - 1];
+								if (prev) setPreviewId(prev.id);
+							}}
+							onNext={() => {
+								const next = previewRecords[shownPreview.index + 1];
+								if (next) setPreviewId(next.id);
+							}}
 						/>
 					)}
 				</SheetContent>

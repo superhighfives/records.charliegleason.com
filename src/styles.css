@@ -218,10 +218,196 @@ a {
     border-color 160ms ease;
 }
 
-/* Cover tiles: a simple bordered card, no hover treatment. */
+/* Cover tiles: a plain square, no border or radius. */
 .album-card {
-  border: 1px solid var(--border);
   background: var(--card);
+}
+
+/*
+ * Lift-off: on hover the cover rises a few pixels and a yellow line is revealed
+ * along its bottom edge, as if the sleeve were being lifted to show a marker
+ * behind it. The line sits under the cover (lower z-index) and stays put; the
+ * cover translates up over it. Line height matches the lift so it reveals flush.
+ */
+.cover-lift {
+  position: relative;
+  --lift: 4px;
+  /* Reserve the lift's worth of headroom above the cover. The tile's paint
+   * containment (content-visibility on .cv-auto) clips anything drawn outside
+   * its box, so without this the cover's top edge would be cropped as it rises.
+   * At rest the cover sits --lift down; the hover translate brings it flush. */
+  padding-top: var(--lift);
+}
+
+.cover-lift::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: var(--lift);
+  background: var(--accent-yellow);
+  z-index: 0;
+}
+
+.cover-lift .album-card {
+  position: relative;
+  z-index: 1;
+  transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.group:hover .cover-lift .album-card {
+  transform: translateY(calc(-1 * var(--lift)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cover-lift .album-card {
+    transition: none;
+  }
+}
+
+/*
+ * Skip rendering (and animating the grain on) tiles scrolled off-screen. Cheap
+ * insurance for a large collection: the browser only paints tiles near the
+ * viewport. `auto` remembers each tile's real size once rendered, falling back
+ * to ~300px so the scrollbar doesn't jump before first paint.
+ */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
+}
+
+/*
+ * Animated grain, the analog/VHS speckle circularruin.com gets from a looping
+ * video — but generated on the fly from an SVG fractal-noise filter, so there's
+ * no asset to ship. A reusable overlay: any element with `overflow: hidden`
+ * gets living grain by adding the class. The noise layer is deliberately larger
+ * than its host and jittered a frame at a time (steps(1)) so a single static
+ * texture reads as motion; `multiply` blends it into the cover's own tones; the
+ * whole thing ignores pointer events so the host stays interactive.
+ */
+.grain {
+  position: relative;
+  /* Confine the overlay's blend to this element's own contents, so the grain
+   * reads the same regardless of whatever sits behind it in the page. */
+  isolation: isolate;
+}
+
+/* Grain intensity lives in a registered custom property so two things can drive
+ * it at once without both reaching for `opacity`: the keyframes scale by it to
+ * flicker, and hover transitions it to zero to fade the whole layer out. Plain
+ * custom properties can't be transitioned — registering it makes it animatable. */
+@property --grain-alpha {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.7;
+}
+
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: -75%;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='200'%20height='200'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='4'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncG%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncB%20type='linear'%20slope='5'%20intercept='-2'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='200'%20height='200'%20filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  /* Static fallback (reduced-motion, no animation); the keyframes take over and
+   * flicker around this value when motion is allowed. */
+  opacity: var(--grain-alpha);
+  mix-blend-mode: multiply;
+  animation: grain 0.5s steps(1) infinite;
+  transition: --grain-alpha 500ms ease-out;
+}
+
+/* Fade the grain away on hover, in step with the cover blooming into colour. */
+.group:hover .grain::after {
+  --grain-alpha: 0;
+}
+
+/*
+ * Desync the flicker across tiles: sharing one timeline makes every cover pulse
+ * in unison. A negative delay drops each into a different point of the cycle
+ * immediately, and slightly different durations mean they keep drifting apart
+ * rather than snapping back into phase. Six buckets by position is plenty for
+ * the eye to read it as random.
+ */
+.group:nth-child(6n + 1) .grain::after {
+  animation-duration: 0.43s;
+  animation-delay: -0.31s;
+}
+.group:nth-child(6n + 2) .grain::after {
+  animation-duration: 0.53s;
+  animation-delay: -0.11s;
+}
+.group:nth-child(6n + 3) .grain::after {
+  animation-duration: 0.47s;
+  animation-delay: -0.23s;
+}
+.group:nth-child(6n + 4) .grain::after {
+  animation-duration: 0.61s;
+  animation-delay: -0.05s;
+}
+.group:nth-child(6n + 5) .grain::after {
+  animation-duration: 0.5s;
+  animation-delay: -0.41s;
+}
+.group:nth-child(6n) .grain::after {
+  animation-duration: 0.57s;
+  animation-delay: -0.17s;
+}
+
+/* Two things move each step: the texture jitters (so one static noise reads as
+ * motion) and its opacity flickers around --grain-alpha, like a struggling
+ * signal. Scaling by the property keeps the hover fade-out intact. */
+@keyframes grain {
+  0% {
+    transform: translate(0, 0);
+    opacity: var(--grain-alpha);
+  }
+  10% {
+    transform: translate(-4%, -6%);
+    opacity: calc(var(--grain-alpha) * 0.9);
+  }
+  20% {
+    transform: translate(-8%, 2%);
+    opacity: calc(var(--grain-alpha) * 0.97);
+  }
+  30% {
+    transform: translate(6%, -8%);
+    opacity: calc(var(--grain-alpha) * 0.87);
+  }
+  40% {
+    transform: translate(-2%, 8%);
+    opacity: var(--grain-alpha);
+  }
+  50% {
+    transform: translate(-8%, 4%);
+    opacity: calc(var(--grain-alpha) * 0.93);
+  }
+  60% {
+    transform: translate(8%, 0);
+    opacity: calc(var(--grain-alpha) * 0.88);
+  }
+  70% {
+    transform: translate(0, 6%);
+    opacity: calc(var(--grain-alpha) * 0.98);
+  }
+  80% {
+    transform: translate(4%, -4%);
+    opacity: calc(var(--grain-alpha) * 0.91);
+  }
+  90% {
+    transform: translate(-6%, -2%);
+    opacity: calc(var(--grain-alpha) * 0.95);
+  }
+  100% {
+    transform: translate(0, 0);
+    opacity: var(--grain-alpha);
+  }
+}
+
+/* Respect a reduced-motion preference: keep the texture, drop the flicker. */
+@media (prefers-reduced-motion: reduce) {
+  .grain::after {
+    animation: none;
+  }
 }
 
 .rise-in {
@@ -250,9 +436,46 @@ a {
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
   body {
     @apply bg-background text-foreground;
+  }
+
+  /*
+   * One consistent focus treatment for the whole app, matching the inputs: a
+   * bright 1px brand-yellow line hugging the element plus a wider, dimmer ring
+   * outside it, on keyboard focus only. Buttons and inputs opt out with
+   * `outline-none` and render their own matching `border` + `ring`; everything
+   * else — links, the copy button — picks this up automatically. The transparent
+   * outline keeps a visible indicator under forced-colours / high-contrast mode,
+   * where box-shadows are dropped.
+   */
+  :focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 1px var(--ring),
+      0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+
+  /*
+   * Cover tiles are wrapped in an `.group` list item that carries
+   * `content-visibility` (→ paint containment), which would clip a ring drawn on
+   * the inner button. Draw it on the list item instead — an element's own shadow
+   * isn't clipped by its own containment — and cancel the (clipped) inner ring.
+   */
+  @supports selector(:has(*)) {
+    .cv-auto:has(:focus-visible) {
+      box-shadow:
+        0 0 0 1px var(--ring),
+        0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
+    }
+    /* Only cancel the inner ring where the wrapper can replace it. Without
+     * `:has()` the wrapper never lights up, so leaving the button's own ring in
+     * place keeps a visible focus indicator. */
+    .cv-auto > button:focus-visible {
+      box-shadow: none;
+    }
   }
 }

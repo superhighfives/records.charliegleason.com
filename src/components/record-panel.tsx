@@ -42,7 +42,7 @@ export type PanelRecord = PublicRecord &
 /** A headline fact rendered as a bordered card (the OpenRouter-style stat grid). */
 function Stat({ label, children }: { label: string; children: ReactNode }) {
 	return (
-		<div className="rounded-lg border border-border p-3">
+		<div className="border border-border p-3">
 			<p className="text-xs text-muted-foreground">{label}</p>
 			<p className="mt-0.5 font-medium tabular-nums">{children ?? "—"}</p>
 		</div>
@@ -154,10 +154,13 @@ export function RecordPanel({
 	// so paging to another record remounts this component with a fresh state.
 	const [copied, setCopied] = useState(false);
 
+	// The catalog number is shown, but copying grabs the Discogs release URL (the
+	// more useful thing to paste), falling back to the catno when there's no link.
 	const copyCatno = async () => {
-		if (!record.catno) return;
+		const toCopy = record.discogsUrl ?? record.catno;
+		if (!toCopy) return;
 		try {
-			await navigator.clipboard.writeText(record.catno);
+			await navigator.clipboard.writeText(toCopy);
 			setCopied(true);
 		} catch {
 			// Clipboard denied (insecure context / permissions) — nothing to do.
@@ -172,6 +175,8 @@ export function RecordPanel({
 		const t = setTimeout(() => setCopied(false), 1500);
 		return () => clearTimeout(t);
 	}, [copied]);
+
+	const cover = displayCoverKey(record);
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
@@ -204,19 +209,7 @@ export function RecordPanel({
 
 	return (
 		<>
-			<SheetHeader className="flex-row items-start gap-4 pb-2 pr-10">
-				<div className="size-16 shrink-0 overflow-hidden rounded-md border border-border bg-muted">
-					{(() => {
-						const cover = displayCoverKey(record);
-						return cover ? (
-							<img
-								src={`/api/photos/${cover}`}
-								alt=""
-								className="size-full object-cover"
-							/>
-						) : null;
-					})()}
-				</div>
+			<SheetHeader className="flex-row flex-wrap items-start gap-4 pb-6 pr-10 min-[400px]:flex-nowrap mt-auto border-b border-border">
 				<div className="min-w-0 flex-1">
 					<SheetTitle className="font-serif text-lg leading-tight">
 						{record.discogsUrl ? (
@@ -260,70 +253,81 @@ export function RecordPanel({
 				</div>
 			</SheetHeader>
 
-			<div className="flex-1 space-y-6 overflow-y-auto px-6 pb-6">
-				<div className="grid grid-cols-3 gap-2">
-					<Stat label="Year">{dash(record.year)}</Stat>
-					<Stat label="Format">{dash(record.format)}</Stat>
-					<Stat label="Size">{dash(record.size)}</Stat>
-					<Stat label="Genre">{dash(record.genre)}</Stat>
-					<Stat label="Country">{dash(record.country)}</Stat>
+			<div className="flex-1 overflow-y-auto">
+				<div className="aspect-square">
+					{cover && (
+						<img
+							src={`/api/photos/${cover}`}
+							alt=""
+							className="block size-full object-cover"
+						/>
+					)}
 				</div>
+				<div className="p-6 space-y-6">
+					<div className="grid grid-cols-3 gap-2">
+						<Stat label="Year">{dash(record.year)}</Stat>
+						<Stat label="Format">{dash(record.format)}</Stat>
+						<Stat label="Size">{dash(record.size)}</Stat>
+						<Stat label="Genre">{dash(record.genre)}</Stat>
+						<Stat label="Country">{dash(record.country)}</Stat>
+					</div>
 
-				<div>
-					<h3 className="mb-1 text-sm font-semibold">Specifications</h3>
-					<dl className="divide-y divide-border">
-						<Spec label="Label">{dash(record.label)}</Spec>
-						<Spec label="Catalog number">{dash(record.catno)}</Spec>
-						<Spec label="Discogs">
-							{record.discogsUrl ? (
-								<a
-									href={record.discogsUrl}
-									target="_blank"
-									rel="noreferrer"
-									className="inline-flex items-center gap-1 text-brand hover:text-brand-strong"
-								>
-									View release
-									<ExternalLink className="size-3" />
-								</a>
-							) : (
-								"—"
-							)}
-						</Spec>
-						<Spec label="Added">{dash(added)}</Spec>
-					</dl>
+					<div>
+						<h3 className="mb-1 text-sm font-semibold">Specifications</h3>
+						<dl className="divide-y divide-border">
+							<Spec label="Label">{dash(record.label)}</Spec>
+							<Spec label="Catalog number">{dash(record.catno)}</Spec>
+							<Spec label="Discogs">
+								{record.discogsUrl ? (
+									<a
+										href={record.discogsUrl}
+										target="_blank"
+										rel="noreferrer"
+										className="inline-flex items-center gap-1 text-brand hover:text-brand-strong"
+									>
+										View release
+										<ExternalLink className="size-3" />
+									</a>
+								) : (
+									"—"
+								)}
+							</Spec>
+							<Spec label="Added">{dash(added)}</Spec>
+						</dl>
+					</div>
+
+					{admin && <AdminValuation record={record} />}
+
+					{record.pitchforkScore != null && (
+						<div>
+							<h3 className="mb-1 text-sm font-semibold">Critical reception</h3>
+							<p className="text-sm text-muted-foreground">
+								{record.pitchforkUrl ? (
+									<a
+										href={record.pitchforkUrl}
+										target="_blank"
+										rel="noreferrer"
+										className="font-bold tabular-nums text-brand hover:text-brand-strong"
+									>
+										{record.pitchforkScore}
+									</a>
+								) : (
+									<span className="font-bold tabular-nums text-brand">
+										{record.pitchforkScore}
+									</span>
+								)}{" "}
+								on Pitchfork
+							</p>
+						</div>
+					)}
+
+					{record.notes && (
+						<div>
+							<h3 className="mb-1 text-sm font-semibold">Notes</h3>
+							<p className="text-sm text-muted-foreground">{record.notes}</p>
+						</div>
+					)}
 				</div>
-
-				{admin && <AdminValuation record={record} />}
-
-				{record.pitchforkScore != null && (
-					<div>
-						<h3 className="mb-1 text-sm font-semibold">Critical reception</h3>
-						<p className="text-sm text-muted-foreground">
-							{record.pitchforkUrl ? (
-								<a
-									href={record.pitchforkUrl}
-									target="_blank"
-									rel="noreferrer"
-									className="font-bold tabular-nums text-brand hover:text-brand-strong"
-								>
-									{record.pitchforkScore}
-								</a>
-							) : (
-								<span className="font-bold tabular-nums text-brand">
-									{record.pitchforkScore}
-								</span>
-							)}{" "}
-							on Pitchfork
-						</p>
-					</div>
-				)}
-
-				{record.notes && (
-					<div>
-						<h3 className="mb-1 text-sm font-semibold">Notes</h3>
-						<p className="text-sm text-muted-foreground">{record.notes}</p>
-					</div>
-				)}
 			</div>
 
 			<SheetFooter className="justify-between border-t border-border">
