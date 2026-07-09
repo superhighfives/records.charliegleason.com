@@ -7,11 +7,11 @@ import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { displayCoverKey } from "#/lib/cover";
+import { emojiSrc } from "#/lib/emoji";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
-const HERO_EMOJI =
-	"https://www.charliegleason.com/api/emoji/%F0%9F%8E%B5?detailed=false&animated=false";
+const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
 
 export const Route = createFileRoute("/")({
 	loader: ({ context }) =>

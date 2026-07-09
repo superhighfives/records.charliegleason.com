@@ -1,9 +1,5 @@
 import { Link } from "@tanstack/react-router";
-
-// charliegleason.com's emoji generator. Pass a percent-encoded emoji.
-function emojiSrc(encoded: string) {
-	return `https://www.charliegleason.com/api/emoji/${encoded}?detailed=false&animated=false`;
-}
+import { emojiSrc } from "#/lib/emoji";
 
 export function ErrorScreen({
 	emoji,
