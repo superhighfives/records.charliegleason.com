@@ -1,19 +1,27 @@
 name: Preview
 
-# Per-PR preview of the app on a standalone `records-preview` Worker
-# (*.workers.dev — no custom domain, cron or email). The preview database is a
-# fresh clone of production on every run, so it's up to date but isolated:
-# captures made while reviewing never touch production data. R2 (cover photos)
-# is shared with production. See SETUP.md → "Preview environment" for the
-# one-time provisioning this depends on.
+# Per-PR preview of the app. Each PR is uploaded as a *version* of the shared
+# `records-preview` Worker and gets its own stable Cloudflare preview URL
+# (https://pr-<number>-records-preview.<subdomain>.workers.dev) via
+# `wrangler versions upload --preview-alias`. Because `versions upload` only
+# mints the workers.dev preview URL and never changes the version served on a
+# route, PRs no longer evict each other — each keeps its own live URL.
+#
+# Worker versions share the parent Worker's bindings, so every preview reads the
+# one isolated `records-preview` D1 — a snapshot of production refreshed nightly
+# by preview-db-refresh.yml, never the live production database. Captures made
+# while reviewing stay in that shared preview DB. R2 (cover photos) is shared
+# with production. Any migrations a PR adds are applied to the preview DB so
+# schema-changing PRs still work. See SETUP.md → "PR previews".
 on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
 
-# One shared preview environment, so only the most recent PR build is live.
+# Cancel superseded builds for the SAME PR only — different PRs keep their own
+# preview URL and no longer cancel each other.
 concurrency:
-  group: preview
+  group: preview-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -44,7 +52,7 @@ jobs:
       # CLOUDFLARE_ENV selects the wrangler environment at BUILD time — the
       # @cloudflare/vite-plugin bakes it into the generated deploy config. Without
       # it the build defaults to the top-level (production!) config and a later
-      # `wrangler deploy --env preview` can't override it.
+      # `wrangler versions upload` can't override it.
       - name: Build
         run: bun run build
         env:
@@ -55,42 +63,50 @@ jobs:
           VITE_SENTRY_PROJECT: ${{ secrets.VITE_SENTRY_PROJECT }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
-      # Clone production → preview. Production D1 is only ever *read* (export).
-      - name: Refresh preview database from production
+      # Top up the shared preview DB with any migrations this PR adds, so
+      # schema-changing PRs render. Idempotent: `migrations apply` runs only the
+      # migrations missing from the preview DB's d1_migrations table (a no-op for
+      # non-schema PRs). The full production clone happens nightly
+      # (preview-db-refresh.yml); this never touches production D1.
+      - name: Apply PR migrations to preview database
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          # 1. Export production (schema + data).
-          bunx wrangler d1 export records --remote --output /tmp/prod.sql
-          # 2. Reset the preview DB so re-runs start clean.
-          bunx wrangler d1 execute records-preview --remote --env preview --yes \
-            --command "DROP TABLE IF EXISTS records; DROP TABLE IF EXISTS d1_migrations;"
-          # 3. Load the fresh copy of production (production's current schema).
-          bunx wrangler d1 execute records-preview --remote --env preview --yes \
-            --file /tmp/prod.sql
-          # 4. Bring the preview schema up to this PR's migrations. The clone
-          #    includes production's d1_migrations table, so this applies only the
-          #    migrations production doesn't have yet — a no-op when prod is already
-          #    current. No need to name migration files explicitly.
-          bunx wrangler d1 migrations apply records-preview --remote --env preview
+        run: bunx wrangler d1 migrations apply records-preview --remote --env preview
 
-      # CLOUDFLARE_ENV (not `--env`) keeps wrangler aligned with the build output
-      # the vite plugin generated for the preview environment, and guarantees this
-      # never falls back to the production config/Worker.
-      - name: Deploy preview Worker
+      # Upload this PR's build as a new version of the preview Worker and give it
+      # a stable per-PR alias URL. `versions upload` does NOT promote the version
+      # to any route, so previews never overwrite each other. CLOUDFLARE_ENV keeps
+      # wrangler aligned with the preview build output the vite plugin generated.
+      - name: Upload preview version
+        id: upload
         env:
           CLOUDFLARE_ENV: preview
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bunx wrangler deploy
+        run: |
+          set -euo pipefail
+          bunx wrangler versions upload \
+            --preview-alias "pr-${{ github.event.pull_request.number }}" \
+            2>&1 | tee /tmp/upload.log
+          # `|| true` so a no-match grep doesn't trip `set -e` before the
+          # explicit check below can print a useful message.
+          url=$(grep -oiE 'https://pr-[0-9a-z.-]+\.workers\.dev' /tmp/upload.log | head -1 || true)
+          if [ -z "$url" ]; then
+            echo "The version uploaded but no preview URL was minted." >&2
+            echo "Enable version preview URLs for the records-preview Worker:" >&2
+            echo "claim a workers.dev subdomain on the account and turn Preview" >&2
+            echo "URLs on once (a dashboard toggle / one 'wrangler versions" >&2
+            echo "deploy' — versions upload can't flip this non-versioned" >&2
+            echo "setting). See SETUP.md -> PR previews." >&2
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Comment preview URL on the PR
         uses: actions/github-script@v7
         env:
-          # Stable custom domain from wrangler.jsonc env.preview.routes.
-          PREVIEW_URL: https://preview.records.charliegleason.com
+          PREVIEW_URL: ${{ steps.upload.outputs.url }}
         with:
           script: |
             const url = process.env.PREVIEW_URL;
@@ -100,9 +116,10 @@ jobs:
 
             **${url}**
 
-            Standalone \`records-preview\` Worker with a fresh clone of the production
-            database (this PR's migrations applied) and the shared production R2
-            bucket. Captures made here won't touch production data.
+            Per-PR version of the \`records-preview\` Worker. Reads the shared,
+            isolated preview database (a nightly snapshot of production with this
+            PR's migrations applied) and the shared production R2 bucket. Captures
+            made here won't touch production data.
 
             _Updated for ${context.sha.slice(0, 7)}._`;
 

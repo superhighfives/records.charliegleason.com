@@ -88,10 +88,14 @@
 			"remote": true
 		}
 	],
-	// PR preview environment — a standalone `records-preview` Worker on
-	// *.workers.dev (no custom domain, cron or email). Deployed by CI on each PR
-	// (.github/workflows/preview.yml), which clones the production D1 into the
-	// preview DB so it's up to date but isolated. R2 is shared with production.
+	// PR preview environment — the shared `records-preview` Worker. Each PR is
+	// uploaded as a *version* of this Worker by CI (.github/workflows/preview.yml)
+	// and served on its own Cloudflare preview URL
+	// (pr-<n>-records-preview.<subdomain>.workers.dev), so PRs no longer overwrite
+	// each other. Versions share these bindings, so all previews read the one
+	// `records-preview` D1 — refreshed nightly from production by
+	// preview-db-refresh.yml — which stays isolated from the live production DB.
+	// R2 is shared with production. There is no custom domain, cron or email.
 	// Bindings are NOT inherited by named environments, so everything is repeated.
 	//
 	// One-time setup (needs your Cloudflare account — see SETUP.md):
@@ -102,16 +106,19 @@
 	"env": {
 		"preview": {
 			// `routes` and `triggers` ARE inherited by environments, so both are
-			// overridden here: without the routes override, deploying preview would
-			// reassign records.charliegleason.com (production!) to this Worker; the
-			// empty crons disable the inherited weekly digest in preview. `send_email`
-			// is intentionally omitted (not inherited) — preview never sends mail.
-			"routes": [
-				{
-					"pattern": "preview.records.charliegleason.com",
-					"custom_domain": true
-				}
-			],
+			// overridden here. `routes: []` is critical: without it preview inherits
+			// the production route and a `wrangler deploy --env preview` would
+			// reassign records.charliegleason.com (production!) to this Worker. It's
+			// empty because per-PR previews are served on version preview URLs
+			// (see `preview_urls` below), not a custom domain. The empty crons
+			// disable the inherited weekly digest in preview. `send_email` is
+			// intentionally omitted (not inherited) — preview never sends mail.
+			"routes": [],
+			// Enable Cloudflare version preview URLs so CI's
+			// `wrangler versions upload --preview-alias pr-<n>` mints a stable
+			// per-PR URL (pr-<n>-records-preview.<subdomain>.workers.dev). Requires
+			// a workers.dev subdomain claimed on the account.
+			"preview_urls": true,
 			"triggers": {
 				"crons": []
 			},
