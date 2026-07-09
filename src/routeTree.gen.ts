@@ -9,6 +9,8 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as R500RouteImport } from './routes/500'
+import { Route as R404RouteImport } from './routes/404'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
@@ -20,6 +22,16 @@ import { Route as ApiCronDigestRouteImport } from './routes/api/cron.digest'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdRouteImport } from './routes/admin/records.$id'
 
+const R500Route = R500RouteImport.update({
+  id: '/500',
+  path: '/500',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const R404Route = R404RouteImport.update({
+  id: '/404',
+  path: '/404',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRouteRoute = AdminRouteRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -74,6 +86,8 @@ const AdminRecordsIdRoute = AdminRecordsIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
+  '/404': typeof R404Route
+  '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
@@ -85,6 +99,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/404': typeof R404Route
+  '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin': typeof AdminIndexRoute
@@ -98,6 +114,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
+  '/404': typeof R404Route
+  '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
@@ -112,6 +130,8 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/404'
+    | '/500'
     | '/admin/capture'
     | '/api/records'
     | '/admin/'
@@ -123,6 +143,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/404'
+    | '/500'
     | '/admin/capture'
     | '/api/records'
     | '/admin'
@@ -135,6 +157,8 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/404'
+    | '/500'
     | '/admin/capture'
     | '/api/records'
     | '/admin/'
@@ -148,6 +172,8 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
+  R404Route: typeof R404Route
+  R500Route: typeof R500Route
   ApiRecordsRoute: typeof ApiRecordsRoute
   ApiCronDigestRoute: typeof ApiCronDigestRoute
   ApiDiscogsCoverIdRoute: typeof ApiDiscogsCoverIdRoute
@@ -156,6 +182,20 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/500': {
+      id: '/500'
+      path: '/500'
+      fullPath: '/500'
+      preLoaderRoute: typeof R500RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/404': {
+      id: '/404'
+      path: '/404'
+      fullPath: '/404'
+      preLoaderRoute: typeof R404RouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin': {
       id: '/admin'
       path: '/admin'
@@ -250,6 +290,8 @@ const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRouteRoute: AdminRouteRouteWithChildren,
+  R404Route: R404Route,
+  R500Route: R500Route,
   ApiRecordsRoute: ApiRecordsRoute,
   ApiCronDigestRoute: ApiCronDigestRoute,
   ApiDiscogsCoverIdRoute: ApiDiscogsCoverIdRoute,
