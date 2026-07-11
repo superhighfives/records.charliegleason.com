@@ -90,15 +90,21 @@ export function RecordForm({
 
 			<form.Field name="confirmedRelease">
 				{(field) => (
-					<div className="flex items-center gap-2">
+					// `items-start` + the checkbox's top nudge keep the box aligned with the
+					// first line when the label wraps on narrow screens. The Label is forced
+					// back to `block` (its base is `flex`, which would split the heading and
+					// the description into two columns that each wrap awkwardly on mobile) so
+					// the text flows and wraps as one natural run instead.
+					<div className="flex items-start gap-2">
 						<Checkbox
 							id={field.name}
 							name={field.name}
 							checked={field.state.value}
 							onBlur={field.handleBlur}
 							onChange={(e) => field.handleChange(e.target.checked)}
+							className="mt-0.5"
 						/>
-						<Label htmlFor={field.name}>
+						<Label htmlFor={field.name} className="block leading-snug">
 							Confirmed release
 							<span className="ml-1 font-normal text-muted-foreground">
 								— this is the correct Discogs match

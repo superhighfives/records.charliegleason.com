@@ -26,6 +26,7 @@ import type {
 import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
+	deleteRecord,
 	fetchRecordValue,
 	generateProfessional,
 	getDiscogsRelease,
@@ -400,6 +401,21 @@ function RecordDetail() {
 	const retry = useMutation({
 		mutationFn: () => reprocessRecord({ data: recordId }),
 		onSuccess: invalidate,
+	});
+
+	// Permanently remove the record, then head back to the collection. Mirrors the
+	// list's delete (see admin/index) — the server also clears any dangling
+	// `duplicateOf` back-references pointing at this row.
+	const remove = useMutation({
+		mutationFn: () => deleteRecord({ data: recordId }),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({
+				queryKey: recordsQueryOptions.queryKey,
+			});
+			toast.success("Record deleted.");
+			navigate({ to: "/admin" });
+		},
+		onError: () => toast.error("Couldn't delete this record."),
 	});
 
 	// Queue (or re-queue) the professional studio photo. Lands via the queue, so
@@ -1179,6 +1195,31 @@ function RecordDetail() {
 					</div>
 				</div>
 			)}
+
+			{/* Danger zone. Kept outside the `!inFlight` gate so a record wedged mid-
+			    analysis can still be removed. Deleting is permanent, so confirm first. */}
+			<div className="flex flex-col gap-2 border-t border-destructive/30 pt-4 sm:flex-row sm:items-center sm:justify-between">
+				<div>
+					<h2 className="text-sm font-semibold">Delete record</h2>
+					<p className="text-xs text-muted-foreground">
+						Permanently removes this record and its photos. This can’t be undone.
+					</p>
+				</div>
+				<Button
+					type="button"
+					variant="destructive"
+					size="sm"
+					className="shrink-0"
+					disabled={remove.isPending}
+					onClick={() => {
+						if (confirm(`Delete "${heading}"? This can't be undone.`)) {
+							remove.mutate();
+						}
+					}}
+				>
+					{remove.isPending ? "Deleting…" : "Delete record"}
+				</Button>
+			</div>
 		</div>
 	);
 }
