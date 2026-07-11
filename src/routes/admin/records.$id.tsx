@@ -731,7 +731,7 @@ function RecordDetail() {
 									}
 								}}
 							>
-								{generatePro.isPending ? "…" : "Taking too long? Regenerate"}
+								{generatePro.isPending ? "Regenerating…" : "Taking too long? Regenerate"}
 							</Button>
 						</div>
 					) : record.professionalImageKey &&
@@ -778,7 +778,7 @@ function RecordDetail() {
 									disabled={generatePro.isPending}
 									onClick={() => generatePro.mutate()}
 								>
-									{generatePro.isPending ? "…" : "Regenerate"}
+									{generatePro.isPending ? "Regenerating…" : "Regenerate"}
 								</Button>
 							</div>
 						</div>
