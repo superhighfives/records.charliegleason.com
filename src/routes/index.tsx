@@ -63,11 +63,7 @@ function Home() {
 		<div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
 			<header className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
 				<div className="flex items-center gap-4">
-					<a
-						href="https://charliegleason.com"
-						className="block shrink-0"
-						aria-label="charliegleason.com"
-					>
+					<a href="https://charliegleason.com" className="block shrink-0">
 						<img
 							src={HERO_EMOJI}
 							alt=""
@@ -76,6 +72,7 @@ function Home() {
 							height={56}
 							className="size-14"
 						/>
+						<span className="sr-only">charliegleason.com</span>
 					</a>
 					<div>
 						<p className="kicker mb-1">The collection</p>
