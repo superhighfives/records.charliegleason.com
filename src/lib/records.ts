@@ -528,6 +528,14 @@ export const deleteRecord = createServerFn({ method: "POST" })
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "deleteRecord" }, async () => {
 			const db = getDb(env.DB);
+			const [existing] = await db
+				.select({
+					capturePhotoKey: records.capturePhotoKey,
+					coverImageKey: records.coverImageKey,
+					professionalImageKey: records.professionalImageKey,
+				})
+				.from(records)
+				.where(eq(records.id, id));
 			await db.delete(records).where(eq(records.id, id));
 			// Clear the dangling reference on any record flagged as a duplicate of
 			// the one we just removed, so it stops showing the "Duplicate" badge.
@@ -535,6 +543,14 @@ export const deleteRecord = createServerFn({ method: "POST" })
 				.update(records)
 				.set({ duplicateOf: null, updatedAt: new Date() })
 				.where(eq(records.duplicateOf, id));
+			// Also drop the R2 objects — otherwise "delete" only removes the row and
+			// the photos linger in the bucket forever.
+			const keys = [
+				existing?.capturePhotoKey,
+				existing?.coverImageKey,
+				existing?.professionalImageKey,
+			].filter((k): k is string => Boolean(k));
+			if (keys.length > 0) await env.PHOTOS.delete(keys);
 			return { id };
 		}),
 	);
