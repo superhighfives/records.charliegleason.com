@@ -351,9 +351,13 @@ function AdminRecords() {
 				header: "",
 				enableSorting: false,
 				cell: ({ row }) => {
-					// Approved professional photo, then the sourced cover, then the
-					// capture (admin only) — same order the public site uses.
-					const key = displayCoverKey(row.original, { includeCapture: true });
+					// Approved professional photo, then the raw capture, then the
+					// Discogs cover — so the list shows the record actually
+					// photographed unless a professional shot has gone live.
+					const key = displayCoverKey(row.original, {
+						includeCapture: true,
+						preferCapture: true,
+					});
 					// The thumbnail opens the quick-view drawer (a <button>, so the row's
 					// navigate-to-detail guard skips it).
 					return (
@@ -795,7 +799,10 @@ function AdminRecords() {
 			<ul className="space-y-2 md:hidden">
 				{table.getRowModel().rows.map((row) => {
 					const r = row.original;
-					const thumb = displayCoverKey(r, { includeCapture: true });
+					const thumb = displayCoverKey(r, {
+						includeCapture: true,
+						preferCapture: true,
+					});
 					return (
 						<li
 							key={row.id}
