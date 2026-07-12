@@ -1,165 +1,88 @@
 import { env } from "cloudflare:workers";
+import { PhotonImage } from "@cf-wasm/photon";
 
 import type { Record } from "#/db/schema";
 import { bytesToBase64 } from "#/lib/image-data";
+import { type RgbaImage, reframeSquare } from "#/lib/photo-processing";
 import { firstOutputUrl, runModel } from "#/lib/replicate";
 
 /**
- * Turn a rough iPhone capture into a studio product shot of the physical sleeve.
+ * Turn a rough iPhone capture into a clean, straight-on studio shot of the physical
+ * sleeve — by *processing* the real photo, never repainting it.
  *
- * Two Replicate passes: an instruction-based editor restyles the photo as a
- * straight-on, evenly-lit studio shot on a plain seamless background (it's
- * identity-preserving, so it keeps the actual artwork rather than inventing new
- * art), then a background-matting model cuts the background out to transparency for
- * a true "zero background" cutout. The editor runs at 4 MP so fine print detail —
- * small text, halftone dots — survives the restyle rather than being smoothed away
- * (the reason the old 1 MP model looked soft). The result is canonicalised to a
- * webp-with-alpha via the Cloudflare Images binding (like the cover pipeline) and
- * stored under `professional/` in R2.
+ * The old pipeline sent the capture through a generative image editor (FLUX.2) to
+ * "restyle" it, which inevitably took creative liberties: it redrew artwork, smoothed
+ * halftones and flattened paper texture. Crop, square and lighting are all
+ * deterministic operations, so we do them deterministically instead:
+ *
+ *   1. Background matting (Bria) on the *original capture* → a straight-alpha cutout
+ *      whose RGB is the real photo and whose alpha marks the sleeve.
+ *   2. From that alpha we find the sleeve's four corners and perspective-warp the
+ *      real pixels onto a square — cropping, squaring and de-keystoning in one step
+ *      (a classic "document scanner" homography). If the quad looks unreliable we
+ *      fall back to a plain bounding-box crop (no perspective).
+ *   3. Foreground-aware auto-levels + grey-world white balance normalise exposure
+ *      and neutralise the ambient colour cast, so every shot looks consistent.
+ *
+ * The pixel math lives in {@link reframeSquare} (pure, unit-tested); Photon decodes
+ * the cutout and re-encodes the result, and the Images binding canonicalises to a
+ * webp-with-alpha (like the cover pipeline) before storing under `professional/` in
+ * R2. Only one Replicate pass now (the matte), so it's cheaper and faster too.
  *
  * Returns the R2 key plus the Replicate prediction id (kept on the row for
  * debugging). Throws on any failure — the queue consumer records it on the row.
  * Server-only (pulls in `cloudflare:workers`); never import from a client route.
  */
 
-// Instruction-based editor. Identity-preserving, so the sleeve's artwork/text is
-// kept while lighting, angle and background are cleaned up. FLUX.2 [pro] edits at
-// up to 4 MP (vs flux-kontext-pro's ~1 MP), which is what keeps small text and the
-// halftone crisp instead of smoothed — see EDITOR_RESOLUTION. Swap the model here
-// for higher fidelity, in this one place.
-const EDITOR_MODEL = "black-forest-labs/flux-2-pro";
-// Output resolution for the restyle. FLUX.2 accepts up to "4 MP"; that's the point
-// of using it here — enough pixels to hold the print detail through to the final
-// CANVAS_SIZE frame. (BFL suggests ≤2 MP for complex scenes, but a flat sleeve is
-// simple geometry, so 4 MP is safe and maximises fidelity.)
-const EDITOR_RESOLUTION = "4 MP";
-// Background matting → transparent cutout ("zero background"). An official model,
-// run at its latest version (see `runModel` — only official models work there).
+// Background matting → transparent cutout. An official model, run at its latest
+// version (see `runModel` — only official models work there).
 const CUTOUT_MODEL = "bria/remove-background";
 
-// Final framing — always a square canvas. The trimmed sleeve is fit into a
-// CONTENT_SIZE square, then padded out to a CANVAS_SIZE square; the even gap is the
-// transparent margin on each side (here (2000-1920)/2 = 40px, 2%). Shrink
-// CONTENT_SIZE for more breathing room. Sized to hold the 4 MP restyle's ~2K output
-// so the reframe doesn't throw that detail away — the store step is the last resize,
-// and everything above it now feeds it a genuinely high-res cutout.
+// Final framing — always a square canvas. The warped sleeve fills a CONTENT_SIZE
+// square, then is padded out to a CANVAS_SIZE square; the even gap is the
+// transparent margin on each side (here (2000-1920)/2 = 40px, 2%).
 const CANVAS_SIZE = 2000;
 const CONTENT_SIZE = 1920;
 
-const STUDIO_PROMPT =
-	"Restyle this photograph of a vinyl record sleeve as a high-end studio product " +
-	"shot: a straight-on, front-facing view of the sleeve, tightly cropped to its " +
-	"edges, lit with soft even diffused studio lighting and no harsh shadows or " +
-	"glare, on a plain seamless light-grey background. Keep the sleeve's artwork, " +
-	"text, logos and colours exactly as they are — do not alter, add, or remove any " +
-	"part of the artwork.";
-
-/** Fetch an image URL and inline it as a data URI (Replicate image inputs accept both). */
-async function fetchAsDataUri(url: string): Promise<string> {
-	const res = await fetch(url);
-	if (!res.ok) {
-		throw new Error(`fetch output failed (${res.status}) for ${url}`);
-	}
-	const type = res.headers.get("content-type") || "image/png";
-	const bytes = new Uint8Array(await res.arrayBuffer());
-	return `data:${type};base64,${bytesToBase64(bytes)}`;
-}
+// Sharpen strength for the final Images pass. Gentle — just enough to counter the
+// bilinear softening from the warp, not enough to crunch the halftone.
+const FINAL_SHARPEN = 1.0;
 
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
 function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 	return new Blob([bytes as BlobPart]).stream();
 }
 
-// Resolution of the proxy we scan for the artwork's bounding box. A small fixed
-// square keeps the alpha scan cheap; per-axis fractions map back to the original
-// exactly despite the squeeze distortion.
-const SCAN_SIZE = 400;
-// Ignore the anti-aliased fringe when deciding what counts as "the artwork".
-const ALPHA_MIN = 16;
-
-type Insets = { top: number; right: number; bottom: number; left: number };
-
-/**
- * Pixels to trim off each side of the cutout to reach the artwork's bounding box.
- *
- * The background-removal model returns *straight* alpha — transparent pixels keep
- * their original background RGB — so Cloudflare's colour-based `trim: "border"`
- * sees no uniform border and trims nothing. Instead we read the alpha channel off a
- * small proxy and find the box ourselves.
- *
- * Returns `null` when the raw `rgba` decode isn't available — notably `wrangler dev`,
- * where it errors with `IMAGES_TRANSFORM_ERROR 9520` — so the caller can fall back to
- * an untrimmed reframe. The real (deployed) Images binding always resolves.
- */
-async function contentInsets(
-	bytes: Uint8Array,
-	width: number,
-	height: number,
-): Promise<Insets | null> {
-	let rgba: Uint8Array;
+/** Decode encoded image bytes to an {@link RgbaImage} via Photon. */
+function decodeRgba(bytes: Uint8Array): RgbaImage {
+	const img = PhotonImage.new_from_byteslice(bytes);
 	try {
-		const scan = await env.IMAGES.input(blobStream(bytes))
-			.transform({ width: SCAN_SIZE, height: SCAN_SIZE, fit: "squeeze" })
-			.output({ format: "rgba" });
-		rgba = new Uint8Array(await scan.response().arrayBuffer());
-	} catch {
-		return null;
+		return {
+			data: new Uint8ClampedArray(img.get_raw_pixels()),
+			width: img.get_width(),
+			height: img.get_height(),
+		};
+	} finally {
+		img.free();
 	}
-
-	let minX = SCAN_SIZE;
-	let minY = SCAN_SIZE;
-	let maxX = -1;
-	let maxY = -1;
-	for (let y = 0; y < SCAN_SIZE; y++) {
-		for (let x = 0; x < SCAN_SIZE; x++) {
-			if (rgba[(y * SCAN_SIZE + x) * 4 + 3] >= ALPHA_MIN) {
-				if (x < minX) minX = x;
-				if (x > maxX) maxX = x;
-				if (y < minY) minY = y;
-				if (y > maxY) maxY = y;
-			}
-		}
-	}
-
-	// Fully transparent (shouldn't happen) — treat as nothing to trim.
-	if (maxX < minX || maxY < minY)
-		return { top: 0, right: 0, bottom: 0, left: 0 };
-
-	return {
-		left: Math.round((minX / SCAN_SIZE) * width),
-		right: width - Math.round(((maxX + 1) / SCAN_SIZE) * width),
-		top: Math.round((minY / SCAN_SIZE) * height),
-		bottom: height - Math.round(((maxY + 1) / SCAN_SIZE) * height),
-	};
 }
 
-/**
- * Reframe the transparent cutout so the artwork fills the frame with a small, even
- * margin, and canonicalise to a webp-with-alpha for R2: crop to the artwork's
- * bounding box (see `contentInsets`), scale into a CONTENT_SIZE square, then pad back
- * out to the CANVAS_SIZE canvas. When the bounding box can't be measured (local dev),
- * skip the crop — the image is still square and valid, just with the model's original
- * margin.
- */
-async function reframeCutout(bytes: Uint8Array): Promise<ArrayBuffer> {
-	const info = await env.IMAGES.info(blobStream(bytes));
-	if (!("width" in info)) throw new Error("cutout has no raster dimensions");
-
-	const trim =
-		(await contentInsets(bytes, info.width, info.height)) ??
-		({ top: 0, right: 0, bottom: 0, left: 0 } satisfies Insets);
-
-	const out = await env.IMAGES.input(blobStream(bytes))
-		.transform({ trim })
-		.transform({ width: CONTENT_SIZE, height: CONTENT_SIZE, fit: "contain" })
-		.transform({
-			width: CANVAS_SIZE,
-			height: CANVAS_SIZE,
-			fit: "pad",
-			background: "rgba(0,0,0,0)",
-		})
-		.output({ format: "image/webp", quality: 92 });
-	return out.response().arrayBuffer();
+/** Encode an {@link RgbaImage} to PNG bytes via Photon (preserves alpha). */
+function encodePng(image: RgbaImage): Uint8Array {
+	const img = new PhotonImage(
+		new Uint8Array(
+			image.data.buffer,
+			image.data.byteOffset,
+			image.data.byteLength,
+		),
+		image.width,
+		image.height,
+	);
+	try {
+		return img.get_bytes();
+	} finally {
+		img.free();
+	}
 }
 
 export interface ProfessionalResult {
@@ -182,39 +105,39 @@ export async function generateProfessionalPhoto(
 	const mediaType = object.httpMetadata?.contentType || "image/webp";
 	const captureDataUri = `data:${mediaType};base64,${bytesToBase64(bytes)}`;
 
-	// 1. Studio restyle at 4 MP — keeps the artwork, fixes lighting/angle, and
-	// retains the print detail. Opaque PNG so the cutout matte is clean.
-	const studio = await runModel(EDITOR_MODEL, {
-		prompt: STUDIO_PROMPT,
-		input_images: [captureDataUri],
-		resolution: EDITOR_RESOLUTION,
-		aspect_ratio: "match_input_image",
-		output_format: "png",
-	});
-	const studioUrl = firstOutputUrl(studio.output);
-	if (!studioUrl) throw new Error("studio restyle returned no image");
-
-	// 2. Background cutout → transparent PNG.
-	const cutout = await runModel(CUTOUT_MODEL, {
-		image: await fetchAsDataUri(studioUrl),
-	});
+	// 1. Background matte on the ORIGINAL capture → straight-alpha cutout. The RGB is
+	// the untouched photo; the alpha marks the sleeve (used to find its corners).
+	const cutout = await runModel(CUTOUT_MODEL, { image: captureDataUri });
 	const cutoutUrl = firstOutputUrl(cutout.output);
 	if (!cutoutUrl) throw new Error("background removal returned no image");
 
-	// 3. Reframe the cutout to an even margin and canonicalise to a webp-with-alpha
-	// (mirrors the cover pipeline; webp keeps the transparency), then store in R2.
-	const finalRes = await fetch(cutoutUrl);
-	if (!finalRes.ok) {
-		throw new Error(`cutout fetch failed (${finalRes.status})`);
+	const cutoutRes = await fetch(cutoutUrl);
+	if (!cutoutRes.ok) {
+		throw new Error(`cutout fetch failed (${cutoutRes.status})`);
 	}
-	const buffer = await reframeCutout(
-		new Uint8Array(await finalRes.arrayBuffer()),
-	);
+	const cutoutRgba = decodeRgba(new Uint8Array(await cutoutRes.arrayBuffer()));
+
+	// 2. + 3. Deterministic reframe: detect the sleeve, perspective-warp to a square
+	// (or bbox-crop as a fallback), pad to the canvas, and auto-tone. Real pixels
+	// throughout — nothing is regenerated.
+	const { image } = reframeSquare(cutoutRgba, {
+		canvasSize: CANVAS_SIZE,
+		contentSize: CONTENT_SIZE,
+	});
+
+	// 4. Canonicalise to a webp-with-alpha via the Images binding (mirrors the cover
+	// pipeline; webp keeps the transparency), with a gentle sharpen to counter the
+	// warp's bilinear softening, then store in R2.
+	const png = encodePng(image);
+	const out = await env.IMAGES.input(blobStream(png))
+		.transform({ sharpen: FINAL_SHARPEN })
+		.output({ format: "image/webp", quality: 92 });
+	const buffer = await out.response().arrayBuffer();
 
 	const key = `professional/${crypto.randomUUID()}.webp`;
 	await env.PHOTOS.put(key, buffer, {
 		httpMetadata: { contentType: "image/webp" },
 	});
 
-	return { key, predictionId: studio.id };
+	return { key, predictionId: cutout.id };
 }
