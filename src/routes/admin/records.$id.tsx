@@ -1011,7 +1011,7 @@ function RecordDetail() {
 											variant="outline"
 											disabled={search.isPending}
 										>
-											{search.isPending ? "…" : "Search"}
+											{search.isPending ? "Searching…" : "Search"}
 										</Button>
 									</div>
 								</form>
