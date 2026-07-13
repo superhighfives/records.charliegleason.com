@@ -36,7 +36,6 @@ import {
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 import type { ReframeParams } from "#/lib/reframe-params";
 import {
-	DEFAULT_CORNERS,
 	type NormalizedCorners,
 	parseCorners,
 	serializeCorners,
@@ -225,10 +224,9 @@ export const captureRecord = createServerFn({ method: "POST" })
 					status: "pending",
 					capturePhotoKey,
 					captureContext: data.context?.trim() || null,
-					// Kick off the professional photo automatically on capture with a
-					// full-frame default crop, so a first pass is ready by the time the
-					// record's reviewed; the admin then nudges the corners to taste.
-					sleeveCornersJson: serializeCorners(DEFAULT_CORNERS),
+					// Kick off the professional photo automatically on capture. Corners are
+					// left unset so the queue seeds them by detecting the sleeve (the admin
+					// then nudges the handles); a first pass is ready by the time it's reviewed.
 					professionalStatus: "pending",
 				})
 				.returning();

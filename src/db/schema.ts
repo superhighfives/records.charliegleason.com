@@ -53,10 +53,10 @@ export const records = sqliteTable("records", {
 
 	// Professional studio photo — a straight-on, cropped, evenly-toned square built
 	// deterministically from the iPhone capture (no AI, no paid call):
-	//   1. The sleeve's four corners are picked in the admin corner editor (optionally
-	//      seeded by an in-browser OpenCV document-scan) and stored as `sleeveCornersJson`
+	//   1. The sleeve's four corners are picked in the admin corner editor (auto-seeded by
+	//      a lightweight sleeve-detection pass on capture) and stored as `sleeveCornersJson`
 	//      — normalised [[x,y]×4] in TL,TR,BR,BL order. A fresh capture defaults to the
-	//      full frame.
+	//      full frame when detection can't find the sleeve.
 	//   2. Those corners drive a perspective-warp + crop + auto-tone of the real capture
 	//      pixels → the displayed `professionalImageKey` under `professional/`. Free (pure
 	//      pixel math), so it re-runs whenever the admin nudges the corners or the

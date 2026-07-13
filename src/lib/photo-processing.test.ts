@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	autoTone,
 	type Corners,
+	detectSleeveCorners,
 	homography,
 	padToCanvas,
 	type RgbaImage,
@@ -137,6 +138,57 @@ describe("autoTone", () => {
 		expect(sum / n).toBeGreaterThan(40);
 		// alpha is preserved
 		expect(toned.data[3]).toBe(255);
+	});
+});
+
+describe("detectSleeveCorners", () => {
+	/** A `size` image: uniform `bg`, with a solid `fg` rectangle in [x0,x1)×[y0,y1). */
+	function rectOnBg(
+		size: number,
+		bg: [number, number, number],
+		fg: [number, number, number],
+		box: [number, number, number, number],
+	): RgbaImage {
+		const data = new Uint8ClampedArray(size * size * 4);
+		const [x0, y0, x1, y1] = box;
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const inside = x >= x0 && x < x1 && y >= y0 && y < y1;
+				const [r, g, b] = inside ? fg : bg;
+				const i = (y * size + x) * 4;
+				data[i] = r;
+				data[i + 1] = g;
+				data[i + 2] = b;
+				data[i + 3] = 255;
+			}
+		return { data, width: size, height: size };
+	}
+
+	it("finds the bounding box of a high-contrast sleeve on the background", () => {
+		const img = rectOnBg(
+			400,
+			[30, 30, 30],
+			[220, 220, 220],
+			[80, 60, 320, 340],
+		);
+		const c = detectSleeveCorners(img);
+		if (!c) throw new Error("expected a detection");
+		const [tl, tr, , bl] = c;
+		expect(tl[0]).toBeCloseTo(0.2, 1); // left  = 80/400
+		expect(tr[0]).toBeCloseTo(0.8, 1); // right = 320/400
+		expect(tl[1]).toBeCloseTo(0.15, 1); // top  = 60/400
+		expect(bl[1]).toBeCloseTo(0.85, 1); // bottom = 340/400
+	});
+
+	it("returns null when the cover barely contrasts with the background", () => {
+		// Background and 'sleeve' only 10 apart in each channel → below threshold.
+		const img = rectOnBg(
+			400,
+			[120, 120, 120],
+			[130, 130, 130],
+			[80, 60, 320, 340],
+		);
+		expect(detectSleeveCorners(img)).toBeNull();
 	});
 });
 

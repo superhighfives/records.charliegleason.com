@@ -6,12 +6,14 @@
  * dependency (the caller decodes/encodes via Photon + the Images binding).
  *
  * The geometry is a classic "document scanner" 4-point perspective correction: the
- * sleeve's four corners (picked by hand in the admin editor, optionally seeded by
- * OpenCV) are mapped onto a square via a homography and inverse-sampled, which crops,
- * squares and de-keystones in one step. The tone is a foreground-aware auto-levels +
- * grey-world white balance, so a dark capture and a bright one come out consistent and
- * neutral.
+ * sleeve's four corners (picked by hand in the admin editor, seeded by the lightweight
+ * {@link detectSleeveCorners}) are mapped onto a square via a homography and
+ * inverse-sampled, which crops, squares and de-keystones in one step. The tone is a
+ * foreground-aware auto-levels + grey-world white balance, so a dark capture and a
+ * bright one come out consistent and neutral.
  */
+
+import type { NormalizedCorners } from "#/lib/sleeve-corners";
 
 export interface RgbaImage {
 	data: Uint8ClampedArray;
@@ -134,6 +136,112 @@ export function warpToSquare(
 		}
 	}
 	return { data, width: size, height: size };
+}
+
+// ---------- sleeve detection (best-effort seed) ----------
+
+/**
+ * Best-effort seed for the corner editor: find the sleeve's axis-aligned bounding box by
+ * contrast against the (wood) background, so a freshly captured record opens roughly
+ * pre-cropped. Returns normalised corners (TL,TR,BR,BL, 0..1), or `null` when it can't
+ * separate the sleeve from the background — a low-contrast cover, or a sleeve that fills
+ * the whole frame — in which case the caller falls back to the full-frame default and the
+ * admin drags the handles by hand.
+ *
+ * Deliberately cheap and dependency-free (unlike the 10MB OpenCV build it replaces): it
+ * samples the frame's border ring for the background colour, then row/column-projects a
+ * foreground mask and takes the band where over half the samples differ from the
+ * background. No perspective — the admin nudges the handles for keystone. Pure, so it runs
+ * on the Worker straight off the capture we already decode for the reframe.
+ */
+export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
+	const { data, width, height } = img;
+	if (width < 20 || height < 20) return null;
+
+	// Sample on a stride so this stays cheap on a full-res capture (~400 per axis).
+	const stride = Math.max(1, Math.round(Math.min(width, height) / 400));
+	const at = (x: number, y: number) => (y * width + x) * 4;
+
+	// 1. Background colour = median of a thin border ring (outer ~4%). Median (not mean)
+	// so a sleeve poking into the ring on one side doesn't drag the estimate with it.
+	const ring = Math.max(2, Math.round(Math.min(width, height) * 0.04));
+	const rs: number[] = [];
+	const gs: number[] = [];
+	const bs: number[] = [];
+	for (let y = 0; y < height; y += stride) {
+		for (let x = 0; x < width; x += stride) {
+			if (x >= ring && x < width - ring && y >= ring && y < height - ring)
+				continue;
+			const i = at(x, y);
+			rs.push(data[i]);
+			gs.push(data[i + 1]);
+			bs.push(data[i + 2]);
+		}
+	}
+	if (rs.length < 8) return null;
+	const median = (arr: number[]) => {
+		arr.sort((a, b) => a - b);
+		return arr[arr.length >> 1];
+	};
+	const br = median(rs);
+	const bgc = median(gs);
+	const bb = median(bs);
+
+	// 2. Foreground = pixels far from the background colour (L1 distance over RGB),
+	// projected onto column/row counts.
+	const THRESH = 60;
+	const cols = Math.ceil(width / stride);
+	const rows = Math.ceil(height / stride);
+	const colFg = new Uint32Array(cols);
+	const rowFg = new Uint32Array(rows);
+	for (let y = 0, ry = 0; y < height; y += stride, ry++) {
+		for (let x = 0, cx = 0; x < width; x += stride, cx++) {
+			const i = at(x, y);
+			const dist =
+				Math.abs(data[i] - br) +
+				Math.abs(data[i + 1] - bgc) +
+				Math.abs(data[i + 2] - bb);
+			if (dist > THRESH) {
+				colFg[cx]++;
+				rowFg[ry]++;
+			}
+		}
+	}
+
+	// 3. A column/row belongs to the sleeve when over half its samples are foreground;
+	// the first and last such indices bound the sleeve on each axis.
+	const firstLast = (
+		arr: Uint32Array,
+		thresh: number,
+	): [number, number] | null => {
+		let lo = -1;
+		let hi = -1;
+		for (let k = 0; k < arr.length; k++) {
+			if (arr[k] > thresh) {
+				if (lo < 0) lo = k;
+				hi = k;
+			}
+		}
+		return lo < 0 ? null : [lo, hi];
+	};
+	const xr = firstLast(colFg, rows * 0.5);
+	const yr = firstLast(rowFg, cols * 0.5);
+	if (!xr || !yr) return null;
+
+	const left = (xr[0] * stride) / width;
+	const right = Math.min(1, ((xr[1] + 1) * stride) / width);
+	const top = (yr[0] * stride) / height;
+	const bottom = Math.min(1, ((yr[1] + 1) * stride) / height);
+
+	// 4. Reject an implausibly small box — not a confident detection.
+	if (right - left < 0.3 || bottom - top < 0.3) return null;
+
+	return [
+		[left, top],
+		[right, top],
+		[right, bottom],
+		[left, bottom],
+	];
 }
 
 // ---------- framing ----------

@@ -8,6 +8,7 @@ import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
 import { getReleaseDetail, getReleaseValue } from "#/lib/discogs";
 import { professionalPipeline } from "#/lib/professional";
+import { serializeCorners } from "#/lib/sleeve-corners";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -274,14 +275,17 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				})
 				.where(eq(records.id, recordId));
 
-			// Deterministic reframe from the stored/default corners (shared with the
-			// interactive server fn so both paths behave identically).
-			const { professionalKey } = await professionalPipeline(record);
+			// Deterministic reframe from the stored crop, or a detected seed for a fresh
+			// capture (shared with the interactive server fn so both paths behave identically).
+			const { professionalKey, corners } = await professionalPipeline(record);
 
 			await db
 				.update(records)
 				.set({
 					professionalImageKey: professionalKey,
+					// Persist the corners used (the detected seed) so the editor opens
+					// pre-cropped; a later Apply overwrites them with the admin's crop.
+					sleeveCornersJson: serializeCorners(corners),
 					// Generated, but not shown until an admin approves it (review gate).
 					professionalStatus: "ready",
 					professionalError: null,

@@ -4,6 +4,7 @@ import { PhotonImage } from "@cf-wasm/photon";
 import type { Record } from "#/db/schema";
 import {
 	type Corners,
+	detectSleeveCorners,
 	type RgbaImage,
 	reframeFromCorners,
 } from "#/lib/photo-processing";
@@ -30,8 +31,8 @@ import {
  * locked onto the artwork's subject (a figure, a building), never the flat rectangle.
  *
  * So the sleeve's four corners are picked deterministically instead: by hand in the
- * admin corner editor (optionally seeded by an in-browser OpenCV document-scan), stored
- * on the row as {@link NormalizedCorners}. Given those corners this module:
+ * admin corner editor (auto-seeded by the lightweight {@link detectSleeveCorners} pass),
+ * stored on the row as {@link NormalizedCorners}. Given those corners this module:
  *
  *   1. perspective-warps the real capture pixels onto a square — cropping, squaring and
  *      de-keystoning in one step (a classic "document scanner" homography);
@@ -105,23 +106,24 @@ function toPixelCorners(
 	return corners.map(([x, y]) => [x * (w - 1), y * (h - 1)]) as Corners;
 }
 
-/**
- * The whole (free, deterministic) reframe: read the capture from R2, warp it to a
- * square using the sleeve's `corners`, pad to the canvas, auto-tone, canonicalise to a
- * webp-with-alpha via the Images binding, and store it under `professional/`. Re-runnable
- * as often as the admin likes — with new corners or new {@link ReframeParams} — at no
- * cost, since nothing is regenerated and there's no external call. Returns the new R2 key.
- */
-export async function reframeFromCapture(
-	capturePhotoKey: string,
-	corners: NormalizedCorners,
-	params: ReframeParams = {},
-): Promise<{ key: string }> {
+/** Load + decode a capture from R2 to an {@link RgbaImage} (throws if it's missing). */
+async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
 	const object = await env.PHOTOS.get(capturePhotoKey);
 	if (!object)
 		throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);
-	const capture = decodeRgba(new Uint8Array(await object.arrayBuffer()));
+	return decodeRgba(new Uint8Array(await object.arrayBuffer()));
+}
 
+/**
+ * The core pixel work: warp the decoded `capture` to a square using the sleeve `corners`,
+ * pad/tone per the {@link ReframeParams} knobs, canonicalise to a webp-with-alpha via the
+ * Images binding, and store it under `professional/`. Returns the new R2 key.
+ */
+async function warpEncodeStore(
+	capture: RgbaImage,
+	corners: NormalizedCorners,
+	params: ReframeParams,
+): Promise<{ key: string }> {
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
 	// Margin is a % of the canvas on each side; the sleeve fills what's left.
 	const contentSize = Math.round(CANVAS_SIZE * (1 - (2 * p.marginPct) / 100));
@@ -154,28 +156,44 @@ export async function reframeFromCapture(
 }
 
 /**
- * Reframe a record end-to-end using whatever corners + knobs are remembered on the row
- * (falling back to the full-frame default corners for a fresh capture). Shared by the
- * queue consumer (auto-on-capture + bulk) and the interactive server fn so the two stay
- * in lockstep. Does NOT touch the DB itself — returns the new professional R2 key for
- * the caller to persist.
+ * The FREE, deterministic reframe with explicit corners — the interactive path (the
+ * corner editor's Apply). Reads the capture, warps it to the given `corners` + knobs, and
+ * stores the result. Re-runnable at no cost, since nothing is regenerated. Returns the key.
+ */
+export async function reframeFromCapture(
+	capturePhotoKey: string,
+	corners: NormalizedCorners,
+	params: ReframeParams = {},
+): Promise<{ key: string }> {
+	return warpEncodeStore(await loadCapture(capturePhotoKey), corners, params);
+}
+
+/**
+ * Reframe a record end-to-end for the queue (auto-on-capture + bulk). Decodes the capture
+ * once, then picks the corners: the admin's stored crop if there is one, otherwise a
+ * best-effort {@link detectSleeveCorners} seed (full-frame default when detection can't
+ * find the sleeve). Returns the new professional R2 key AND the corners used, so the
+ * consumer can persist them — that seed is what the corner editor opens pre-cropped to.
+ * Does NOT touch the DB itself.
  */
 export async function professionalPipeline(
 	record: Pick<
 		Record,
 		"capturePhotoKey" | "sleeveCornersJson" | "professionalParamsJson"
 	>,
-): Promise<{ professionalKey: string }> {
+): Promise<{ professionalKey: string; corners: NormalizedCorners }> {
 	if (!record.capturePhotoKey) {
 		throw new Error("record has no capture photo to work from");
 	}
+	const capture = await loadCapture(record.capturePhotoKey);
+	// Respect a stored crop; otherwise seed by detecting the sleeve (full-frame fallback).
 	const corners = record.sleeveCornersJson
 		? parseCorners(record.sleeveCornersJson)
-		: DEFAULT_CORNERS;
-	const { key: professionalKey } = await reframeFromCapture(
-		record.capturePhotoKey,
+		: (detectSleeveCorners(capture) ?? DEFAULT_CORNERS);
+	const { key: professionalKey } = await warpEncodeStore(
+		capture,
 		corners,
 		parseReframeParams(record.professionalParamsJson),
 	);
-	return { professionalKey };
+	return { professionalKey, corners };
 }
