@@ -135,6 +135,43 @@ export function warpToSquare(
 	return { data, width: size, height: size };
 }
 
+// ---------- mask compositing ----------
+
+/**
+ * Composite a segmentation `mask` onto `image` as its alpha channel: the result keeps
+ * the image's RGB and takes alpha from the mask's luminance (white → opaque, black →
+ * transparent). Turns a promptable-segmenter mask + the original capture into a
+ * straight-alpha cutout whose alpha marks the *sleeve* (not the artwork's subject), so
+ * {@link cornersFromMask} downstream finds the sleeve's corners. The mask is
+ * nearest-sampled if its resolution differs from the image, so a mask returned at a
+ * different size still lines up. Alpha is passed through the mask only — RGB untouched.
+ */
+export function applyMaskAlpha(image: RgbaImage, mask: RgbaImage): RgbaImage {
+	const { data, width, height } = image;
+	const out = new Uint8ClampedArray(data.length);
+	const sameSize = mask.width === width && mask.height === height;
+	for (let y = 0; y < height; y++) {
+		const my = sameSize
+			? y
+			: Math.min(mask.height - 1, Math.floor((y / height) * mask.height));
+		for (let x = 0; x < width; x++) {
+			const mx = sameSize
+				? x
+				: Math.min(mask.width - 1, Math.floor((x / width) * mask.width));
+			const i = (y * width + x) * 4;
+			const mi = (my * mask.width + mx) * 4;
+			out[i] = data[i];
+			out[i + 1] = data[i + 1];
+			out[i + 2] = data[i + 2];
+			out[i + 3] =
+				0.2126 * mask.data[mi] +
+				0.7152 * mask.data[mi + 1] +
+				0.0722 * mask.data[mi + 2];
+		}
+	}
+	return { data: out, width, height };
+}
+
 // ---------- corner detection from an alpha mask ----------
 
 /**

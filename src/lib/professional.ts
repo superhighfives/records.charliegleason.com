@@ -3,13 +3,17 @@ import { PhotonImage } from "@cf-wasm/photon";
 
 import type { Record } from "#/db/schema";
 import { bytesToBase64 } from "#/lib/image-data";
-import { type RgbaImage, reframeSquare } from "#/lib/photo-processing";
+import {
+	applyMaskAlpha,
+	type RgbaImage,
+	reframeSquare,
+} from "#/lib/photo-processing";
 import {
 	DEFAULT_REFRAME_PARAMS,
 	parseReframeParams,
 	type ReframeParams,
 } from "#/lib/reframe-params";
-import { firstOutputUrl, runModel } from "#/lib/replicate";
+import { firstOutputUrl, runVersion } from "#/lib/replicate";
 
 /**
  * Turn a rough iPhone capture into a clean, straight-on studio shot of the physical
@@ -20,7 +24,9 @@ import { firstOutputUrl, runModel } from "#/lib/replicate";
  * halftones and flattened paper texture. Crop, square and lighting are all
  * deterministic operations, so we do them deterministically instead:
  *
- *   1. Background matting (Bria) on the *original capture* → a straight-alpha cutout
+ *   1. Segment the sleeve by prompting grounded_sam with the *physical object* (not
+ *      a plain background-remover, which grabs the subject depicted in the artwork),
+ *      then composite that mask onto the original capture → a straight-alpha cutout
  *      whose RGB is the real photo and whose alpha marks the sleeve.
  *   2. From that alpha we find the sleeve's four corners and perspective-warp the
  *      real pixels onto a square — cropping, squaring and de-keystoning in one step
@@ -42,9 +48,15 @@ import { firstOutputUrl, runModel } from "#/lib/replicate";
  * the shared knob type/defaults live in `reframe-params.ts` for that.
  */
 
-// Background matting → transparent cutout. An official model, run at its latest
-// version (see `runModel` — only official models work there).
-const CUTOUT_MODEL = "bria/remove-background";
+// Sleeve segmentation. Plain background-removal models find the salient subject
+// *depicted in the album art* (a face, a figure) and cut everything else away — the
+// opposite of what we want. So instead we prompt schananas/grounded_sam (Grounding
+// DINO + SAM) with the PHYSICAL object, so it segments the whole rectangular sleeve
+// regardless of what the cover depicts. Community model → pinned version, run via
+// `runVersion`. Returns a white-on-black mask we composite onto the real capture.
+const SLEEVE_SEGMENT_VERSION =
+	"ee871c19efb1941f55f66a3d7d960428c8a5afcb77449547fe8e5a3ab9ebc21c";
+const SLEEVE_MASK_PROMPT = "album cover, record sleeve";
 
 // Final framing — always a square canvas. The warped sleeve fills a content square,
 // then is padded out to a CANVAS_SIZE square; the even gap is the transparent margin
@@ -93,10 +105,11 @@ function encodePng(image: RgbaImage): Uint8Array {
 }
 
 /**
- * Step 1 — the PAID matte. Runs Bria background removal on the original capture and
- * stores the resulting straight-alpha cutout (raw PNG, RGB untouched, alpha marking
- * the sleeve) under `cutout/` in R2. Persisted so {@link reframeFromCutout} can be
- * re-run for free afterwards — the only Replicate call in the whole pipeline. Returns
+ * Step 1 — the PAID segmentation. Prompts grounded_sam with the physical sleeve so it
+ * returns a mask of the whole rectangle (not the artwork's subject), composites that
+ * mask onto the ORIGINAL capture to make a straight-alpha cutout (real RGB, alpha =
+ * sleeve), and stores it under `cutout/` in R2. Persisted so {@link reframeFromCutout}
+ * can be re-run for free afterwards — the only Replicate call in the pipeline. Returns
  * the cutout's R2 key and the prediction id (kept on the row for debugging).
  */
 export async function generateCutout(
@@ -110,24 +123,31 @@ export async function generateCutout(
 	const mediaType = object.httpMetadata?.contentType || "image/webp";
 	const captureDataUri = `data:${mediaType};base64,${bytesToBase64(bytes)}`;
 
-	const cutout = await runModel(CUTOUT_MODEL, { image: captureDataUri });
-	const cutoutUrl = firstOutputUrl(cutout.output);
-	if (!cutoutUrl) throw new Error("background removal returned no image");
+	// Segment the sleeve rectangle by prompting for the physical object.
+	const seg = await runVersion(SLEEVE_SEGMENT_VERSION, {
+		image: captureDataUri,
+		mask_prompt: SLEEVE_MASK_PROMPT,
+		negative_mask_prompt: "",
+		adjustment_factor: 0,
+	});
+	const maskUrl = firstOutputUrl(seg.output);
+	if (!maskUrl) throw new Error("sleeve segmentation returned no mask");
 
-	const cutoutRes = await fetch(cutoutUrl);
-	if (!cutoutRes.ok) {
-		throw new Error(`cutout fetch failed (${cutoutRes.status})`);
-	}
-	const cutoutBytes = new Uint8Array(await cutoutRes.arrayBuffer());
+	const maskRes = await fetch(maskUrl);
+	if (!maskRes.ok) throw new Error(`mask fetch failed (${maskRes.status})`);
+	const maskRgba = decodeRgba(new Uint8Array(await maskRes.arrayBuffer()));
 
-	// Store the matte verbatim (Bria hands back a straight-alpha PNG). Photon sniffs
-	// the format from the bytes on decode, so the extension is only cosmetic.
+	// Composite the mask onto the real capture → straight-alpha cutout. The RGB stays
+	// the untouched photo; the alpha now marks the sleeve, so the reframe's corner
+	// detection sees the rectangle instead of whatever the cover depicts.
+	const cutout = applyMaskAlpha(decodeRgba(bytes), maskRgba);
+
 	const key = `cutout/${crypto.randomUUID()}.png`;
-	await env.PHOTOS.put(key, cutoutBytes, {
+	await env.PHOTOS.put(key, encodePng(cutout), {
 		httpMetadata: { contentType: "image/png" },
 	});
 
-	return { key, predictionId: cutout.id };
+	return { key, predictionId: seg.id };
 }
 
 /**

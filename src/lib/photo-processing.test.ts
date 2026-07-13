@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	applyMaskAlpha,
 	autoTone,
 	bboxFromMask,
 	type Corners,
@@ -79,6 +80,49 @@ function synthCapture(sleeve: RgbaImage, canvas: number, corners: Corners) {
 		}
 	return { data, width: canvas, height: canvas };
 }
+
+describe("applyMaskAlpha", () => {
+	it("keeps RGB and takes alpha from the mask's luminance", () => {
+		// 2x1 image (red, green), both fully opaque to start.
+		const image: RgbaImage = {
+			data: new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255]),
+			width: 2,
+			height: 1,
+		};
+		// Mask: white (keep) then black (drop).
+		const mask: RgbaImage = {
+			data: new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]),
+			width: 2,
+			height: 1,
+		};
+		const out = applyMaskAlpha(image, mask);
+		// RGB unchanged…
+		expect([out.data[0], out.data[1], out.data[2]]).toEqual([255, 0, 0]);
+		expect([out.data[4], out.data[5], out.data[6]]).toEqual([0, 255, 0]);
+		// …alpha driven by the mask: opaque under white, transparent under black.
+		expect(out.data[3]).toBe(255);
+		expect(out.data[7]).toBe(0);
+	});
+
+	it("nearest-samples a mask of a different resolution", () => {
+		// 4px-wide image, 2px-wide mask (white | black) → left half opaque, right clear.
+		const image: RgbaImage = {
+			data: new Uint8ClampedArray(4 * 4).fill(255),
+			width: 4,
+			height: 1,
+		};
+		const mask: RgbaImage = {
+			data: new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]),
+			width: 2,
+			height: 1,
+		};
+		const out = applyMaskAlpha(image, mask);
+		expect(out.data[3]).toBe(255); // x=0 → mask col 0 (white)
+		expect(out.data[7]).toBe(255); // x=1 → mask col 0 (white)
+		expect(out.data[11]).toBe(0); // x=2 → mask col 1 (black)
+		expect(out.data[15]).toBe(0); // x=3 → mask col 1 (black)
+	});
+});
 
 describe("cornersFromMask + warpToSquare", () => {
 	it("detects a rotated/keystoned quad's corners exactly", () => {
