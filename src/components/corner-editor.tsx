@@ -1,5 +1,8 @@
+import { Loader2, Scan } from "lucide-react";
 import { useRef, useState } from "react";
+import { toast } from "sonner";
 
+import { Button } from "#/components/ui/button";
 import type { NormalizedCorner, NormalizedCorners } from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 
@@ -18,15 +21,41 @@ export function CornerEditor({
 	src,
 	value,
 	onChange,
+	onDetect,
 	disabled,
 }: {
 	src: string;
 	value: NormalizedCorners;
 	onChange: (corners: NormalizedCorners) => void;
+	/** Optional: run detection (server-side) and return suggested corners to seed. */
+	onDetect?: () => Promise<NormalizedCorners | null>;
 	disabled?: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [drag, setDrag] = useState<number | null>(null);
+	const [detecting, setDetecting] = useState(false);
+
+	const runDetect = async () => {
+		if (!onDetect) return;
+		setDetecting(true);
+		try {
+			const found = await onDetect();
+			if (found) {
+				onChange(found);
+				toast.success("Detected the sleeve — nudge the handles to fine-tune.");
+			} else {
+				toast.message("Couldn't find the sleeve automatically.", {
+					description: "Drag the four corners to the edges of the sleeve.",
+				});
+			}
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't detect the sleeve.",
+			);
+		} finally {
+			setDetecting(false);
+		}
+	};
 
 	const setCorner = (index: number, point: NormalizedCorner) => {
 		onChange(
@@ -118,9 +147,27 @@ export function CornerEditor({
 					/>
 				))}
 			</div>
-			<p className="text-xs text-muted-foreground">
-				Drag the corners to the edges of the sleeve.
-			</p>
+			<div className="flex items-center justify-between gap-2">
+				<p className="text-xs text-muted-foreground">
+					Drag the corners to the edges of the sleeve.
+				</p>
+				{onDetect && (
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						disabled={disabled || detecting}
+						onClick={runDetect}
+					>
+						{detecting ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : (
+							<Scan className="size-4" />
+						)}
+						{detecting ? "Detecting…" : "Detect corners"}
+					</Button>
+				)}
+			</div>
 		</div>
 	);
 }

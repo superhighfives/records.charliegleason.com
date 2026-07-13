@@ -169,6 +169,17 @@ export async function reframeFromCapture(
 }
 
 /**
+ * Run the lightweight {@link detectSleeveCorners} seed against a stored capture on demand
+ * — the corner editor's "Detect corners" button. Returns the detected corners, or `null`
+ * when it can't separate the sleeve from the background (the caller leaves the handles put).
+ */
+export async function detectCaptureCorners(
+	capturePhotoKey: string,
+): Promise<NormalizedCorners | null> {
+	return detectSleeveCorners(await loadCapture(capturePhotoKey));
+}
+
+/**
  * Reframe a record end-to-end for the queue (auto-on-capture + bulk). Decodes the capture
  * once, then picks the corners: the admin's stored crop if there is one, otherwise a
  * best-effort {@link detectSleeveCorners} seed (full-frame default when detection can't

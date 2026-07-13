@@ -22,7 +22,7 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
-import { reframeFromCapture } from "#/lib/professional";
+import { detectCaptureCorners, reframeFromCapture } from "#/lib/professional";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
@@ -407,6 +407,30 @@ export const generateProfessional = createServerFn({ method: "POST" })
 				.returning();
 			await enqueueProfessional(id);
 			return row ?? null;
+		}),
+	);
+
+/**
+ * Detect the sleeve's corners in a record's capture on demand — the corner editor's
+ * "Detect corners" button. Runs the lightweight, free detector server-side and returns the
+ * suggested corners for the admin to review before applying (or null if it can't find the
+ * sleeve — e.g. a low-contrast cover). Does not persist anything; the follow-up Apply does.
+ */
+export const detectCorners = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "detectCorners" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select({ capturePhotoKey: records.capturePhotoKey })
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record?.capturePhotoKey) {
+				throw new Error("This record has no capture photo to detect.");
+			}
+			return { corners: await detectCaptureCorners(record.capturePhotoKey) };
 		}),
 	);
 

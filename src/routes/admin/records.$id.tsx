@@ -30,6 +30,7 @@ import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
 	deleteRecord,
+	detectCorners,
 	fetchRecordValue,
 	getDiscogsRelease,
 	lookupDiscogsRelease,
@@ -808,6 +809,10 @@ function RecordDetail() {
 						src={`/api/photos/${record.capturePhotoKey}`}
 						value={corners}
 						onChange={setCorners}
+						onDetect={async () => {
+							const res = await detectCorners({ data: recordId });
+							return res.corners;
+						}}
 						disabled={reframePro.isPending}
 					/>
 
