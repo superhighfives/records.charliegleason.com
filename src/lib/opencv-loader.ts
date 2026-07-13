@@ -36,10 +36,14 @@ export function loadOpenCv(): Promise<OpenCv> {
 	loadPromise = new Promise<OpenCv>((resolve, reject) => {
 		const win = window as unknown as { cv?: OpenCv };
 		const ready = (cv: OpenCv) => {
-			// Newer builds resolve a promise; older ones fire onRuntimeInitialized; some
-			// are usable immediately. Cover all three.
+			// The emscripten build assigns `window.cv` synchronously but initialises its
+			// wasm asynchronously. The module is *thenable* (so `await cv` works once
+			// ready) — but its `.then` does NOT return a real Promise, so chaining
+			// `.catch` on it throws. Wrap in `Promise.resolve` to adopt the thenable
+			// safely; fall back to `.Mat`-is-ready / `onRuntimeInitialized` for builds
+			// that expose the module directly instead.
 			if (cv && typeof cv.then === "function") {
-				cv.then(resolve).catch(reject);
+				Promise.resolve(cv).then(resolve, reject);
 			} else if (cv?.Mat) {
 				resolve(cv);
 			} else if (cv) {
