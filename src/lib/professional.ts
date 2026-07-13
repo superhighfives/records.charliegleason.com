@@ -142,8 +142,17 @@ async function warpEncodeStore(
 	);
 
 	const png = encodePng(image);
+	// Final encode pass: gentle sharpen to counter the warp's bilinear softening, plus
+	// the "polish" factors (saturation/contrast/gamma) as blunt global multipliers on
+	// top of the foreground-aware auto-tone already baked into the pixels. 1.0 = no-op,
+	// so an untouched knob costs nothing.
 	const out = await env.IMAGES.input(blobStream(png))
-		.transform({ sharpen: FINAL_SHARPEN })
+		.transform({
+			sharpen: FINAL_SHARPEN,
+			saturation: p.saturation,
+			contrast: p.contrast,
+			gamma: p.gamma,
+		})
 		.output({ format: "image/webp", quality: 92 });
 	const buffer = await out.response().arrayBuffer();
 

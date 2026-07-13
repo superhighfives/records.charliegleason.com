@@ -40,7 +40,6 @@ import { displayCoverKey } from "#/lib/cover";
 import {
 	deleteRecord,
 	deleteRecords,
-	generateProfessionalPhotos,
 	refreshRecords,
 	retryRecords,
 } from "#/lib/records";
@@ -86,7 +85,7 @@ const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
 // (for unmatched/failed/captured rows — re-reads the cover and re-searches
 // Discogs), `refresh` enqueues a Discogs re-pull for already-matched rows,
 // `delete` removes them. Each endpoint returns how many rows it acted on.
-type BulkAction = "match" | "refresh" | "professional" | "delete";
+type BulkAction = "match" | "refresh" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
@@ -96,9 +95,6 @@ const BULK_ACTIONS: {
 		// Only meaningful for already-matched rows (those with a Discogs release);
 		// the button disables when the selection contains none.
 		requiresMatch?: boolean;
-		// Only meaningful for rows with an iPhone capture to work from; the button
-		// disables when the selection contains none.
-		requiresCapture?: boolean;
 	};
 } = {
 	match: {
@@ -111,12 +107,6 @@ const BULK_ACTIONS: {
 		verb: "queued for refresh",
 		fn: refreshRecords,
 		requiresMatch: true,
-	},
-	professional: {
-		label: "Generate pro photo",
-		verb: "queued for a professional photo",
-		fn: generateProfessionalPhotos,
-		requiresCapture: true,
 	},
 	delete: {
 		label: "Delete",
@@ -535,11 +525,6 @@ function AdminRecords() {
 	const hasMatchedSelection = selectedRows.some(
 		(r) => r.original.discogsId != null,
 	);
-	// The professional photo is generated from the iPhone capture, so it's
-	// disabled unless the selection contains at least one record with one.
-	const hasCaptureSelection = selectedRows.some(
-		(r) => r.original.capturePhotoKey != null,
-	);
 	// Rows visible under the current tab + search. Drives the empty state and
 	// whether the bulk toolbar is worth showing at all.
 	const visibleRowCount = table.getRowModel().rows.length;
@@ -698,25 +683,20 @@ function AdminRecords() {
 							{/* Desktop: the actions inline. */}
 							<div className="hidden items-center gap-2 sm:flex">
 								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
-									const { label, destructive, requiresMatch, requiresCapture } =
+									const { label, destructive, requiresMatch } =
 										BULK_ACTIONS[action];
 									const needsMatch = requiresMatch && !hasMatchedSelection;
-									const needsCapture = requiresCapture && !hasCaptureSelection;
 									return (
 										<Button
 											key={action}
 											type="button"
 											size="sm"
 											variant={destructive ? "destructive" : "outline"}
-											disabled={
-												bulkMutation.isPending || needsMatch || needsCapture
-											}
+											disabled={bulkMutation.isPending || needsMatch}
 											title={
 												needsMatch
 													? "Only matched records can be refreshed from Discogs."
-													: needsCapture
-														? "Only records with a capture photo can get a professional photo."
-														: undefined
+													: undefined
 											}
 											onClick={() => runBulkAction(action)}
 										>
@@ -752,10 +732,8 @@ function AdminRecords() {
 															: "default"
 													}
 													disabled={
-														(BULK_ACTIONS[action].requiresMatch &&
-															!hasMatchedSelection) ||
-														(BULK_ACTIONS[action].requiresCapture &&
-															!hasCaptureSelection)
+														BULK_ACTIONS[action].requiresMatch &&
+														!hasMatchedSelection
 													}
 													onSelect={() => runBulkAction(action)}
 												>

@@ -1,14 +1,12 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
 import { getReleaseDetail, getReleaseValue } from "#/lib/discogs";
-import { professionalPipeline } from "#/lib/professional";
-import { serializeCorners } from "#/lib/sleeve-corners";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -56,83 +54,6 @@ export function enqueueAnalyzeBatch(recordIds: number[]): Promise<void> {
 /** Enqueue many published records to be re-pulled from their Discogs releases. */
 export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
 	return enqueueBatch(recordIds, "refresh");
-}
-
-/** Enqueue a captured record for professional studio-photo generation. */
-export async function enqueueProfessional(recordId: number): Promise<void> {
-	await analyzeQueue().send({ recordId, mode: "professional" });
-}
-
-/** Enqueue many captured records for professional studio-photo generation. */
-export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
-	return enqueueBatch(recordIds, "professional");
-}
-
-/**
- * How long a professional job may sit in `pending`/`processing` before a reader
- * treats it as dead. Comfortably above a healthy run — the reframe is just a decode,
- * perspective-warp and Images pass (a few seconds) — so a still-working job is never
- * falsely failed, while a wedged one (e.g. a deploy landing mid-run) is caught promptly.
- */
-export const PROFESSIONAL_STALE_MS = 10 * 60 * 1000;
-
-/**
- * Whether a professional-photo row has wedged: it's still `pending`/`processing`
- * but hasn't advanced in {@link PROFESSIONAL_STALE_MS}. Pure (takes `now`) so the
- * threshold can be tested without a clock or the DB. A missing `updatedAt` counts
- * as epoch, i.e. always stale.
- */
-export function isProfessionalStale(
-	record: Pick<Record, "professionalStatus" | "updatedAt">,
-	now: number,
-): boolean {
-	if (
-		record.professionalStatus !== "pending" &&
-		record.professionalStatus !== "processing"
-	) {
-		return false;
-	}
-	const updatedAt = record.updatedAt?.getTime() ?? 0;
-	return now - updatedAt >= PROFESSIONAL_STALE_MS;
-}
-
-/**
- * Watchdog for a wedged professional-photo job. The consumer always writes a
- * terminal `ready`/`failed` (even on a caught error), so the only way a row stays
- * `pending`/`processing` is a failure *outside* that try/catch: an isolate evicted
- * or over its wall-clock/subrequest limit, a deploy landing mid-run, or an enqueue
- * that never delivered. Nothing else reconciles those, so the admin page would spin
- * forever. When a reader sees such a stale row (see {@link isProfessionalStale}),
- * flip it to `failed` so the page self-heals to a "Try again" button. Returns the
- * (possibly updated) row; a no-op for anything that isn't actually stale.
- */
-export async function failStaleProfessional(record: Record): Promise<Record> {
-	if (!isProfessionalStale(record, Date.now())) return record;
-
-	// Compare-and-swap: only reclaim the exact stuck row we read. If the consumer
-	// landed a terminal `ready`/`failed` (or a manual regenerate bumped it to a
-	// fresh `pending`) in the gap between our read and this write, the status/
-	// `updatedAt` guards below won't match — so we leave that newer state alone
-	// rather than clobbering a good photo back to `failed`.
-	const guards = [
-		eq(records.id, record.id),
-		inArray(records.professionalStatus, ["pending", "processing"]),
-	];
-	if (record.updatedAt) guards.push(eq(records.updatedAt, record.updatedAt));
-
-	const db = getDb(env.DB);
-	const [row] = await db
-		.update(records)
-		.set({
-			professionalStatus: "failed",
-			professionalError:
-				"Generation timed out — the job stalled before finishing. Try again.",
-			updatedAt: new Date(),
-		})
-		.where(and(...guards))
-		.returning();
-	// No match → someone advanced the row first; keep what we read, next poll re-syncs.
-	return row ?? record;
 }
 
 /**
@@ -240,81 +161,6 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				}`,
 			);
 			Sentry.captureException(err);
-		}
-		message.ack();
-		return;
-	}
-
-	// Professional studio photo. Runs the deterministic reframe from the record's stored
-	// (or full-frame default) corners — free, no external call. This is the auto-on-capture
-	// + bulk path; interactive corner edits go through the reframeRecord server fn inline.
-	// Like refresh, it's best-effort and self-contained — it tracks its own `professional*`
-	// fields and never touches the record's main `status`, and always acks.
-	if (mode === "professional") {
-		try {
-			const [record] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, recordId))
-				.limit(1);
-			// Deleted between enqueue and delivery — nothing to do.
-			if (!record) {
-				message.ack();
-				return;
-			}
-			if (!record.capturePhotoKey) {
-				throw new Error("record has no capture photo to work from");
-			}
-
-			await db
-				.update(records)
-				.set({
-					professionalStatus: "processing",
-					professionalError: null,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, recordId));
-
-			// Deterministic reframe from the stored crop, or a detected seed for a fresh
-			// capture (shared with the interactive server fn so both paths behave identically).
-			const { professionalKey, corners } = await professionalPipeline(record);
-
-			await db
-				.update(records)
-				.set({
-					professionalImageKey: professionalKey,
-					// Persist the corners used (the detected seed) so the editor opens
-					// pre-cropped; a later Apply overwrites them with the admin's crop.
-					sleeveCornersJson: serializeCorners(corners),
-					// Generated, but not shown until an admin approves it (review gate).
-					professionalStatus: "ready",
-					professionalError: null,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, recordId));
-
-			// A regenerate supersedes any previous professional image; bin the old
-			// object so a redo doesn't orphan it in R2. Best-effort — the row already
-			// points at the new key, so a failed cleanup just leaves a stale object.
-			const stale = record.professionalImageKey;
-			if (stale && stale !== professionalKey) {
-				await env.PHOTOS.delete(stale).catch(() => {});
-			}
-		} catch (err) {
-			const detail = err instanceof Error ? err.message : String(err);
-			console.error(
-				`[queue] professional photo failed for record ${recordId}: ${detail}`,
-			);
-			Sentry.captureException(err);
-			await db
-				.update(records)
-				.set({
-					professionalStatus: "failed",
-					professionalError: detail,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, recordId))
-				.catch(() => {});
 		}
 		message.ack();
 		return;

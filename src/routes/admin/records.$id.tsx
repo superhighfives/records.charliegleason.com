@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Info, Loader2 } from "lucide-react";
+import { Info, Loader2, Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -10,6 +10,14 @@ import { RecordForm } from "#/components/record-form";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Checkbox } from "#/components/ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
 import { ImageZoom } from "#/components/ui/image-zoom";
 import { Input } from "#/components/ui/input";
 import { Slider } from "#/components/ui/slider";
@@ -32,6 +40,7 @@ import {
 	deleteRecord,
 	detectCorners,
 	fetchRecordValue,
+	generateProfessional,
 	getDiscogsRelease,
 	lookupDiscogsRelease,
 	previewReleaseValue,
@@ -317,15 +326,11 @@ function RecordDetail() {
 
 	const { data: record } = useQuery({
 		...recordQueryOptions(recordId),
-		// Poll while the background analysis or a professional-photo job is in flight.
+		// Poll only while the background analysis is in flight. The professional photo
+		// is generated synchronously (no queue), so there's never a pro job to wait on.
 		refetchInterval: (query) => {
 			const status = query.state.data?.status;
-			const pro = query.state.data?.professionalStatus;
-			const active =
-				status === "pending" ||
-				status === "processing" ||
-				pro === "pending" ||
-				pro === "processing";
+			const active = status === "pending" || status === "processing";
 			return active ? 2000 : false;
 		},
 	});
@@ -364,6 +369,8 @@ function RecordDetail() {
 	const [corners, setCorners] = useState<NormalizedCorners>(() =>
 		parseCorners(record?.sleeveCornersJson),
 	);
+	// Whether the professional-photo editor modal is open (crop + live preview + knobs).
+	const [editorOpen, setEditorOpen] = useState(false);
 	// A user-uploaded cover overrides the auto-sourced Discogs artwork on publish.
 	const [customCover, setCustomCover] = useState<{
 		key: string;
@@ -498,12 +505,40 @@ function RecordDetail() {
 			),
 	});
 
+	// First-pass generation for a record that has no professional photo yet (captured
+	// before auto-generation, or a prior failure). Detects the sleeve, warps and tones —
+	// synchronously — so opening the editor always has something to preview and tweak.
+	const generateFirst = useMutation({
+		mutationFn: () => generateProfessional({ data: recordId }),
+		onSuccess: (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error
+					? err.message
+					: "Couldn't generate the professional photo.",
+			),
+	});
+
 	// Approve (promote) or unapprove the generated professional photo.
 	const approvePro = useMutation({
 		mutationFn: (approved: boolean) =>
 			setProfessionalApproved({ data: { id: recordId, approved } }),
 		onSuccess: invalidate,
 	});
+
+	// Open the editor, syncing the working copies to the row and seeding a first pass if
+	// the record has never been cropped (so the preview pane isn't empty).
+	const openEditor = () => {
+		setCorners(parseCorners(record?.sleeveCornersJson));
+		setParams(parseReframeParams(record?.professionalParamsJson));
+		setEditorOpen(true);
+		if (!record?.professionalImageKey && !generateFirst.isPending) {
+			generateFirst.mutate();
+		}
+	};
 
 	// Pull a fresh Discogs value estimate (seller price suggestions, falling back
 	// to the lowest listing) for this record, leaving all other metadata alone.
@@ -570,15 +605,17 @@ function RecordDetail() {
 	const failure =
 		record.status === "failed" ? describeAnalysisError(record.error) : null;
 
-	// Professional-photo derived state. The auto-on-capture (or bulk) reframe runs in the
-	// queue while `pending`/`processing`; the corner editor + knobs are always available
-	// once there's a capture. `p` merges the working-copy params over the defaults so the
-	// sliders always have a concrete value to render.
-	const proBusy =
-		record.professionalStatus === "pending" ||
-		record.professionalStatus === "processing";
+	// Professional-photo derived state. Generation is synchronous, so there's no "busy"
+	// queue state to poll — the editor's own mutations report their progress. `p` merges
+	// the working-copy params over the defaults so the sliders always have a concrete value.
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
-	const contrastPct = Math.round((p.lowPct / 0.05) * 100);
+	// Whichever image the editor's preview pane should show: the generated professional
+	// photo, else the raw capture as a stand-in while the first pass generates.
+	const proPreviewSrc = record.professionalImageKey
+		? `/api/photos/${record.professionalImageKey}`
+		: record.capturePhotoKey
+			? `/api/photos/${record.capturePhotoKey}`
+			: null;
 
 	// Cover preview source, best-first: the freshly downloaded full-res artwork,
 	// then the picked candidate's thumbnail (instant, while the full-res loads or
@@ -764,8 +801,8 @@ function RecordDetail() {
 			)}
 
 			{/* Professional studio photo — a deterministic crop/straighten/tone of the
-			    capture (no AI), reviewed here, then preferred over the Discogs cover once
-			    approved. Mark the sleeve's corners → warp → tweak tone/margin, all free. */}
+			    capture (no AI), edited in a modal, then preferred over the Discogs cover
+			    once approved. Click the photo to open the corner + tone editor. */}
 			{!inFlight && record.capturePhotoKey && (
 				<div className="space-y-3 rounded-lg border p-3">
 					<div className="flex items-start justify-between gap-2">
@@ -773,9 +810,9 @@ function RecordDetail() {
 							<h2 className="text-sm font-semibold">Professional photo</h2>
 							<p className="text-xs text-muted-foreground">
 								A straight-on, cropped, evenly-toned square built from your
-								capture — not repainted. Mark the sleeve’s corners, then tweak
-								the tone and margin. Once approved it’s shown across the site in
-								place of the cover.
+								capture — not repainted. Click it to crop the sleeve and tune
+								the tone. Once approved it’s shown across the site in place of
+								the cover.
 							</p>
 						</div>
 						{record.professionalStatus === "approved" && (
@@ -785,116 +822,44 @@ function RecordDetail() {
 						)}
 					</div>
 
-					{/* The generated result (present after the first auto-reframe or an Apply). */}
-					{record.professionalImageKey && (
-						<figure className="space-y-1">
-							<ImageZoom
-								src={`/api/photos/${record.professionalImageKey}`}
-								alt="Professional photo"
-								className="size-40 bg-muted"
-							/>
-							<figcaption className="flex items-center gap-1.5 text-xs text-muted-foreground">
-								{proBusy && <Loader2 className="size-3 animate-spin" />}
-								{proBusy
-									? "Generating first pass…"
-									: record.professionalStatus === "approved"
-										? "Approved — shown on the site"
-										: "Generated — not shown until approved"}
-							</figcaption>
-						</figure>
-					)}
-
-					{/* Crop: mark the sleeve's four corners on the capture (drag or auto-detect). */}
-					<CornerEditor
-						src={`/api/photos/${record.capturePhotoKey}`}
-						value={corners}
-						onChange={setCorners}
-						onDetect={async () => {
-							const res = await detectCorners({ data: recordId });
-							return res.corners;
-						}}
-						disabled={reframePro.isPending}
-					/>
-
-					{/* Tone/margin knobs — every Apply re-warps the capture to the current
-					    corners and re-tones it. All free (pure pixel math, no external call). */}
-					<div className="space-y-3 rounded-md border bg-muted/30 p-3">
-						<label
-							htmlFor="pro-autotone"
-							className="flex items-center gap-2 text-xs text-muted-foreground"
+					{/* Clickable thumbnail → opens the editor modal. Shows the generated
+					    photo, or the raw capture as a stand-in until a first pass exists. */}
+					<figure className="space-y-1">
+						<button
+							type="button"
+							onClick={openEditor}
+							title="Edit crop & tone"
+							className="group relative block size-40 overflow-hidden rounded-md border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						>
-							<Checkbox
-								id="pro-autotone"
-								checked={!p.skipTone}
-								disabled={reframePro.isPending}
-								onChange={(e) =>
-									setParams({
-										...params,
-										skipTone: !e.currentTarget.checked,
-									})
-								}
-							/>
-							Auto-tone (levels + white balance)
-						</label>
-						<Knob
-							label="White balance"
-							display={`${Math.round(p.wbStrength * 100)}%`}
-							value={Math.round(p.wbStrength * 100)}
-							min={0}
-							max={100}
-							step={1}
-							disabled={p.skipTone || reframePro.isPending}
-							onChange={(v) => setParams({ ...params, wbStrength: v / 100 })}
-						/>
-						<Knob
-							label="Contrast"
-							display={`${contrastPct}%`}
-							value={contrastPct}
-							min={0}
-							max={100}
-							step={1}
-							disabled={p.skipTone || reframePro.isPending}
-							onChange={(v) => {
-								const clip = (v / 100) * 0.05;
-								setParams({ ...params, lowPct: clip, highPct: 1 - clip });
-							}}
-						/>
-						<Knob
-							label="Margin"
-							display={`${p.marginPct}%`}
-							value={p.marginPct}
-							min={0}
-							max={6}
-							step={0.5}
-							disabled={reframePro.isPending}
-							onChange={(v) => setParams({ ...params, marginPct: v })}
-						/>
-						<div className="flex flex-wrap gap-2 pt-1">
-							<Button
-								type="button"
-								size="sm"
-								disabled={reframePro.isPending}
-								onClick={() => reframePro.mutate({ corners, params })}
-							>
-								{reframePro.isPending ? "Applying…" : "Apply"}
-							</Button>
-							<Button
-								type="button"
-								size="sm"
-								variant="ghost"
-								disabled={reframePro.isPending}
-								onClick={() => {
-									setParams({});
-									setCorners(DEFAULT_CORNERS);
-									reframePro.mutate({ corners: DEFAULT_CORNERS, params: {} });
-								}}
-							>
-								Reset
-							</Button>
-						</div>
-					</div>
+							{proPreviewSrc && (
+								<img
+									src={proPreviewSrc}
+									alt="Straightened sleeve"
+									className="size-full object-contain"
+								/>
+							)}
+							<span className="absolute inset-0 flex items-center justify-center bg-black/0 text-xs font-medium text-white opacity-0 transition group-hover:bg-black/40 group-hover:opacity-100">
+								<Pencil className="mr-1 size-3.5" /> Edit
+							</span>
+						</button>
+						<figcaption className="text-xs text-muted-foreground">
+							{record.professionalImageKey
+								? record.professionalStatus === "approved"
+									? "Approved — shown on the site"
+									: "Generated — not shown until approved"
+								: "Not generated yet — click to create the first pass"}
+						</figcaption>
+					</figure>
 
 					<div className="flex flex-wrap gap-2">
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							onClick={openEditor}
+						>
+							Edit crop &amp; tone
+						</Button>
 						{record.professionalStatus === "approved" ? (
 							<Button
 								type="button"
@@ -920,10 +885,189 @@ function RecordDetail() {
 					{record.professionalStatus === "failed" &&
 						record.professionalError && (
 							<p className="text-xs text-red-600 dark:text-red-400">
-								Last generation failed: {record.professionalError}. Adjust the
-								corners and hit Apply to try again.
+								Last generation failed: {record.professionalError}. Open the
+								editor and adjust the corners to try again.
 							</p>
 						)}
+
+					{/* The editor: crop on the left, live output on the right, knobs below. */}
+					<Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+						<DialogContent className="max-w-5xl">
+							<DialogHeader>
+								<DialogTitle>Professional photo</DialogTitle>
+								<DialogDescription>
+									Drag the corners to the sleeve’s edges (or auto-detect), then
+									tune the tone. The preview updates each time you apply. All
+									deterministic — no AI, no external call.
+								</DialogDescription>
+							</DialogHeader>
+
+							<div className="grid gap-4 sm:grid-cols-2">
+								<div className="space-y-1">
+									<p className="text-xs font-medium text-muted-foreground">
+										Crop
+									</p>
+									<CornerEditor
+										src={`/api/photos/${record.capturePhotoKey}`}
+										value={corners}
+										onChange={setCorners}
+										onDetect={async () => {
+											const res = await detectCorners({ data: recordId });
+											return res.corners;
+										}}
+										disabled={reframePro.isPending}
+									/>
+								</div>
+								<div className="space-y-1">
+									<p className="text-xs font-medium text-muted-foreground">
+										Preview
+									</p>
+									<div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-md border bg-muted">
+										{proPreviewSrc && (
+											<img
+												src={proPreviewSrc}
+												alt="Straightened sleeve preview"
+												className="size-full object-contain"
+											/>
+										)}
+										{(reframePro.isPending || generateFirst.isPending) && (
+											<span className="absolute inset-0 flex items-center justify-center bg-background/60">
+												<Loader2 className="size-5 animate-spin" />
+											</span>
+										)}
+									</div>
+								</div>
+							</div>
+
+							{/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
+							    the polish factors below map straight to the Cloudflare Images
+							    encode pass. Every Apply re-warps + re-tones — all free. */}
+							<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+								<label
+									htmlFor="pro-autotone"
+									className="flex items-center gap-2 text-xs text-muted-foreground"
+								>
+									<Checkbox
+										id="pro-autotone"
+										checked={!p.skipTone}
+										disabled={reframePro.isPending}
+										onChange={(e) =>
+											setParams({
+												...params,
+												skipTone: !e.currentTarget.checked,
+											})
+										}
+									/>
+									Auto-tone (levels + white balance)
+								</label>
+								<Knob
+									label="White balance"
+									display={`${Math.round(p.wbStrength * 100)}%`}
+									value={Math.round(p.wbStrength * 100)}
+									min={0}
+									max={100}
+									step={1}
+									disabled={p.skipTone || reframePro.isPending}
+									onChange={(v) =>
+										setParams({ ...params, wbStrength: v / 100 })
+									}
+								/>
+								<Knob
+									label="Saturation"
+									display={`${Math.round(p.saturation * 100)}%`}
+									value={Math.round(p.saturation * 100)}
+									min={0}
+									max={200}
+									step={5}
+									disabled={reframePro.isPending}
+									onChange={(v) =>
+										setParams({ ...params, saturation: v / 100 })
+									}
+								/>
+								<Knob
+									label="Contrast"
+									display={`${Math.round(p.contrast * 100)}%`}
+									value={Math.round(p.contrast * 100)}
+									min={50}
+									max={200}
+									step={5}
+									disabled={reframePro.isPending}
+									onChange={(v) => setParams({ ...params, contrast: v / 100 })}
+								/>
+								<Knob
+									label="Gamma"
+									display={p.gamma.toFixed(2)}
+									value={Math.round(p.gamma * 100)}
+									min={50}
+									max={200}
+									step={5}
+									disabled={reframePro.isPending}
+									onChange={(v) => setParams({ ...params, gamma: v / 100 })}
+								/>
+								<Knob
+									label="Margin"
+									display={`${p.marginPct}%`}
+									value={p.marginPct}
+									min={0}
+									max={6}
+									step={0.5}
+									disabled={reframePro.isPending}
+									onChange={(v) => setParams({ ...params, marginPct: v })}
+								/>
+							</div>
+
+							<DialogFooter className="justify-between">
+								<div className="flex flex-wrap gap-2">
+									<Button
+										type="button"
+										size="sm"
+										disabled={reframePro.isPending}
+										onClick={() => reframePro.mutate({ corners, params })}
+									>
+										{reframePro.isPending ? "Applying…" : "Apply"}
+									</Button>
+									<Button
+										type="button"
+										size="sm"
+										variant="ghost"
+										disabled={reframePro.isPending}
+										onClick={() => {
+											setParams({});
+											setCorners(DEFAULT_CORNERS);
+											reframePro.mutate({
+												corners: DEFAULT_CORNERS,
+												params: {},
+											});
+										}}
+									>
+										Reset
+									</Button>
+								</div>
+								{record.professionalStatus === "approved" ? (
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										disabled={approvePro.isPending}
+										onClick={() => approvePro.mutate(false)}
+									>
+										{approvePro.isPending ? "…" : "Stop using as cover"}
+									</Button>
+								) : (
+									<Button
+										type="button"
+										size="sm"
+										disabled={
+											!record.professionalImageKey || approvePro.isPending
+										}
+										onClick={() => approvePro.mutate(true)}
+									>
+										{approvePro.isPending ? "…" : "Use as cover"}
+									</Button>
+								)}
+							</DialogFooter>
+						</DialogContent>
+					</Dialog>
 				</div>
 			)}
 

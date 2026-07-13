@@ -59,13 +59,14 @@ export const records = sqliteTable("records", {
 	//      full frame when detection can't find the sleeve.
 	//   2. Those corners drive a perspective-warp + crop + auto-tone of the real capture
 	//      pixels → the displayed `professionalImageKey` under `professional/`. Free (pure
-	//      pixel math), so it re-runs whenever the admin nudges the corners or the
-	//      `professionalParamsJson` tone/margin knobs.
-	// `professionalStatus` tracks generation: `pending`/`processing` while the (queued)
-	// reframe runs, `failed` on error. Reviewed before it goes live: `ready` = generated,
-	// awaiting approval; `approved` = promoted and preferred over the Discogs cover for
-	// display (see displayCoverKey). Best-effort in its own queue mode, so it never blocks
-	// the main capture status machine.
+	//      pixel math), so it runs synchronously — a first pass inline on capture, and again
+	//      whenever the admin nudges the corners or the `professionalParamsJson` tone/polish
+	//      knobs. There is no queue and no async job to wait on.
+	// `professionalStatus`: `idle` = nothing generated yet; `ready` = a photo exists but is
+	// not shown on the site (awaiting approval); `approved` = promoted and preferred over the
+	// Discogs cover for display (see displayCoverKey); `failed` = the inline generation errored
+	// (a re-crop retries). The `pending`/`processing` values are legacy (the old queued flow)
+	// and no longer written — kept in the enum only so historical rows still type-check.
 	sleeveCornersJson: text("sleeve_corners_json"), // normalised sleeve corners (JSON), admin-picked
 	professionalImageKey: text("professional_image_key"), // R2 key — pro photo (public once approved)
 	professionalParamsJson: text("professional_params_json"), // last reframe knob settings (JSON)

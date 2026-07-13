@@ -22,14 +22,15 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
-import { detectCaptureCorners, reframeFromCapture } from "#/lib/professional";
+import {
+	detectCaptureCorners,
+	professionalPipeline,
+	reframeFromCapture,
+} from "#/lib/professional";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
-	enqueueProfessional,
-	enqueueProfessionalBatch,
 	enqueueRefreshBatch,
-	failStaleProfessional,
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
@@ -128,7 +129,7 @@ export const getRecord = createServerFn({ method: "GET" })
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "getRecord" }, async () => {
 			// Admin-only: this returns the full row (capture key, valuation, professional*
-			// bookkeeping) and now also drives the watchdog write below, so it must not be
+			// bookkeeping), so it must not be
 			// callable unauthenticated. Fail soft — it runs inside the /admin SSR loader,
 			// where a thrown 401 would break the render rather than fall through to the
 			// client-side signed-out redirect.
@@ -140,17 +141,7 @@ export const getRecord = createServerFn({ method: "GET" })
 				.from(records)
 				.where(eq(records.id, id))
 				.limit(1);
-			if (!row) return null;
-			// Self-heal a professional-photo job wedged in pending/processing: since the
-			// detail page polls this fn while a job is in flight, a stale one flips to
-			// `failed` here and surfaces a "Try again" button on the next poll. The
-			// watchdog is best-effort — never let its write break the read, so fall back
-			// to the row as-is if it throws.
-			try {
-				return await failStaleProfessional(row);
-			} catch {
-				return row;
-			}
+			return row ?? null;
 		}),
 	);
 
@@ -227,10 +218,6 @@ export const captureRecord = createServerFn({ method: "POST" })
 					status: "pending",
 					capturePhotoKey,
 					captureContext: data.context?.trim() || null,
-					// Kick off the professional photo automatically on capture. Corners are
-					// left unset so the queue seeds them by detecting the sleeve (the admin
-					// then nudges the handles); a first pass is ready by the time it's reviewed.
-					professionalStatus: "pending",
 				})
 				.returning();
 
@@ -252,25 +239,43 @@ export const captureRecord = createServerFn({ method: "POST" })
 				return failed ?? row;
 			}
 
-			// Best-effort: queue the background matte too. Independent of analysis — if it
-			// can't enqueue, mark just the professional track failed (a manual button can
-			// retry) rather than failing the whole capture.
+			// Generate the first-pass professional photo inline. It's free, deterministic
+			// pixel math (detect the sleeve's corners, warp, tone) — no external call — so
+			// there's no queue: a straight, cropped square is ready the moment the capture
+			// lands, and clicking it opens the editor pre-cropped. Best-effort and fully
+			// independent of analysis: on failure we record it on the professional* track (a
+			// manual re-crop retries) rather than failing the whole capture.
 			try {
-				await enqueueProfessional(row.id);
-			} catch (err) {
-				const detail = err instanceof Error ? err.message : String(err);
-				await db
+				const { professionalKey, corners } = await professionalPipeline(row);
+				const [pro] = await db
 					.update(records)
 					.set({
-						professionalStatus: "failed",
-						professionalError: `Could not queue professional photo: ${detail}`,
+						professionalImageKey: professionalKey,
+						// Persist the detected seed so the editor opens pre-cropped; a later
+						// Apply overwrites it with the admin's crop.
+						sleeveCornersJson: serializeCorners(corners),
+						// Generated, but not shown on the site until an admin approves it.
+						professionalStatus: "ready",
+						professionalError: null,
 						updatedAt: new Date(),
 					})
 					.where(eq(records.id, row.id))
-					.catch(() => {});
+					.returning();
+				return pro ?? row;
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				const [failed] = await db
+					.update(records)
+					.set({
+						professionalStatus: "failed",
+						professionalError: `Could not generate professional photo: ${detail}`,
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, row.id))
+					.returning()
+					.catch(() => []);
+				return failed ?? row;
 			}
-
-			return row;
 		}),
 	);
 
@@ -376,13 +381,14 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * (Re-)generate the professional photo for a captured record using its stored (or
- * full-frame default) corners. Marks it `pending` and enqueues the `professional` queue
- * mode; the detail page polls itself to `ready`. Queued (not inline) so it shares one
- * path with auto-on-capture and the bulk action, and doesn't block the request — the
- * reframe itself is free (pure pixel math, no external call). Returns the updated row,
- * or null if the record is gone. Throws if there's no capture to work from so the UI can
- * say why. Interactive corner edits + knob re-tweaks go through {@link reframeRecord}.
+ * Generate a first-pass professional photo for a captured record, synchronously: detect
+ * the sleeve's corners, warp/crop/tone the capture, store the result, and persist the
+ * detected corners + `ready` status — all inline (free pixel math, no queue). This is the
+ * on-demand seed for records captured before auto-generation existed; the detail page calls
+ * it when the editor opens on a record that has no professional photo yet, so there's
+ * something to preview and tweak. Returns the updated row, or null if the record is gone.
+ * Throws if there's no capture to work from so the UI can say why. Interactive corner edits
+ * + knob re-tweaks go through {@link reframeRecord}.
  */
 export const generateProfessional = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -399,16 +405,24 @@ export const generateProfessional = createServerFn({ method: "POST" })
 			if (!record.capturePhotoKey) {
 				throw new Error("This record has no capture photo to work from.");
 			}
+			const { professionalKey, corners } = await professionalPipeline(record);
 			const [row] = await db
 				.update(records)
 				.set({
-					professionalStatus: "pending",
+					professionalImageKey: professionalKey,
+					sleeveCornersJson: serializeCorners(corners),
+					professionalStatus:
+						record.professionalStatus === "approved" ? "approved" : "ready",
 					professionalError: null,
 					updatedAt: new Date(),
 				})
 				.where(eq(records.id, id))
 				.returning();
-			await enqueueProfessional(id);
+			// Supersede any previous professional object so a re-seed doesn't orphan it.
+			const stale = record.professionalImageKey;
+			if (stale && stale !== professionalKey) {
+				await env.PHOTOS.delete(stale).catch(() => {});
+			}
 			return row ?? null;
 		}),
 	);
@@ -773,40 +787,5 @@ export const refreshRecords = createServerFn({ method: "POST" })
 			}
 			await enqueueRefreshBatch(matched);
 			return { count: matched.length };
-		}),
-	);
-
-/**
- * Bulk professional photos. Marks every selected record that has a capture photo
- * `pending` and enqueues the Replicate work through the queue (rate-limited by
- * its concurrency cap) rather than firing N synchronous generations. Records
- * without a capture to work from are silently skipped. Returns how many were
- * queued.
- */
-export const generateProfessionalPhotos = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(idList)
-	.handler(({ data: ids }) =>
-		Sentry.startSpan({ name: "generateProfessionalPhotos" }, async () => {
-			if (ids.length === 0) return { count: 0 };
-			const db = getDb(env.DB);
-			const now = new Date();
-			const queued: number[] = [];
-			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
-				const rows = await db
-					.update(records)
-					.set({
-						professionalStatus: "pending",
-						professionalError: null,
-						updatedAt: now,
-					})
-					.where(
-						and(inArray(records.id, batch), isNotNull(records.capturePhotoKey)),
-					)
-					.returning({ id: records.id });
-				queued.push(...rows.map(({ id }) => id));
-			}
-			await enqueueProfessionalBatch(queued);
-			return { count: queued.length };
 		}),
 	);

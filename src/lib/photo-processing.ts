@@ -9,8 +9,8 @@
  * sleeve's four corners (picked by hand in the admin editor, seeded by the lightweight
  * {@link detectSleeveCorners}) are mapped onto a square via a homography and
  * inverse-sampled, which crops, squares and de-keystones in one step. The tone is a
- * foreground-aware auto-levels + grey-world white balance, so a dark capture and a
- * bright one come out consistent and neutral.
+ * foreground-aware auto-levels + white-patch white balance, so a dark capture and a
+ * bright one come out consistent and neutral without desaturating the artwork.
  */
 
 import type { NormalizedCorners } from "#/lib/sleeve-corners";
@@ -242,15 +242,17 @@ export function padToCanvas(content: RgbaImage, canvasSize: number): RgbaImage {
 	return { data, width: canvasSize, height: canvasSize };
 }
 
-// ---------- tone: auto-levels + grey-world white balance ----------
+// ---------- tone: auto-levels + white-patch white balance ----------
 
 interface ForegroundStats {
 	hist: [Uint32Array, Uint32Array, Uint32Array];
+	/** Luminance histogram — drives the hue-preserving levels stretch. */
+	lumaHist: Uint32Array;
 	mean: [number, number, number];
 	n: number;
 }
 
-/** Per-channel histograms + means over opaque (foreground) pixels only. */
+/** Per-channel + luma histograms and per-channel means over opaque (foreground) pixels only. */
 function foregroundStats(img: RgbaImage, alphaMin: number): ForegroundStats {
 	const { data, width, height } = img;
 	const hist: [Uint32Array, Uint32Array, Uint32Array] = [
@@ -258,19 +260,26 @@ function foregroundStats(img: RgbaImage, alphaMin: number): ForegroundStats {
 		new Uint32Array(256),
 		new Uint32Array(256),
 	];
+	const lumaHist = new Uint32Array(256);
 	const sum: [number, number, number] = [0, 0, 0];
 	let n = 0;
 	for (let p = 0; p < width * height; p++) {
 		if (data[p * 4 + 3] < alphaMin) continue;
 		n++;
-		for (let c = 0; c < 3; c++) {
-			const v = data[p * 4 + c];
-			hist[c][v]++;
-			sum[c] += v;
-		}
+		const r = data[p * 4];
+		const g = data[p * 4 + 1];
+		const b = data[p * 4 + 2];
+		hist[0][r]++;
+		hist[1][g]++;
+		hist[2][b]++;
+		sum[0] += r;
+		sum[1] += g;
+		sum[2] += b;
+		lumaHist[Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b)]++;
 	}
 	return {
 		hist,
+		lumaHist,
 		mean: [
 			sum[0] / Math.max(n, 1),
 			sum[1] / Math.max(n, 1),
@@ -293,14 +302,17 @@ function percentile(hist: Uint32Array, n: number, frac: number): number {
 
 export interface AutoToneOptions {
 	alphaMin?: number;
-	/** Low/high percentiles clipped to black/white when stretching levels. */
+	/** Low/high percentiles (of the luma histogram) clipped to black/white when stretching levels. */
 	lowPct?: number;
 	highPct?: number;
-	/** 0 = no white balance, 1 = full grey-world correction. */
+	/** 0 = no white balance, 1 = full white-patch correction. */
 	wbStrength?: number;
 	/** Target normalised mean luma after levels (0..1); drives one global gamma. */
 	targetMid?: number;
 }
+
+/** Percentile of each channel treated as the near-white reference for white-balance. */
+const WB_WHITE_PCT = 0.97;
 
 export interface AutoToneResult extends RgbaImage {
 	debug: {
@@ -313,11 +325,17 @@ export interface AutoToneResult extends RgbaImage {
 }
 
 /**
- * Foreground-aware auto-levels + grey-world white balance in one pass:
- *  - white balance scales each channel so its mean approaches the overall grey mean
- *    (removes an ambient colour cast), damped by `wbStrength` and clamped so it
- *    never swings wildly;
- *  - levels stretch each channel's [lowPct, highPct] to [0,255];
+ * Foreground-aware auto-levels + white-patch white balance in one pass:
+ *  - white balance anchors on the near-white highlights (the {@link WB_WHITE_PCT}
+ *    percentile of each channel) rather than the frame average: each channel is
+ *    scaled so that reference lines up with the brightest channel's, neutralising
+ *    the ambient cast on whites *without* desaturating strongly-coloured content.
+ *    (Grey-world — scaling every channel toward the overall mean — wrecks a
+ *    dominantly-coloured sleeve: a navy cover would be pushed grey, i.e. yellow.)
+ *    Damped by `wbStrength` and clamped so it never swings wildly.
+ *  - levels stretch a *single* luma [lowPct, highPct] range to [0,255], applied
+ *    identically to every channel, so contrast opens up without shifting hue
+ *    (an independent per-channel stretch skews the colour of a saturated cover);
  *  - one global gamma nudges the mean luma toward `targetMid` for consistent
  *    exposure across shots.
  * Only opaque pixels feed the statistics, so the transparent margin never skews
@@ -335,28 +353,36 @@ export function autoTone(
 		targetMid = 0.5,
 	} = opts;
 
-	const { hist, mean, n } = foregroundStats(img, alphaMin);
-	const greyMean = (mean[0] + mean[1] + mean[2]) / 3;
+	const { hist, lumaHist, n } = foregroundStats(img, alphaMin);
 
+	// White-patch balance: line each channel's near-white reference up with the
+	// brightest channel's, so whites go neutral while saturated midtones keep their hue.
+	const whiteRef = [0, 1, 2].map((c) =>
+		Math.max(percentile(hist[c], n, WB_WHITE_PCT), 1),
+	);
+	const refWhite = Math.max(...whiteRef);
 	const wbGain: [number, number, number] = [1, 1, 1];
 	for (let c = 0; c < 3; c++) {
-		const g = greyMean / Math.max(mean[c], 1);
+		const g = refWhite / whiteRef[c];
 		const damped = 1 + (g - 1) * wbStrength;
 		wbGain[c] = Math.min(1.6, Math.max(0.625, damped));
 	}
 
-	const lo = [0, 1, 2].map((c) => percentile(hist[c], n, lowPct));
-	const hi = [0, 1, 2].map((c) => percentile(hist[c], n, highPct));
+	// A single luma-domain levels window, applied to every channel alike (hue-preserving).
+	const loL = percentile(lumaHist, n, lowPct);
+	const hiL = percentile(lumaHist, n, highPct);
+	const span = hiL - loL;
+	const lo = [loL, loL, loL];
+	const hi = [hiL, hiL, hiL];
 
-	// LUT per channel: white-balance gain then levels stretch. A channel with no
-	// usable spread (a near-uniform region) would otherwise collapse to black, so we
-	// skip the stretch and just apply the balance gain there.
+	// LUT per channel: white-balance gain, then the shared luma levels stretch. A
+	// near-uniform frame with no usable spread would otherwise collapse to black, so
+	// we skip the stretch there and just apply the balance gain.
 	const lut = [0, 1, 2].map((c) => {
 		const table = new Uint8ClampedArray(256);
-		const span = hi[c] - lo[c];
 		for (let v = 0; v < 256; v++) {
 			const balanced = v * wbGain[c];
-			table[v] = span < 1 ? balanced : ((balanced - lo[c]) / span) * 255;
+			table[v] = span < 1 ? balanced : ((balanced - loL) / span) * 255;
 		}
 		return table;
 	});
