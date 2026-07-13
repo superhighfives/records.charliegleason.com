@@ -17,13 +17,13 @@ export interface ReframeParams {
 	/**
 	 * Final "polish" factors applied on the Cloudflare Images encode pass, *after*
 	 * the foreground-aware auto-tone — blunt global multipliers where 1.0 = no change.
-	 * Auto-tone does the smart per-image correction; these are for taste.
+	 * Auto-tone does the smart per-image correction; these are for taste. The defaults
+	 * are a gentle "studio pop" (a little more saturation + contrast) so a fresh capture
+	 * looks its best without touching the sliders.
 	 */
 	saturation?: number;
 	contrast?: number;
 	gamma?: number;
-	/** Transparent margin on each side, as a % of the canvas (0 … ~6). */
-	marginPct?: number;
 }
 
 export const DEFAULT_REFRAME_PARAMS: Required<ReframeParams> = {
@@ -31,10 +31,9 @@ export const DEFAULT_REFRAME_PARAMS: Required<ReframeParams> = {
 	wbStrength: 1.0,
 	lowPct: 0.005,
 	highPct: 0.995,
-	saturation: 1.0,
-	contrast: 1.0,
+	saturation: 1.12,
+	contrast: 1.08,
 	gamma: 1.0,
-	marginPct: 2,
 };
 
 /** Parse a stored `professionalParamsJson` string into params (defaults on junk/null). */

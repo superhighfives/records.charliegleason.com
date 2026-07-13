@@ -1004,16 +1004,6 @@ function RecordDetail() {
 									disabled={reframePro.isPending}
 									onChange={(v) => setParams({ ...params, gamma: v / 100 })}
 								/>
-								<Knob
-									label="Margin"
-									display={`${p.marginPct}%`}
-									value={p.marginPct}
-									min={0}
-									max={6}
-									step={0.5}
-									disabled={reframePro.isPending}
-									onChange={(v) => setParams({ ...params, marginPct: v })}
-								/>
 							</div>
 
 							<DialogFooter className="justify-between">

@@ -45,15 +45,13 @@ import {
  *
  * There is no paid step anymore: the whole reframe is free and deterministic, so it
  * re-runs on demand whenever the admin nudges the corners or the {@link ReframeParams}
- * tone/margin knobs.
+ * tone/polish knobs.
  *
  * Server-only (pulls in `cloudflare:workers`); never import from a client route — the
  * shared knob/corner types + defaults live in `reframe-params.ts` / `sleeve-corners.ts`.
  */
 
-// Final framing — always a square canvas. The warped sleeve fills a content square,
-// then is padded out to a CANVAS_SIZE square; the even gap is the transparent margin
-// on each side, sized by `marginPct` (2% → (2000-1920)/2 = 40px each side).
+// Final framing — the warped sleeve fills the whole square canvas, edge to edge.
 const CANVAS_SIZE = 2000;
 
 // Sharpen strength for the final Images pass. Gentle — just enough to counter the
@@ -125,14 +123,13 @@ async function warpEncodeStore(
 	params: ReframeParams,
 ): Promise<{ key: string }> {
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
-	// Margin is a % of the canvas on each side; the sleeve fills what's left.
-	const contentSize = Math.round(CANVAS_SIZE * (1 - (2 * p.marginPct) / 100));
 	const { image } = reframeFromCorners(
 		capture,
 		toPixelCorners(corners, capture.width, capture.height),
 		{
 			canvasSize: CANVAS_SIZE,
-			contentSize,
+			// The sleeve fills the whole canvas — no transparent margin.
+			contentSize: CANVAS_SIZE,
 			// `skipTone` keeps the warped capture at its original exposure; otherwise the
 			// white-balance/levels knobs feed auto-tone.
 			tone: p.skipTone
