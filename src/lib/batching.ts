@@ -15,10 +15,6 @@ export interface AnalyzeMessage {
 	// the Discogs release for an already-identified record; "professional"
 	// generates a studio product photo from the capture via Replicate.
 	mode?: "analyze" | "refresh" | "professional";
-	// Professional mode only: skip the auto-tone (levels/white-balance/gamma) stage
-	// and keep the warped capture's original exposure. A diagnostic toggle exposed
-	// in the admin UI to compare toned vs untoned output.
-	skipTone?: boolean;
 }
 
 /**

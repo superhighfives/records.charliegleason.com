@@ -11,6 +11,7 @@ import { Button } from "#/components/ui/button";
 import { Checkbox } from "#/components/ui/checkbox";
 import { ImageZoom } from "#/components/ui/image-zoom";
 import { Input } from "#/components/ui/input";
+import { Slider } from "#/components/ui/slider";
 import {
 	Tooltip,
 	TooltipContent,
@@ -34,6 +35,7 @@ import {
 	lookupDiscogsRelease,
 	previewReleaseValue,
 	publishRecord,
+	reframeRecord,
 	refreshRecord,
 	reprocessRecord,
 	searchDiscogs,
@@ -41,6 +43,11 @@ import {
 	uploadCover,
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
+import {
+	DEFAULT_REFRAME_PARAMS,
+	parseReframeParams,
+	type ReframeParams,
+} from "#/lib/reframe-params";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
 
@@ -93,6 +100,44 @@ function TabButton({
 		>
 			{children}
 		</button>
+	);
+}
+
+/** One labelled reframe knob: a slider with its current value shown on the right. */
+function Knob({
+	label,
+	value,
+	display,
+	min,
+	max,
+	step,
+	disabled,
+	onChange,
+}: {
+	label: string;
+	value: number;
+	display: string;
+	min: number;
+	max: number;
+	step: number;
+	disabled?: boolean;
+	onChange: (v: number) => void;
+}) {
+	return (
+		<div className={cn("space-y-1.5", disabled && "opacity-50")}>
+			<div className="flex justify-between text-xs text-muted-foreground">
+				<span>{label}</span>
+				<span className="tabular-nums">{display}</span>
+			</div>
+			<Slider
+				min={min}
+				max={max}
+				step={step}
+				value={[value]}
+				disabled={disabled}
+				onValueChange={([v]) => onChange(v)}
+			/>
+		</div>
 	);
 }
 
@@ -303,10 +348,11 @@ function RecordDetail() {
 	const [discogsUrl, setDiscogsUrl] = useState("");
 	// Briefly shown after a refresh so the enrichment landing isn't silent.
 	const [justRefreshed, setJustRefreshed] = useState(false);
-	// Diagnostic: regenerate the professional photo with the auto-tone stage off, to
-	// compare against the toned output (the levels/white-balance/gamma stretch can
-	// over-amplify real surface sheen). Applies to every "generate/regenerate" button.
-	const [skipTone, setSkipTone] = useState(false);
+	// Editable reframe knobs, seeded from whatever's stored on the record. This is the
+	// working copy the sliders drive; "Apply" sends it to the (free) reframe step.
+	const [params, setParams] = useState<ReframeParams>(() =>
+		parseReframeParams(record?.professionalParamsJson),
+	);
 	// A user-uploaded cover overrides the auto-sourced Discogs artwork on publish.
 	const [customCover, setCustomCover] = useState<{
 		key: string;
@@ -423,15 +469,32 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn't delete this record."),
 	});
 
-	// Queue (or re-queue) the professional studio photo. Lands via the queue, so
-	// the detail page polls itself to `ready` while `professionalStatus` is in flight.
+	// Step 1 (paid): queue the background matte. Lands via the queue, so the detail
+	// page polls itself to `ready` while `professionalStatus` is in flight.
 	const generatePro = useMutation({
-		mutationFn: () =>
-			generateProfessional({ data: { id: recordId, skipTone } }),
+		mutationFn: () => generateProfessional({ data: recordId }),
 		onSuccess: invalidate,
 		onError: (err) =>
 			toast.error(
-				err instanceof Error ? err.message : "Couldn't start the photo.",
+				err instanceof Error
+					? err.message
+					: "Couldn't start background removal.",
+			),
+	});
+
+	// Step 2 (free): re-run the deterministic reframe on the stored cutout with the
+	// current knobs. Synchronous — the server returns the updated row, which we drop
+	// straight into the cache so the preview updates in place (no queue, no polling).
+	const reframePro = useMutation({
+		mutationFn: (params: ReframeParams) =>
+			reframeRecord({ data: { id: recordId, params } }),
+		onSuccess: (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't apply the changes.",
 			),
 	});
 
@@ -506,6 +569,17 @@ function RecordDetail() {
 		record.status === "pending" || record.status === "processing";
 	const failure =
 		record.status === "failed" ? describeAnalysisError(record.error) : null;
+
+	// Professional-photo derived state. The matte (step 1) is in flight while
+	// `pending`/`processing`; once a `cutoutImageKey` exists the free reframe knobs
+	// (step 2) are available. `p` merges the working-copy params over the defaults so
+	// the sliders always have a concrete value to render.
+	const proBusy =
+		record.professionalStatus === "pending" ||
+		record.professionalStatus === "processing";
+	const hasCutout = Boolean(record.cutoutImageKey);
+	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
+	const contrastPct = Math.round((p.lowPct / 0.05) * 100);
 
 	// Cover preview source, best-first: the freshly downloaded full-res artwork,
 	// then the picked candidate's thumbnail (instant, while the full-res loads or
@@ -698,8 +772,10 @@ function RecordDetail() {
 						<div>
 							<h2 className="text-sm font-semibold">Professional photo</h2>
 							<p className="text-xs text-muted-foreground">
-								A studio-lit, tight-cropped cutout generated from your capture.
-								Once approved it’s shown across the site in place of the cover.
+								A straight-on, cropped, evenly-toned square built from your
+								capture — not repainted. Remove the background once (a paid
+								pass), then tweak the framing and tone for free. Once approved
+								it’s shown across the site in place of the cover.
 							</p>
 						</div>
 						{record.professionalStatus === "approved" && (
@@ -709,32 +785,17 @@ function RecordDetail() {
 						)}
 					</div>
 
-					{/* Diagnostic toggle: regenerate without the auto-tone (levels + white
-					    balance + gamma) stage, so we can see whether it's over-amplifying
-					    real surface detail (e.g. a glossy edge sheen reading as a hard
-					    highlight). Applies to whichever generate button is shown below. */}
-					<label className="flex items-center gap-2 text-xs text-muted-foreground">
-						<Checkbox
-							checked={skipTone}
-							disabled={generatePro.isPending}
-							onChange={(e) => setSkipTone(e.currentTarget.checked)}
-						/>
-						Skip auto-tone (raw exposure) — regenerate to compare
-					</label>
-
-					{record.professionalStatus === "pending" ||
-					record.professionalStatus === "processing" ? (
+					{proBusy ? (
+						// Step 1 (paid) in flight: removing the background.
 						<div className="space-y-2">
 							<div className="flex items-center gap-2 text-sm text-muted-foreground">
 								<Loader2 className="size-4 shrink-0 animate-spin" />
-								Generating the professional photo — this page updates itself
-								when it’s ready.
+								Removing the background — this page updates itself when the
+								cutout’s ready to tweak.
 							</div>
 							{/* Escape hatch: a job can wedge if its worker dies mid-run, and the
-							    server-side watchdog only reclaims it after a timeout. Always let
-							    the admin start over so they're never stuck watching the spinner —
-							    but confirm first, since the original job may still be running and
-							    a second run is a fresh (paid) Replicate charge. */}
+							    server-side watchdog only reclaims it after a timeout. Confirm
+							    first — restarting is a fresh (paid) Replicate run. */}
 							<Button
 								type="button"
 								size="sm"
@@ -743,43 +804,115 @@ function RecordDetail() {
 								onClick={() => {
 									if (
 										confirm(
-											"The current generation may still be running. Start a new one anyway? This can take a few minutes and counts as a new run.",
+											"The current run may still be going. Start background removal again anyway? This is a fresh paid run and can take a few minutes.",
 										)
 									) {
 										generatePro.mutate();
 									}
 								}}
 							>
-								{generatePro.isPending ? "…" : "Taking too long? Regenerate"}
+								{generatePro.isPending ? "…" : "Taking too long? Restart"}
 							</Button>
 						</div>
-					) : record.professionalImageKey &&
-						(record.professionalStatus === "ready" ||
-							record.professionalStatus === "approved") ? (
+					) : hasCutout ? (
+						// Step 2 (free): the cutout exists — reframe knobs + review controls.
 						<div className="space-y-3">
-							<figure className="space-y-1">
-								<ImageZoom
-									src={`/api/photos/${record.professionalImageKey}`}
-									alt="Professional photo"
-									className="size-40 bg-muted"
+							{record.professionalImageKey && (
+								<figure className="space-y-1">
+									<ImageZoom
+										src={`/api/photos/${record.professionalImageKey}`}
+										alt="Professional photo"
+										className="size-40 bg-muted"
+									/>
+									<figcaption className="text-xs text-muted-foreground">
+										{record.professionalStatus === "approved"
+											? "Approved — shown on the site"
+											: "Generated — not shown until approved"}
+									</figcaption>
+								</figure>
+							)}
+
+							{/* Free knobs — re-run the deterministic reframe on the stored
+							    cutout. No Replicate call, so tweak away. */}
+							<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+								<label
+									htmlFor="pro-autotone"
+									className="flex items-center gap-2 text-xs text-muted-foreground"
+								>
+									<Checkbox
+										id="pro-autotone"
+										checked={!p.skipTone}
+										disabled={reframePro.isPending}
+										onChange={(e) =>
+											setParams({
+												...params,
+												skipTone: !e.currentTarget.checked,
+											})
+										}
+									/>
+									Auto-tone (levels + white balance)
+								</label>
+								<Knob
+									label="White balance"
+									display={`${Math.round(p.wbStrength * 100)}%`}
+									value={Math.round(p.wbStrength * 100)}
+									min={0}
+									max={100}
+									step={1}
+									disabled={p.skipTone || reframePro.isPending}
+									onChange={(v) =>
+										setParams({ ...params, wbStrength: v / 100 })
+									}
 								/>
-								<figcaption className="text-xs text-muted-foreground">
-									{record.professionalStatus === "approved"
-										? "Approved — shown on the site"
-										: "Generated — not shown until approved"}
-								</figcaption>
-							</figure>
-							<div className="flex flex-wrap gap-2">
-								{record.professionalStatus === "ready" ? (
+								<Knob
+									label="Contrast"
+									display={`${contrastPct}%`}
+									value={contrastPct}
+									min={0}
+									max={100}
+									step={1}
+									disabled={p.skipTone || reframePro.isPending}
+									onChange={(v) => {
+										const clip = (v / 100) * 0.05;
+										setParams({ ...params, lowPct: clip, highPct: 1 - clip });
+									}}
+								/>
+								<Knob
+									label="Margin"
+									display={`${p.marginPct}%`}
+									value={p.marginPct}
+									min={0}
+									max={6}
+									step={0.5}
+									disabled={reframePro.isPending}
+									onChange={(v) => setParams({ ...params, marginPct: v })}
+								/>
+								<div className="flex flex-wrap gap-2 pt-1">
 									<Button
 										type="button"
 										size="sm"
-										disabled={approvePro.isPending}
-										onClick={() => approvePro.mutate(true)}
+										disabled={reframePro.isPending}
+										onClick={() => reframePro.mutate(params)}
 									>
-										{approvePro.isPending ? "…" : "Use as cover"}
+										{reframePro.isPending ? "Applying…" : "Apply"}
 									</Button>
-								) : (
+									<Button
+										type="button"
+										size="sm"
+										variant="ghost"
+										disabled={reframePro.isPending}
+										onClick={() => {
+											setParams({});
+											reframePro.mutate({});
+										}}
+									>
+										Reset
+									</Button>
+								</div>
+							</div>
+
+							<div className="flex flex-wrap gap-2">
+								{record.professionalStatus === "approved" ? (
 									<Button
 										type="button"
 										size="sm"
@@ -789,24 +922,45 @@ function RecordDetail() {
 									>
 										{approvePro.isPending ? "…" : "Stop using"}
 									</Button>
+								) : (
+									<Button
+										type="button"
+										size="sm"
+										disabled={
+											!record.professionalImageKey || approvePro.isPending
+										}
+										onClick={() => approvePro.mutate(true)}
+									>
+										{approvePro.isPending ? "…" : "Use as cover"}
+									</Button>
 								)}
+								{/* Redo the paid matte (e.g. if the cutout clipped the sleeve). */}
 								<Button
 									type="button"
 									size="sm"
 									variant="outline"
 									disabled={generatePro.isPending}
-									onClick={() => generatePro.mutate()}
+									onClick={() => {
+										if (
+											confirm(
+												"Re-run background removal? This is a fresh paid run and can take a few minutes.",
+											)
+										) {
+											generatePro.mutate();
+										}
+									}}
 								>
-									{generatePro.isPending ? "…" : "Regenerate"}
+									{generatePro.isPending ? "…" : "Redo background removal"}
 								</Button>
 							</div>
 						</div>
 					) : (
+						// No cutout yet (idle, or a failed matte): offer the paid step.
 						<div className="space-y-2">
 							{record.professionalStatus === "failed" &&
 								record.professionalError && (
 									<p className="text-xs text-red-600 dark:text-red-400">
-										Generation failed: {record.professionalError}
+										Background removal failed: {record.professionalError}
 									</p>
 								)}
 							<Button
@@ -820,8 +974,12 @@ function RecordDetail() {
 									? "Queuing…"
 									: record.professionalStatus === "failed"
 										? "Try again"
-										: "Generate professional photo"}
+										: "Remove background"}
 							</Button>
+							<p className="text-xs text-muted-foreground">
+								Runs a paid background-removal pass; afterwards you can tweak
+								the framing and tone for free.
+							</p>
 						</div>
 					)}
 				</div>

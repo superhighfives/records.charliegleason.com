@@ -50,6 +50,13 @@
       "when": 1783376310920,
       "tag": "0006_cultured_shatterstar",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1783914830347,
+      "tag": "0007_material_legion",
+      "breakpoints": true
     }
   ]
 }

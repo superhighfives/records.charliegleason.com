@@ -22,6 +22,7 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
+import { reframeFromCutout } from "#/lib/professional";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
@@ -33,6 +34,7 @@ import {
 	refreshRecordById,
 } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
+import type { ReframeParams } from "#/lib/reframe-params";
 
 /**
  * Server-side data access for the records collection.
@@ -55,10 +57,13 @@ const ADMIN_ONLY_FIELDS = [
 	"discogsValueCurrency",
 	"discogsValueJson",
 	"discogsValueFetchedAt",
-	// Internal professional-photo job bookkeeping — the last error and the
-	// Replicate prediction id are never public.
+	// Internal professional-photo job bookkeeping — the last error, the Replicate
+	// prediction id, the raw matte (an admin-only capture derivative, fetchable via
+	// `/api/photos/$`) and the reframe knob settings are never public.
 	"professionalError",
 	"professionalPredictionId",
+	"cutoutImageKey",
+	"professionalParamsJson",
 ] as const;
 
 /** The public shape of a record — the full row minus the admin-only fields. */
@@ -76,6 +81,8 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 		discogsValueFetchedAt: _fetchedAt,
 		professionalError: _proError,
 		professionalPredictionId: _proPrediction,
+		cutoutImageKey: _cutout,
+		professionalParamsJson: _proParams,
 		...rest
 	} = row;
 	return {
@@ -215,6 +222,9 @@ export const captureRecord = createServerFn({ method: "POST" })
 					status: "pending",
 					capturePhotoKey,
 					captureContext: data.context?.trim() || null,
+					// Kick off the professional-photo matte automatically on capture, so the
+					// (paid) cutout is ready to tweak by the time the record's reviewed.
+					professionalStatus: "pending",
 				})
 				.returning();
 
@@ -234,6 +244,24 @@ export const captureRecord = createServerFn({ method: "POST" })
 					.where(eq(records.id, row.id))
 					.returning();
 				return failed ?? row;
+			}
+
+			// Best-effort: queue the background matte too. Independent of analysis — if it
+			// can't enqueue, mark just the professional track failed (a manual button can
+			// retry) rather than failing the whole capture.
+			try {
+				await enqueueProfessional(row.id);
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				await db
+					.update(records)
+					.set({
+						professionalStatus: "failed",
+						professionalError: `Could not queue background removal: ${detail}`,
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, row.id))
+					.catch(() => {});
 			}
 
 			return row;
@@ -342,18 +370,16 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Kick off (or re-run) professional studio-photo generation for a captured
- * record. Marks it `pending` and enqueues the Replicate work on the queue (its
- * own `professional` mode). Returns the updated row, or null if the record is
- * gone. Throws if there's no capture to work from so the UI can say why.
+ * Step 1 trigger — (re-)run the PAID background matte for a captured record. Marks
+ * it `pending` and enqueues the Replicate work (the `professional` queue mode), which
+ * stores the reusable cutout and an initial reframe. Returns the updated row, or null
+ * if the record is gone. Throws if there's no capture to work from so the UI can say
+ * why. The cheap re-tweaks afterwards go through {@link reframeRecord}, not this.
  */
 export const generateProfessional = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator((input: { id: number; skipTone?: boolean }) => ({
-		id: input.id,
-		skipTone: Boolean(input.skipTone),
-	}))
-	.handler(({ data: { id, skipTone } }) =>
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "generateProfessional" }, async () => {
 			const db = getDb(env.DB);
 			const [record] = await db
@@ -374,7 +400,57 @@ export const generateProfessional = createServerFn({ method: "POST" })
 				})
 				.where(eq(records.id, id))
 				.returning();
-			await enqueueProfessional(id, { skipTone });
+			await enqueueProfessional(id);
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Step 2 — the FREE re-tweak. Re-runs the deterministic reframe (crop/square/tone)
+ * on the already-stored cutout with a new set of knobs, synchronously: no Replicate,
+ * no queue, so the admin gets the updated image back in one request. Persists the new
+ * `professionalImageKey` and remembers the knobs in `professionalParamsJson`.
+ * Requires the matte (step 1) to have run — throws if there's no cutout yet. Returns
+ * the updated row, or null if the record is gone.
+ */
+export const reframeRecord = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((input: { id: number; params: ReframeParams }) => ({
+		id: input.id,
+		params: input.params ?? {},
+	}))
+	.handler(({ data: { id, params } }) =>
+		Sentry.startSpan({ name: "reframeRecord" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+			if (!record.cutoutImageKey) {
+				throw new Error(
+					"Remove the background first — there's no cutout to reframe yet.",
+				);
+			}
+			const { key } = await reframeFromCutout(record.cutoutImageKey, params);
+			const [row] = await db
+				.update(records)
+				.set({
+					professionalImageKey: key,
+					professionalParamsJson: JSON.stringify(params),
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			// Bin the superseded professional image so re-tweaks don't accumulate
+			// orphaned objects in R2. Best-effort — the row already points at the new
+			// key, so a failed cleanup just leaves one stale object, never a broken ref.
+			const stale = record.professionalImageKey;
+			if (stale && stale !== key) {
+				await env.PHOTOS.delete(stale).catch(() => {});
+			}
 			return row ?? null;
 		}),
 	);
@@ -532,12 +608,13 @@ export const deleteRecord = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "deleteRecord" }, async () => {
 			const db = getDb(env.DB);
 			// Read the record's R2 photo keys before dropping the row so we can
-			// clean up the objects too — otherwise the capture, cover, and pro
-			// images (all in the PHOTOS bucket) would be orphaned forever.
+			// clean up the objects too — otherwise the capture, cover, matte, and
+			// pro images (all in the PHOTOS bucket) would be orphaned forever.
 			const [row] = await db
 				.select({
 					capturePhotoKey: records.capturePhotoKey,
 					coverImageKey: records.coverImageKey,
+					cutoutImageKey: records.cutoutImageKey,
 					professionalImageKey: records.professionalImageKey,
 				})
 				.from(records)
@@ -550,6 +627,7 @@ export const deleteRecord = createServerFn({ method: "POST" })
 				const keys = [
 					row.capturePhotoKey,
 					row.coverImageKey,
+					row.cutoutImageKey,
 					row.professionalImageKey,
 				].filter((key): key is string => Boolean(key));
 				if (keys.length > 0) await env.PHOTOS.delete(keys);

@@ -51,13 +51,24 @@ export const records = sqliteTable("records", {
 	coverImageKey: text("cover_image_key"), // R2 key — good cover, sourced + resized (public)
 	capturePhotoKey: text("capture_photo_key"), // R2 key — the original iPhone shot (admin only)
 
-	// Professional studio photo — generated from the iPhone capture via Replicate
-	// (Flux Kontext relight + BiRefNet cutout → a transparent webp under
-	// `professional/`). Reviewed before it goes live: `ready` = generated, awaiting
-	// approval; `approved` = promoted and preferred over the Discogs cover for
-	// display (see displayCoverKey). Runs in its own queue mode, best-effort, so it
-	// never blocks the main capture status machine.
+	// Professional studio photo — a straight-on, cropped, evenly-toned square built
+	// from the iPhone capture in two steps:
+	//   1. Background matte (Bria, paid Replicate call) → a straight-alpha cutout,
+	//      stored ONCE under `cutout/` as `cutoutImageKey`. `professionalStatus`
+	//      tracks this paid step: `pending`/`processing` while it runs, `failed` on
+	//      error. Auto-runs on capture; a manual button re-runs it.
+	//   2. Deterministic reframe + tone of that cutout (crop/square/de-keystone +
+	//      auto-levels/white-balance) → the displayed `professionalImageKey` under
+	//      `professional/`. This step is free (pure pixel math, no Replicate), so the
+	//      admin can re-run it with different `professionalParamsJson` knobs as often
+	//      as they like without paying again.
+	// Reviewed before it goes live: `ready` = generated, awaiting approval;
+	// `approved` = promoted and preferred over the Discogs cover for display (see
+	// displayCoverKey). Best-effort in its own queue mode, so it never blocks the
+	// main capture status machine.
+	cutoutImageKey: text("cutout_image_key"), // R2 key — Bria matte, reused for free re-tweaks (admin only)
 	professionalImageKey: text("professional_image_key"), // R2 key — pro cutout (public once approved)
+	professionalParamsJson: text("professional_params_json"), // last reframe knob settings (JSON)
 	professionalStatus: text("professional_status", {
 		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
 	}).default("idle"),

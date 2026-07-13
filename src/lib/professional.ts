@@ -1,9 +1,12 @@
 import { env } from "cloudflare:workers";
 import { PhotonImage } from "@cf-wasm/photon";
 
-import type { Record } from "#/db/schema";
 import { bytesToBase64 } from "#/lib/image-data";
 import { type RgbaImage, reframeSquare } from "#/lib/photo-processing";
+import {
+	DEFAULT_REFRAME_PARAMS,
+	type ReframeParams,
+} from "#/lib/reframe-params";
 import { firstOutputUrl, runModel } from "#/lib/replicate";
 
 /**
@@ -26,23 +29,25 @@ import { firstOutputUrl, runModel } from "#/lib/replicate";
  *
  * The pixel math lives in {@link reframeSquare} (pure, unit-tested); Photon decodes
  * the cutout and re-encodes the result, and the Images binding canonicalises to a
- * webp-with-alpha (like the cover pipeline) before storing under `professional/` in
- * R2. Only one Replicate pass now (the matte), so it's cheaper and faster too.
+ * webp-with-alpha (like the cover pipeline) before storing under `professional/`.
  *
- * Returns the R2 key plus the Replicate prediction id (kept on the row for
- * debugging). Throws on any failure — the queue consumer records it on the row.
- * Server-only (pulls in `cloudflare:workers`); never import from a client route.
+ * The work is split into two functions so the paid part happens once: the matte
+ * ({@link generateCutout}, the only Replicate call) is run and stored once, then the
+ * deterministic reframe ({@link reframeFromCutout}) can be re-run for free with
+ * different {@link ReframeParams} knobs as often as the admin likes.
+ *
+ * Server-only (pulls in `cloudflare:workers`); never import from a client route —
+ * the shared knob type/defaults live in `reframe-params.ts` for that.
  */
 
 // Background matting → transparent cutout. An official model, run at its latest
 // version (see `runModel` — only official models work there).
 const CUTOUT_MODEL = "bria/remove-background";
 
-// Final framing — always a square canvas. The warped sleeve fills a CONTENT_SIZE
-// square, then is padded out to a CANVAS_SIZE square; the even gap is the
-// transparent margin on each side (here (2000-1920)/2 = 40px, 2%).
+// Final framing — always a square canvas. The warped sleeve fills a content square,
+// then is padded out to a CANVAS_SIZE square; the even gap is the transparent margin
+// on each side, sized by `marginPct` (2% → (2000-1920)/2 = 40px each side).
 const CANVAS_SIZE = 2000;
-const CONTENT_SIZE = 1920;
 
 // Sharpen strength for the final Images pass. Gentle — just enough to counter the
 // bilinear softening from the warp, not enough to crunch the halftone.
@@ -85,29 +90,24 @@ function encodePng(image: RgbaImage): Uint8Array {
 	}
 }
 
-export interface ProfessionalResult {
-	key: string;
-	predictionId: string;
-}
-
-export async function generateProfessionalPhoto(
-	record: Record,
-	opts: { skipTone?: boolean } = {},
-): Promise<ProfessionalResult> {
-	if (!record.capturePhotoKey) {
-		throw new Error("record has no capture photo to work from");
-	}
-
-	const object = await env.PHOTOS.get(record.capturePhotoKey);
+/**
+ * Step 1 — the PAID matte. Runs Bria background removal on the original capture and
+ * stores the resulting straight-alpha cutout (raw PNG, RGB untouched, alpha marking
+ * the sleeve) under `cutout/` in R2. Persisted so {@link reframeFromCutout} can be
+ * re-run for free afterwards — the only Replicate call in the whole pipeline. Returns
+ * the cutout's R2 key and the prediction id (kept on the row for debugging).
+ */
+export async function generateCutout(
+	capturePhotoKey: string,
+): Promise<{ key: string; predictionId: string }> {
+	const object = await env.PHOTOS.get(capturePhotoKey);
 	if (!object) {
-		throw new Error(`capture photo missing in R2: ${record.capturePhotoKey}`);
+		throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);
 	}
 	const bytes = new Uint8Array(await object.arrayBuffer());
 	const mediaType = object.httpMetadata?.contentType || "image/webp";
 	const captureDataUri = `data:${mediaType};base64,${bytesToBase64(bytes)}`;
 
-	// 1. Background matte on the ORIGINAL capture → straight-alpha cutout. The RGB is
-	// the untouched photo; the alpha marks the sleeve (used to find its corners).
 	const cutout = await runModel(CUTOUT_MODEL, { image: captureDataUri });
 	const cutoutUrl = firstOutputUrl(cutout.output);
 	if (!cutoutUrl) throw new Error("background removal returned no image");
@@ -116,23 +116,47 @@ export async function generateProfessionalPhoto(
 	if (!cutoutRes.ok) {
 		throw new Error(`cutout fetch failed (${cutoutRes.status})`);
 	}
-	const cutoutRgba = decodeRgba(new Uint8Array(await cutoutRes.arrayBuffer()));
+	const cutoutBytes = new Uint8Array(await cutoutRes.arrayBuffer());
 
-	// 2. + 3. Deterministic reframe: detect the sleeve, perspective-warp to a square
-	// (or bbox-crop as a fallback), pad to the canvas, and auto-tone. Real pixels
-	// throughout — nothing is regenerated.
-	const { image } = reframeSquare(cutoutRgba, {
-		canvasSize: CANVAS_SIZE,
-		contentSize: CONTENT_SIZE,
-		// `skipTone` leaves the warped capture at its original exposure/colour instead
-		// of running auto-levels + white balance — a diagnostic toggle from the admin
-		// UI to check whether the tone stage is over-amplifying real surface detail.
-		tone: opts.skipTone ? false : undefined,
+	// Store the matte verbatim (Bria hands back a straight-alpha PNG). Photon sniffs
+	// the format from the bytes on decode, so the extension is only cosmetic.
+	const key = `cutout/${crypto.randomUUID()}.png`;
+	await env.PHOTOS.put(key, cutoutBytes, {
+		httpMetadata: { contentType: "image/png" },
 	});
 
-	// 4. Canonicalise to a webp-with-alpha via the Images binding (mirrors the cover
-	// pipeline; webp keeps the transparency), with a gentle sharpen to counter the
-	// warp's bilinear softening, then store in R2.
+	return { key, predictionId: cutout.id };
+}
+
+/**
+ * Step 2 — the FREE reframe. Reads a stored cutout, deterministically detects the
+ * sleeve, perspective-warps it to a square (or bbox-crops as a fallback), pads to the
+ * canvas, and auto-tones — all real pixels, nothing regenerated. Re-runnable with
+ * different {@link ReframeParams} as often as the admin likes without another paid
+ * matte. Canonicalises to a webp-with-alpha via the Images binding (like the cover
+ * pipeline) and stores it under `professional/`. Returns the new R2 key.
+ */
+export async function reframeFromCutout(
+	cutoutKey: string,
+	params: ReframeParams = {},
+): Promise<{ key: string }> {
+	const object = await env.PHOTOS.get(cutoutKey);
+	if (!object) throw new Error(`cutout missing in R2: ${cutoutKey}`);
+	const cutoutRgba = decodeRgba(new Uint8Array(await object.arrayBuffer()));
+
+	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
+	// Margin is a % of the canvas on each side; the sleeve fills what's left.
+	const contentSize = Math.round(CANVAS_SIZE * (1 - (2 * p.marginPct) / 100));
+	const { image } = reframeSquare(cutoutRgba, {
+		canvasSize: CANVAS_SIZE,
+		contentSize,
+		// `skipTone` keeps the warped capture at its original exposure; otherwise the
+		// white-balance/levels knobs feed auto-tone.
+		tone: p.skipTone
+			? false
+			: { wbStrength: p.wbStrength, lowPct: p.lowPct, highPct: p.highPct },
+	});
+
 	const png = encodePng(image);
 	const out = await env.IMAGES.input(blobStream(png))
 		.transform({ sharpen: FINAL_SHARPEN })
@@ -144,5 +168,5 @@ export async function generateProfessionalPhoto(
 		httpMetadata: { contentType: "image/webp" },
 	});
 
-	return { key, predictionId: cutout.id };
+	return { key };
 }
