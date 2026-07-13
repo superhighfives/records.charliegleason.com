@@ -8,6 +8,7 @@ import { DuplicateBadge } from "#/components/duplicate-badge";
 import { RecordForm } from "#/components/record-form";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
+import { Checkbox } from "#/components/ui/checkbox";
 import { ImageZoom } from "#/components/ui/image-zoom";
 import { Input } from "#/components/ui/input";
 import {
@@ -302,6 +303,10 @@ function RecordDetail() {
 	const [discogsUrl, setDiscogsUrl] = useState("");
 	// Briefly shown after a refresh so the enrichment landing isn't silent.
 	const [justRefreshed, setJustRefreshed] = useState(false);
+	// Diagnostic: regenerate the professional photo with the auto-tone stage off, to
+	// compare against the toned output (the levels/white-balance/gamma stretch can
+	// over-amplify real surface sheen). Applies to every "generate/regenerate" button.
+	const [skipTone, setSkipTone] = useState(false);
 	// A user-uploaded cover overrides the auto-sourced Discogs artwork on publish.
 	const [customCover, setCustomCover] = useState<{
 		key: string;
@@ -421,7 +426,8 @@ function RecordDetail() {
 	// Queue (or re-queue) the professional studio photo. Lands via the queue, so
 	// the detail page polls itself to `ready` while `professionalStatus` is in flight.
 	const generatePro = useMutation({
-		mutationFn: () => generateProfessional({ data: recordId }),
+		mutationFn: () =>
+			generateProfessional({ data: { id: recordId, skipTone } }),
 		onSuccess: invalidate,
 		onError: (err) =>
 			toast.error(
@@ -702,6 +708,19 @@ function RecordDetail() {
 							</span>
 						)}
 					</div>
+
+					{/* Diagnostic toggle: regenerate without the auto-tone (levels + white
+					    balance + gamma) stage, so we can see whether it's over-amplifying
+					    real surface detail (e.g. a glossy edge sheen reading as a hard
+					    highlight). Applies to whichever generate button is shown below. */}
+					<label className="flex items-center gap-2 text-xs text-muted-foreground">
+						<Checkbox
+							checked={skipTone}
+							disabled={generatePro.isPending}
+							onChange={(e) => setSkipTone(e.currentTarget.checked)}
+						/>
+						Skip auto-tone (raw exposure) — regenerate to compare
+					</label>
 
 					{record.professionalStatus === "pending" ||
 					record.professionalStatus === "processing" ? (
@@ -1202,7 +1221,8 @@ function RecordDetail() {
 				<div>
 					<h2 className="text-sm font-semibold">Delete record</h2>
 					<p className="text-xs text-muted-foreground">
-						Permanently removes this record and its photos. This can’t be undone.
+						Permanently removes this record and its photos. This can’t be
+						undone.
 					</p>
 				</div>
 				<Button

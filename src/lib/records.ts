@@ -349,8 +349,11 @@ export const refreshRecord = createServerFn({ method: "POST" })
  */
 export const generateProfessional = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator((id: number) => id)
-	.handler(({ data: id }) =>
+	.validator((input: { id: number; skipTone?: boolean }) => ({
+		id: input.id,
+		skipTone: Boolean(input.skipTone),
+	}))
+	.handler(({ data: { id, skipTone } }) =>
 		Sentry.startSpan({ name: "generateProfessional" }, async () => {
 			const db = getDb(env.DB);
 			const [record] = await db
@@ -371,7 +374,7 @@ export const generateProfessional = createServerFn({ method: "POST" })
 				})
 				.where(eq(records.id, id))
 				.returning();
-			await enqueueProfessional(id);
+			await enqueueProfessional(id, { skipTone });
 			return row ?? null;
 		}),
 	);

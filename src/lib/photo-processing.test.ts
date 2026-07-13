@@ -6,6 +6,7 @@ import {
 	cornersFromMask,
 	homography,
 	isQuadTrustworthy,
+	padToCanvas,
 	type RgbaImage,
 	reframeSquare,
 	warpToSquare,
@@ -234,5 +235,41 @@ describe("reframeSquare", () => {
 			{ canvasSize: 200, contentSize: 180 },
 		);
 		expect(perspective).toBe(false);
+	});
+
+	it("tone: false skips auto-tone (raw warp+pad), default applies it", () => {
+		// A dark horizontal gradient sleeve: it has real tonal spread, so default
+		// auto-tone visibly stretches/brightens it — while tone:false must return the
+		// warped-and-padded pixels verbatim, with no tone stage at all.
+		const s = 512;
+		const grad = new Uint8ClampedArray(s * s * 4);
+		for (let y = 0; y < s; y++)
+			for (let x = 0; x < s; x++) {
+				const v = 20 + Math.round((x / (s - 1)) * 80); // 20..100, dark
+				const i = (y * s + x) * 4;
+				grad[i] = grad[i + 1] = grad[i + 2] = v;
+				grad[i + 3] = 255;
+			}
+		const corners: Corners = [
+			[140, 90],
+			[770, 160],
+			[810, 740],
+			[95, 690],
+		];
+		const cap = synthCapture({ data: grad, width: s, height: s }, 900, corners);
+		const opts = { canvasSize: 200, contentSize: 180 };
+
+		const raw = reframeSquare(cap, { ...opts, tone: false });
+		// tone:false must be byte-identical to a bare warp→pad (the same geometry path
+		// reframeSquare takes for a trustworthy quad), proving no tone ran.
+		const bare = padToCanvas(
+			warpToSquare(cap, cornersFromMask(cap) as Corners, opts.contentSize),
+			opts.canvasSize,
+		);
+		expect(raw.image.data).toEqual(bare.data);
+
+		// The default (toned) output must differ — auto-tone changed the pixels.
+		const toned = reframeSquare(cap, opts);
+		expect(toned.image.data).not.toEqual(raw.image.data);
 	});
 });

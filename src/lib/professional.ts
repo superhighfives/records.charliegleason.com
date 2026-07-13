@@ -92,6 +92,7 @@ export interface ProfessionalResult {
 
 export async function generateProfessionalPhoto(
 	record: Record,
+	opts: { skipTone?: boolean } = {},
 ): Promise<ProfessionalResult> {
 	if (!record.capturePhotoKey) {
 		throw new Error("record has no capture photo to work from");
@@ -123,6 +124,10 @@ export async function generateProfessionalPhoto(
 	const { image } = reframeSquare(cutoutRgba, {
 		canvasSize: CANVAS_SIZE,
 		contentSize: CONTENT_SIZE,
+		// `skipTone` leaves the warped capture at its original exposure/colour instead
+		// of running auto-levels + white balance — a diagnostic toggle from the admin
+		// UI to check whether the tone stage is over-amplifying real surface detail.
+		tone: opts.skipTone ? false : undefined,
 	});
 
 	// 4. Canonicalise to a webp-with-alpha via the Images binding (mirrors the cover

@@ -58,8 +58,15 @@ export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
 }
 
 /** Enqueue a captured record for professional studio-photo generation. */
-export async function enqueueProfessional(recordId: number): Promise<void> {
-	await analyzeQueue().send({ recordId, mode: "professional" });
+export async function enqueueProfessional(
+	recordId: number,
+	opts: { skipTone?: boolean } = {},
+): Promise<void> {
+	await analyzeQueue().send({
+		recordId,
+		mode: "professional",
+		skipTone: opts.skipTone,
+	});
 }
 
 /** Enqueue many captured records for professional studio-photo generation. */
@@ -225,7 +232,7 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 }
 
 async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
-	const { recordId, mode } = message.body;
+	const { recordId, mode, skipTone } = message.body;
 	const db = getDb(env.DB);
 
 	// Lightweight path: just re-pull the stored Discogs release. Best-effort —
@@ -271,7 +278,9 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				})
 				.where(eq(records.id, recordId));
 
-			const { key, predictionId } = await generateProfessionalPhoto(record);
+			const { key, predictionId } = await generateProfessionalPhoto(record, {
+				skipTone,
+			});
 
 			await db
 				.update(records)

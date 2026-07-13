@@ -421,7 +421,15 @@ export function autoTone(
  */
 export function reframeSquare(
 	cutout: RgbaImage,
-	opts: { canvasSize: number; contentSize: number; tone?: AutoToneOptions },
+	opts: {
+		canvasSize: number;
+		contentSize: number;
+		// Auto-tone options, or `false` to skip the tone stage entirely and keep the
+		// warped capture's original exposure/colour (a diagnostic path — the levels +
+		// white-balance + gamma stretch can amplify real surface sheen into a hard
+		// highlight, so being able to compare untoned output is useful).
+		tone?: AutoToneOptions | false;
+	},
 ): { image: RgbaImage; perspective: boolean } {
 	const detected = cornersFromMask(cutout);
 	let corners: Corners;
@@ -447,9 +455,9 @@ export function reframeSquare(
 	}
 	const content = warpToSquare(cutout, corners, opts.contentSize);
 	const padded = padToCanvas(content, opts.canvasSize);
-	const toned = autoTone(padded, opts.tone);
+	const framed = opts.tone === false ? padded : autoTone(padded, opts.tone);
 	return {
-		image: { data: toned.data, width: toned.width, height: toned.height },
+		image: { data: framed.data, width: framed.width, height: framed.height },
 		perspective,
 	};
 }
