@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { CornerEditor } from "#/components/corner-editor";
 import { DuplicateBadge } from "#/components/duplicate-badge";
+import { ProPreview } from "#/components/pro-preview";
 import { RecordForm } from "#/components/record-form";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
@@ -511,8 +512,11 @@ function RecordDetail() {
 	const generateFirst = useMutation({
 		mutationFn: () => generateProfessional({ data: recordId }),
 		onSuccess: (row) => {
-			if (row)
-				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			if (!row) return;
+			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			// Adopt the detected crop so the editor + live preview reflect it.
+			setCorners(parseCorners(row.sleeveCornersJson));
+			setParams(parseReframeParams(row.professionalParamsJson));
 		},
 		onError: (err) =>
 			toast.error(
@@ -897,7 +901,7 @@ function RecordDetail() {
 								<DialogTitle>Professional photo</DialogTitle>
 								<DialogDescription>
 									Drag the corners to the sleeve’s edges (or auto-detect), then
-									tune the tone. The preview updates each time you apply. All
+									tune the tone — the preview updates live. Apply saves it. All
 									deterministic — no AI, no external call.
 								</DialogDescription>
 							</DialogHeader>
@@ -919,23 +923,21 @@ function RecordDetail() {
 									/>
 								</div>
 								<div className="space-y-1">
-									<p className="text-xs font-medium text-muted-foreground">
-										Preview
-									</p>
-									<div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-md border bg-muted">
-										{proPreviewSrc && (
-											<img
-												src={proPreviewSrc}
-												alt="Straightened sleeve preview"
-												className="size-full object-contain"
-											/>
-										)}
-										{(reframePro.isPending || generateFirst.isPending) && (
-											<span className="absolute inset-0 flex items-center justify-center bg-background/60">
-												<Loader2 className="size-5 animate-spin" />
-											</span>
-										)}
+									<div className="flex items-baseline justify-between">
+										<p className="text-xs font-medium text-muted-foreground">
+											Preview
+										</p>
+										<p className="text-[10px] text-muted-foreground/70">
+											Live · Apply to save
+										</p>
 									</div>
+									{record.capturePhotoKey && (
+										<ProPreview
+											src={`/api/photos/${record.capturePhotoKey}`}
+											corners={corners}
+											params={params}
+										/>
+									)}
 								</div>
 							</div>
 

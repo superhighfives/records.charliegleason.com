@@ -1,0 +1,177 @@
+import { Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+
+import {
+	type Corners,
+	type RgbaImage,
+	reframeFromCorners,
+} from "#/lib/photo-processing";
+import {
+	DEFAULT_REFRAME_PARAMS,
+	type ReframeParams,
+} from "#/lib/reframe-params";
+import type { NormalizedCorners } from "#/lib/sleeve-corners";
+import { cn } from "#/lib/utils";
+
+/**
+ * A live, client-side preview of the professional-photo reframe. Runs the *same*
+ * pure pixel math the server does ({@link reframeFromCorners} — warp + crop + the
+ * foreground-aware auto-tone), on a canvas, re-rendering as the corners and tone
+ * knobs change — so the admin sees the result while dragging, not only after Apply.
+ *
+ * Two deliberate approximations vs the server's authoritative render (`Apply`):
+ *  - the polish factors (saturation/contrast/gamma) are applied here as plain pixel
+ *    ops rather than through the Cloudflare Images pass, so they're close but not bit-
+ *    identical; and there's no final sharpen. Apply still produces the real, stored image.
+ *  - it renders at a small {@link PREVIEW_SIZE} from a downscaled capture, to stay smooth
+ *    on the main thread while dragging.
+ */
+
+// Preview render resolution — small enough to warp per animation frame on the main thread.
+const PREVIEW_SIZE = 448;
+// Cap the decoded capture's longest side so warp sampling stays cheap (corners are
+// normalised, so a downscaled source maps identically).
+const SOURCE_MAX = 1100;
+
+/** Decode an image URL to an {@link RgbaImage}, downscaled so its longest side ≤ SOURCE_MAX. */
+async function decodeToRgba(src: string): Promise<RgbaImage> {
+	const img = new Image();
+	img.src = src; // same-origin (/api/photos/…), so the canvas is never tainted
+	await img.decode();
+	const scale = Math.min(
+		1,
+		SOURCE_MAX / Math.max(img.naturalWidth, img.naturalHeight),
+	);
+	const w = Math.max(1, Math.round(img.naturalWidth * scale));
+	const h = Math.max(1, Math.round(img.naturalHeight * scale));
+	const canvas = document.createElement("canvas");
+	canvas.width = w;
+	canvas.height = h;
+	const ctx = canvas.getContext("2d", { willReadFrequently: true });
+	if (!ctx) throw new Error("no 2d context");
+	ctx.drawImage(img, 0, 0, w, h);
+	const { data } = ctx.getImageData(0, 0, w, h);
+	return { data, width: w, height: h };
+}
+
+/**
+ * Apply the "polish" factors in place (approximating the Cloudflare Images pass):
+ * saturation around luma, then contrast around mid-grey, then gamma. 1.0 = no change,
+ * so untouched knobs are a fast no-op. Uint8ClampedArray clamps writes to [0,255].
+ */
+function applyPolish(
+	img: RgbaImage,
+	sat: number,
+	contrast: number,
+	gamma: number,
+): void {
+	if (sat === 1 && contrast === 1 && gamma === 1) return;
+	const d = img.data;
+	const gInv = 1 / gamma;
+	for (let i = 0; i < d.length; i += 4) {
+		let r = d[i];
+		let g = d[i + 1];
+		let b = d[i + 2];
+		if (sat !== 1) {
+			const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+			r = l + (r - l) * sat;
+			g = l + (g - l) * sat;
+			b = l + (b - l) * sat;
+		}
+		if (contrast !== 1) {
+			r = (r - 128) * contrast + 128;
+			g = (g - 128) * contrast + 128;
+			b = (b - 128) * contrast + 128;
+		}
+		if (gamma !== 1) {
+			r = 255 * (Math.max(0, r) / 255) ** gInv;
+			g = 255 * (Math.max(0, g) / 255) ** gInv;
+			b = 255 * (Math.max(0, b) / 255) ** gInv;
+		}
+		d[i] = r;
+		d[i + 1] = g;
+		d[i + 2] = b;
+	}
+}
+
+export function ProPreview({
+	src,
+	corners,
+	params,
+	className,
+}: {
+	src: string;
+	corners: NormalizedCorners;
+	params: ReframeParams;
+	className?: string;
+}) {
+	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const rafRef = useRef<number | null>(null);
+	const [source, setSource] = useState<RgbaImage | null>(null);
+
+	// Decode the capture once per src (cheap, cached by the browser image cache).
+	useEffect(() => {
+		let cancelled = false;
+		setSource(null);
+		decodeToRgba(src)
+			.then((rgba) => {
+				if (!cancelled) setSource(rgba);
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [src]);
+
+	// Re-render whenever the source, corners, or knobs change — coalesced to one
+	// animation frame so a fast drag doesn't queue a warp per pointer event.
+	useEffect(() => {
+		if (!source) return;
+		if (rafRef.current) cancelAnimationFrame(rafRef.current);
+		rafRef.current = requestAnimationFrame(() => {
+			const canvas = canvasRef.current;
+			if (!canvas) return;
+			const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
+			const px = corners.map(([x, y]) => [
+				x * (source.width - 1),
+				y * (source.height - 1),
+			]) as Corners;
+			const { image } = reframeFromCorners(source, px, {
+				canvasSize: PREVIEW_SIZE,
+				contentSize: PREVIEW_SIZE,
+				tone: p.skipTone
+					? false
+					: { wbStrength: p.wbStrength, lowPct: p.lowPct, highPct: p.highPct },
+			});
+			applyPolish(image, p.saturation, p.contrast, p.gamma);
+			canvas.width = image.width;
+			canvas.height = image.height;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return;
+			// Copy into a fresh ImageData (its buffer is a plain ArrayBuffer, which the
+			// warp result's Uint8ClampedArray may not be) before blitting.
+			const out = ctx.createImageData(image.width, image.height);
+			out.data.set(image.data);
+			ctx.putImageData(out, 0, 0);
+		});
+		return () => {
+			if (rafRef.current) cancelAnimationFrame(rafRef.current);
+		};
+	}, [source, corners, params]);
+
+	return (
+		<div
+			className={cn(
+				"relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-md border bg-muted",
+				className,
+			)}
+		>
+			<canvas ref={canvasRef} className="size-full" />
+			{!source && (
+				<span className="absolute inset-0 flex items-center justify-center bg-background/60">
+					<Loader2 className="size-5 animate-spin" />
+				</span>
+			)}
+		</div>
+	);
+}
