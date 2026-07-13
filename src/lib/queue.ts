@@ -7,8 +7,7 @@ import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
 import { getReleaseDetail, getReleaseValue } from "#/lib/discogs";
-import { generateCutout, reframeFromCutout } from "#/lib/professional";
-import { parseReframeParams } from "#/lib/reframe-params";
+import { mattePipeline } from "#/lib/professional";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -276,22 +275,16 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				})
 				.where(eq(records.id, recordId));
 
-			// Step 1 (paid): background matte → stored cutout, reused for free re-tweaks.
-			const { key: cutoutKey, predictionId } = await generateCutout(
-				record.capturePhotoKey,
-			);
-			// Step 2 (free): initial reframe with whatever knobs are remembered on the
-			// row (so a re-matte keeps the admin's dialled settings), else the defaults.
-			const { key } = await reframeFromCutout(
-				cutoutKey,
-				parseReframeParams(record.professionalParamsJson),
-			);
+			// Paid matte → stored cutout, then an initial free reframe (shared with the
+			// interactive server fn so both paths behave identically).
+			const { cutoutKey, professionalKey, predictionId } =
+				await mattePipeline(record);
 
 			await db
 				.update(records)
 				.set({
 					cutoutImageKey: cutoutKey,
-					professionalImageKey: key,
+					professionalImageKey: professionalKey,
 					professionalPredictionId: predictionId,
 					// Generated, but not shown until an admin approves it (review gate).
 					professionalStatus: "ready",
@@ -304,7 +297,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			// objects so a redo doesn't orphan them in R2. Best-effort — the row already
 			// points at the new keys, so a failed cleanup just leaves stale objects.
 			const stale = [record.cutoutImageKey, record.professionalImageKey].filter(
-				(k): k is string => Boolean(k) && k !== cutoutKey && k !== key,
+				(k): k is string =>
+					Boolean(k) && k !== cutoutKey && k !== professionalKey,
 			);
 			if (stale.length > 0) await env.PHOTOS.delete(stale).catch(() => {});
 		} catch (err) {

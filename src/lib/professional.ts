@@ -1,10 +1,12 @@
 import { env } from "cloudflare:workers";
 import { PhotonImage } from "@cf-wasm/photon";
 
+import type { Record } from "#/db/schema";
 import { bytesToBase64 } from "#/lib/image-data";
 import { type RgbaImage, reframeSquare } from "#/lib/photo-processing";
 import {
 	DEFAULT_REFRAME_PARAMS,
+	parseReframeParams,
 	type ReframeParams,
 } from "#/lib/reframe-params";
 import { firstOutputUrl, runModel } from "#/lib/replicate";
@@ -169,4 +171,30 @@ export async function reframeFromCutout(
 	});
 
 	return { key };
+}
+
+/**
+ * Both steps end-to-end: run the paid matte, then an initial reframe with whatever
+ * knobs are remembered on the row. Returns the new R2 keys and prediction id for the
+ * caller to persist. Shared by the queue consumer (auto-on-capture + bulk) and the
+ * interactive server fn, so the two stay in lockstep. Does NOT touch the DB itself.
+ */
+export async function mattePipeline(
+	record: Pick<Record, "capturePhotoKey" | "professionalParamsJson">,
+): Promise<{
+	cutoutKey: string;
+	professionalKey: string;
+	predictionId: string;
+}> {
+	if (!record.capturePhotoKey) {
+		throw new Error("record has no capture photo to work from");
+	}
+	const { key: cutoutKey, predictionId } = await generateCutout(
+		record.capturePhotoKey,
+	);
+	const { key: professionalKey } = await reframeFromCutout(
+		cutoutKey,
+		parseReframeParams(record.professionalParamsJson),
+	);
+	return { cutoutKey, professionalKey, predictionId };
 }

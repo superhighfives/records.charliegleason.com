@@ -22,7 +22,7 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
-import { reframeFromCutout } from "#/lib/professional";
+import { mattePipeline, reframeFromCutout } from "#/lib/professional";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
@@ -370,11 +370,14 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Step 1 trigger — (re-)run the PAID background matte for a captured record. Marks
- * it `pending` and enqueues the Replicate work (the `professional` queue mode), which
- * stores the reusable cutout and an initial reframe. Returns the updated row, or null
- * if the record is gone. Throws if there's no capture to work from so the UI can say
- * why. The cheap re-tweaks afterwards go through {@link reframeRecord}, not this.
+ * Step 1 — (re-)run the PAID background matte for a captured record, INLINE. The Bria
+ * matte is quick (a few seconds), so rather than going through the queue we run both
+ * steps synchronously and hand the finished row straight back — the detail page gets
+ * the cutout + initial reframe in one request, no polling. (It also means the work
+ * runs as request code, so it's exercised on per-PR previews, where queue consumers
+ * only ever run the deployed version.) Bulk + auto-on-capture still use the queue via
+ * {@link enqueueProfessional}. Throws (surfaced as a toast) if there's no capture, or
+ * if the matte/reframe fails — the row is marked `failed` so the UI can retry.
  */
 export const generateProfessional = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -391,17 +394,55 @@ export const generateProfessional = createServerFn({ method: "POST" })
 			if (!record.capturePhotoKey) {
 				throw new Error("This record has no capture photo to work from.");
 			}
-			const [row] = await db
+			// Flag it processing first, so a concurrent poll (or a queued auto-matte
+			// that's mid-flight) reflects that work is happening.
+			await db
 				.update(records)
 				.set({
-					professionalStatus: "pending",
+					professionalStatus: "processing",
 					professionalError: null,
 					updatedAt: new Date(),
 				})
-				.where(eq(records.id, id))
-				.returning();
-			await enqueueProfessional(id);
-			return row ?? null;
+				.where(eq(records.id, id));
+			try {
+				const { cutoutKey, professionalKey, predictionId } =
+					await mattePipeline(record);
+				const [row] = await db
+					.update(records)
+					.set({
+						cutoutImageKey: cutoutKey,
+						professionalImageKey: professionalKey,
+						professionalPredictionId: predictionId,
+						professionalStatus: "ready",
+						professionalError: null,
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, id))
+					.returning();
+				// Bin the superseded cutout + professional image so redos don't orphan
+				// R2 objects (best-effort — the row already points at the new keys).
+				const stale = [
+					record.cutoutImageKey,
+					record.professionalImageKey,
+				].filter(
+					(k): k is string =>
+						Boolean(k) && k !== cutoutKey && k !== professionalKey,
+				);
+				if (stale.length > 0) await env.PHOTOS.delete(stale).catch(() => {});
+				return row ?? null;
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				await db
+					.update(records)
+					.set({
+						professionalStatus: "failed",
+						professionalError: detail,
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, id))
+					.catch(() => {});
+				throw new Error(`Background removal failed: ${detail}`);
+			}
 		}),
 	);
 

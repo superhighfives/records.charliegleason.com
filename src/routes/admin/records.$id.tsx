@@ -469,16 +469,18 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn't delete this record."),
 	});
 
-	// Step 1 (paid): queue the background matte. Lands via the queue, so the detail
-	// page polls itself to `ready` while `professionalStatus` is in flight.
+	// Step 1 (paid): run the background matte INLINE. Synchronous — the server does the
+	// matte + an initial reframe and hands back the finished row, which we drop into
+	// the cache so the knobs appear straight away (no queue, no polling).
 	const generatePro = useMutation({
 		mutationFn: () => generateProfessional({ data: recordId }),
-		onSuccess: invalidate,
+		onSuccess: (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+		},
 		onError: (err) =>
 			toast.error(
-				err instanceof Error
-					? err.message
-					: "Couldn't start background removal.",
+				err instanceof Error ? err.message : "Couldn't remove the background.",
 			),
 	});
 
@@ -975,7 +977,7 @@ function RecordDetail() {
 								onClick={() => generatePro.mutate()}
 							>
 								{generatePro.isPending
-									? "Queuing…"
+									? "Removing…"
 									: record.professionalStatus === "failed"
 										? "Try again"
 										: "Remove background"}
