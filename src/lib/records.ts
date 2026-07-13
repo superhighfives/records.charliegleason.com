@@ -63,10 +63,12 @@ const ADMIN_ONLY_FIELDS = [
 	"discogsValueJson",
 	"discogsValueFetchedAt",
 	// Internal professional-photo job bookkeeping — the last error, the admin-picked
-	// sleeve corners and the reframe knob settings are never public.
+	// sleeve corners, the reframe knob settings and the vestigial prediction id are
+	// never public.
 	"professionalError",
 	"sleeveCornersJson",
 	"professionalParamsJson",
+	"professionalPredictionId",
 ] as const;
 
 /** The public shape of a record — the full row minus the admin-only fields. */
@@ -85,6 +87,7 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 		professionalError: _proError,
 		sleeveCornersJson: _corners,
 		professionalParamsJson: _proParams,
+		professionalPredictionId: _proPrediction,
 		...rest
 	} = row;
 	return {

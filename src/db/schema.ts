@@ -73,6 +73,10 @@ export const records = sqliteTable("records", {
 		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
 	}).default("idle"),
 	professionalError: text("professional_error"), // last generation error, surfaced in admin
+	// Vestigial — the pipeline no longer makes any Replicate call. Kept as a nullable
+	// column (not dropped) so a migration never has to remove something the currently
+	// deployed production code still selects; a later migration can drop it post-merge.
+	professionalPredictionId: text("professional_prediction_id"),
 
 	notes: text("notes"),
 	source: text("source", { enum: ["photo", "manual", "import"] }).default(
