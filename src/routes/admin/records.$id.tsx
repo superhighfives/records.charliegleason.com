@@ -811,7 +811,9 @@ function RecordDetail() {
 									}
 								}}
 							>
-								{generatePro.isPending ? "…" : "Taking too long? Restart"}
+								{generatePro.isPending
+									? "Restarting…"
+									: "Taking too long? Restart"}
 							</Button>
 						</div>
 					) : hasCutout ? (
@@ -950,7 +952,9 @@ function RecordDetail() {
 										}
 									}}
 								>
-									{generatePro.isPending ? "…" : "Redo background removal"}
+									{generatePro.isPending
+										? "Restarting…"
+										: "Redo background removal"}
 								</Button>
 							</div>
 						</div>
@@ -1188,7 +1192,7 @@ function RecordDetail() {
 											variant="outline"
 											disabled={search.isPending}
 										>
-											{search.isPending ? "…" : "Search"}
+											{search.isPending ? "Searching…" : "Search"}
 										</Button>
 									</div>
 								</form>
