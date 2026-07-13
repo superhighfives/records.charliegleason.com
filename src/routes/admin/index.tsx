@@ -59,9 +59,7 @@ type StatusFilter =
 	| "unvalued"
 	| "professionalNone"
 	| "professionalReady"
-	| "professionalLive"
-	| "backgroundNone"
-	| "backgroundRemoved";
+	| "professionalLive";
 
 const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "all", label: "All" },
@@ -76,8 +74,6 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "confirmed", label: "Confirmed" },
 	{ value: "valued", label: "Valued" },
 	{ value: "unvalued", label: "Unvalued" },
-	{ value: "backgroundNone", label: "Background not removed" },
-	{ value: "backgroundRemoved", label: "Background removed" },
 	{ value: "professionalNone", label: "No pro photo" },
 	{ value: "professionalReady", label: "Pro photo ready" },
 	{ value: "professionalLive", label: "Pro photo live" },
@@ -117,8 +113,8 @@ const BULK_ACTIONS: {
 		requiresMatch: true,
 	},
 	professional: {
-		label: "Remove background",
-		verb: "queued for background removal",
+		label: "Generate pro photo",
+		verb: "queued for a professional photo",
 		fn: generateProfessionalPhotos,
 		requiresCapture: true,
 	},
@@ -226,11 +222,6 @@ function matchesFilter(
 			record.professionalImageKey != null &&
 			record.professionalStatus === "approved"
 		);
-	// Background removal (step 1 of the professional photo): whether the reusable
-	// cutout has been generated yet. "Background not removed" surfaces the records a
-	// bulk "Remove background" still needs to run on.
-	if (filter === "backgroundNone") return record.cutoutImageKey == null;
-	if (filter === "backgroundRemoved") return record.cutoutImageKey != null;
 	return status === filter;
 }
 

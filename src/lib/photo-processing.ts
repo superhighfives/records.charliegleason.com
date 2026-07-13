@@ -6,10 +6,11 @@
  * dependency (the caller decodes/encodes via Photon + the Images binding).
  *
  * The geometry is a classic "document scanner" 4-point perspective correction: the
- * sleeve's four corners (found from the cutout's alpha) are mapped onto a square via
- * a homography and inverse-sampled, which crops, squares and de-keystones in one
- * step. The tone is a foreground-aware auto-levels + grey-world white balance, so a
- * dark capture and a bright one come out consistent and neutral.
+ * sleeve's four corners (picked by hand in the admin editor, optionally seeded by
+ * OpenCV) are mapped onto a square via a homography and inverse-sampled, which crops,
+ * squares and de-keystones in one step. The tone is a foreground-aware auto-levels +
+ * grey-world white balance, so a dark capture and a bright one come out consistent and
+ * neutral.
  */
 
 export interface RgbaImage {
@@ -133,144 +134,6 @@ export function warpToSquare(
 		}
 	}
 	return { data, width: size, height: size };
-}
-
-// ---------- mask compositing ----------
-
-/**
- * Composite a segmentation `mask` onto `image` as its alpha channel: the result keeps
- * the image's RGB and takes alpha from the mask's luminance (white → opaque, black →
- * transparent). Turns a promptable-segmenter mask + the original capture into a
- * straight-alpha cutout whose alpha marks the *sleeve* (not the artwork's subject), so
- * {@link cornersFromMask} downstream finds the sleeve's corners. The mask is
- * nearest-sampled if its resolution differs from the image, so a mask returned at a
- * different size still lines up. Alpha is passed through the mask only — RGB untouched.
- */
-export function applyMaskAlpha(image: RgbaImage, mask: RgbaImage): RgbaImage {
-	const { data, width, height } = image;
-	const out = new Uint8ClampedArray(data.length);
-	const sameSize = mask.width === width && mask.height === height;
-	for (let y = 0; y < height; y++) {
-		const my = sameSize
-			? y
-			: Math.min(mask.height - 1, Math.floor((y / height) * mask.height));
-		for (let x = 0; x < width; x++) {
-			const mx = sameSize
-				? x
-				: Math.min(mask.width - 1, Math.floor((x / width) * mask.width));
-			const i = (y * width + x) * 4;
-			const mi = (my * mask.width + mx) * 4;
-			out[i] = data[i];
-			out[i + 1] = data[i + 1];
-			out[i + 2] = data[i + 2];
-			out[i + 3] =
-				0.2126 * mask.data[mi] +
-				0.7152 * mask.data[mi + 1] +
-				0.0722 * mask.data[mi + 2];
-		}
-	}
-	return { data: out, width, height };
-}
-
-// ---------- corner detection from an alpha mask ----------
-
-/**
- * Find the sleeve's four corners (TL,TR,BR,BL) from a cutout's alpha channel by
- * taking the extremes of x+y (→ TL/BR) and x-y (→ TR/BL). Robust for a convex quad
- * under mild rotation; on an axis-aligned sleeve it collapses to the bounding box.
- * `alphaMin` ignores the anti-aliased matte fringe. Returns null if nothing is
- * opaque enough to be the sleeve.
- */
-export function cornersFromMask(
-	mask: RgbaImage,
-	alphaMin = 16,
-): Corners | null {
-	const { data, width, height } = mask;
-	let tl: Corner | undefined;
-	let tr: Corner | undefined;
-	let br: Corner | undefined;
-	let bl: Corner | undefined;
-	let sMin = Infinity;
-	let sMax = -Infinity;
-	let dMin = Infinity;
-	let dMax = -Infinity;
-	for (let y = 0; y < height; y++) {
-		for (let x = 0; x < width; x++) {
-			if (data[(y * width + x) * 4 + 3] < alphaMin) continue;
-			const s = x + y;
-			const d = x - y;
-			if (s < sMin) {
-				sMin = s;
-				tl = [x, y];
-			}
-			if (s > sMax) {
-				sMax = s;
-				br = [x, y];
-			}
-			if (d > dMax) {
-				dMax = d;
-				tr = [x, y];
-			}
-			if (d < dMin) {
-				dMin = d;
-				bl = [x, y];
-			}
-		}
-	}
-	if (!tl || !tr || !br || !bl) return null;
-	return [tl, tr, br, bl];
-}
-
-/** The axis-aligned bounding rectangle of the mask, as TL,TR,BR,BL corners. */
-export function bboxFromMask(mask: RgbaImage, alphaMin = 16): Corners | null {
-	const { data, width, height } = mask;
-	let minX = width;
-	let minY = height;
-	let maxX = -1;
-	let maxY = -1;
-	for (let y = 0; y < height; y++) {
-		for (let x = 0; x < width; x++) {
-			if (data[(y * width + x) * 4 + 3] < alphaMin) continue;
-			if (x < minX) minX = x;
-			if (x > maxX) maxX = x;
-			if (y < minY) minY = y;
-			if (y > maxY) maxY = y;
-		}
-	}
-	if (maxX < minX || maxY < minY) return null;
-	return [
-		[minX, minY],
-		[maxX, minY],
-		[maxX, maxY],
-		[minX, maxY],
-	];
-}
-
-/**
- * Whether the detected quad is trustworthy enough to perspective-warp. A vinyl
- * sleeve is square and roughly frontal, so we reject quads that are too small,
- * badly keystoned, or far from square — the caller then falls back to a plain
- * bounding-box crop (no perspective) rather than warping to a bad shape.
- */
-export function isQuadTrustworthy(
-	corners: Corners | null,
-	width: number,
-	height: number,
-): corners is Corners {
-	if (!corners) return false;
-	const [tl, tr, br, bl] = corners;
-	const dist = (a: Corner, b: Corner) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-	const top = dist(tl, tr);
-	const bottom = dist(bl, br);
-	const left = dist(tl, bl);
-	const right = dist(tr, br);
-	const minSide = Math.min(top, bottom, left, right);
-	if (minSide < 0.25 * Math.min(width, height)) return false;
-	if (Math.max(top, bottom) / Math.min(top, bottom) > 1.35) return false;
-	if (Math.max(left, right) / Math.min(left, right) > 1.35) return false;
-	const aspect = (top + bottom) / (left + right); // ~1 for a square sleeve
-	if (aspect < 0.7 || aspect > 1.3) return false;
-	return true;
 }
 
 // ---------- framing ----------
@@ -452,49 +315,30 @@ export function autoTone(
 }
 
 /**
- * The full deterministic reframe: given a straight-alpha cutout, detect the sleeve,
- * perspective-warp it to a square (or bbox-crop as a fallback), pad to the canvas,
- * and auto-tone. Returns the final RGBA plus which geometry path was taken.
+ * The full deterministic reframe: given the raw capture and the sleeve's four
+ * `corners` (TL,TR,BR,BL, in the capture's pixel coordinates — as picked in the admin
+ * editor), perspective-warp the sleeve onto a `contentSize` square, pad it out to a
+ * `canvasSize` square (the even gap is the transparent margin), and auto-tone. The
+ * capture is fully opaque, so the warped content square is opaque and the padded
+ * margin is transparent — which is exactly what {@link autoTone}'s foreground-only
+ * statistics expect. Pass `tone: false` to skip the tone stage entirely and keep the
+ * warped capture's original exposure/colour (the white-balance/levels/gamma stretch
+ * can amplify real surface sheen into a hard highlight, so an untoned compare is
+ * useful). Returns the final RGBA square.
  */
-export function reframeSquare(
-	cutout: RgbaImage,
+export function reframeFromCorners(
+	capture: RgbaImage,
+	corners: Corners,
 	opts: {
 		canvasSize: number;
 		contentSize: number;
-		// Auto-tone options, or `false` to skip the tone stage entirely and keep the
-		// warped capture's original exposure/colour (a diagnostic path — the levels +
-		// white-balance + gamma stretch can amplify real surface sheen into a hard
-		// highlight, so being able to compare untoned output is useful).
 		tone?: AutoToneOptions | false;
 	},
-): { image: RgbaImage; perspective: boolean } {
-	const detected = cornersFromMask(cutout);
-	let corners: Corners;
-	let perspective: boolean;
-	if (isQuadTrustworthy(detected, cutout.width, cutout.height)) {
-		corners = detected;
-		perspective = true;
-	} else {
-		const bbox = bboxFromMask(cutout);
-		if (!bbox) {
-			// Nothing opaque — return a transparent canvas rather than throwing.
-			return {
-				image: {
-					data: new Uint8ClampedArray(opts.canvasSize * opts.canvasSize * 4),
-					width: opts.canvasSize,
-					height: opts.canvasSize,
-				},
-				perspective: false,
-			};
-		}
-		corners = bbox;
-		perspective = false;
-	}
-	const content = warpToSquare(cutout, corners, opts.contentSize);
+): { image: RgbaImage } {
+	const content = warpToSquare(capture, corners, opts.contentSize);
 	const padded = padToCanvas(content, opts.canvasSize);
 	const framed = opts.tone === false ? padded : autoTone(padded, opts.tone);
 	return {
 		image: { data: framed.data, width: framed.width, height: framed.height },
-		perspective,
 	};
 }

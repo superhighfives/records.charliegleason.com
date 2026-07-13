@@ -57,6 +57,13 @@
       "when": 1783914830347,
       "tag": "0007_material_legion",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1783968813586,
+      "tag": "0008_sleeve_corners",
+      "breakpoints": true
     }
   ]
 }

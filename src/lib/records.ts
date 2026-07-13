@@ -22,7 +22,7 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
-import { reframeFromCutout } from "#/lib/professional";
+import { reframeFromCapture } from "#/lib/professional";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
@@ -35,6 +35,12 @@ import {
 } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 import type { ReframeParams } from "#/lib/reframe-params";
+import {
+	DEFAULT_CORNERS,
+	type NormalizedCorners,
+	parseCorners,
+	serializeCorners,
+} from "#/lib/sleeve-corners";
 
 /**
  * Server-side data access for the records collection.
@@ -57,12 +63,10 @@ const ADMIN_ONLY_FIELDS = [
 	"discogsValueCurrency",
 	"discogsValueJson",
 	"discogsValueFetchedAt",
-	// Internal professional-photo job bookkeeping — the last error, the Replicate
-	// prediction id, the raw matte (an admin-only capture derivative, fetchable via
-	// `/api/photos/$`) and the reframe knob settings are never public.
+	// Internal professional-photo job bookkeeping — the last error, the admin-picked
+	// sleeve corners and the reframe knob settings are never public.
 	"professionalError",
-	"professionalPredictionId",
-	"cutoutImageKey",
+	"sleeveCornersJson",
 	"professionalParamsJson",
 ] as const;
 
@@ -80,8 +84,7 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 		discogsValueJson: _valueJson,
 		discogsValueFetchedAt: _fetchedAt,
 		professionalError: _proError,
-		professionalPredictionId: _proPrediction,
-		cutoutImageKey: _cutout,
+		sleeveCornersJson: _corners,
 		professionalParamsJson: _proParams,
 		...rest
 	} = row;
@@ -222,8 +225,10 @@ export const captureRecord = createServerFn({ method: "POST" })
 					status: "pending",
 					capturePhotoKey,
 					captureContext: data.context?.trim() || null,
-					// Kick off the professional-photo matte automatically on capture, so the
-					// (paid) cutout is ready to tweak by the time the record's reviewed.
+					// Kick off the professional photo automatically on capture with a
+					// full-frame default crop, so a first pass is ready by the time the
+					// record's reviewed; the admin then nudges the corners to taste.
+					sleeveCornersJson: serializeCorners(DEFAULT_CORNERS),
 					professionalStatus: "pending",
 				})
 				.returning();
@@ -257,7 +262,7 @@ export const captureRecord = createServerFn({ method: "POST" })
 					.update(records)
 					.set({
 						professionalStatus: "failed",
-						professionalError: `Could not queue background removal: ${detail}`,
+						professionalError: `Could not queue professional photo: ${detail}`,
 						updatedAt: new Date(),
 					})
 					.where(eq(records.id, row.id))
@@ -370,15 +375,13 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Step 1 trigger — (re-)run the PAID background matte for a captured record. Marks it
- * `pending` and enqueues the Replicate work (the `professional` queue mode), which
- * stores the reusable cutout and an initial reframe; the detail page polls itself to
- * `ready`. Queued (not inline) because it's a paid external call: the queue is
- * durable (a client disconnect can't pay Bria then lose the result), retryable, and
- * throttled by the consumer concurrency cap — and it's the same path auto-on-capture
- * and the bulk action use. Returns the updated row, or null if the record is gone.
- * Throws if there's no capture to work from so the UI can say why. The cheap re-tweaks
- * afterwards go through {@link reframeRecord}, not this.
+ * (Re-)generate the professional photo for a captured record using its stored (or
+ * full-frame default) corners. Marks it `pending` and enqueues the `professional` queue
+ * mode; the detail page polls itself to `ready`. Queued (not inline) so it shares one
+ * path with auto-on-capture and the bulk action, and doesn't block the request — the
+ * reframe itself is free (pure pixel math, no external call). Returns the updated row,
+ * or null if the record is gone. Throws if there's no capture to work from so the UI can
+ * say why. Interactive corner edits + knob re-tweaks go through {@link reframeRecord}.
  */
 export const generateProfessional = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -410,20 +413,27 @@ export const generateProfessional = createServerFn({ method: "POST" })
 	);
 
 /**
- * Step 2 — the FREE re-tweak. Re-runs the deterministic reframe (crop/square/tone)
- * on the already-stored cutout with a new set of knobs, synchronously: no Replicate,
- * no queue, so the admin gets the updated image back in one request. Persists the new
- * `professionalImageKey` and remembers the knobs in `professionalParamsJson`.
- * Requires the matte (step 1) to have run — throws if there's no cutout yet. Returns
- * the updated row, or null if the record is gone.
+ * The FREE interactive reframe — the corner editor and the tone/margin knobs both call
+ * this. Perspective-warps the real capture using the given (or stored) sleeve `corners`,
+ * crops/squares/tones it, and stores the result, synchronously: no queue, so the admin
+ * gets the updated image back in one request. Persists the corners in `sleeveCornersJson`
+ * and the knobs in `professionalParamsJson` so they seed the next edit. Requires a capture
+ * to warp — throws if there's none. Returns the updated row, or null if the record's gone.
  */
 export const reframeRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator((input: { id: number; params: ReframeParams }) => ({
-		id: input.id,
-		params: input.params ?? {},
-	}))
-	.handler(({ data: { id, params } }) =>
+	.validator(
+		(input: {
+			id: number;
+			corners?: NormalizedCorners;
+			params?: ReframeParams;
+		}) => ({
+			id: input.id,
+			corners: input.corners,
+			params: input.params ?? {},
+		}),
+	)
+	.handler(({ data: { id, corners, params } }) =>
 		Sentry.startSpan({ name: "reframeRecord" }, async () => {
 			const db = getDb(env.DB);
 			const [record] = await db
@@ -432,17 +442,28 @@ export const reframeRecord = createServerFn({ method: "POST" })
 				.where(eq(records.id, id))
 				.limit(1);
 			if (!record) return null;
-			if (!record.cutoutImageKey) {
-				throw new Error(
-					"Remove the background first — there's no cutout to reframe yet.",
-				);
+			if (!record.capturePhotoKey) {
+				throw new Error("This record has no capture photo to reframe.");
 			}
-			const { key } = await reframeFromCutout(record.cutoutImageKey, params);
+			// Use the edited corners if supplied, else whatever's stored (or the
+			// full-frame default for a record that's never been cropped).
+			const effectiveCorners =
+				corners ?? parseCorners(record.sleeveCornersJson);
+			const { key } = await reframeFromCapture(
+				record.capturePhotoKey,
+				effectiveCorners,
+				params,
+			);
 			const [row] = await db
 				.update(records)
 				.set({
+					sleeveCornersJson: serializeCorners(effectiveCorners),
 					professionalImageKey: key,
 					professionalParamsJson: JSON.stringify(params),
+					// An interactive reframe always produces a reviewable image; keep an
+					// already-approved photo live so a quick tweak goes straight out.
+					professionalStatus:
+						record.professionalStatus === "approved" ? "approved" : "ready",
 					professionalError: null,
 					updatedAt: new Date(),
 				})
@@ -612,13 +633,12 @@ export const deleteRecord = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "deleteRecord" }, async () => {
 			const db = getDb(env.DB);
 			// Read the record's R2 photo keys before dropping the row so we can
-			// clean up the objects too — otherwise the capture, cover, matte, and
-			// pro images (all in the PHOTOS bucket) would be orphaned forever.
+			// clean up the objects too — otherwise the capture, cover and pro
+			// images (all in the PHOTOS bucket) would be orphaned forever.
 			const [row] = await db
 				.select({
 					capturePhotoKey: records.capturePhotoKey,
 					coverImageKey: records.coverImageKey,
-					cutoutImageKey: records.cutoutImageKey,
 					professionalImageKey: records.professionalImageKey,
 				})
 				.from(records)
@@ -631,7 +651,6 @@ export const deleteRecord = createServerFn({ method: "POST" })
 				const keys = [
 					row.capturePhotoKey,
 					row.coverImageKey,
-					row.cutoutImageKey,
 					row.professionalImageKey,
 				].filter((key): key is string => Boolean(key));
 				if (keys.length > 0) await env.PHOTOS.delete(keys);

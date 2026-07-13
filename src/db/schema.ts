@@ -52,28 +52,27 @@ export const records = sqliteTable("records", {
 	capturePhotoKey: text("capture_photo_key"), // R2 key — the original iPhone shot (admin only)
 
 	// Professional studio photo — a straight-on, cropped, evenly-toned square built
-	// from the iPhone capture in two steps:
-	//   1. Background matte (Bria, paid Replicate call) → a straight-alpha cutout,
-	//      stored ONCE under `cutout/` as `cutoutImageKey`. `professionalStatus`
-	//      tracks this paid step: `pending`/`processing` while it runs, `failed` on
-	//      error. Auto-runs on capture; a manual button re-runs it.
-	//   2. Deterministic reframe + tone of that cutout (crop/square/de-keystone +
-	//      auto-levels/white-balance) → the displayed `professionalImageKey` under
-	//      `professional/`. This step is free (pure pixel math, no Replicate), so the
-	//      admin can re-run it with different `professionalParamsJson` knobs as often
-	//      as they like without paying again.
-	// Reviewed before it goes live: `ready` = generated, awaiting approval;
-	// `approved` = promoted and preferred over the Discogs cover for display (see
-	// displayCoverKey). Best-effort in its own queue mode, so it never blocks the
-	// main capture status machine.
-	cutoutImageKey: text("cutout_image_key"), // R2 key — Bria matte, reused for free re-tweaks (admin only)
-	professionalImageKey: text("professional_image_key"), // R2 key — pro cutout (public once approved)
+	// deterministically from the iPhone capture (no AI, no paid call):
+	//   1. The sleeve's four corners are picked in the admin corner editor (optionally
+	//      seeded by an in-browser OpenCV document-scan) and stored as `sleeveCornersJson`
+	//      — normalised [[x,y]×4] in TL,TR,BR,BL order. A fresh capture defaults to the
+	//      full frame.
+	//   2. Those corners drive a perspective-warp + crop + auto-tone of the real capture
+	//      pixels → the displayed `professionalImageKey` under `professional/`. Free (pure
+	//      pixel math), so it re-runs whenever the admin nudges the corners or the
+	//      `professionalParamsJson` tone/margin knobs.
+	// `professionalStatus` tracks generation: `pending`/`processing` while the (queued)
+	// reframe runs, `failed` on error. Reviewed before it goes live: `ready` = generated,
+	// awaiting approval; `approved` = promoted and preferred over the Discogs cover for
+	// display (see displayCoverKey). Best-effort in its own queue mode, so it never blocks
+	// the main capture status machine.
+	sleeveCornersJson: text("sleeve_corners_json"), // normalised sleeve corners (JSON), admin-picked
+	professionalImageKey: text("professional_image_key"), // R2 key — pro photo (public once approved)
 	professionalParamsJson: text("professional_params_json"), // last reframe knob settings (JSON)
 	professionalStatus: text("professional_status", {
 		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
 	}).default("idle"),
 	professionalError: text("professional_error"), // last generation error, surfaced in admin
-	professionalPredictionId: text("professional_prediction_id"), // Replicate prediction id (debug)
 
 	notes: text("notes"),
 	source: text("source", { enum: ["photo", "manual", "import"] }).default(

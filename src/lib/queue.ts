@@ -7,7 +7,7 @@ import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
 import { getReleaseDetail, getReleaseValue } from "#/lib/discogs";
-import { mattePipeline } from "#/lib/professional";
+import { professionalPipeline } from "#/lib/professional";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -69,10 +69,9 @@ export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
 
 /**
  * How long a professional job may sit in `pending`/`processing` before a reader
- * treats it as dead. Comfortably above a healthy run — two Replicate passes (a
- * 4 MP restyle, then the cutout) capped at ~2 min each ({@link runModel}'s
- * `timeoutMs`) plus the fetches and Images reframe — so a still-working job is
- * never falsely failed, while a wedged one is caught promptly.
+ * treats it as dead. Comfortably above a healthy run — the reframe is just a decode,
+ * perspective-warp and Images pass (a few seconds) — so a still-working job is never
+ * falsely failed, while a wedged one (e.g. a deploy landing mid-run) is caught promptly.
  */
 export const PROFESSIONAL_STALE_MS = 10 * 60 * 1000;
 
@@ -245,11 +244,11 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
-	// Professional studio photo. Only the PAID matte runs here (Replicate); the free
-	// reframe is done inline in the reframeRecord server fn. Like refresh, this is
-	// best-effort and self-contained — it tracks its own `professional*` fields and
-	// never touches the record's main `status`. We always ack (even on failure) so a
-	// paid run is never silently retried; regeneration is a manual action.
+	// Professional studio photo. Runs the deterministic reframe from the record's stored
+	// (or full-frame default) corners — free, no external call. This is the auto-on-capture
+	// + bulk path; interactive corner edits go through the reframeRecord server fn inline.
+	// Like refresh, it's best-effort and self-contained — it tracks its own `professional*`
+	// fields and never touches the record's main `status`, and always acks.
 	if (mode === "professional") {
 		try {
 			const [record] = await db
@@ -275,17 +274,14 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				})
 				.where(eq(records.id, recordId));
 
-			// Paid matte → stored cutout, then an initial free reframe (shared with the
+			// Deterministic reframe from the stored/default corners (shared with the
 			// interactive server fn so both paths behave identically).
-			const { cutoutKey, professionalKey, predictionId } =
-				await mattePipeline(record);
+			const { professionalKey } = await professionalPipeline(record);
 
 			await db
 				.update(records)
 				.set({
-					cutoutImageKey: cutoutKey,
 					professionalImageKey: professionalKey,
-					professionalPredictionId: predictionId,
 					// Generated, but not shown until an admin approves it (review gate).
 					professionalStatus: "ready",
 					professionalError: null,
@@ -293,14 +289,13 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				})
 				.where(eq(records.id, recordId));
 
-			// Re-matte supersedes any previous cutout + professional image; bin the old
-			// objects so a redo doesn't orphan them in R2. Best-effort — the row already
-			// points at the new keys, so a failed cleanup just leaves stale objects.
-			const stale = [record.cutoutImageKey, record.professionalImageKey].filter(
-				(k): k is string =>
-					Boolean(k) && k !== cutoutKey && k !== professionalKey,
-			);
-			if (stale.length > 0) await env.PHOTOS.delete(stale).catch(() => {});
+			// A regenerate supersedes any previous professional image; bin the old
+			// object so a redo doesn't orphan it in R2. Best-effort — the row already
+			// points at the new key, so a failed cleanup just leaves a stale object.
+			const stale = record.professionalImageKey;
+			if (stale && stale !== professionalKey) {
+				await env.PHOTOS.delete(stale).catch(() => {});
+			}
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
 			console.error(
