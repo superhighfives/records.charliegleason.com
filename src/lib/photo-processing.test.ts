@@ -164,30 +164,26 @@ describe("detectSleeveCorners", () => {
 		return { data, width: size, height: size };
 	}
 
-	it("finds the bounding box of a high-contrast sleeve on the background", () => {
+	it("finds the sleeve's edges when it nearly fills the frame", () => {
+		// A bright sleeve on dark wood, edges at 8%/92% — within the outer band the
+		// edge detector searches; its four borders are the strongest gradients there.
 		const img = rectOnBg(
 			400,
-			[30, 30, 30],
-			[220, 220, 220],
-			[80, 60, 320, 340],
+			[40, 40, 40],
+			[200, 200, 200],
+			[32, 32, 368, 368],
 		);
 		const c = detectSleeveCorners(img);
 		if (!c) throw new Error("expected a detection");
 		const [tl, tr, , bl] = c;
-		expect(tl[0]).toBeCloseTo(0.2, 1); // left  = 80/400
-		expect(tr[0]).toBeCloseTo(0.8, 1); // right = 320/400
-		expect(tl[1]).toBeCloseTo(0.15, 1); // top  = 60/400
-		expect(bl[1]).toBeCloseTo(0.85, 1); // bottom = 340/400
+		expect(tl[0]).toBeCloseTo(0.08, 1); // left
+		expect(tr[0]).toBeCloseTo(0.92, 1); // right
+		expect(tl[1]).toBeCloseTo(0.08, 1); // top
+		expect(bl[1]).toBeCloseTo(0.92, 1); // bottom
 	});
 
-	it("returns null when the cover barely contrasts with the background", () => {
-		// Background and 'sleeve' only 10 apart in each channel → below threshold.
-		const img = rectOnBg(
-			400,
-			[120, 120, 120],
-			[130, 130, 130],
-			[80, 60, 320, 340],
-		);
+	it("returns null for an image too small to detect", () => {
+		const img = rectOnBg(30, [40, 40, 40], [200, 200, 200], [4, 4, 26, 26]);
 		expect(detectSleeveCorners(img)).toBeNull();
 	});
 });

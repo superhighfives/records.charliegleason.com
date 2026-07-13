@@ -141,100 +141,74 @@ export function warpToSquare(
 // ---------- sleeve detection (best-effort seed) ----------
 
 /**
- * Best-effort seed for the corner editor: find the sleeve's axis-aligned bounding box by
- * contrast against the (wood) background, so a freshly captured record opens roughly
- * pre-cropped. Returns normalised corners (TL,TR,BR,BL, 0..1), or `null` when it can't
- * separate the sleeve from the background — a low-contrast cover, or a sleeve that fills
- * the whole frame — in which case the caller falls back to the full-frame default and the
- * admin drags the handles by hand.
+ * Best-effort seed for the corner editor: find the sleeve's axis-aligned bounding box so a
+ * freshly captured record opens roughly pre-cropped. Returns normalised corners (TL,TR,BR,
+ * BL, 0..1), or `null` for a degenerate result — the caller then falls back to the
+ * full-frame default and the admin drags the handles by hand.
  *
- * Deliberately cheap and dependency-free (unlike the 10MB OpenCV build it replaces): it
- * samples the frame's border ring for the background colour, then row/column-projects a
- * foreground mask and takes the band where over half the samples differ from the
- * background. No perspective — the admin nudges the handles for keystone. Pure, so it runs
- * on the Worker straight off the capture we already decode for the reframe.
+ * Works off EDGES, not colour: the sleeve sits on wood and nearly fills the frame, so its
+ * four straight borders are the strongest full-width/height luminance transitions near the
+ * frame. We build row- and column-gradient profiles and take the strongest peak within the
+ * outer band on each side — which is robust to worn/tan sleeve edges and low-contrast
+ * artwork (where a colour-difference approach picks up the wrong pixels), and the outer-band
+ * limit keeps it from latching onto strong *internal* artwork edges (a tree, a horizon).
+ * No perspective — the admin nudges the handles for keystone. Pure and cheap (strided), so
+ * it runs on the Worker straight off the capture we already decode for the reframe.
  */
 export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 	const { data, width, height } = img;
-	if (width < 20 || height < 20) return null;
+	if (width < 40 || height < 40) return null;
 
 	// Sample on a stride so this stays cheap on a full-res capture (~400 per axis).
 	const stride = Math.max(1, Math.round(Math.min(width, height) / 400));
-	const at = (x: number, y: number) => (y * width + x) * 4;
-
-	// 1. Background colour = median of a thin border ring (outer ~4%). Median (not mean)
-	// so a sleeve poking into the ring on one side doesn't drag the estimate with it.
-	const ring = Math.max(2, Math.round(Math.min(width, height) * 0.04));
-	const rs: number[] = [];
-	const gs: number[] = [];
-	const bs: number[] = [];
-	for (let y = 0; y < height; y += stride) {
-		for (let x = 0; x < width; x += stride) {
-			if (x >= ring && x < width - ring && y >= ring && y < height - ring)
-				continue;
-			const i = at(x, y);
-			rs.push(data[i]);
-			gs.push(data[i + 1]);
-			bs.push(data[i + 2]);
-		}
-	}
-	if (rs.length < 8) return null;
-	const median = (arr: number[]) => {
-		arr.sort((a, b) => a - b);
-		return arr[arr.length >> 1];
+	const lum = (x: number, y: number) => {
+		const i = (y * width + x) * 4;
+		return 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
 	};
-	const br = median(rs);
-	const bgc = median(gs);
-	const bb = median(bs);
 
-	// 2. Foreground = pixels far from the background colour (L1 distance over RGB),
-	// projected onto column/row counts.
-	const THRESH = 60;
+	// Gradient energy per row/column: rowGrad peaks on horizontal edges (top/bottom of the
+	// sleeve), colGrad on vertical edges (left/right). Summed across the full span, so a
+	// full-width sleeve border dominates a short internal edge.
 	const cols = Math.ceil(width / stride);
 	const rows = Math.ceil(height / stride);
-	const colFg = new Uint32Array(cols);
-	const rowFg = new Uint32Array(rows);
-	for (let y = 0, ry = 0; y < height; y += stride, ry++) {
-		for (let x = 0, cx = 0; x < width; x += stride, cx++) {
-			const i = at(x, y);
-			const dist =
-				Math.abs(data[i] - br) +
-				Math.abs(data[i + 1] - bgc) +
-				Math.abs(data[i + 2] - bb);
-			if (dist > THRESH) {
-				colFg[cx]++;
-				rowFg[ry]++;
-			}
+	const rowGrad = new Float64Array(rows);
+	const colGrad = new Float64Array(cols);
+	for (let y = stride, ry = 1; y < height; y += stride, ry++) {
+		for (let x = 0; x < width; x += stride) {
+			rowGrad[ry] += Math.abs(lum(x, y) - lum(x, y - stride));
+		}
+	}
+	for (let x = stride, cx = 1; x < width; x += stride, cx++) {
+		for (let y = 0; y < height; y += stride) {
+			colGrad[cx] += Math.abs(lum(x, y) - lum(x - stride, y));
 		}
 	}
 
-	// 3. A column/row belongs to the sleeve when over half its samples are foreground;
-	// the first and last such indices bound the sleeve on each axis.
-	const firstLast = (
-		arr: Uint32Array,
-		thresh: number,
-	): [number, number] | null => {
-		let lo = -1;
-		let hi = -1;
-		for (let k = 0; k < arr.length; k++) {
-			if (arr[k] > thresh) {
-				if (lo < 0) lo = k;
-				hi = k;
+	// The sleeve edge on each side is the strongest gradient within the outer BAND of that
+	// axis (these captures are tightly framed, so an edge is always near the frame; the band
+	// also excludes deeper internal artwork edges).
+	const BAND = 0.12;
+	const argmax = (arr: Float64Array, loF: number, hiF: number): number => {
+		const lo = Math.max(1, Math.floor(arr.length * loF));
+		const hi = Math.min(arr.length, Math.ceil(arr.length * hiF));
+		let bi = lo;
+		let bv = -1;
+		for (let k = lo; k < hi; k++) {
+			if (arr[k] > bv) {
+				bv = arr[k];
+				bi = k;
 			}
 		}
-		return lo < 0 ? null : [lo, hi];
+		return bi;
 	};
-	const xr = firstLast(colFg, rows * 0.5);
-	const yr = firstLast(rowFg, cols * 0.5);
-	if (!xr || !yr) return null;
 
-	const left = (xr[0] * stride) / width;
-	const right = Math.min(1, ((xr[1] + 1) * stride) / width);
-	const top = (yr[0] * stride) / height;
-	const bottom = Math.min(1, ((yr[1] + 1) * stride) / height);
+	const left = argmax(colGrad, 0, BAND) / cols;
+	const right = argmax(colGrad, 1 - BAND, 1) / cols;
+	const top = argmax(rowGrad, 0, BAND) / rows;
+	const bottom = argmax(rowGrad, 1 - BAND, 1) / rows;
 
-	// 4. Reject an implausibly small box — not a confident detection.
-	if (right - left < 0.3 || bottom - top < 0.3) return null;
+	// Reject an implausible box (edges collapsed together) — not a confident detection.
+	if (right - left < 0.4 || bottom - top < 0.4) return null;
 
 	return [
 		[left, top],
