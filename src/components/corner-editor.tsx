@@ -1,9 +1,5 @@
-import { Loader2, Scan } from "lucide-react";
 import { useRef, useState } from "react";
-import { toast } from "sonner";
 
-import { Button } from "#/components/ui/button";
-import { detectSleeveCorners } from "#/lib/opencv-loader";
 import type { NormalizedCorner, NormalizedCorners } from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 
@@ -14,9 +10,9 @@ const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
 /**
  * A draggable four-corner crop editor over the capture. The admin drags the handles to
- * the sleeve's corners (or hits Auto-detect to seed them via OpenCV); the parent turns
- * those corners into a deterministic perspective-warp. Controlled: `value` is the current
- * {@link NormalizedCorners} (0..1, TL,TR,BR,BL) and `onChange` reports every move.
+ * the sleeve's corners; the parent turns those corners into a deterministic
+ * perspective-warp. Controlled: `value` is the current {@link NormalizedCorners} (0..1,
+ * TL,TR,BR,BL) and `onChange` reports every move.
  */
 export function CornerEditor({
 	src,
@@ -30,9 +26,7 @@ export function CornerEditor({
 	disabled?: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement>(null);
-	const imgRef = useRef<HTMLImageElement>(null);
 	const [drag, setDrag] = useState<number | null>(null);
-	const [detecting, setDetecting] = useState(false);
 
 	const setCorner = (index: number, point: NormalizedCorner) => {
 		onChange(
@@ -52,28 +46,6 @@ export function CornerEditor({
 		];
 	};
 
-	const autoDetect = async () => {
-		if (!imgRef.current) return;
-		setDetecting(true);
-		try {
-			const found = await detectSleeveCorners(imgRef.current);
-			if (found) {
-				onChange(found);
-				toast.success("Detected the sleeve — nudge the handles to fine-tune.");
-			} else {
-				toast.message("Couldn't find the sleeve automatically.", {
-					description: "Drag the four corners to the edges of the sleeve.",
-				});
-			}
-		} catch (err) {
-			toast.error(
-				err instanceof Error ? err.message : "Auto-detect failed to load.",
-			);
-		} finally {
-			setDetecting(false);
-		}
-	};
-
 	// SVG polygon points in a 0..100 viewBox (preserveAspectRatio none → stretches to
 	// the image box); a non-scaling stroke keeps the outline crisp despite the stretch.
 	const polyPoints = value.map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
@@ -85,7 +57,6 @@ export function CornerEditor({
 				className="relative overflow-hidden rounded-md border bg-muted select-none touch-none"
 			>
 				<img
-					ref={imgRef}
 					src={src}
 					alt="Capture"
 					className="block w-full"
@@ -147,25 +118,9 @@ export function CornerEditor({
 					/>
 				))}
 			</div>
-			<div className="flex items-center justify-between gap-2">
-				<p className="text-xs text-muted-foreground">
-					Drag the corners to the edges of the sleeve.
-				</p>
-				<Button
-					type="button"
-					size="sm"
-					variant="outline"
-					disabled={disabled || detecting}
-					onClick={autoDetect}
-				>
-					{detecting ? (
-						<Loader2 className="size-4 animate-spin" />
-					) : (
-						<Scan className="size-4" />
-					)}
-					{detecting ? "Detecting…" : "Auto-detect"}
-				</Button>
-			</div>
+			<p className="text-xs text-muted-foreground">
+				Drag the corners to the edges of the sleeve.
+			</p>
 		</div>
 	);
 }
