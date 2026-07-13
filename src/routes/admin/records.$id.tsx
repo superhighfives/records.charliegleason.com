@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Info, Loader2, Pencil } from "lucide-react";
+import { Info, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -814,9 +814,9 @@ function RecordDetail() {
 							<h2 className="text-sm font-semibold">Professional photo</h2>
 							<p className="text-xs text-muted-foreground">
 								A straight-on, cropped, evenly-toned square built from your
-								capture — not repainted. Click it to crop the sleeve and tune
-								the tone. Once approved it’s shown across the site in place of
-								the cover.
+								capture — not repainted. Click it to view it large, or Edit to
+								crop the sleeve and tune the tone. Once approved it’s shown
+								across the site in place of the cover.
 							</p>
 						</div>
 						{record.professionalStatus === "approved" && (
@@ -826,32 +826,23 @@ function RecordDetail() {
 						)}
 					</div>
 
-					{/* Clickable thumbnail → opens the editor modal. Shows the generated
-					    photo, or the raw capture as a stand-in until a first pass exists. */}
+					{/* Thumbnail → click to zoom the actual stored photo full-size; edit via
+					    the button below. Shows the generated photo, or the raw capture as a
+					    stand-in until a first pass exists. */}
 					<figure className="space-y-1">
-						<button
-							type="button"
-							onClick={openEditor}
-							title="Edit crop & tone"
-							className="group relative block size-40 overflow-hidden rounded-md border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
-						>
-							{proPreviewSrc && (
-								<img
-									src={proPreviewSrc}
-									alt="Straightened sleeve"
-									className="size-full object-contain"
-								/>
-							)}
-							<span className="absolute inset-0 flex items-center justify-center bg-black/0 text-xs font-medium text-white opacity-0 transition group-hover:bg-black/40 group-hover:opacity-100">
-								<Pencil className="mr-1 size-3.5" /> Edit
-							</span>
-						</button>
+						{proPreviewSrc && (
+							<ImageZoom
+								src={proPreviewSrc}
+								alt="Straightened sleeve"
+								className="size-40 bg-muted"
+							/>
+						)}
 						<figcaption className="text-xs text-muted-foreground">
 							{record.professionalImageKey
 								? record.professionalStatus === "approved"
 									? "Approved — shown on the site"
 									: "Generated — not shown until approved"
-								: "Not generated yet — click to create the first pass"}
+								: "Not generated yet — use Edit to create the first pass"}
 						</figcaption>
 					</figure>
 
