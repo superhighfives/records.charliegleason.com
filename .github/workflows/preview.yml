@@ -103,6 +103,24 @@ jobs:
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
+      # Also promote this build to the preview Worker's ACTIVE deployment. The
+      # per-PR alias URL above only serves HTTP requests; queue consumers (and
+      # crons) always run whatever version is *deployed*, never a preview alias. So
+      # without this, queued work — notably the professional-photo background matte
+      # — would run stale code on every preview. Deploying here points the shared
+      # preview consumer at THIS PR's code.
+      #
+      # Trade-off (accepted): whichever PR built most recently owns the shared
+      # preview queue consumer until the next build supersedes it. Fine for a
+      # preview env. Safe because `env.preview` pins `routes: []`, so this never
+      # serves on a production domain, and preview crons are empty.
+      - name: Deploy preview Worker (so the queue consumer runs this PR)
+        env:
+          CLOUDFLARE_ENV: preview
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler deploy --env preview
+
       - name: Comment preview URL on the PR
         uses: actions/github-script@v7
         env:

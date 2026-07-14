@@ -1,5 +1,3 @@
-import { SearchX } from "lucide-react";
-
 import { cn } from "#/lib/utils";
 
 /**
@@ -12,12 +10,11 @@ export function UnmatchedBadge({ className }: { className?: string }) {
 	return (
 		<span
 			className={cn(
-				"inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-900 dark:bg-yellow-950 dark:text-yellow-200",
+				"inline-flex items-center whitespace-nowrap rounded-full border border-amber-500/40 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400",
 				className,
 			)}
 			title="Couldn’t find a matching Discogs release — search or paste a URL to link one"
 		>
-			<SearchX className="size-3" />
 			Unmatched
 		</span>
 	);

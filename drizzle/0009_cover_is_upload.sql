@@ -1,0 +1,1 @@
+ALTER TABLE `records` ADD `cover_is_upload` integer DEFAULT false;

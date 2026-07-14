@@ -1,15 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Info, Loader2 } from "lucide-react";
+import { Image as ImageIcon, Info, Loader2, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { CornerEditor } from "#/components/corner-editor";
 import { DuplicateBadge } from "#/components/duplicate-badge";
+import { ProPreview } from "#/components/pro-preview";
 import { RecordForm } from "#/components/record-form";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
+import { Checkbox } from "#/components/ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
 import { ImageZoom } from "#/components/ui/image-zoom";
 import { Input } from "#/components/ui/input";
+import { Slider } from "#/components/ui/slider";
 import {
 	Tooltip,
 	TooltipContent,
@@ -18,28 +30,40 @@ import {
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
+import { displayCoverKey } from "#/lib/cover";
 import type {
 	DiscogsCandidate,
 	DiscogsValue,
 	SearchParams,
 } from "#/lib/discogs";
-import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
+	clearProfessional,
 	deleteRecord,
+	detectCorners,
+	enhanceProfessional,
 	fetchRecordValue,
-	generateProfessional,
 	getDiscogsRelease,
 	lookupDiscogsRelease,
 	previewReleaseValue,
 	publishRecord,
-	refreshRecord,
+	reframeRecord,
+	replaceCapture,
 	reprocessRecord,
 	searchDiscogs,
 	setProfessionalApproved,
-	uploadCover,
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
+import {
+	DEFAULT_REFRAME_PARAMS,
+	parseReframeParams,
+	type ReframeParams,
+} from "#/lib/reframe-params";
+import {
+	type NormalizedCorners,
+	parseCorners,
+	serializeCorners,
+} from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
 
@@ -49,7 +73,7 @@ function looksLikeReleaseId(input: string): boolean {
 	return /^\d+$/.test(s) || /\/releases?\/\d+/.test(s);
 }
 
-/** Read a file to a data URL (fallback when the browser can't crop/decode it). */
+/** Read a file to a data URL — used to ship a replacement capture to the server. */
 function readFileAsDataUrl(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -57,15 +81,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(file);
 	});
-}
-
-/** Square-crop + downscale a chosen cover, falling back to the raw file. */
-async function prepareCover(file: File): Promise<string> {
-	try {
-		return (await squareDownscale(file)).dataUrl;
-	} catch {
-		return readFileAsDataUrl(file);
-	}
 }
 
 function TabButton({
@@ -92,6 +107,44 @@ function TabButton({
 		>
 			{children}
 		</button>
+	);
+}
+
+/** One labelled reframe knob: a slider with its current value shown on the right. */
+function Knob({
+	label,
+	value,
+	display,
+	min,
+	max,
+	step,
+	disabled,
+	onChange,
+}: {
+	label: string;
+	value: number;
+	display: string;
+	min: number;
+	max: number;
+	step: number;
+	disabled?: boolean;
+	onChange: (v: number) => void;
+}) {
+	return (
+		<div className={cn("space-y-1.5", disabled && "opacity-50")}>
+			<div className="flex justify-between text-xs text-muted-foreground">
+				<span>{label}</span>
+				<span className="tabular-nums">{display}</span>
+			</div>
+			<Slider
+				min={min}
+				max={max}
+				step={step}
+				value={[value]}
+				disabled={disabled}
+				onValueChange={([v]) => onChange(v)}
+			/>
+		</div>
 	);
 }
 
@@ -265,15 +318,11 @@ function RecordDetail() {
 
 	const { data: record } = useQuery({
 		...recordQueryOptions(recordId),
-		// Poll while the background analysis or a professional-photo job is in flight.
+		// Poll only while the background analysis is in flight. The professional photo
+		// is generated synchronously (no queue), so there's never a pro job to wait on.
 		refetchInterval: (query) => {
 			const status = query.state.data?.status;
-			const pro = query.state.data?.professionalStatus;
-			const active =
-				status === "pending" ||
-				status === "processing" ||
-				pro === "pending" ||
-				pro === "processing";
+			const active = status === "pending" || status === "processing";
 			return active ? 2000 : false;
 		},
 	});
@@ -300,15 +349,20 @@ function RecordDetail() {
 	const [tab, setTab] = useState<"search" | "url">("url");
 	const [showAdvanced, setShowAdvanced] = useState(false);
 	const [discogsUrl, setDiscogsUrl] = useState("");
-	// Briefly shown after a refresh so the enrichment landing isn't silent.
-	const [justRefreshed, setJustRefreshed] = useState(false);
-	// A user-uploaded cover overrides the auto-sourced Discogs artwork on publish.
-	const [customCover, setCustomCover] = useState<{
-		key: string;
-		preview: string;
-	} | null>(null);
-	const [uploadingCover, setUploadingCover] = useState(false);
-	const coverInputRef = useRef<HTMLInputElement>(null);
+	// Editable reframe knobs, seeded from whatever's stored on the record. This is the
+	// working copy the sliders drive; "Apply" sends it to the (free) reframe step.
+	const [params, setParams] = useState<ReframeParams>(() =>
+		parseReframeParams(record?.professionalParamsJson),
+	);
+	// Working copy of the sleeve corners the crop editor drives, seeded from the row
+	// (full-frame default if it's never been cropped). "Apply" warps the capture to these.
+	const [corners, setCorners] = useState<NormalizedCorners>(() =>
+		parseCorners(record?.sleeveCornersJson),
+	);
+	// Whether the professional-photo editor modal is open (crop + live preview + knobs).
+	const [editorOpen, setEditorOpen] = useState(false);
+	const [replacingCapture, setReplacingCapture] = useState(false);
+	const captureInputRef = useRef<HTMLInputElement>(null);
 
 	// When a Discogs candidate is picked, grab its full-res cover through our own
 	// proxy so we can (a) show a zoomable preview of the actual artwork that will
@@ -386,15 +440,39 @@ function RecordDetail() {
 		},
 	});
 
-	async function handleCoverFile(file: File | undefined) {
+	// Replace the source capture with a freshly chosen photo, regenerate the crop
+	// server-side, then open the editor on the new image so it can be reviewed.
+	const replaceCaptureMut = useMutation({
+		mutationFn: (input: { dataUrl: string; mediaType: string }) =>
+			replaceCapture({
+				data: {
+					id: recordId,
+					imageBase64: input.dataUrl,
+					mediaType: input.mediaType,
+				},
+			}),
+		onSuccess: (row) => {
+			if (!row) return;
+			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			setCorners(parseCorners(row.sleeveCornersJson));
+			setParams(parseReframeParams(row.professionalParamsJson));
+			setEditorOpen(true);
+			toast.success("Capture replaced — review the crop, then Apply.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't replace the capture.",
+			),
+	});
+
+	async function handleCaptureFile(file: File | undefined) {
 		if (!file || !file.type.startsWith("image/")) return;
-		setUploadingCover(true);
+		setReplacingCapture(true);
 		try {
-			const dataUrl = await prepareCover(file);
-			const key = await uploadCover({ data: { imageBase64: dataUrl } });
-			if (key) setCustomCover({ key, preview: dataUrl });
+			const dataUrl = await readFileAsDataUrl(file);
+			await replaceCaptureMut.mutateAsync({ dataUrl, mediaType: file.type });
 		} finally {
-			setUploadingCover(false);
+			setReplacingCapture(false);
 		}
 	}
 
@@ -418,23 +496,72 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn't delete this record."),
 	});
 
-	// Queue (or re-queue) the professional studio photo. Lands via the queue, so
-	// the detail page polls itself to `ready` while `professionalStatus` is in flight.
-	const generatePro = useMutation({
-		mutationFn: () => generateProfessional({ data: recordId }),
-		onSuccess: invalidate,
+	// Apply the edit: warp the capture to the current corners + tone, promote it to
+	// the displayed cover, then dismiss the editor.
+	const applyPro = useMutation({
+		mutationFn: async () => {
+			await reframeRecord({ data: { id: recordId, corners, params } });
+			return setProfessionalApproved({
+				data: { id: recordId, approved: true },
+			});
+		},
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			// Stay open: with the edit now saved and the working copy matching the
+			// row, the footer's primary button flips from Apply/Re-apply to Close.
+		},
 		onError: (err) =>
 			toast.error(
-				err instanceof Error ? err.message : "Couldn't start the photo.",
+				err instanceof Error ? err.message : "Couldn't apply the changes.",
 			),
 	});
 
-	// Approve (promote) or unapprove the generated professional photo.
-	const approvePro = useMutation({
-		mutationFn: (approved: boolean) =>
-			setProfessionalApproved({ data: { id: recordId, approved } }),
-		onSuccess: invalidate,
+	// The paid "Enhance": bake the current edit, then super-resolve it through
+	// Real-ESRGAN for a sharper, higher-res master. Takes ~10–30s (a real GPU run),
+	// so the button shows a spinner. Preserves approval, so a live cover stays live.
+	const enhancePro = useMutation({
+		mutationFn: () =>
+			enhanceProfessional({ data: { id: recordId, corners, params } }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			toast.success("Enhanced — the photo was upscaled.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't enhance the photo.",
+			),
 	});
+
+	// Remove the professional photo altogether: delete it from R2 and clear the record
+	// back to a zero-state (no image, default crop + tone), then close the editor and
+	// return to the detail view. A later edit regenerates from scratch.
+	const removeCover = useMutation({
+		mutationFn: () => clearProfessional({ data: recordId }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			setEditorOpen(false);
+			toast.success("Cover removed.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't remove the cover.",
+			),
+	});
+
+	// Open the editor, syncing the working copies to the saved crop/tone. Non-destructive:
+	// nothing is generated or stored until Apply — the live preview renders client-side
+	// from the capture, so it's never empty even when there's no saved professional photo.
+	const openEditor = () => {
+		setCorners(parseCorners(record?.sleeveCornersJson));
+		setParams(parseReframeParams(record?.professionalParamsJson));
+		setEditorOpen(true);
+	};
 
 	// Pull a fresh Discogs value estimate (seller price suggestions, falling back
 	// to the lowest listing) for this record, leaving all other metadata alone.
@@ -469,20 +596,6 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn’t fetch a value from Discogs."),
 	});
 
-	// Re-pull the enrichment fields from the stored Discogs release (no re-scan of
-	// the photo). Clears any locally picked candidate so the form shows fresh data.
-	const refresh = useMutation({
-		mutationFn: () => refreshRecord({ data: recordId }),
-		onSuccess: async () => {
-			setPicked(null);
-			setResults(null);
-			await invalidate();
-			// Surface that fresh content landed, then let the message fade out.
-			setJustRefreshed(true);
-			setTimeout(() => setJustRefreshed(false), 2500);
-		},
-	});
-
 	if (!record) {
 		return <p className="text-muted-foreground">Record not found.</p>;
 	}
@@ -501,43 +614,92 @@ function RecordDetail() {
 	const failure =
 		record.status === "failed" ? describeAnalysisError(record.error) : null;
 
-	// Cover preview source, best-first: the freshly downloaded full-res artwork,
-	// then the picked candidate's thumbnail (instant, while the full-res loads or
-	// if it failed), then the stored cover when nothing is picked.
-	const coverPreviewSrc =
-		coverProbe.status === "ready"
-			? coverProbe.url
-			: (picked?.thumb ??
-				(record.coverImageKey ? `/api/photos/${record.coverImageKey}` : null));
-	const heading =
-		record.artist || record.title
-			? `${record.artist || "Unknown"} — ${record.title || "Untitled"}`
-			: "Captured record";
+	// Professional-photo derived state. Generation is synchronous, so there's no "busy"
+	// queue state to poll — the editor's own mutations report their progress. `p` merges
+	// the working-copy params over the defaults so the sliders always have a concrete value.
+	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
+
+	// Does the working copy (corners + tone) differ from what's saved on the row? Both
+	// signatures normalise (round corners / merge tone defaults + sort keys) so a
+	// reopened-but-untouched editor reads clean.
+	const paramSig = (v: ReframeParams) =>
+		JSON.stringify(
+			Object.entries({ ...DEFAULT_REFRAME_PARAMS, ...v }).sort(([a], [b]) =>
+				a < b ? -1 : a > b ? 1 : 0,
+			),
+		);
+	const isDirty =
+		serializeCorners(corners) !==
+			serializeCorners(parseCorners(record.sleeveCornersJson)) ||
+		paramSig(params) !==
+			paramSig(parseReframeParams(record.professionalParamsJson));
+	// The photo's relationship to the shown cover drives the button states:
+	//  - approved  → it's the live cover;
+	//  - "live"    → approved *and* unchanged, so the primary button is a plain Close;
+	//  - "Re-apply" only makes sense against a live cover; anything else is a first Apply.
+	const isApproved = record.professionalStatus === "approved";
+	const proIsLive = isApproved && !isDirty;
+	// Any editor mutation in flight — used to disable the controls while one runs.
+	const editorBusy = applyPro.isPending || enhancePro.isPending;
+
+	// Header photo: the approved professional crop, else the raw capture. Never the
+	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
+	const headerCoverKey = displayCoverKey(record, { includeCapture: true });
+	const headerPhotoSrc = headerCoverKey
+		? `/api/photos/${headerCoverKey}`
+		: null;
 
 	return (
 		<div className="mx-auto max-w-2xl space-y-6">
-			<div className="flex items-start justify-between gap-4">
-				<div>
-					<Link
-						to="/admin"
-						className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
-					>
-						← Collection
-					</Link>
-					<h1 className="mt-1 text-2xl font-semibold">{heading}</h1>
-					{record.captureContext && (
-						<p className="mt-1 text-sm text-muted-foreground">
-							<span className="font-medium text-foreground">Context:</span>{" "}
-							{record.captureContext}
-						</p>
+			<div>
+				<Link
+					to="/admin"
+					className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
+				>
+					← Collection
+				</Link>
+				{/* Photo + text take ~half the width on desktop, with the badges pushed
+				    to the far right; on mobile they stack into two rows (photo + text,
+				    then the badges). Everything shares one bottom baseline so the status
+				    badge sits opposite the Context line. */}
+				<div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-end">
+					{headerPhotoSrc && (
+						<ImageZoom
+							src={headerPhotoSrc}
+							alt="Record photo"
+							className="aspect-square w-full shrink-0 sm:w-1/2"
+						/>
 					)}
-				</div>
-				<div className="flex flex-wrap items-center justify-end gap-1">
-					{record.status === "review" && !record.discogsId && (
-						<UnmatchedBadge />
-					)}
-					{record.duplicateOf != null && <DuplicateBadge />}
-					<StatusBadge status={record.status} />
+					<div className="min-w-0 flex-1">
+						{record.artist && (
+							<p className="truncate text-sm text-muted-foreground">
+								{record.artist}
+							</p>
+						)}
+						<h1 className="text-2xl font-semibold leading-tight">
+							{record.title || "Captured record"}
+						</h1>
+						{/* Context and the status badges share a row on desktop (badge pushed
+						    right, opposite the context); on mobile the badges drop to their
+						    own line below the context. */}
+						<div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+							{record.captureContext ? (
+								<p className="min-w-0 text-sm text-muted-foreground">
+									<span className="font-medium text-foreground">Context:</span>{" "}
+									{record.captureContext}
+								</p>
+							) : (
+								<span />
+							)}
+							<div className="flex flex-wrap items-center gap-1">
+								{record.status === "review" && !record.discogsId && (
+									<UnmatchedBadge />
+								)}
+								{record.duplicateOf != null && <DuplicateBadge />}
+								<StatusBadge status={record.status} />
+							</div>
+						</div>
+					</div>
 				</div>
 			</div>
 
@@ -555,257 +717,286 @@ function RecordDetail() {
 				</div>
 			)}
 
-			{/* Photos: the iPhone capture, plus the sourced cover once we have one. */}
-			<div className="flex gap-3">
-				{record.capturePhotoKey && (
-					<figure className="space-y-1">
-						<ImageZoom
-							src={`/api/photos/${record.capturePhotoKey}`}
-							alt="Original capture"
-							className="size-32"
-						/>
-						<figcaption className="text-xs text-muted-foreground">
-							Capture
-						</figcaption>
-					</figure>
-				)}
-				{/* Preview the picked candidate's Discogs artwork immediately — the
-				    full-res cover isn't sourced into R2 until publish, so we grab it
-				    through the proxy for a zoomable, verified preview. */}
-				{coverPreviewSrc && (
-					<figure className="space-y-1">
-						<ImageZoom
-							src={coverPreviewSrc}
-							alt={picked ? "Selected Discogs cover" : "Sourced cover"}
-							className="size-32"
-						/>
-						<figcaption className="text-xs text-muted-foreground">
-							{picked ? "Cover (selected)" : "Cover"}
-						</figcaption>
-					</figure>
-				)}
-				{customCover && (
-					<figure className="space-y-1">
-						<ImageZoom
-							src={customCover.preview}
-							alt="Uploaded cover"
-							className="size-32"
-						/>
-						<figcaption className="text-xs text-muted-foreground">
-							Upload
-						</figcaption>
-					</figure>
-				)}
-			</div>
-
-			{/* Download status for the picked candidate's cover — confirms the grab
-			    worked (with size/type) or surfaces why it didn't. */}
-			{picked && coverProbe.status !== "idle" && (
-				<p className="text-xs text-muted-foreground" aria-live="polite">
-					{coverProbe.status === "loading" && "Downloading cover from Discogs…"}
-					{coverProbe.status === "ready" &&
-						`Cover downloaded — ${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}.`}
-					{coverProbe.status === "error" && (
-						<span className="text-red-600 dark:text-red-400">
-							Couldn’t download cover: {coverProbe.message}. It’ll be re-sourced
-							on publish.
-						</span>
-					)}
-				</p>
-			)}
-
-			{/* Upload your own cover — overrides the Discogs artwork on publish. */}
-			{!inFlight && (
-				<div className="flex items-center gap-2">
+			{/* Two actions on the capture: swap the source photo, or open the crop/
+			    tone editor. The image itself is shown (bottom-aligned) in the header. */}
+			{!inFlight && record.capturePhotoKey && (
+				<div className="flex flex-wrap items-center gap-2">
 					<input
-						ref={coverInputRef}
+						ref={captureInputRef}
 						type="file"
 						accept="image/*"
 						className="hidden"
 						onChange={(e) => {
-							handleCoverFile(e.target.files?.[0]);
-							// Allow re-selecting the same file after a remove.
+							handleCaptureFile(e.target.files?.[0]);
+							// Allow re-selecting the same file after a cancel.
 							e.target.value = "";
 						}}
 					/>
-					{record.discogsId ? (
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							disabled={refresh.isPending}
-							onClick={() => refresh.mutate()}
-						>
-							{refresh.isPending ? "Refreshing…" : "Refresh"}
-						</Button>
-					) : (
-						// Unmatched: no release to refresh from yet. Re-run the analysis to
-						// take another shot at reading the cover and matching Discogs (the
-						// fetch retries mean a transient miss is worth retrying).
-						record.status === "review" && (
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={retry.isPending}
-								onClick={() => retry.mutate()}
-							>
-								{retry.isPending ? "Matching…" : "Match"}
-							</Button>
-						)
-					)}
+					<Button type="button" size="sm" onClick={openEditor}>
+						Edit image
+					</Button>
 					<Button
 						type="button"
 						size="sm"
 						variant="outline"
-						disabled={uploadingCover}
-						onClick={() => coverInputRef.current?.click()}
+						disabled={replacingCapture}
+						onClick={() => captureInputRef.current?.click()}
 					>
-						{uploadingCover
-							? "Uploading…"
-							: customCover
-								? "Replace cover"
-								: "Upload cover"}
+						{replacingCapture ? "Replacing…" : "Replace capture"}
 					</Button>
-					{customCover && (
-						<button
-							type="button"
-							onClick={() => setCustomCover(null)}
-							className="text-sm text-muted-foreground underline underline-offset-4"
-						>
-							Remove
-						</button>
-					)}
-					{justRefreshed && (
-						<span className="text-sm text-muted-foreground">
-							Updating content…
-						</span>
-					)}
+					{record.professionalStatus === "failed" &&
+						record.professionalError && (
+							<span className="text-xs text-red-600 dark:text-red-400">
+								Last generation failed: {record.professionalError}. Open the
+								editor and adjust the corners to try again.
+							</span>
+						)}
 				</div>
 			)}
 
-			{/* Professional studio photo — generated from the capture via Replicate,
-			    reviewed here, then preferred over the Discogs cover once approved. */}
+			{/* The editor: crop on the left, live output on the right, knobs below.
+			    "Use as cover" (footer checkbox) controls whether Apply promotes it. */}
 			{!inFlight && record.capturePhotoKey && (
-				<div className="space-y-3 rounded-lg border p-3">
-					<div className="flex items-start justify-between gap-2">
-						<div>
-							<h2 className="text-sm font-semibold">Professional photo</h2>
-							<p className="text-xs text-muted-foreground">
-								A studio-lit, tight-cropped cutout generated from your capture.
-								Once approved it’s shown across the site in place of the cover.
-							</p>
-						</div>
-						{record.professionalStatus === "approved" && (
-							<span className="shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
-								Live
-							</span>
-						)}
-					</div>
+				<Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+					<DialogContent className="max-w-5xl">
+						<DialogHeader>
+							<DialogTitle>Edit image</DialogTitle>
+							<DialogDescription>
+								Drag the corners to the sleeve’s edges (or auto-detect), then
+								tune the tone — the preview updates live. Apply saves it.
+							</DialogDescription>
+						</DialogHeader>
 
-					{record.professionalStatus === "pending" ||
-					record.professionalStatus === "processing" ? (
-						<div className="space-y-2">
-							<div className="flex items-center gap-2 text-sm text-muted-foreground">
-								<Loader2 className="size-4 shrink-0 animate-spin" />
-								Generating the professional photo — this page updates itself
-								when it’s ready.
-							</div>
-							{/* Escape hatch: a job can wedge if its worker dies mid-run, and the
-							    server-side watchdog only reclaims it after a timeout. Always let
-							    the admin start over so they're never stuck watching the spinner —
-							    but confirm first, since the original job may still be running and
-							    a second run is a fresh (paid) Replicate charge. */}
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={generatePro.isPending}
-								onClick={() => {
-									if (
-										confirm(
-											"The current generation may still be running. Start a new one anyway? This can take a few minutes and counts as a new run.",
-										)
-									) {
-										generatePro.mutate();
-									}
-								}}
-							>
-								{generatePro.isPending ? "Regenerating…" : "Taking too long? Regenerate"}
-							</Button>
-						</div>
-					) : record.professionalImageKey &&
-						(record.professionalStatus === "ready" ||
-							record.professionalStatus === "approved") ? (
-						<div className="space-y-3">
-							<figure className="space-y-1">
-								<ImageZoom
-									src={`/api/photos/${record.professionalImageKey}`}
-									alt="Professional photo"
-									className="size-40 bg-muted"
+						<div className="grid gap-4 sm:grid-cols-2">
+							<div className="space-y-1">
+								<p className="text-xs font-medium text-muted-foreground">
+									Crop
+								</p>
+								<CornerEditor
+									src={`/api/photos/${record.capturePhotoKey}`}
+									value={corners}
+									onChange={setCorners}
+									onDetect={async () => {
+										const res = await detectCorners({ data: recordId });
+										return res.corners;
+									}}
+									disabled={editorBusy}
 								/>
-								<figcaption className="text-xs text-muted-foreground">
-									{record.professionalStatus === "approved"
-										? "Approved — shown on the site"
-										: "Generated — not shown until approved"}
-								</figcaption>
-							</figure>
-							<div className="flex flex-wrap gap-2">
-								{record.professionalStatus === "ready" ? (
-									<Button
-										type="button"
-										size="sm"
-										disabled={approvePro.isPending}
-										onClick={() => approvePro.mutate(true)}
-									>
-										{approvePro.isPending ? "…" : "Use as cover"}
-									</Button>
-								) : (
+							</div>
+							<div className="space-y-2">
+								<div className="flex items-baseline justify-between">
+									<p className="text-xs font-medium text-muted-foreground">
+										Preview
+									</p>
+									<p className="text-[10px] text-muted-foreground/70">
+										Live · Apply to save
+									</p>
+								</div>
+								{record.capturePhotoKey && (
+									// Hover reveals the *actual saved* professional image over the
+									// live canvas preview (which is a fast approximation) — with a
+									// badge marking it a plain render or a Real-ESRGAN upscale.
+									<div className="group relative">
+										<ProPreview
+											src={`/api/photos/${record.capturePhotoKey}`}
+											corners={corners}
+											params={params}
+										/>
+										{record.professionalImageKey && (
+											<>
+												<img
+													src={`/api/photos/${record.professionalImageKey}`}
+													alt="Saved cover render"
+													className="pointer-events-none absolute inset-0 size-full rounded-md border object-cover opacity-0 transition-opacity group-hover:opacity-100"
+												/>
+												<div
+													className="pointer-events-none absolute left-2 top-2 flex size-7 items-center justify-center rounded-md border bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100"
+													aria-hidden="true"
+												>
+													{record.professionalEnhanced ? (
+														<Sparkles className="size-4" />
+													) : (
+														<ImageIcon className="size-4" />
+													)}
+												</div>
+											</>
+										)}
+									</div>
+								)}
+								{/* Optional, on-demand super-resolution — laid out like the crop
+								    side's "Detect corners" row (hint left, button right). Only
+								    offered once there's a saved photo with no pending edits; it
+								    bakes the applied crop/tone, then runs it through Real-ESRGAN. */}
+								<div className="flex items-center justify-between gap-2">
+									<p className="text-xs text-muted-foreground">
+										Upscales the photo with Real-ESRGAN.
+									</p>
 									<Button
 										type="button"
 										size="sm"
 										variant="outline"
-										disabled={approvePro.isPending}
-										onClick={() => approvePro.mutate(false)}
+										disabled={!proIsLive || editorBusy}
+										title={
+											proIsLive
+												? undefined
+												: isDirty
+													? "Apply your changes first."
+													: "Apply the photo as the cover first."
+										}
+										onClick={() => enhancePro.mutate()}
 									>
-										{approvePro.isPending ? "…" : "Stop using"}
+										{enhancePro.isPending ? (
+											<Loader2 className="size-4 animate-spin" />
+										) : (
+											<Sparkles className="size-4" />
+										)}
+										{/* "Re-enhance" only while it's actually re-runnable (enhanced
+										    and unchanged). Once an edit is pending it flips back to
+										    "Enhance", since Re-applying will discard the upscale. */}
+										{enhancePro.isPending
+											? "Enhancing…"
+											: record.professionalEnhanced && !isDirty
+												? "Re-enhance"
+												: "Enhance"}
 									</Button>
-								)}
+								</div>
+							</div>
+						</div>
+
+						{/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
+						    the polish factors below map straight to the pixel encode pass.
+						    Every Apply re-warps + re-tones — all free. */}
+						<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+							<label
+								htmlFor="pro-autotone"
+								className="flex items-center gap-2 text-xs text-muted-foreground"
+							>
+								<Checkbox
+									id="pro-autotone"
+									checked={!p.skipTone}
+									disabled={editorBusy}
+									onChange={(e) =>
+										setParams({
+											...params,
+											skipTone: !e.currentTarget.checked,
+										})
+									}
+								/>
+								Auto-tone (levels + white balance)
+							</label>
+							{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
+							<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+								<Knob
+									label="White balance"
+									display={`${Math.round(p.wbStrength * 100)}%`}
+									value={Math.round(p.wbStrength * 100)}
+									min={0}
+									max={100}
+									step={1}
+									disabled={p.skipTone || editorBusy}
+									onChange={(v) =>
+										setParams({ ...params, wbStrength: v / 100 })
+									}
+								/>
+								<Knob
+									label="Saturation"
+									display={`${Math.round(p.saturation * 100)}%`}
+									value={Math.round(p.saturation * 100)}
+									min={0}
+									max={200}
+									step={5}
+									disabled={editorBusy}
+									onChange={(v) =>
+										setParams({ ...params, saturation: v / 100 })
+									}
+								/>
+								<Knob
+									label="Contrast"
+									display={`${Math.round(p.contrast * 100)}%`}
+									value={Math.round(p.contrast * 100)}
+									min={50}
+									max={200}
+									step={5}
+									disabled={editorBusy}
+									onChange={(v) => setParams({ ...params, contrast: v / 100 })}
+								/>
+								<Knob
+									label="Gamma"
+									display={p.gamma.toFixed(2)}
+									value={Math.round(p.gamma * 100)}
+									min={50}
+									max={200}
+									step={5}
+									disabled={editorBusy}
+									onChange={(v) => setParams({ ...params, gamma: v / 100 })}
+								/>
+							</div>
+						</div>
+
+						{/* Destructive "Remove cover" on the left (only when there's an
+						    approved cover to take down); Reset + Apply on the right (Apply
+						    last). Apply saves the crop/tone and promotes it to the cover;
+						    Remove cover unapproves it and returns to the detail view. */}
+						<DialogFooter className="items-center justify-between sm:justify-between">
+							{record.professionalStatus === "approved" ? (
 								<Button
 									type="button"
 									size="sm"
-									variant="outline"
-									disabled={generatePro.isPending}
-									onClick={() => generatePro.mutate()}
+									variant="destructive"
+									disabled={
+										removeCover.isPending || applyPro.isPending || editorBusy
+									}
+									onClick={() => removeCover.mutate()}
 								>
-									{generatePro.isPending ? "Regenerating…" : "Regenerate"}
+									{removeCover.isPending ? "Removing…" : "Remove cover"}
+								</Button>
+							) : (
+								<span />
+							)}
+							<div className="flex gap-2">
+								{/* Discard unsaved edits: snap the working copy back to what's
+								    saved on the row. Purely client-side — no re-warp, no write —
+								    so it can't leave a half-applied state. Disabled when there's
+								    nothing to discard. */}
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									disabled={!isDirty || editorBusy}
+									onClick={() => {
+										setCorners(parseCorners(record.sleeveCornersJson));
+										setParams(
+											parseReframeParams(record.professionalParamsJson),
+										);
+									}}
+								>
+									Reset
+								</Button>
+								{/* One primary action, three states: Apply (nothing live yet),
+								    Re-apply (live, but the crop/tone has been nudged), or a
+								    plain Close (live and unchanged — nothing left to do). Only
+								    the first two mutate; Close just dismisses. */}
+								<Button
+									type="button"
+									size="sm"
+									variant={proIsLive ? "outline" : "default"}
+									disabled={proIsLive ? false : editorBusy}
+									onClick={() =>
+										proIsLive ? setEditorOpen(false) : applyPro.mutate()
+									}
+								>
+									{applyPro.isPending
+										? "Applying…"
+										: proIsLive
+											? "Close"
+											: isApproved && isDirty
+												? "Re-apply"
+												: "Apply"}
 								</Button>
 							</div>
-						</div>
-					) : (
-						<div className="space-y-2">
-							{record.professionalStatus === "failed" &&
-								record.professionalError && (
-									<p className="text-xs text-red-600 dark:text-red-400">
-										Generation failed: {record.professionalError}
-									</p>
-								)}
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={generatePro.isPending}
-								onClick={() => generatePro.mutate()}
-							>
-								{generatePro.isPending
-									? "Queuing…"
-									: record.professionalStatus === "failed"
-										? "Try again"
-										: "Generate professional photo"}
-							</Button>
-						</div>
-					)}
-				</div>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
 			)}
 
 			{/* In-flight: just wait and poll. */}
@@ -859,204 +1050,232 @@ function RecordDetail() {
 							</div>
 						)}
 
-						{/* Wrong match? Search Discogs or paste a release URL. */}
-						<div className="space-y-3 p-3">
-							<div
-								role="tablist"
-								aria-label="Discogs lookup method"
-								className="flex gap-1 border-b"
-							>
-								<TabButton active={tab === "url"} onClick={() => setTab("url")}>
-									Discogs URL
-								</TabButton>
-								<TabButton
-									active={tab === "search"}
-									onClick={() => setTab("search")}
-								>
-									Search
-								</TabButton>
-							</div>
-
-							{tab === "search" ? (
-								<form
-									className="space-y-2"
-									onSubmit={(e) => {
-										e.preventDefault();
-										if (!search.isPending) search.mutate(query);
-									}}
-								>
-									<div className="flex items-end gap-2">
-										<div className="flex-1 space-y-1">
-											<label
-												htmlFor="q-artist"
-												className="text-xs text-muted-foreground"
-											>
-												Artist
-											</label>
-											<Input
-												id="q-artist"
-												value={query.artist}
-												onChange={(e) =>
-													setQuery((q) => ({ ...q, artist: e.target.value }))
-												}
-											/>
-										</div>
-										<div className="flex-1 space-y-1">
-											<label
-												htmlFor="q-title"
-												className="text-xs text-muted-foreground"
-											>
-												Title
-											</label>
-											<Input
-												id="q-title"
-												value={query.title}
-												onChange={(e) =>
-													setQuery((q) => ({ ...q, title: e.target.value }))
-												}
-											/>
-										</div>
-									</div>
-
-									{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
-									<button
-										type="button"
-										aria-expanded={showAdvanced}
-										onClick={() => setShowAdvanced((v) => !v)}
-										className="text-xs text-muted-foreground underline underline-offset-4"
+						{/* Wrong match? Search or paste a Discogs URL. The sourced cover isn't
+						    previewed here — it's visible in the candidate thumbnails below. */}
+						<div className="p-3">
+							<div className="min-w-0 space-y-3">
+								{/* Tabs on the left; the cover-download status (progress →
+								    size/type, or a failure) sits opposite, on the same row. */}
+								<div className="flex items-center justify-between gap-2 border-b">
+									<div
+										role="tablist"
+										aria-label="Discogs lookup method"
+										className="flex gap-1"
 									>
-										{showAdvanced
-											? "Hide advanced options"
-											: "Advanced options"}
-									</button>
+										<TabButton
+											active={tab === "url"}
+											onClick={() => setTab("url")}
+										>
+											Discogs URL
+										</TabButton>
+										<TabButton
+											active={tab === "search"}
+											onClick={() => setTab("search")}
+										>
+											Search
+										</TabButton>
+									</div>
+									{picked && coverProbe.status !== "idle" && (
+										<span
+											className={cn(
+												"shrink-0 text-xs text-muted-foreground",
+												coverProbe.status === "error" &&
+													"text-red-600 dark:text-red-400",
+											)}
+											aria-live="polite"
+										>
+											{coverProbe.status === "loading" && "Downloading…"}
+											{coverProbe.status === "ready" &&
+												`${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}`}
+											{coverProbe.status === "error" && "Download failed"}
+										</span>
+									)}
+								</div>
 
-									{showAdvanced && (
+								{tab === "search" ? (
+									<form
+										className="space-y-2"
+										onSubmit={(e) => {
+											e.preventDefault();
+											if (!search.isPending) search.mutate(query);
+										}}
+									>
 										<div className="flex items-end gap-2">
 											<div className="flex-1 space-y-1">
 												<label
-													htmlFor="q-country"
+													htmlFor="q-artist"
 													className="text-xs text-muted-foreground"
 												>
-													Country
+													Artist
 												</label>
 												<Input
-													id="q-country"
-													value={query.country}
-													placeholder="e.g. UK"
+													id="q-artist"
+													value={query.artist}
 													onChange={(e) =>
-														setQuery((q) => ({ ...q, country: e.target.value }))
+														setQuery((q) => ({ ...q, artist: e.target.value }))
 													}
 												/>
 											</div>
 											<div className="flex-1 space-y-1">
 												<label
-													htmlFor="q-year"
+													htmlFor="q-title"
 													className="text-xs text-muted-foreground"
 												>
-													Year
+													Title
 												</label>
 												<Input
-													id="q-year"
-													inputMode="numeric"
-													value={query.year}
-													placeholder="e.g. 1971"
+													id="q-title"
+													value={query.title}
 													onChange={(e) =>
-														setQuery((q) => ({ ...q, year: e.target.value }))
+														setQuery((q) => ({ ...q, title: e.target.value }))
 													}
 												/>
 											</div>
 										</div>
-									)}
 
-									{/* Free-text catch-all — passed to Discogs' general search for
+										{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
+										<button
+											type="button"
+											aria-expanded={showAdvanced}
+											onClick={() => setShowAdvanced((v) => !v)}
+											className="text-xs text-muted-foreground underline underline-offset-4"
+										>
+											{showAdvanced
+												? "Hide advanced options"
+												: "Advanced options"}
+										</button>
+
+										{showAdvanced && (
+											<div className="flex items-end gap-2">
+												<div className="flex-1 space-y-1">
+													<label
+														htmlFor="q-country"
+														className="text-xs text-muted-foreground"
+													>
+														Country
+													</label>
+													<Input
+														id="q-country"
+														value={query.country}
+														placeholder="e.g. UK"
+														onChange={(e) =>
+															setQuery((q) => ({
+																...q,
+																country: e.target.value,
+															}))
+														}
+													/>
+												</div>
+												<div className="flex-1 space-y-1">
+													<label
+														htmlFor="q-year"
+														className="text-xs text-muted-foreground"
+													>
+														Year
+													</label>
+													<Input
+														id="q-year"
+														inputMode="numeric"
+														value={query.year}
+														placeholder="e.g. 1971"
+														onChange={(e) =>
+															setQuery((q) => ({ ...q, year: e.target.value }))
+														}
+													/>
+												</div>
+											</div>
+										)}
+
+										{/* Free-text catch-all — passed to Discogs' general search for
 								    anything the structured fields miss (label, catalog number). */}
-									{showAdvanced && (
+										{showAdvanced && (
+											<div className="space-y-1">
+												<label
+													htmlFor="q-keywords"
+													className="text-xs text-muted-foreground"
+												>
+													Discogs search
+												</label>
+												<Input
+													id="q-keywords"
+													value={query.q}
+													placeholder="e.g. label, catalog number, or any keywords"
+													onChange={(e) =>
+														setQuery((q) => ({ ...q, q: e.target.value }))
+													}
+												/>
+											</div>
+										)}
+
+										{search.isError && (
+											<p className="text-xs text-red-600" role="alert">
+												{search.error instanceof Error
+													? search.error.message
+													: "Search failed. Try again."}
+											</p>
+										)}
+										{search.isSuccess && (search.data?.length ?? 0) === 0 && (
+											<p
+												className="text-xs text-muted-foreground"
+												aria-live="polite"
+											>
+												No matches on Discogs. Try a different spelling, drop
+												the title, or paste the release URL.
+											</p>
+										)}
+										<div className="flex justify-end">
+											<Button
+												type="submit"
+												variant="outline"
+												disabled={search.isPending}
+											>
+												{search.isPending ? "Searching…" : "Search"}
+											</Button>
+										</div>
+									</form>
+								) : (
+									<form
+										className="space-y-2"
+										onSubmit={(e) => {
+											e.preventDefault();
+											if (looksLikeReleaseId(discogsUrl) && !lookup.isPending) {
+												lookup.mutate(discogsUrl);
+											}
+										}}
+									>
 										<div className="space-y-1">
 											<label
-												htmlFor="q-keywords"
+												htmlFor="q-url"
 												className="text-xs text-muted-foreground"
 											>
-												Discogs search
+												Discogs release URL
 											</label>
 											<Input
-												id="q-keywords"
-												value={query.q}
-												placeholder="e.g. label, catalog number, or any keywords"
-												onChange={(e) =>
-													setQuery((q) => ({ ...q, q: e.target.value }))
-												}
+												id="q-url"
+												value={discogsUrl}
+												placeholder="https://www.discogs.com/release/…"
+												onChange={(e) => setDiscogsUrl(e.target.value)}
 											/>
 										</div>
-									)}
-
-									{search.isError && (
-										<p className="text-xs text-red-600" role="alert">
-											{search.error instanceof Error
-												? search.error.message
-												: "Search failed. Try again."}
-										</p>
-									)}
-									{search.isSuccess && (search.data?.length ?? 0) === 0 && (
-										<p
-											className="text-xs text-muted-foreground"
-											aria-live="polite"
-										>
-											No matches on Discogs. Try a different spelling, drop the
-											title, or paste the release URL.
-										</p>
-									)}
-									<div className="flex justify-end">
-										<Button
-											type="submit"
-											variant="outline"
-											disabled={search.isPending}
-										>
-											{search.isPending ? "Searching…" : "Search"}
-										</Button>
-									</div>
-								</form>
-							) : (
-								<form
-									className="space-y-2"
-									onSubmit={(e) => {
-										e.preventDefault();
-										if (looksLikeReleaseId(discogsUrl) && !lookup.isPending) {
-											lookup.mutate(discogsUrl);
-										}
-									}}
-								>
-									<div className="space-y-1">
-										<label
-											htmlFor="q-url"
-											className="text-xs text-muted-foreground"
-										>
-											Discogs release URL
-										</label>
-										<Input
-											id="q-url"
-											value={discogsUrl}
-											placeholder="https://www.discogs.com/release/…"
-											onChange={(e) => setDiscogsUrl(e.target.value)}
-										/>
-									</div>
-									{lookup.isError && (
-										<p className="text-xs text-red-600">
-											{lookup.error.message}
-										</p>
-									)}
-									<div className="flex justify-end">
-										<Button
-											type="submit"
-											variant="outline"
-											disabled={
-												lookup.isPending || !looksLikeReleaseId(discogsUrl)
-											}
-										>
-											{lookup.isPending ? "…" : "Fetch release"}
-										</Button>
-									</div>
-								</form>
-							)}
+										{lookup.isError && (
+											<p className="text-xs text-red-600">
+												{lookup.error.message}
+											</p>
+										)}
+										<div className="flex justify-end">
+											<Button
+												type="submit"
+												variant="outline"
+												disabled={
+													lookup.isPending || !looksLikeReleaseId(discogsUrl)
+												}
+											>
+												{lookup.isPending ? "Fetching…" : "Fetch release"}
+											</Button>
+										</div>
+									</form>
+								)}
+							</div>
 						</div>
 
 						{/* Candidate pick-list — the lower half of the panel, divided from
@@ -1169,7 +1388,7 @@ function RecordDetail() {
 										data: input,
 										discogsId: picked?.discogsId ?? record.discogsId ?? null,
 										discogsUrl: picked?.discogsUrl ?? record.discogsUrl ?? null,
-										coverImageKey: customCover?.key ?? null,
+										coverImageKey: null,
 									},
 								});
 								if (!result) {
@@ -1202,7 +1421,8 @@ function RecordDetail() {
 				<div>
 					<h2 className="text-sm font-semibold">Delete record</h2>
 					<p className="text-xs text-muted-foreground">
-						Permanently removes this record and its photos. This can’t be undone.
+						Permanently removes this record and its photos. This can’t be
+						undone.
 					</p>
 				</div>
 				<Button
@@ -1212,7 +1432,10 @@ function RecordDetail() {
 					className="shrink-0"
 					disabled={remove.isPending}
 					onClick={() => {
-						if (confirm(`Delete "${heading}"? This can't be undone.`)) {
+						const label =
+							[record.artist, record.title].filter(Boolean).join(" — ") ||
+							"this record";
+						if (confirm(`Delete "${label}"? This can't be undone.`)) {
 							remove.mutate();
 						}
 					}}

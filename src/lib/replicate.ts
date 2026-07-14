@@ -1,10 +1,9 @@
 import { env } from "cloudflare:workers";
 
 /**
- * Minimal Replicate client — the whole integration surface for the professional
- * studio-photo pipeline, mirroring `ai.ts` for Claude. It creates a prediction
- * against an official model and polls it to completion. No SDK: one authed
- * `fetch` against the REST API, so it runs unchanged in the queue consumer.
+ * Minimal Replicate client — one authed `fetch` against the REST API, no SDK, so
+ * it runs unchanged in a server fn or a queue consumer. It creates a prediction
+ * against a pinned model version and polls it to completion.
  *
  * Auth is `REPLICATE_API_KEY` — a runtime secret (`wrangler secret put`, and in
  * `.env.local` for dev). Server-only: never import this into a client bundle.
@@ -32,38 +31,17 @@ function authHeaders(): HeadersInit {
 	};
 }
 
-/**
- * Run an official Replicate model (`owner/name`) to completion and return the
- * finished prediction. Creates it, then polls until it reaches a terminal state
- * or the timeout elapses. Throws on an API error, a failed/canceled prediction,
- * or a timeout — the caller decides how to surface it. Both image passes in the
- * professional pipeline are just fetches awaiting a remote GPU, so the wall-clock
- * wait (not CPU) is fine inside a queue consumer.
- *
- * Only official models work here: the `/models/{model}/predictions` endpoint 404s
- * for community models (those must be pinned to a version and run via a different
- * endpoint), so keep both models in the professional pipeline official.
- */
-export async function runModel(
-	model: string,
-	input: Record<string, unknown>,
-	opts: { pollMs?: number; timeoutMs?: number } = {},
+interface RunOpts {
+	pollMs?: number;
+	timeoutMs?: number;
+}
+
+/** Poll a freshly-created prediction to a terminal state; throw unless it succeeded. */
+async function pollToDone(
+	initial: Prediction,
+	{ pollMs = 2000, timeoutMs = 120_000 }: RunOpts,
 ): Promise<Prediction> {
-	const pollMs = opts.pollMs ?? 2000;
-	const timeoutMs = opts.timeoutMs ?? 120_000;
-
-	const created = await fetch(`${API_BASE}/models/${model}/predictions`, {
-		method: "POST",
-		headers: authHeaders(),
-		body: JSON.stringify({ input }),
-	});
-	if (!created.ok) {
-		throw new Error(
-			`Replicate create failed (${created.status}): ${await created.text()}`,
-		);
-	}
-	let prediction = (await created.json()) as Prediction;
-
+	let prediction = initial;
 	const deadline = Date.now() + timeoutMs;
 	while (
 		prediction.status !== "succeeded" &&
@@ -93,6 +71,31 @@ export async function runModel(
 		);
 	}
 	return prediction;
+}
+
+/**
+ * Run a Replicate model pinned to a specific `version` hash to completion and
+ * return the finished prediction. Creates it, then polls until it reaches a
+ * terminal state or the timeout elapses. Throws on an API error, a
+ * failed/canceled prediction, or a timeout — the caller decides how to surface
+ * it. The wall-clock wait (awaiting subrequests, not CPU) is fine in a Worker.
+ */
+export async function runVersion(
+	version: string,
+	input: Record<string, unknown>,
+	opts: RunOpts = {},
+): Promise<Prediction> {
+	const created = await fetch(`${API_BASE}/predictions`, {
+		method: "POST",
+		headers: authHeaders(),
+		body: JSON.stringify({ version, input }),
+	});
+	if (!created.ok) {
+		throw new Error(
+			`Replicate create failed (${created.status}): ${await created.text()}`,
+		);
+	}
+	return pollToDone((await created.json()) as Prediction, opts);
 }
 
 /**

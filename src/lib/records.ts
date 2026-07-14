@@ -23,16 +23,30 @@ import {
 	storeUploadedCover,
 } from "#/lib/images";
 import {
+	detectCaptureCorners,
+	professionalPipeline,
+	reframeFromCapture,
+	upscaleProfessional,
+} from "#/lib/professional";
+import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
-	enqueueProfessional,
-	enqueueProfessionalBatch,
 	enqueueRefreshBatch,
-	failStaleProfessional,
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
+import {
+	type ReframeParams,
+	sanitizeReframeParams,
+} from "#/lib/reframe-params";
+import {
+	DEFAULT_CORNERS,
+	type NormalizedCorners,
+	parseCorners,
+	parseNormalizedCorners,
+	serializeCorners,
+} from "#/lib/sleeve-corners";
 
 /**
  * Server-side data access for the records collection.
@@ -55,9 +69,13 @@ const ADMIN_ONLY_FIELDS = [
 	"discogsValueCurrency",
 	"discogsValueJson",
 	"discogsValueFetchedAt",
-	// Internal professional-photo job bookkeeping — the last error and the
-	// Replicate prediction id are never public.
+	// Internal professional-photo job bookkeeping — the last error, the admin-picked
+	// sleeve corners, the reframe knob settings and the vestigial prediction id are
+	// never public.
 	"professionalError",
+	"professionalEnhanced",
+	"sleeveCornersJson",
+	"professionalParamsJson",
 	"professionalPredictionId",
 ] as const;
 
@@ -75,6 +93,9 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 		discogsValueJson: _valueJson,
 		discogsValueFetchedAt: _fetchedAt,
 		professionalError: _proError,
+		professionalEnhanced: _proEnhanced,
+		sleeveCornersJson: _corners,
+		professionalParamsJson: _proParams,
 		professionalPredictionId: _proPrediction,
 		...rest
 	} = row;
@@ -116,7 +137,7 @@ export const getRecord = createServerFn({ method: "GET" })
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "getRecord" }, async () => {
 			// Admin-only: this returns the full row (capture key, valuation, professional*
-			// bookkeeping) and now also drives the watchdog write below, so it must not be
+			// bookkeeping), so it must not be
 			// callable unauthenticated. Fail soft — it runs inside the /admin SSR loader,
 			// where a thrown 401 would break the render rather than fall through to the
 			// client-side signed-out redirect.
@@ -128,17 +149,7 @@ export const getRecord = createServerFn({ method: "GET" })
 				.from(records)
 				.where(eq(records.id, id))
 				.limit(1);
-			if (!row) return null;
-			// Self-heal a professional-photo job wedged in pending/processing: since the
-			// detail page polls this fn while a job is in flight, a stale one flips to
-			// `failed` here and surfaces a "Try again" button on the next poll. The
-			// watchdog is best-effort — never let its write break the read, so fall back
-			// to the row as-is if it throws.
-			try {
-				return await failStaleProfessional(row);
-			} catch {
-				return row;
-			}
+			return row ?? null;
 		}),
 	);
 
@@ -150,8 +161,10 @@ export const createRecord = createServerFn({ method: "POST" })
 			const db = getDb(env.DB);
 			const { source, coverImageKey: provided, ...rest } = data;
 
-			// Display cover comes from Discogs (resized → R2), not the iPhone shot.
+			// Display cover comes from Discogs (resized → R2), not the iPhone shot —
+			// unless one was provided (a manual upload), which we mark as such.
 			let coverImageKey = provided ?? null;
+			const coverIsUpload = Boolean(provided);
 			if (!coverImageKey && rest.discogsId) {
 				coverImageKey = await sourceCoverFromDiscogs(rest.discogsId);
 			}
@@ -161,6 +174,7 @@ export const createRecord = createServerFn({ method: "POST" })
 				.values({
 					...rest,
 					coverImageKey,
+					coverIsUpload,
 					source: source ?? "manual",
 					// Manually entered / imported records are ready to show immediately.
 					status: "complete",
@@ -236,7 +250,43 @@ export const captureRecord = createServerFn({ method: "POST" })
 				return failed ?? row;
 			}
 
-			return row;
+			// Generate the first-pass professional photo inline. It's free, deterministic
+			// pixel math (detect the sleeve's corners, warp, tone) — no external call — so
+			// there's no queue: a straight, cropped square is ready the moment the capture
+			// lands, and clicking it opens the editor pre-cropped. Best-effort and fully
+			// independent of analysis: on failure we record it on the professional* track (a
+			// manual re-crop retries) rather than failing the whole capture.
+			try {
+				const { professionalKey, corners } = await professionalPipeline(row);
+				const [pro] = await db
+					.update(records)
+					.set({
+						professionalImageKey: professionalKey,
+						// Persist the detected seed so the editor opens pre-cropped; a later
+						// Apply overwrites it with the admin's crop.
+						sleeveCornersJson: serializeCorners(corners),
+						// Generated, but not shown on the site until an admin approves it.
+						professionalStatus: "ready",
+						professionalError: null,
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, row.id))
+					.returning();
+				return pro ?? row;
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				const [failed] = await db
+					.update(records)
+					.set({
+						professionalStatus: "failed",
+						professionalError: `Could not generate professional photo: ${detail}`,
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, row.id))
+					.returning()
+					.catch(() => []);
+				return failed ?? row;
+			}
 		}),
 	);
 
@@ -281,10 +331,12 @@ export const publishRecord = createServerFn({ method: "POST" })
 				if (!current) return null;
 
 				let coverImageKey = current.coverImageKey;
+				let coverIsUpload = current.coverIsUpload ?? false;
 				let coverFetchFailed = false;
 				if (uploaded) {
 					// A user-uploaded cover always wins over the Discogs artwork.
 					coverImageKey = uploaded;
+					coverIsUpload = true;
 				} else if (discogsId && discogsId !== current.discogsId) {
 					// New match → re-source its cover. If that fails, clear the cover
 					// rather than keep the previous release's artwork (which would now be
@@ -292,6 +344,7 @@ export const publishRecord = createServerFn({ method: "POST" })
 					// back so the admin gets a toast and can retry or upload manually.
 					coverImageKey = await sourceCoverFromDiscogs(discogsId);
 					coverFetchFailed = !coverImageKey;
+					coverIsUpload = false;
 				}
 
 				const [row] = await db
@@ -301,6 +354,7 @@ export const publishRecord = createServerFn({ method: "POST" })
 						discogsId,
 						discogsUrl,
 						coverImageKey,
+						coverIsUpload,
 						status: "complete",
 						error: null,
 						updatedAt: new Date(),
@@ -342,16 +396,55 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Kick off (or re-run) professional studio-photo generation for a captured
- * record. Marks it `pending` and enqueues the Replicate work on the queue (its
- * own `professional` mode). Returns the updated row, or null if the record is
- * gone. Throws if there's no capture to work from so the UI can say why.
+ * Detect the sleeve's corners in a record's capture on demand — the corner editor's
+ * "Detect corners" button. Runs the lightweight, free detector server-side and returns the
+ * suggested corners for the admin to review before applying (or null if it can't find the
+ * sleeve — e.g. a low-contrast cover). Does not persist anything; the follow-up Apply does.
  */
-export const generateProfessional = createServerFn({ method: "POST" })
+export const detectCorners = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator((id: number) => id)
 	.handler(({ data: id }) =>
-		Sentry.startSpan({ name: "generateProfessional" }, async () => {
+		Sentry.startSpan({ name: "detectCorners" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select({ capturePhotoKey: records.capturePhotoKey })
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record?.capturePhotoKey) {
+				throw new Error("This record has no capture photo to detect.");
+			}
+			return { corners: await detectCaptureCorners(record.capturePhotoKey) };
+		}),
+	);
+
+/**
+ * The FREE interactive reframe — the corner editor and the tone/margin knobs both call
+ * this. Perspective-warps the real capture using the given (or stored) sleeve `corners`,
+ * crops/squares/tones it, and stores the result, synchronously: no queue, so the admin
+ * gets the updated image back in one request. Persists the corners in `sleeveCornersJson`
+ * and the knobs in `professionalParamsJson` so they seed the next edit. Requires a capture
+ * to warp — throws if there's none. Returns the updated row, or null if the record's gone.
+ */
+export const reframeRecord = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(
+		(input: {
+			id: number;
+			corners?: NormalizedCorners;
+			params?: ReframeParams;
+		}) => ({
+			id: input.id,
+			// Runtime-sanitise untrusted input before it drives the homography/tone math:
+			// drop malformed corners (out of 0..1 or non-finite → fall back to the stored
+			// crop) and keep only well-typed knob values.
+			corners: parseNormalizedCorners(input.corners) ?? undefined,
+			params: sanitizeReframeParams(input.params),
+		}),
+	)
+	.handler(({ data: { id, corners, params } }) =>
+		Sentry.startSpan({ name: "reframeRecord" }, async () => {
 			const db = getDb(env.DB);
 			const [record] = await db
 				.select()
@@ -360,18 +453,219 @@ export const generateProfessional = createServerFn({ method: "POST" })
 				.limit(1);
 			if (!record) return null;
 			if (!record.capturePhotoKey) {
-				throw new Error("This record has no capture photo to work from.");
+				throw new Error("This record has no capture photo to reframe.");
 			}
+			// Use the edited corners if supplied, else whatever's stored (or the
+			// full-frame default for a record that's never been cropped).
+			const effectiveCorners =
+				corners ?? parseCorners(record.sleeveCornersJson);
+			const { key } = await reframeFromCapture(
+				record.capturePhotoKey,
+				effectiveCorners,
+				params,
+			);
 			const [row] = await db
 				.update(records)
 				.set({
-					professionalStatus: "pending",
+					sleeveCornersJson: serializeCorners(effectiveCorners),
+					professionalImageKey: key,
+					professionalParamsJson: JSON.stringify(params),
+					// An interactive reframe always produces a reviewable image; keep an
+					// already-approved photo live so a quick tweak goes straight out.
+					professionalStatus:
+						record.professionalStatus === "approved" ? "approved" : "ready",
+					// A plain reframe supersedes any prior Real-ESRGAN upscale.
+					professionalEnhanced: false,
 					professionalError: null,
 					updatedAt: new Date(),
 				})
 				.where(eq(records.id, id))
 				.returning();
-			await enqueueProfessional(id);
+			// Bin the superseded professional image so re-tweaks don't accumulate
+			// orphaned objects in R2. Best-effort — the row already points at the new
+			// key, so a failed cleanup just leaves one stale object, never a broken ref.
+			const stale = record.professionalImageKey;
+			if (stale && stale !== key) {
+				await env.PHOTOS.delete(stale).catch(() => {});
+			}
+			return row ?? null;
+		}),
+	);
+
+/**
+ * The PAID "Enhance" action under the editor preview. Bakes the current corners +
+ * tone into a fresh reframe (so what's upscaled matches what the admin sees), runs
+ * that through Real-ESRGAN for a higher-res, sharper master, and stores it as the
+ * professional image. Approval is preserved — enhancing an already-live cover keeps
+ * it live. Atomic: any Replicate/fetch failure throws and leaves the current cover
+ * untouched (the throwaway reframe is cleaned up). Returns the updated row, or null
+ * if the record is gone.
+ */
+export const enhanceProfessional = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(
+		(input: {
+			id: number;
+			corners?: NormalizedCorners;
+			params?: ReframeParams;
+		}) => ({
+			id: input.id,
+			// Runtime-sanitise untrusted input before it drives the homography/tone math:
+			// drop malformed corners (out of 0..1 or non-finite → fall back to the stored
+			// crop) and keep only well-typed knob values.
+			corners: parseNormalizedCorners(input.corners) ?? undefined,
+			params: sanitizeReframeParams(input.params),
+		}),
+	)
+	.handler(({ data: { id, corners, params } }) =>
+		Sentry.startSpan({ name: "enhanceProfessional" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+			if (!record.capturePhotoKey) {
+				throw new Error("This record has no capture photo to enhance.");
+			}
+			const effectiveCorners =
+				corners ?? parseCorners(record.sleeveCornersJson);
+			// Bake the current edit first so the upscale operates on exactly what the
+			// preview shows, then super-resolve it. If the (paid) upscale throws, bin
+			// the throwaway reframe and rethrow — the record keeps its current cover.
+			const { key: baseKey } = await reframeFromCapture(
+				record.capturePhotoKey,
+				effectiveCorners,
+				params,
+			);
+			let upscaledKey: string;
+			try {
+				({ key: upscaledKey } = await upscaleProfessional(baseKey));
+			} catch (err) {
+				await env.PHOTOS.delete(baseKey).catch(() => {});
+				throw err;
+			}
+			// The reframe was only a staging step for the upscale — don't leave it in R2.
+			await env.PHOTOS.delete(baseKey).catch(() => {});
+
+			const [row] = await db
+				.update(records)
+				.set({
+					sleeveCornersJson: serializeCorners(effectiveCorners),
+					professionalImageKey: upscaledKey,
+					professionalParamsJson: JSON.stringify(params),
+					professionalStatus:
+						record.professionalStatus === "approved" ? "approved" : "ready",
+					// This master came out of Real-ESRGAN — mark it so the admin filter
+					// (and any future badge) can tell it apart from a plain reframe.
+					professionalEnhanced: true,
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			// Bin the superseded professional image, best-effort.
+			const stale = record.professionalImageKey;
+			if (stale && stale !== upscaledKey) {
+				await env.PHOTOS.delete(stale).catch(() => {});
+			}
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Swap a record's source capture for a freshly uploaded photo, then regenerate the
+ * first-pass professional crop from it — re-detecting the sleeve, since the stored
+ * corners were for the old image. The result drops back to `ready` (unapproved), so
+ * the admin re-approves via the editor. Best-effort R2 cleanup of the superseded
+ * capture + professional objects. Returns the updated row, or null if it's gone.
+ */
+export const replaceCapture = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => {
+		const d = (data ?? {}) as Record<string, unknown>;
+		if (typeof d.id !== "number") throw new Error("id must be a number");
+		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
+			throw new Error("imageBase64 must be a non-empty string");
+		}
+		const mediaType =
+			typeof d.mediaType === "string" && d.mediaType.startsWith("image/")
+				? d.mediaType
+				: "image/jpeg";
+		return { id: d.id, imageBase64: d.imageBase64, mediaType };
+	})
+	.handler(({ data: { id, imageBase64, mediaType } }) =>
+		Sentry.startSpan({ name: "replaceCapture" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+
+			const bytes = base64ToBytes(stripDataUrl(imageBase64));
+			const { key: capturePhotoKey } = await storeCapturePhoto(
+				bytes,
+				mediaType,
+			);
+
+			// Regenerate from the new capture. Re-detect the sleeve (pass a null crop) —
+			// the stored corners were for the old image. On failure keep the new capture
+			// but mark the pro track failed, so the admin can crop it by hand.
+			let professionalKey: string | null = null;
+			const proFields: {
+				professionalImageKey?: string | null;
+				sleeveCornersJson: string;
+				professionalStatus: "ready" | "failed";
+				professionalError: string | null;
+			} = {
+				sleeveCornersJson: serializeCorners(DEFAULT_CORNERS),
+				professionalStatus: "failed",
+				professionalError: null,
+			};
+			try {
+				const gen = await professionalPipeline({
+					capturePhotoKey,
+					sleeveCornersJson: null,
+					professionalParamsJson: record.professionalParamsJson,
+				});
+				professionalKey = gen.professionalKey;
+				proFields.professionalImageKey = gen.professionalKey;
+				proFields.sleeveCornersJson = serializeCorners(gen.corners);
+				proFields.professionalStatus = "ready";
+			} catch (err) {
+				proFields.professionalError =
+					err instanceof Error ? err.message : String(err);
+			}
+
+			const [row] = await db
+				.update(records)
+				.set({
+					capturePhotoKey,
+					...proFields,
+					// A new capture regenerates from scratch — no longer an upscale.
+					professionalEnhanced: false,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+
+			// Bin the superseded objects — best-effort, so a transient R2 failure just
+			// leaves an orphan rather than breaking the (already-updated) row.
+			for (const staleKey of [
+				record.capturePhotoKey,
+				record.professionalImageKey,
+			]) {
+				if (
+					staleKey &&
+					staleKey !== capturePhotoKey &&
+					staleKey !== professionalKey
+				) {
+					await env.PHOTOS.delete(staleKey).catch(() => {});
+				}
+			}
 			return row ?? null;
 		}),
 	);
@@ -405,6 +699,48 @@ export const setProfessionalApproved = createServerFn({ method: "POST" })
 				})
 				.where(eq(records.id, id))
 				.returning();
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Remove the professional photo entirely — the "Remove cover" action. Deletes the
+ * stored image from R2 and resets the record's whole professional* state to zero:
+ * no key, status `idle`, not enhanced, and the crop corners + tone knobs cleared back
+ * to their defaults. So the header falls back to the raw capture and a later edit opens
+ * on a clean full-frame, default-tone slate. No-op (returns the row/null) if the record
+ * is gone.
+ */
+export const clearProfessional = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "clearProfessional" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+			const stale = record.professionalImageKey;
+			const [row] = await db
+				.update(records)
+				.set({
+					professionalImageKey: null,
+					professionalStatus: "idle",
+					professionalEnhanced: false,
+					professionalError: null,
+					// Zero-state: drop the saved crop + tone so the editor reopens clean.
+					sleeveCornersJson: null,
+					professionalParamsJson: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			// Best-effort R2 cleanup — the row already points at no image, so a failed
+			// delete just leaves an orphan object, never a broken reference.
+			if (stale) await env.PHOTOS.delete(stale).catch(() => {});
 			return row ?? null;
 		}),
 	);
@@ -529,7 +865,7 @@ export const deleteRecord = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "deleteRecord" }, async () => {
 			const db = getDb(env.DB);
 			// Read the record's R2 photo keys before dropping the row so we can
-			// clean up the objects too — otherwise the capture, cover, and pro
+			// clean up the objects too — otherwise the capture, cover and pro
 			// images (all in the PHOTOS bucket) would be orphaned forever.
 			const [row] = await db
 				.select({
@@ -644,40 +980,5 @@ export const refreshRecords = createServerFn({ method: "POST" })
 			}
 			await enqueueRefreshBatch(matched);
 			return { count: matched.length };
-		}),
-	);
-
-/**
- * Bulk professional photos. Marks every selected record that has a capture photo
- * `pending` and enqueues the Replicate work through the queue (rate-limited by
- * its concurrency cap) rather than firing N synchronous generations. Records
- * without a capture to work from are silently skipped. Returns how many were
- * queued.
- */
-export const generateProfessionalPhotos = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(idList)
-	.handler(({ data: ids }) =>
-		Sentry.startSpan({ name: "generateProfessionalPhotos" }, async () => {
-			if (ids.length === 0) return { count: 0 };
-			const db = getDb(env.DB);
-			const now = new Date();
-			const queued: number[] = [];
-			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
-				const rows = await db
-					.update(records)
-					.set({
-						professionalStatus: "pending",
-						professionalError: null,
-						updatedAt: now,
-					})
-					.where(
-						and(inArray(records.id, batch), isNotNull(records.capturePhotoKey)),
-					)
-					.returning({ id: records.id });
-				queued.push(...rows.map(({ id }) => id));
-			}
-			await enqueueProfessionalBatch(queued);
-			return { count: queued.length };
 		}),
 	);

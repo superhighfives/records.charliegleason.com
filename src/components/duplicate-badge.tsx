@@ -1,5 +1,3 @@
-import { CopyCheck } from "lucide-react";
-
 import { cn } from "#/lib/utils";
 
 /**
@@ -11,12 +9,11 @@ export function DuplicateBadge({ className }: { className?: string }) {
 	return (
 		<span
 			className={cn(
-				"inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800 dark:bg-orange-950 dark:text-orange-200",
+				"inline-flex items-center whitespace-nowrap rounded-full border border-orange-500/40 px-2 py-0.5 text-xs font-medium text-orange-600 dark:text-orange-400",
 				className,
 			)}
 			title="This release is already in your collection"
 		>
-			<CopyCheck className="size-3" />
 			Duplicate
 		</span>
 	);

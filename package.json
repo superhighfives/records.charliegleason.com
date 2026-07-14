@@ -16,10 +16,14 @@
     "check": "biome check",
     "deploy": "bun run build && wrangler deploy",
     "db:generate": "drizzle-kit generate",
+    "db:migrate": "wrangler d1 migrations apply records --remote",
+    "db:migrate:local": "wrangler d1 migrations apply records --local",
+    "db:migrate:preview": "wrangler d1 migrations apply records-preview --remote --env preview",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"
   },
   "dependencies": {
+    "@cf-wasm/photon": "^0.3.6",
     "@clerk/backend": "^3.8.2",
     "@clerk/clerk-react": "^5.61.3",
     "@cloudflare/vite-plugin": "^1.26.0",

@@ -12,9 +12,9 @@
 export interface AnalyzeMessage {
 	recordId: number;
 	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls
-	// the Discogs release for an already-identified record; "professional"
-	// generates a studio product photo from the capture via Replicate.
-	mode?: "analyze" | "refresh" | "professional";
+	// the Discogs release for an already-identified record. (The professional studio
+	// photo is generated synchronously, inline — it's free pixel math, no queue.)
+	mode?: "analyze" | "refresh";
 }
 
 /**

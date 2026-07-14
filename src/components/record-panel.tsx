@@ -176,7 +176,9 @@ export function RecordPanel({
 		return () => clearTimeout(t);
 	}, [copied]);
 
-	const cover = displayCoverKey(record);
+	// Admin drawer falls back to the raw capture so an in-progress record still
+	// shows an image; the public panel shows only an approved photo (else nothing).
+	const cover = displayCoverKey(record, { includeCapture: admin });
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {

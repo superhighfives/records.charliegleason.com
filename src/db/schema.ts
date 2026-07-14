@@ -49,20 +49,45 @@ export const records = sqliteTable("records", {
 
 	// Storage / provenance
 	coverImageKey: text("cover_image_key"), // R2 key — good cover, sourced + resized (public)
+	// Whether `coverImageKey` came from a manual upload (true) vs Discogs-sourced
+	// artwork (false/default). Both live under `covers/`, so this is the only way to
+	// tell them apart — used by the admin "Using upload" filter.
+	coverIsUpload: integer("cover_is_upload", { mode: "boolean" }).default(false),
 	capturePhotoKey: text("capture_photo_key"), // R2 key — the original iPhone shot (admin only)
 
-	// Professional studio photo — generated from the iPhone capture via Replicate
-	// (Flux Kontext relight + BiRefNet cutout → a transparent webp under
-	// `professional/`). Reviewed before it goes live: `ready` = generated, awaiting
-	// approval; `approved` = promoted and preferred over the Discogs cover for
-	// display (see displayCoverKey). Runs in its own queue mode, best-effort, so it
-	// never blocks the main capture status machine.
-	professionalImageKey: text("professional_image_key"), // R2 key — pro cutout (public once approved)
+	// Professional studio photo — a straight-on, cropped, evenly-toned square built
+	// deterministically from the iPhone capture (no AI, no paid call):
+	//   1. The sleeve's four corners are picked in the admin corner editor (auto-seeded by
+	//      a lightweight sleeve-detection pass on capture) and stored as `sleeveCornersJson`
+	//      — normalised [[x,y]×4] in TL,TR,BR,BL order. A fresh capture defaults to the
+	//      full frame when detection can't find the sleeve.
+	//   2. Those corners drive a perspective-warp + crop + auto-tone of the real capture
+	//      pixels → the displayed `professionalImageKey` under `professional/`. Free (pure
+	//      pixel math), so it runs synchronously — a first pass inline on capture, and again
+	//      whenever the admin nudges the corners or the `professionalParamsJson` tone/polish
+	//      knobs. There is no queue and no async job to wait on.
+	// `professionalStatus`: `idle` = nothing generated yet; `ready` = a photo exists but is
+	// not shown on the site (awaiting approval); `approved` = promoted and preferred over the
+	// Discogs cover for display (see displayCoverKey); `failed` = the inline generation errored
+	// (a re-crop retries). The `pending`/`processing` values are legacy (the old queued flow)
+	// and no longer written — kept in the enum only so historical rows still type-check.
+	sleeveCornersJson: text("sleeve_corners_json"), // normalised sleeve corners (JSON), admin-picked
+	professionalImageKey: text("professional_image_key"), // R2 key — pro photo (public once approved)
+	professionalParamsJson: text("professional_params_json"), // last reframe knob settings (JSON)
 	professionalStatus: text("professional_status", {
 		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
 	}).default("idle"),
+	// Whether `professionalImageKey` is a Real-ESRGAN-upscaled master (the editor's
+	// paid "Enhance"), vs a plain reframe of the capture. Reset to false whenever the
+	// photo is regenerated from the capture. Powers the admin "Enhanced" filter.
+	professionalEnhanced: integer("professional_enhanced", {
+		mode: "boolean",
+	}).default(false),
 	professionalError: text("professional_error"), // last generation error, surfaced in admin
-	professionalPredictionId: text("professional_prediction_id"), // Replicate prediction id (debug)
+	// Vestigial — the pipeline no longer makes any Replicate call. Kept as a nullable
+	// column (not dropped) so a migration never has to remove something the currently
+	// deployed production code still selects; a later migration can drop it post-merge.
+	professionalPredictionId: text("professional_prediction_id"),
 
 	notes: text("notes"),
 	source: text("source", { enum: ["photo", "manual", "import"] }).default(
