@@ -766,15 +766,14 @@ function AdminRecords() {
 
 	return (
 		<div className="space-y-4">
-			<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+			<div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
 				<div>
 					<h1 className="text-2xl font-semibold">Collection</h1>
 					<p className="mt-0.5 text-sm text-muted-foreground">
-						Total value{" "}
 						<span className="font-medium tabular-nums text-foreground">
 							{formatMoney(totals.total, "USD")}
 						</span>{" "}
-						across {totals.valued} {totals.valued === 1 ? "record" : "records"}
+						/ {totals.valued} {totals.valued === 1 ? "record" : "records"}
 						{totals.confirmedTotal > 0 && (
 							<>
 								{" "}
@@ -787,14 +786,21 @@ function AdminRecords() {
 						)}
 					</p>
 				</div>
-				<div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-					<Input
-						ref={searchRef}
-						value={filter}
-						onChange={(e) => setFilter(e.target.value)}
-						placeholder="Filter records…  ( / )"
-						className="w-full sm:w-56"
-					/>
+				<div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
+					<div className="relative w-full md:w-56">
+						<Input
+							ref={searchRef}
+							value={filter}
+							onChange={(e) => setFilter(e.target.value)}
+							placeholder="Filter records…"
+							className="w-full pr-9"
+						/>
+						{!filter && (
+							<kbd className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 select-none items-center rounded border bg-muted px-1.5 font-mono text-xs text-muted-foreground md:inline-flex">
+								/
+							</kbd>
+						)}
+					</div>
 
 					{/* Facet filters live in a popover so the header stays a single tidy row
 					    on mobile. The trigger badges the active count; the panel holds the
@@ -805,7 +811,7 @@ function AdminRecords() {
 						<PopoverTrigger asChild>
 							<Button
 								variant="outline"
-								className="flex-1 sm:flex-none"
+								className="flex-1 md:flex-none"
 								aria-label="Filters"
 							>
 								Filters
@@ -874,8 +880,8 @@ function AdminRecords() {
 
 					{/* Split primary action: "Capture record" is the common path; the caret
 					    tucks the rarer "Add manually" behind a dropdown. */}
-					<div className="flex flex-1 sm:flex-none">
-						<Button asChild className="flex-1 rounded-r-none sm:flex-none">
+					<div className="flex flex-1 md:flex-none">
+						<Button asChild className="flex-1 rounded-r-none md:flex-none">
 							<Link to="/admin/capture">Capture record</Link>
 						</Button>
 						<DropdownMenu>
@@ -918,7 +924,7 @@ function AdminRecords() {
 					{hasSelection && (
 						<>
 							{/* Desktop: the actions inline. */}
-							<div className="hidden items-center gap-2 sm:flex">
+							<div className="hidden items-center gap-2 md:flex">
 								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
 									const { label, destructive, requiresMatch } =
 										BULK_ACTIONS[action];
@@ -945,7 +951,7 @@ function AdminRecords() {
 
 							{/* Mobile: the same actions collapsed into a dropdown so the
 							    toolbar stays on one row. */}
-							<div className="sm:hidden">
+							<div className="md:hidden">
 								<DropdownMenu>
 									<DropdownMenuTrigger asChild>
 										<Button
