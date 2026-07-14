@@ -629,35 +629,55 @@ function RecordDetail() {
 			? coverProbe.url
 			: (picked?.thumb ??
 				(record.coverImageKey ? `/api/photos/${record.coverImageKey}` : null));
-	const heading =
-		record.artist || record.title
-			? `${record.artist || "Unknown"} — ${record.title || "Untitled"}`
-			: "Captured record";
+	// Header photo: the raw capture if there is one, else the best cover we have.
+	const headerPhotoSrc = record.capturePhotoKey
+		? `/api/photos/${record.capturePhotoKey}`
+		: coverPreviewSrc;
 
 	return (
 		<div className="mx-auto max-w-2xl space-y-6">
-			<div className="flex items-start justify-between gap-4">
-				<div>
-					<Link
-						to="/admin"
-						className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
-					>
-						← Collection
-					</Link>
-					<h1 className="mt-1 text-2xl font-semibold">{heading}</h1>
-					{record.captureContext && (
-						<p className="mt-1 text-sm text-muted-foreground">
-							<span className="font-medium text-foreground">Context:</span>{" "}
-							{record.captureContext}
-						</p>
+			<div>
+				<Link
+					to="/admin"
+					className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
+				>
+					← Collection
+				</Link>
+				<div className="mt-3 flex items-start gap-4">
+					{headerPhotoSrc && (
+						<ImageZoom
+							src={headerPhotoSrc}
+							alt="Record photo"
+							className="size-24 shrink-0"
+						/>
 					)}
-				</div>
-				<div className="flex flex-wrap items-center justify-end gap-1">
-					{record.status === "review" && !record.discogsId && (
-						<UnmatchedBadge />
-					)}
-					{record.duplicateOf != null && <DuplicateBadge />}
-					<StatusBadge status={record.status} />
+					<div className="min-w-0 flex-1">
+						<div className="flex items-start justify-between gap-2">
+							<div className="min-w-0">
+								{record.artist && (
+									<p className="truncate text-sm text-muted-foreground">
+										{record.artist}
+									</p>
+								)}
+								<h1 className="text-2xl font-semibold leading-tight">
+									{record.title || "Captured record"}
+								</h1>
+							</div>
+							<div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+								{record.status === "review" && !record.discogsId && (
+									<UnmatchedBadge />
+								)}
+								{record.duplicateOf != null && <DuplicateBadge />}
+								<StatusBadge status={record.status} />
+							</div>
+						</div>
+						{record.captureContext && (
+							<p className="mt-1 text-sm text-muted-foreground">
+								<span className="font-medium text-foreground">Context:</span>{" "}
+								{record.captureContext}
+							</p>
+						)}
+					</div>
 				</div>
 			</div>
 
@@ -674,49 +694,6 @@ function RecordDetail() {
 					</Link>
 				</div>
 			)}
-
-			{/* Photos: the iPhone capture, plus the sourced cover once we have one. */}
-			<div className="flex gap-3">
-				{record.capturePhotoKey && (
-					<figure className="space-y-1">
-						<ImageZoom
-							src={`/api/photos/${record.capturePhotoKey}`}
-							alt="Original capture"
-							className="size-32"
-						/>
-						<figcaption className="text-xs text-muted-foreground">
-							Capture
-						</figcaption>
-					</figure>
-				)}
-				{/* Preview the picked candidate's Discogs artwork immediately — the
-				    full-res cover isn't sourced into R2 until publish, so we grab it
-				    through the proxy for a zoomable, verified preview. */}
-				{coverPreviewSrc && (
-					<figure className="space-y-1">
-						<ImageZoom
-							src={coverPreviewSrc}
-							alt={picked ? "Selected Discogs cover" : "Sourced cover"}
-							className="size-32"
-						/>
-						<figcaption className="text-xs text-muted-foreground">
-							{picked ? "Discogs (selected)" : "Discogs"}
-						</figcaption>
-					</figure>
-				)}
-				{customCover && (
-					<figure className="space-y-1">
-						<ImageZoom
-							src={customCover.preview}
-							alt="Uploaded cover"
-							className="size-32"
-						/>
-						<figcaption className="text-xs text-muted-foreground">
-							Upload
-						</figcaption>
-					</figure>
-				)}
-			</div>
 
 			{/* Download status for the picked candidate's cover — confirms the grab
 			    worked (with size/type) or surfaces why it didn't. */}
@@ -1105,204 +1082,243 @@ function RecordDetail() {
 							</div>
 						)}
 
-						{/* Wrong match? Search Discogs or paste a release URL. */}
-						<div className="space-y-3 p-3">
-							<div
-								role="tablist"
-								aria-label="Discogs lookup method"
-								className="flex gap-1 border-b"
-							>
-								<TabButton active={tab === "url"} onClick={() => setTab("url")}>
-									Discogs URL
-								</TabButton>
-								<TabButton
-									active={tab === "search"}
-									onClick={() => setTab("search")}
-								>
-									Search
-								</TabButton>
-							</div>
-
-							{tab === "search" ? (
-								<form
-									className="space-y-2"
-									onSubmit={(e) => {
-										e.preventDefault();
-										if (!search.isPending) search.mutate(query);
-									}}
-								>
-									<div className="flex items-end gap-2">
-										<div className="flex-1 space-y-1">
-											<label
-												htmlFor="q-artist"
-												className="text-xs text-muted-foreground"
-											>
-												Artist
-											</label>
-											<Input
-												id="q-artist"
-												value={query.artist}
-												onChange={(e) =>
-													setQuery((q) => ({ ...q, artist: e.target.value }))
+						{/* Wrong match? The sourced cover sits to the left of the search /
+						    paste-a-URL controls. */}
+						<div className="flex gap-3 p-3">
+							{(coverPreviewSrc || customCover) && (
+								<div className="flex shrink-0 flex-col gap-2">
+									{coverPreviewSrc && (
+										<figure className="space-y-1">
+											<ImageZoom
+												src={coverPreviewSrc}
+												alt={
+													picked ? "Selected Discogs cover" : "Sourced cover"
 												}
+												className="size-32"
 											/>
-										</div>
-										<div className="flex-1 space-y-1">
-											<label
-												htmlFor="q-title"
-												className="text-xs text-muted-foreground"
-											>
-												Title
-											</label>
-											<Input
-												id="q-title"
-												value={query.title}
-												onChange={(e) =>
-													setQuery((q) => ({ ...q, title: e.target.value }))
-												}
+											<figcaption className="text-xs text-muted-foreground">
+												{picked ? "Discogs (selected)" : "Discogs"}
+											</figcaption>
+										</figure>
+									)}
+									{customCover && (
+										<figure className="space-y-1">
+											<ImageZoom
+												src={customCover.preview}
+												alt="Uploaded cover"
+												className="size-32"
 											/>
-										</div>
-									</div>
-
-									{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
-									<button
-										type="button"
-										aria-expanded={showAdvanced}
-										onClick={() => setShowAdvanced((v) => !v)}
-										className="text-xs text-muted-foreground underline underline-offset-4"
+											<figcaption className="text-xs text-muted-foreground">
+												Upload
+											</figcaption>
+										</figure>
+									)}
+								</div>
+							)}
+							<div className="min-w-0 flex-1 space-y-3">
+								<div
+									role="tablist"
+									aria-label="Discogs lookup method"
+									className="flex gap-1 border-b"
+								>
+									<TabButton
+										active={tab === "url"}
+										onClick={() => setTab("url")}
 									>
-										{showAdvanced
-											? "Hide advanced options"
-											: "Advanced options"}
-									</button>
+										Discogs URL
+									</TabButton>
+									<TabButton
+										active={tab === "search"}
+										onClick={() => setTab("search")}
+									>
+										Search
+									</TabButton>
+								</div>
 
-									{showAdvanced && (
+								{tab === "search" ? (
+									<form
+										className="space-y-2"
+										onSubmit={(e) => {
+											e.preventDefault();
+											if (!search.isPending) search.mutate(query);
+										}}
+									>
 										<div className="flex items-end gap-2">
 											<div className="flex-1 space-y-1">
 												<label
-													htmlFor="q-country"
+													htmlFor="q-artist"
 													className="text-xs text-muted-foreground"
 												>
-													Country
+													Artist
 												</label>
 												<Input
-													id="q-country"
-													value={query.country}
-													placeholder="e.g. UK"
+													id="q-artist"
+													value={query.artist}
 													onChange={(e) =>
-														setQuery((q) => ({ ...q, country: e.target.value }))
+														setQuery((q) => ({ ...q, artist: e.target.value }))
 													}
 												/>
 											</div>
 											<div className="flex-1 space-y-1">
 												<label
-													htmlFor="q-year"
+													htmlFor="q-title"
 													className="text-xs text-muted-foreground"
 												>
-													Year
+													Title
 												</label>
 												<Input
-													id="q-year"
-													inputMode="numeric"
-													value={query.year}
-													placeholder="e.g. 1971"
+													id="q-title"
+													value={query.title}
 													onChange={(e) =>
-														setQuery((q) => ({ ...q, year: e.target.value }))
+														setQuery((q) => ({ ...q, title: e.target.value }))
 													}
 												/>
 											</div>
 										</div>
-									)}
 
-									{/* Free-text catch-all — passed to Discogs' general search for
+										{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
+										<button
+											type="button"
+											aria-expanded={showAdvanced}
+											onClick={() => setShowAdvanced((v) => !v)}
+											className="text-xs text-muted-foreground underline underline-offset-4"
+										>
+											{showAdvanced
+												? "Hide advanced options"
+												: "Advanced options"}
+										</button>
+
+										{showAdvanced && (
+											<div className="flex items-end gap-2">
+												<div className="flex-1 space-y-1">
+													<label
+														htmlFor="q-country"
+														className="text-xs text-muted-foreground"
+													>
+														Country
+													</label>
+													<Input
+														id="q-country"
+														value={query.country}
+														placeholder="e.g. UK"
+														onChange={(e) =>
+															setQuery((q) => ({
+																...q,
+																country: e.target.value,
+															}))
+														}
+													/>
+												</div>
+												<div className="flex-1 space-y-1">
+													<label
+														htmlFor="q-year"
+														className="text-xs text-muted-foreground"
+													>
+														Year
+													</label>
+													<Input
+														id="q-year"
+														inputMode="numeric"
+														value={query.year}
+														placeholder="e.g. 1971"
+														onChange={(e) =>
+															setQuery((q) => ({ ...q, year: e.target.value }))
+														}
+													/>
+												</div>
+											</div>
+										)}
+
+										{/* Free-text catch-all — passed to Discogs' general search for
 								    anything the structured fields miss (label, catalog number). */}
-									{showAdvanced && (
+										{showAdvanced && (
+											<div className="space-y-1">
+												<label
+													htmlFor="q-keywords"
+													className="text-xs text-muted-foreground"
+												>
+													Discogs search
+												</label>
+												<Input
+													id="q-keywords"
+													value={query.q}
+													placeholder="e.g. label, catalog number, or any keywords"
+													onChange={(e) =>
+														setQuery((q) => ({ ...q, q: e.target.value }))
+													}
+												/>
+											</div>
+										)}
+
+										{search.isError && (
+											<p className="text-xs text-red-600" role="alert">
+												{search.error instanceof Error
+													? search.error.message
+													: "Search failed. Try again."}
+											</p>
+										)}
+										{search.isSuccess && (search.data?.length ?? 0) === 0 && (
+											<p
+												className="text-xs text-muted-foreground"
+												aria-live="polite"
+											>
+												No matches on Discogs. Try a different spelling, drop
+												the title, or paste the release URL.
+											</p>
+										)}
+										<div className="flex justify-end">
+											<Button
+												type="submit"
+												variant="outline"
+												disabled={search.isPending}
+											>
+												{search.isPending ? "Searching…" : "Search"}
+											</Button>
+										</div>
+									</form>
+								) : (
+									<form
+										className="space-y-2"
+										onSubmit={(e) => {
+											e.preventDefault();
+											if (looksLikeReleaseId(discogsUrl) && !lookup.isPending) {
+												lookup.mutate(discogsUrl);
+											}
+										}}
+									>
 										<div className="space-y-1">
 											<label
-												htmlFor="q-keywords"
+												htmlFor="q-url"
 												className="text-xs text-muted-foreground"
 											>
-												Discogs search
+												Discogs release URL
 											</label>
 											<Input
-												id="q-keywords"
-												value={query.q}
-												placeholder="e.g. label, catalog number, or any keywords"
-												onChange={(e) =>
-													setQuery((q) => ({ ...q, q: e.target.value }))
-												}
+												id="q-url"
+												value={discogsUrl}
+												placeholder="https://www.discogs.com/release/…"
+												onChange={(e) => setDiscogsUrl(e.target.value)}
 											/>
 										</div>
-									)}
-
-									{search.isError && (
-										<p className="text-xs text-red-600" role="alert">
-											{search.error instanceof Error
-												? search.error.message
-												: "Search failed. Try again."}
-										</p>
-									)}
-									{search.isSuccess && (search.data?.length ?? 0) === 0 && (
-										<p
-											className="text-xs text-muted-foreground"
-											aria-live="polite"
-										>
-											No matches on Discogs. Try a different spelling, drop the
-											title, or paste the release URL.
-										</p>
-									)}
-									<div className="flex justify-end">
-										<Button
-											type="submit"
-											variant="outline"
-											disabled={search.isPending}
-										>
-											{search.isPending ? "Searching…" : "Search"}
-										</Button>
-									</div>
-								</form>
-							) : (
-								<form
-									className="space-y-2"
-									onSubmit={(e) => {
-										e.preventDefault();
-										if (looksLikeReleaseId(discogsUrl) && !lookup.isPending) {
-											lookup.mutate(discogsUrl);
-										}
-									}}
-								>
-									<div className="space-y-1">
-										<label
-											htmlFor="q-url"
-											className="text-xs text-muted-foreground"
-										>
-											Discogs release URL
-										</label>
-										<Input
-											id="q-url"
-											value={discogsUrl}
-											placeholder="https://www.discogs.com/release/…"
-											onChange={(e) => setDiscogsUrl(e.target.value)}
-										/>
-									</div>
-									{lookup.isError && (
-										<p className="text-xs text-red-600">
-											{lookup.error.message}
-										</p>
-									)}
-									<div className="flex justify-end">
-										<Button
-											type="submit"
-											variant="outline"
-											disabled={
-												lookup.isPending || !looksLikeReleaseId(discogsUrl)
-											}
-										>
-											{lookup.isPending ? "…" : "Fetch release"}
-										</Button>
-									</div>
-								</form>
-							)}
+										{lookup.isError && (
+											<p className="text-xs text-red-600">
+												{lookup.error.message}
+											</p>
+										)}
+										<div className="flex justify-end">
+											<Button
+												type="submit"
+												variant="outline"
+												disabled={
+													lookup.isPending || !looksLikeReleaseId(discogsUrl)
+												}
+											>
+												{lookup.isPending ? "…" : "Fetch release"}
+											</Button>
+										</div>
+									</form>
+								)}
+							</div>
 						</div>
 
 						{/* Candidate pick-list — the lower half of the panel, divided from
@@ -1459,7 +1475,10 @@ function RecordDetail() {
 					className="shrink-0"
 					disabled={remove.isPending}
 					onClick={() => {
-						if (confirm(`Delete "${heading}"? This can't be undone.`)) {
+						const label =
+							[record.artist, record.title].filter(Boolean).join(" — ") ||
+							"this record";
+						if (confirm(`Delete "${label}"? This can't be undone.`)) {
 							remove.mutate();
 						}
 					}}
