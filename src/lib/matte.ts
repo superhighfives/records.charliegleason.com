@@ -11,6 +11,7 @@ import {
 	type MatteOptions,
 	type MatteResult,
 	matteFromCorners,
+	refineQuadEdges,
 	type RgbaImage,
 	type ShadowOptions,
 } from "#/lib/photo-processing";
@@ -66,12 +67,13 @@ const SHADOW: ShadowOptions = {
 const MODEL_SIZE = 2048;
 const MODEL_PAD = 0.2;
 
-// Trimap band widths, as a fraction of MODEL_SIZE, offset from the picked corners:
-// erode the cover a little inward for the definite-foreground core, dilate outward past
-// where the true edge could be (the admin picked *inside*, so the edge is outward) for
-// the definite-background boundary. The unknown band spans between the two.
-const TRIMAP_ERODE = Math.round(MODEL_SIZE * 0.035);
-const TRIMAP_DILATE = Math.round(MODEL_SIZE * 0.07);
+// The picked corners sit *inside* the cover, so first snap the quad out to the true
+// sleeve edge (max-gradient search up to this far outward), then wrap a tight, symmetric
+// unknown band around that refined edge. A narrow band centred on the real boundary is
+// what keeps the model from keeping wood — it only decides a thin strip at the edge,
+// rather than a wide inside-cover-to-deep-wood zone.
+const TRIMAP_REFINE_SEARCH = Math.round(MODEL_SIZE * 0.08);
+const TRIMAP_BAND = Math.round(MODEL_SIZE * 0.025);
 
 // The pinned matting model version (Replicate): our own ViTMatte cog (see
 // `cog/vitmatte-trimap/`), which takes `image` + `trimap` and returns a grayscale alpha
@@ -192,18 +194,22 @@ async function matteAI(
 	if (!MATTE_MODEL_VERSION) throw new Error("matting model not configured");
 	const px = toPixelCorners(corners, capture.width, capture.height);
 	// Deskew upright with a wood margin around the sleeve; `inset` are the picked corners
-	// mapped into the deskewed frame — the trimap's starting rectangle.
+	// mapped into the deskewed frame — inside the cover, since that's how they're picked.
 	const { content, corners: inset } = deskewContentPadded(
 		capture,
 		px,
 		MODEL_SIZE,
 		MODEL_PAD,
 	);
-	// The trimap: cover interior locked foreground, wood beyond the edge locked
-	// background, a band around the picked edge left unknown for the model to resolve.
-	const trimap = buildTrimap(inset, content.width, content.height, {
-		erode: TRIMAP_ERODE,
-		dilate: TRIMAP_DILATE,
+	// Snap the quad out to the true sleeve edge, then build a tight trimap around it:
+	// cover interior locked foreground, wood beyond locked background, only a thin band
+	// at the refined edge left unknown for the model to resolve.
+	const refined = refineQuadEdges(content, inset, {
+		search: TRIMAP_REFINE_SEARCH,
+	});
+	const trimap = buildTrimap(refined, content.width, content.height, {
+		erode: TRIMAP_BAND,
+		dilate: TRIMAP_BAND,
 	});
 
 	const imageUri = `data:image/png;base64,${bytesToBase64(encodePng(content))}`;
