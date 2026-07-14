@@ -46,9 +46,10 @@ import {
  * the capture and re-encodes the result, and the Images binding canonicalises to a
  * webp-with-alpha (like the cover pipeline) before storing under `professional/`.
  *
- * There is no paid step anymore: the whole reframe is free and deterministic, so it
- * re-runs on demand whenever the admin nudges the corners or the {@link ReframeParams}
- * tone/polish knobs.
+ * The reframe itself is free and deterministic, so it re-runs on demand whenever the
+ * admin nudges the corners or the {@link ReframeParams} tone/polish knobs. The only
+ * paid step is the optional, on-demand "Enhance" ({@link upscaleProfessional}), which
+ * super-resolves an already-reframed image through Real-ESRGAN on Replicate.
  *
  * Server-only (pulls in `cloudflare:workers`); never import from a client route — the
  * shared knob/corner types + defaults live in `reframe-params.ts` / `sleeve-corners.ts`.

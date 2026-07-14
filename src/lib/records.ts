@@ -36,11 +36,15 @@ import {
 	refreshRecordById,
 } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
-import type { ReframeParams } from "#/lib/reframe-params";
+import {
+	type ReframeParams,
+	sanitizeReframeParams,
+} from "#/lib/reframe-params";
 import {
 	DEFAULT_CORNERS,
 	type NormalizedCorners,
 	parseCorners,
+	parseNormalizedCorners,
 	serializeCorners,
 } from "#/lib/sleeve-corners";
 
@@ -432,8 +436,11 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			params?: ReframeParams;
 		}) => ({
 			id: input.id,
-			corners: input.corners,
-			params: input.params ?? {},
+			// Runtime-sanitise untrusted input before it drives the homography/tone math:
+			// drop malformed corners (out of 0..1 or non-finite → fall back to the stored
+			// crop) and keep only well-typed knob values.
+			corners: parseNormalizedCorners(input.corners) ?? undefined,
+			params: sanitizeReframeParams(input.params),
 		}),
 	)
 	.handler(({ data: { id, corners, params } }) =>
@@ -503,8 +510,11 @@ export const enhanceProfessional = createServerFn({ method: "POST" })
 			params?: ReframeParams;
 		}) => ({
 			id: input.id,
-			corners: input.corners,
-			params: input.params ?? {},
+			// Runtime-sanitise untrusted input before it drives the homography/tone math:
+			// drop malformed corners (out of 0..1 or non-finite → fall back to the stored
+			// crop) and keep only well-typed knob values.
+			corners: parseNormalizedCorners(input.corners) ?? undefined,
+			params: sanitizeReframeParams(input.params),
 		}),
 	)
 	.handler(({ data: { id, corners, params } }) =>

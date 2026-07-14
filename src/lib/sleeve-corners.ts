@@ -65,20 +65,31 @@ function isNormalizedCorner(v: unknown): v is NormalizedCorner {
 	);
 }
 
+/**
+ * Validate an already-parsed value as {@link NormalizedCorners} — exactly four
+ * finite [x,y] points in 0..1. Returns null on anything else. Used to sanitise
+ * untrusted API input (the reframe/enhance server fns) before it drives the warp.
+ */
+export function parseNormalizedCorners(
+	value: unknown,
+): NormalizedCorners | null {
+	return Array.isArray(value) &&
+		value.length === 4 &&
+		value.every(isNormalizedCorner)
+		? (value as NormalizedCorners)
+		: null;
+}
+
 /** Parse a stored `sleeveCornersJson` string into corners (DEFAULT on junk/null). */
 export function parseCorners(
 	json: string | null | undefined,
 ): NormalizedCorners {
 	if (!json) return DEFAULT_CORNERS;
 	try {
-		const c = JSON.parse(json);
-		if (Array.isArray(c) && c.length === 4 && c.every(isNormalizedCorner)) {
-			return c as NormalizedCorners;
-		}
+		return parseNormalizedCorners(JSON.parse(json)) ?? DEFAULT_CORNERS;
 	} catch {
-		// fall through
+		return DEFAULT_CORNERS;
 	}
-	return DEFAULT_CORNERS;
 }
 
 /** Serialise corners for storage, rounding to keep the JSON small and stable. */
