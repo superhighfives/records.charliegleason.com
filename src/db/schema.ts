@@ -84,6 +84,18 @@ export const records = sqliteTable("records", {
 		mode: "boolean",
 	}).default(false),
 	professionalError: text("professional_error"), // last generation error, surfaced in admin
+	// The "alpha matte": a second render — a transparent, true-edged sleeve floating on
+	// a margin with a soft contact shadow — generated alongside the square from the same
+	// corners on Apply. `professionalAlphaKey` is the shadow variant (used on the homepage
+	// grid; public once the square is `approved`); `…CutoutKey` is the shadowless pure
+	// cutout for compositing onto any background. `professionalAlphaSource` records whether
+	// a matting model (`ai`) or the free deterministic edge-snap (`deterministic`) cut it
+	// out. Both are stored under `alpha/` and cleared/rebuilt in lockstep with the square.
+	professionalAlphaKey: text("professional_alpha_key"),
+	professionalAlphaCutoutKey: text("professional_alpha_cutout_key"),
+	professionalAlphaSource: text("professional_alpha_source", {
+		enum: ["ai", "deterministic"],
+	}),
 	// Vestigial — the pipeline no longer makes any Replicate call. Kept as a nullable
 	// column (not dropped) so a migration never has to remove something the currently
 	// deployed production code still selects; a later migration can drop it post-merge.

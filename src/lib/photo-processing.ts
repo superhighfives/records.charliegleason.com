@@ -105,6 +105,37 @@ function sampleBilinear(
 }
 
 /**
+ * Warp `src` so its `srcCorners` (TL,TR,BR,BL) land on `dstCorners` in a `outW` x
+ * `outH` output, inverse-mapped with bilinear sampling (no holes). Output pixels
+ * whose source falls outside `src` read transparent black (via {@link
+ * sampleBilinear}). The general quad-to-quad primitive under {@link warpToSquare}
+ * (which squares the sleeve) and the matte's mild deskew (which keeps its shape).
+ */
+export function warpToQuad(
+	src: RgbaImage,
+	srcCorners: Corners,
+	dstCorners: Corners,
+	outW: number,
+	outH: number,
+): RgbaImage {
+	const H = homography(dstCorners, srcCorners); // output -> source
+	const data = new Uint8ClampedArray(outW * outH * 4);
+	const px: [number, number, number, number] = [0, 0, 0, 0];
+	for (let y = 0; y < outH; y++) {
+		for (let x = 0; x < outW; x++) {
+			const [sx, sy] = applyH(H, x, y);
+			sampleBilinear(src, sx, sy, px);
+			const i = (y * outW + x) * 4;
+			data[i] = px[0];
+			data[i + 1] = px[1];
+			data[i + 2] = px[2];
+			data[i + 3] = px[3];
+		}
+	}
+	return { data, width: outW, height: outH };
+}
+
+/**
  * Warp `src` so its four `corners` (TL,TR,BR,BL) map onto a `size` x `size` output
  * square, inverse-mapped with bilinear sampling (no holes). An axis-aligned
  * rectangle passed as `corners` degrades this to a plain crop-and-scale — which is
@@ -115,27 +146,18 @@ export function warpToSquare(
 	corners: Corners,
 	size: number,
 ): RgbaImage {
-	const dst: Corners = [
-		[0, 0],
-		[size - 1, 0],
-		[size - 1, size - 1],
-		[0, size - 1],
-	];
-	const H = homography(dst, corners); // output -> source
-	const data = new Uint8ClampedArray(size * size * 4);
-	const px: [number, number, number, number] = [0, 0, 0, 0];
-	for (let y = 0; y < size; y++) {
-		for (let x = 0; x < size; x++) {
-			const [sx, sy] = applyH(H, x, y);
-			sampleBilinear(src, sx, sy, px);
-			const i = (y * size + x) * 4;
-			data[i] = px[0];
-			data[i + 1] = px[1];
-			data[i + 2] = px[2];
-			data[i + 3] = px[3];
-		}
-	}
-	return { data, width: size, height: size };
+	return warpToQuad(
+		src,
+		corners,
+		[
+			[0, 0],
+			[size - 1, 0],
+			[size - 1, size - 1],
+			[0, size - 1],
+		],
+		size,
+		size,
+	);
 }
 
 // ---------- sleeve detection (best-effort seed) ----------
@@ -365,7 +387,11 @@ export function autoTone(
 	for (let c = 0; c < 3; c++) {
 		const g = refWhite / whiteRef[c];
 		const damped = 1 + (g - 1) * wbStrength;
-		wbGain[c] = Math.min(1.6, Math.max(0.625, damped));
+		// Clamp the per-channel gain to ±30%. A strongly-coloured cover drives one
+		// channel's near-white reference far above the others; a looser clamp (this was
+		// ±60%) let that swing green/cyan the whole midtone range. ±30% still neutralises
+		// a real ambient cast without letting a saturated sleeve wreck the grade.
+		wbGain[c] = Math.min(1.3, Math.max(1 / 1.3, damped));
 	}
 
 	// A single luma-domain levels window, applied to every channel alike (hue-preserving).
@@ -494,4 +520,758 @@ export function applyPolish(
 		d[i + 1] = g;
 		d[i + 2] = b;
 	}
+}
+
+// ---------- alpha matte: a transparent, true-edged sleeve floating in space ----------
+//
+// The square reframe above forces the four corners onto a perfect rectangle, which
+// straightens the sleeve's real, slightly-off-square outline by construction. The
+// matte wants the opposite: keep the honest edge and float the object on a
+// transparent margin. So instead of squaring, we *mildly deskew* (rotate the sleeve
+// upright without squaring), cut it out with an alpha mask (a deterministic edge-snap
+// silhouette here, or a matting model's alpha in the server path), pad it out to a
+// transparent canvas, tone it, and lay a synthesised contact shadow underneath.
+// Everything here is pure — the same math runs client-side in the editor preview.
+
+/**
+ * A destination quad that rotates `corners` (pixel-space TL,TR,BR,BL) upright —
+ * removing the capture's tilt from the average of the two horizontal edges —
+ * *without* squaring them, so the sleeve keeps its real aspect and slight keystone.
+ * The quad is translated to the origin; `width`/`height` are its bounding box.
+ */
+export function deskewToLevel(corners: Corners): {
+	dst: Corners;
+	width: number;
+	height: number;
+} {
+	const [tl, tr, br, bl] = corners;
+	// Tilt = the mean angle of the top (TL→TR) and bottom (BL→BR) edges off horizontal.
+	const aTop = Math.atan2(tr[1] - tl[1], tr[0] - tl[0]);
+	const aBot = Math.atan2(br[1] - bl[1], br[0] - bl[0]);
+	const angle = (aTop + aBot) / 2;
+	const cos = Math.cos(-angle);
+	const sin = Math.sin(-angle);
+	const rot = corners.map(
+		([x, y]) => [x * cos - y * sin, x * sin + y * cos] as Corner,
+	) as Corners;
+	const xs = rot.map((p) => p[0]);
+	const ys = rot.map((p) => p[1]);
+	const minX = Math.min(...xs);
+	const minY = Math.min(...ys);
+	const maxX = Math.max(...xs);
+	const maxY = Math.max(...ys);
+	const dst = rot.map(([x, y]) => [x - minX, y - minY] as Corner) as Corners;
+	return {
+		dst,
+		width: Math.max(1, Math.ceil(maxX - minX)),
+		height: Math.max(1, Math.ceil(maxY - minY)),
+	};
+}
+
+/**
+ * Deskew `capture` upright (via {@link deskewToLevel}) and scale it so the sleeve's
+ * longer side is `contentSize` px, warping the real capture pixels onto that quad.
+ * Returns the deskewed content (opaque, with triangular background wedges the mask
+ * will cut away) plus the destination `corners` in the content's own pixel space —
+ * the near-border quad the silhouette/mask is built against.
+ */
+export function deskewContent(
+	capture: RgbaImage,
+	corners: Corners,
+	contentSize: number,
+): { content: RgbaImage; corners: Corners } {
+	const { dst, width, height } = deskewToLevel(corners);
+	const scale = contentSize / Math.max(width, height);
+	const sdst = dst.map(([x, y]) => [x * scale, y * scale] as Corner) as Corners;
+	const cw = Math.max(1, Math.round(width * scale));
+	const ch = Math.max(1, Math.round(height * scale));
+	return {
+		content: warpToQuad(capture, corners, sdst, cw, ch),
+		corners: sdst,
+	};
+}
+
+/**
+ * A separable box blur over a single-channel (`width`×`height`) buffer, repeated
+ * `passes` times to approach a Gaussian. Returns a fresh buffer; used both to feather
+ * a hard mask edge and to soften a shadow. O(n) per pass via a running window sum.
+ */
+export function boxBlur1(
+	src: Uint8ClampedArray,
+	width: number,
+	height: number,
+	radius: number,
+	passes = 1,
+): Uint8ClampedArray {
+	if (radius < 1) return src.slice();
+	const win = radius * 2 + 1;
+	let buf = src;
+	for (let p = 0; p < passes; p++) {
+		// Horizontal pass.
+		const h = new Uint8ClampedArray(width * height);
+		for (let y = 0; y < height; y++) {
+			const row = y * width;
+			let sum = 0;
+			for (let x = -radius; x <= radius; x++)
+				sum += buf[row + Math.min(width - 1, Math.max(0, x))];
+			for (let x = 0; x < width; x++) {
+				h[row + x] = sum / win;
+				const add = Math.min(width - 1, x + radius + 1);
+				const sub = Math.max(0, x - radius);
+				sum += buf[row + add] - buf[row + sub];
+			}
+		}
+		// Vertical pass.
+		const v = new Uint8ClampedArray(width * height);
+		for (let x = 0; x < width; x++) {
+			let sum = 0;
+			for (let y = -radius; y <= radius; y++)
+				sum += h[Math.min(height - 1, Math.max(0, y)) * width + x];
+			for (let y = 0; y < height; y++) {
+				v[y * width + x] = sum / win;
+				const add = Math.min(height - 1, y + radius + 1);
+				const sub = Math.max(0, y - radius);
+				sum += h[add * width + x] - h[sub * width + x];
+			}
+		}
+		buf = v;
+	}
+	return buf;
+}
+
+/**
+ * Scan-line fill a closed polygon (`points` in pixel coords) into a single-channel
+ * `width`×`height` mask: 255 inside, 0 outside, using the even-odd rule at each
+ * pixel-row centre. Feather afterwards for a soft edge.
+ */
+export function rasterizePolygon(
+	points: Array<[number, number]>,
+	width: number,
+	height: number,
+): Uint8ClampedArray {
+	const mask = new Uint8ClampedArray(width * height);
+	const n = points.length;
+	for (let y = 0; y < height; y++) {
+		const yc = y + 0.5;
+		const xs: number[] = [];
+		for (let i = 0; i < n; i++) {
+			const [x1, y1] = points[i];
+			const [x2, y2] = points[(i + 1) % n];
+			if ((y1 <= yc && y2 > yc) || (y2 <= yc && y1 > yc)) {
+				xs.push(x1 + ((yc - y1) / (y2 - y1)) * (x2 - x1));
+			}
+		}
+		xs.sort((a, b) => a - b);
+		for (let k = 0; k + 1 < xs.length; k += 2) {
+			const xa = Math.max(0, Math.ceil(xs[k] - 0.5));
+			const xb = Math.min(width - 1, Math.floor(xs[k + 1] - 0.5));
+			for (let x = xa; x <= xb; x++) mask[y * width + x] = 255;
+		}
+	}
+	return mask;
+}
+
+/**
+ * Keep only the largest connected blob of a mask (4-connectivity, pixels ≥ `threshold`),
+ * zeroing everything else. A matting model often keeps stray bits — a sliver of a
+ * neighbouring record, a shadow speck — disconnected from the sleeve; those would
+ * enlarge the alpha bounding box and throw off the crop, so we drop them here.
+ */
+export function keepLargestComponent(
+	mask: Uint8ClampedArray,
+	width: number,
+	height: number,
+	threshold = 128,
+): Uint8ClampedArray {
+	const n = width * height;
+	const label = new Int32Array(n).fill(-1);
+	const stack: number[] = [];
+	let bestLabel = -1;
+	let bestSize = 0;
+	let cur = 0;
+	for (let i = 0; i < n; i++) {
+		if (mask[i] < threshold || label[i] !== -1) continue;
+		let size = 0;
+		label[i] = cur;
+		stack.push(i);
+		while (stack.length) {
+			const p = stack.pop() as number;
+			size++;
+			const x = p % width;
+			const y = (p / width) | 0;
+			if (x > 0 && mask[p - 1] >= threshold && label[p - 1] === -1) {
+				label[p - 1] = cur;
+				stack.push(p - 1);
+			}
+			if (x < width - 1 && mask[p + 1] >= threshold && label[p + 1] === -1) {
+				label[p + 1] = cur;
+				stack.push(p + 1);
+			}
+			if (y > 0 && mask[p - width] >= threshold && label[p - width] === -1) {
+				label[p - width] = cur;
+				stack.push(p - width);
+			}
+			if (
+				y < height - 1 &&
+				mask[p + width] >= threshold &&
+				label[p + width] === -1
+			) {
+				label[p + width] = cur;
+				stack.push(p + width);
+			}
+		}
+		if (size > bestSize) {
+			bestSize = size;
+			bestLabel = cur;
+		}
+		cur++;
+	}
+	const out = new Uint8ClampedArray(n);
+	if (bestLabel < 0) return out;
+	for (let i = 0; i < n; i++) out[i] = label[i] === bestLabel ? mask[i] : 0;
+	return out;
+}
+
+/** Feather a hard mask edge with a couple of box-blur passes (soft alpha falloff). */
+export function featherMask(
+	mask: Uint8ClampedArray,
+	width: number,
+	height: number,
+	radius: number,
+): Uint8ClampedArray {
+	return boxBlur1(mask, width, height, radius, 2);
+}
+
+/** Multiply `img`'s alpha by `mask` (0..255) in place — cut the sleeve out to the mask. */
+export function applyMask(img: RgbaImage, mask: Uint8ClampedArray): void {
+	const d = img.data;
+	for (let p = 0; p < img.width * img.height; p++) {
+		d[p * 4 + 3] = (d[p * 4 + 3] * mask[p]) / 255;
+	}
+}
+
+export interface ShadowOptions {
+	/** Blur radius of the shadow, px. */
+	blur: number;
+	/** Offset from the sleeve, px (a small down/right cast reads as a contact shadow). */
+	offsetX: number;
+	offsetY: number;
+	/** Shadow colour (default near-black) and peak opacity (0..1). */
+	tint?: [number, number, number];
+	opacity?: number;
+}
+
+/**
+ * Synthesise a soft contact shadow from an image's own alpha: blur the silhouette,
+ * offset it, tint it, and scale by `opacity`. Returns a same-size RGBA layer meant to
+ * sit *under* the sleeve (see {@link compositeUnder}) — deterministic and consistent
+ * across the whole collection, unlike trying to recover the real cast shadow.
+ */
+export function shadowFromAlpha(
+	img: RgbaImage,
+	{ blur, offsetX, offsetY, tint = [0, 0, 0], opacity = 0.35 }: ShadowOptions,
+): RgbaImage {
+	const { width, height } = img;
+	const alpha = new Uint8ClampedArray(width * height);
+	for (let p = 0; p < width * height; p++) alpha[p] = img.data[p * 4 + 3];
+	const blurred = boxBlur1(alpha, width, height, Math.max(1, blur), 3);
+	const data = new Uint8ClampedArray(width * height * 4);
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const sx = x - offsetX;
+			const sy = y - offsetY;
+			if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
+			const d = (y * width + x) * 4;
+			data[d] = tint[0];
+			data[d + 1] = tint[1];
+			data[d + 2] = tint[2];
+			data[d + 3] = blurred[sy * width + sx] * opacity;
+		}
+	}
+	return { data, width, height };
+}
+
+/** Composite `base` over `under` (straight alpha) — returns a fresh RGBA image. */
+export function compositeUnder(base: RgbaImage, under: RgbaImage): RgbaImage {
+	const { width, height } = base;
+	const out = new Uint8ClampedArray(width * height * 4);
+	const b = base.data;
+	const u = under.data;
+	for (let p = 0; p < width * height; p++) {
+		const ba = b[p * 4 + 3] / 255;
+		const ua = u[p * 4 + 3] / 255;
+		const oa = ba + ua * (1 - ba);
+		for (let c = 0; c < 3; c++) {
+			out[p * 4 + c] =
+				oa > 0 ? (b[p * 4 + c] * ba + u[p * 4 + c] * ua * (1 - ba)) / oa : 0;
+		}
+		out[p * 4 + 3] = oa * 255;
+	}
+	return { data: out, width, height };
+}
+
+/**
+ * Walk points along each of the four `corners`-edges of `img` and snap each to the
+ * strongest local luminance gradient within ±`band` px along the edge's outward
+ * normal — turning the nominal straight edges into an organic polyline that bows with
+ * the real sleeve outline. Reuses the same Rec.709-luma gradient signal as {@link
+ * detectSleeveCorners}. Where the gradient is flat (sleeve and background share a
+ * tone) it keeps the nominal point, degrading safely to the straight corner edge.
+ */
+export function edgeSnapSilhouette(
+	img: RgbaImage,
+	corners: Corners,
+	opts: {
+		samples?: number;
+		band?: number;
+		gradMin?: number;
+		smooth?: number;
+	} = {},
+): Array<[number, number]> {
+	const { width, height, data } = img;
+	const samples = opts.samples ?? 32;
+	const band =
+		opts.band ?? Math.max(4, Math.round(Math.min(width, height) * 0.03));
+	const gradMin = opts.gradMin ?? 12;
+	// Moving-average radius over each edge's snapped offsets — turns a jittery,
+	// noise-chasing outline into a clean bow. 0 disables smoothing.
+	const smooth = opts.smooth ?? 2;
+	const lum = (x: number, y: number): number => {
+		const xi = Math.min(width - 1, Math.max(0, Math.round(x)));
+		const yi = Math.min(height - 1, Math.max(0, Math.round(y)));
+		const i = (yi * width + xi) * 4;
+		return 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+	};
+	const cx =
+		(corners[0][0] + corners[1][0] + corners[2][0] + corners[3][0]) / 4;
+	const cy =
+		(corners[0][1] + corners[1][1] + corners[2][1] + corners[3][1]) / 4;
+	const pts: Array<[number, number]> = [];
+	for (let e = 0; e < 4; e++) {
+		const [ax, ay] = corners[e];
+		const [bx, by] = corners[(e + 1) % 4];
+		const ex = bx - ax;
+		const ey = by - ay;
+		const el = Math.hypot(ex, ey) || 1;
+		// Outward normal (perpendicular to the edge). Orient it ONCE per edge, off the
+		// edge midpoint, so it points away from the centroid — flipping it per-sample
+		// (as an earlier version did) let it oscillate and threw the outline around.
+		let nx = -ey / el;
+		let ny = ex / el;
+		const mx = ax + ex * 0.5;
+		const my = ay + ey * 0.5;
+		if ((mx - cx) * nx + (my - cy) * ny < 0) {
+			nx = -nx;
+			ny = -ny;
+		}
+		// 1) Raw snapped offset per sample — the strongest luminance gradient within
+		//    ±band along the normal (or 0, i.e. the nominal edge, where it's flat).
+		//    Sample [0,1) so the shared corner isn't emitted twice by adjacent edges.
+		const off = new Array<number>(samples);
+		for (let s = 0; s < samples; s++) {
+			const t = s / samples;
+			const px = ax + ex * t;
+			const py = ay + ey * t;
+			let best = 0;
+			let bestK = 0;
+			for (let k = -band; k <= band; k++) {
+				const g = Math.abs(
+					lum(px + nx * (k + 1), py + ny * (k + 1)) -
+						lum(px + nx * (k - 1), py + ny * (k - 1)),
+				);
+				if (g > best) {
+					best = g;
+					bestK = k;
+				}
+			}
+			off[s] = best >= gradMin ? bestK : 0;
+		}
+		// 2) Smooth the offsets, then emit the points along the (smoothed) normal.
+		for (let s = 0; s < samples; s++) {
+			let sum = 0;
+			let n = 0;
+			for (let d = -smooth; d <= smooth; d++) {
+				const j = s + d;
+				if (j >= 0 && j < samples) {
+					sum += off[j];
+					n++;
+				}
+			}
+			const k = sum / n;
+			const t = s / samples;
+			pts.push([ax + ex * t + nx * k, ay + ey * t + ny * k]);
+		}
+	}
+	return pts;
+}
+
+/** Crop a `w`×`h` window from `img` at (`x`,`y`); out-of-bounds reads transparent. */
+export function cropImage(
+	img: RgbaImage,
+	x: number,
+	y: number,
+	w: number,
+	h: number,
+): RgbaImage {
+	const data = new Uint8ClampedArray(w * h * 4);
+	for (let ry = 0; ry < h; ry++) {
+		for (let rx = 0; rx < w; rx++) {
+			const sx = x + rx;
+			const sy = y + ry;
+			if (sx < 0 || sy < 0 || sx >= img.width || sy >= img.height) continue;
+			const s = (sy * img.width + sx) * 4;
+			const d = (ry * w + rx) * 4;
+			data[d] = img.data[s];
+			data[d + 1] = img.data[s + 1];
+			data[d + 2] = img.data[s + 2];
+			data[d + 3] = img.data[s + 3];
+		}
+	}
+	return { data, width: w, height: h };
+}
+
+/** Bilinearly resample `img` to `tw`×`th` (a plain resize via the quad warp). */
+export function resizeImage(img: RgbaImage, tw: number, th: number): RgbaImage {
+	return warpToQuad(
+		img,
+		[
+			[0, 0],
+			[img.width - 1, 0],
+			[img.width - 1, img.height - 1],
+			[0, img.height - 1],
+		],
+		[
+			[0, 0],
+			[tw - 1, 0],
+			[tw - 1, th - 1],
+			[0, th - 1],
+		],
+		tw,
+		th,
+	);
+}
+
+/** The bounding box of `img`'s opaque (alpha ≥ `alphaMin`) pixels, or null if none. */
+export function alphaBounds(
+	img: RgbaImage,
+	alphaMin = 16,
+): { x: number; y: number; w: number; h: number } | null {
+	let minX = img.width;
+	let minY = img.height;
+	let maxX = -1;
+	let maxY = -1;
+	for (let y = 0; y < img.height; y++) {
+		for (let x = 0; x < img.width; x++) {
+			if (img.data[(y * img.width + x) * 4 + 3] >= alphaMin) {
+				if (x < minX) minX = x;
+				if (x > maxX) maxX = x;
+				if (y < minY) minY = y;
+				if (y > maxY) maxY = y;
+			}
+		}
+	}
+	if (maxX < 0) return null;
+	return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+
+/**
+ * Like {@link deskewContent}, but the sleeve is centred at `1 - 2·pad` of a square
+ * `outSize` output, so a margin of the *surrounding* capture (the wood the sleeve sits
+ * on) frames it. That context is what lets a matting model read the sleeve as a
+ * rectangular object on a surface and cut the wood away — where a tight crop of just
+ * the cover reads as a scene, and the model segments the *depicted* subject instead.
+ */
+export function deskewContentPadded(
+	capture: RgbaImage,
+	corners: Corners,
+	outSize: number,
+	pad: number,
+): { content: RgbaImage; corners: Corners } {
+	const { dst, width, height } = deskewToLevel(corners);
+	const inner = outSize * (1 - 2 * pad);
+	const scale = inner / Math.max(width, height);
+	const sw = width * scale;
+	const sh = height * scale;
+	const offX = (outSize - sw) / 2;
+	const offY = (outSize - sh) / 2;
+	const sdst = dst.map(
+		([x, y]) => [x * scale + offX, y * scale + offY] as Corner,
+	) as Corners;
+	return {
+		content: warpToQuad(capture, corners, sdst, outSize, outSize),
+		corners: sdst,
+	};
+}
+
+/** Intersection point of two infinite lines, each given by two points on it. */
+function lineIntersect(a1: Corner, a2: Corner, b1: Corner, b2: Corner): Corner {
+	const d =
+		(a1[0] - a2[0]) * (b1[1] - b2[1]) - (a1[1] - a2[1]) * (b1[0] - b2[0]);
+	if (Math.abs(d) < 1e-9) return a2; // near-parallel — fall back to an endpoint
+	const pa = a1[0] * a2[1] - a1[1] * a2[0];
+	const pb = b1[0] * b2[1] - b1[1] * b2[0];
+	return [
+		(pa * (b1[0] - b2[0]) - (a1[0] - a2[0]) * pb) / d,
+		(pa * (b1[1] - b2[1]) - (a1[1] - a2[1]) * pb) / d,
+	];
+}
+
+/**
+ * Refine a starting `quad` (the admin's picked corners, mapped into `img`) to the
+ * sleeve's true edges: slide each of the four edges along its outward normal to the
+ * offset with the strongest *summed* luminance gradient — the full-length sleeve/wood
+ * transition. Because the score sums the whole edge, a local bump (a neighbouring
+ * record poking in) or per-pixel noise can't pull it; the result is four clean, straight
+ * lines whose intersections are the refined corners. This is why the picked points
+ * matter: they say where each edge roughly is, so we only search a band around it.
+ */
+export function refineQuadEdges(
+	img: RgbaImage,
+	quad: Corners,
+	opts: { search?: number; samples?: number } = {},
+): Corners {
+	const { width, height, data } = img;
+	const samples = opts.samples ?? 64;
+	const search = opts.search ?? Math.round(Math.min(width, height) * 0.12);
+	const lum = (x: number, y: number): number => {
+		const xi = Math.min(width - 1, Math.max(0, Math.round(x)));
+		const yi = Math.min(height - 1, Math.max(0, Math.round(y)));
+		const i = (yi * width + xi) * 4;
+		return 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+	};
+	const cx = (quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]) / 4;
+	const cy = (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]) / 4;
+	// The four (shifted) edge lines, each as two points.
+	const lines: Array<[Corner, Corner]> = [];
+	for (let e = 0; e < 4; e++) {
+		const [ax, ay] = quad[e];
+		const [bx, by] = quad[(e + 1) % 4];
+		const ex = bx - ax;
+		const ey = by - ay;
+		const el = Math.hypot(ex, ey) || 1;
+		let nx = -ey / el;
+		let ny = ex / el;
+		const mx = ax + ex * 0.5;
+		const my = ay + ey * 0.5;
+		if ((mx - cx) * nx + (my - cy) * ny < 0) {
+			nx = -nx;
+			ny = -ny;
+		}
+		let bestDelta = 0;
+		let bestScore = -1;
+		// Mostly outward (the picked corners sit inside the cover), a little inward.
+		for (let d = -Math.round(search * 0.5); d <= search; d++) {
+			let score = 0;
+			for (let s = 0; s < samples; s++) {
+				const t = (s + 0.5) / samples;
+				const px = ax + ex * t + nx * d;
+				const py = ay + ey * t + ny * d;
+				score += Math.abs(lum(px + nx, py + ny) - lum(px - nx, py - ny));
+			}
+			if (score > bestScore) {
+				bestScore = score;
+				bestDelta = d;
+			}
+		}
+		lines.push([
+			[ax + nx * bestDelta, ay + ny * bestDelta],
+			[bx + nx * bestDelta, by + ny * bestDelta],
+		]);
+	}
+	// Corner i is where edge (i-1) meets edge i.
+	return [0, 1, 2, 3].map((i) => {
+		const prev = lines[(i + 3) % 4];
+		const cur = lines[i];
+		return lineIntersect(prev[0], prev[1], cur[0], cur[1]);
+	}) as Corners;
+}
+
+/**
+ * Shift each of the quad's four edges by `delta` px along its outward normal (positive
+ * `delta` = dilate outward, negative = erode inward), then intersect adjacent shifted
+ * lines for the new corners — a clean geometric grow/shrink that keeps the rectangle a
+ * rectangle. Used to bracket the true sleeve edge when building a trimap from the picked
+ * corners.
+ */
+export function offsetQuad(quad: Corners, delta: number): Corners {
+	const cx = (quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]) / 4;
+	const cy = (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]) / 4;
+	const lines: Array<[Corner, Corner]> = [];
+	for (let e = 0; e < 4; e++) {
+		const [ax, ay] = quad[e];
+		const [bx, by] = quad[(e + 1) % 4];
+		const ex = bx - ax;
+		const ey = by - ay;
+		const el = Math.hypot(ex, ey) || 1;
+		let nx = -ey / el;
+		let ny = ex / el;
+		// Orient the normal outward once, via the edge midpoint relative to the centroid.
+		if ((ax + ex * 0.5 - cx) * nx + (ay + ey * 0.5 - cy) * ny < 0) {
+			nx = -nx;
+			ny = -ny;
+		}
+		lines.push([
+			[ax + nx * delta, ay + ny * delta],
+			[bx + nx * delta, by + ny * delta],
+		]);
+	}
+	return [0, 1, 2, 3].map((i) => {
+		const prev = lines[(i + 3) % 4];
+		const cur = lines[i];
+		return lineIntersect(prev[0], prev[1], cur[0], cur[1]);
+	}) as Corners;
+}
+
+/**
+ * Build a ViTMatte-style trimap (single channel: 0 = definite background, 128 =
+ * unknown, 255 = definite foreground) from the picked/refined sleeve `quad`. Erode the
+ * quad inward for the definite-foreground core and dilate it outward for the
+ * definite-background boundary; the band between is the *only* region the matting model
+ * decides. Because the cover interior is locked foreground and the wood beyond the
+ * dilated edge is locked background, the model physically can't cut into the artwork's
+ * depicted subject or keep a neighbouring record — it just resolves the true edge in the
+ * band. Since the admin picks corners *inside* the cover, the true edge sits outward of
+ * `quad`, so `dilate` should reach past it into the wood while `erode` stays modest.
+ */
+export function buildTrimap(
+	quad: Corners,
+	width: number,
+	height: number,
+	opts: { erode: number; dilate: number },
+): Uint8ClampedArray {
+	const fg = rasterizePolygon(offsetQuad(quad, -opts.erode), width, height);
+	const known = rasterizePolygon(offsetQuad(quad, opts.dilate), width, height);
+	const trimap = new Uint8ClampedArray(width * height);
+	for (let i = 0; i < trimap.length; i++) {
+		trimap[i] = fg[i] ? 255 : known[i] ? 128 : 0;
+	}
+	return trimap;
+}
+
+export interface MatteOptions {
+	/** Output canvas (square) and the sleeve's longer-side size inside it (margin = the gap). */
+	canvasSize: number;
+	contentSize: number;
+	feather?: number;
+	tone?: AutoToneOptions | false;
+	polish?: { saturation: number; contrast: number; gamma: number };
+	shadow?: ShadowOptions;
+}
+
+export interface MatteResult {
+	/** The sleeve floating on transparency — a pure cutout. */
+	cutout: RgbaImage;
+	/** The cutout with a synthesised contact shadow composited underneath. */
+	shadow: RgbaImage;
+}
+
+/**
+ * The shared matte tail, from an already-cut RGBA `cutout` (alpha = the silhouette,
+ * any size, transparent everywhere else): crop to the opaque sleeve, scale it so its
+ * longer side is `contentSize`, centre it on a transparent `canvasSize` canvas (the
+ * even gap is the margin), foreground-tone + polish, and derive the shadow variant.
+ * Cropping to the alpha means the sleeve always fills the frame the same way, whatever
+ * padding the caller cut it out of.
+ */
+export function frameCutout(
+	cutout: RgbaImage,
+	opts: MatteOptions,
+): MatteResult {
+	const b = alphaBounds(cutout, 16) ?? {
+		x: 0,
+		y: 0,
+		w: cutout.width,
+		h: cutout.height,
+	};
+	const cropped = cropImage(cutout, b.x, b.y, b.w, b.h);
+	const scale = opts.contentSize / Math.max(cropped.width, cropped.height);
+	const scaled = resizeImage(
+		cropped,
+		Math.max(1, Math.round(cropped.width * scale)),
+		Math.max(1, Math.round(cropped.height * scale)),
+	);
+	const padded = padToCanvas(scaled, opts.canvasSize);
+	const toned: RgbaImage =
+		opts.tone === false ? padded : autoTone(padded, opts.tone);
+	if (opts.polish) {
+		applyPolish(
+			toned,
+			opts.polish.saturation,
+			opts.polish.contrast,
+			opts.polish.gamma,
+		);
+	}
+	const framed: RgbaImage = {
+		data: toned.data,
+		width: toned.width,
+		height: toned.height,
+	};
+	if (!opts.shadow) return { cutout: framed, shadow: framed };
+	const shadow = compositeUnder(framed, shadowFromAlpha(framed, opts.shadow));
+	return { cutout: framed, shadow };
+}
+
+/**
+ * Cut `content` (a deskewed, opaque sleeve) to `mask`, feather it, and run the shared
+ * {@link frameCutout} tail. The deterministic path passes a clean-quad/edge-snap mask;
+ * the matting-model path {@link frameCutout}s its own model-derived cutout directly.
+ */
+export function composeMatte(
+	content: RgbaImage,
+	mask: Uint8ClampedArray,
+	opts: MatteOptions,
+): MatteResult {
+	const feathered = featherMask(
+		mask,
+		content.width,
+		content.height,
+		opts.feather ?? 2,
+	);
+	const masked: RgbaImage = {
+		data: content.data.slice(),
+		width: content.width,
+		height: content.height,
+	};
+	applyMask(masked, feathered);
+	return frameCutout(masked, opts);
+}
+
+// The deterministic matte deskews with this much surrounding capture (wood) around the
+// picked quad, so {@link refineQuadEdges} has a band to search outward into for the true
+// sleeve edge — since the admin picks corners *inside* the cover.
+const MATTE_DETERMINISTIC_PAD = 0.12;
+
+/**
+ * The deterministic (free) matte end-to-end: deskew the capture upright with a margin of
+ * surrounding capture, refine the picked quad out to the sleeve's true edges, cut to
+ * that clean rectangle, and run the shared {@link composeMatte} tail. Pure, so the editor
+ * preview renders it client-side exactly like the server stores it.
+ *
+ * A record sleeve *is* a rectangle, and the picked corners already say where it is — so
+ * we fit four straight edges to the real boundary ({@link refineQuadEdges}) rather than
+ * tracing a noisy per-pixel outline or trusting a segmentation model to respect the
+ * rectangle. Pass `refine: false` to fall back to the raw picked quad (no edge search).
+ */
+export function matteFromCorners(
+	capture: RgbaImage,
+	corners: Corners,
+	opts: MatteOptions & { refine?: boolean },
+): MatteResult {
+	const outSize = Math.round(
+		opts.contentSize / (1 - 2 * MATTE_DETERMINISTIC_PAD),
+	);
+	const { content, corners: inset } = deskewContentPadded(
+		capture,
+		corners,
+		outSize,
+		MATTE_DETERMINISTIC_PAD,
+	);
+	const quad =
+		opts.refine === false
+			? inset
+			: refineQuadEdges(content, inset, {
+					search: Math.round(outSize * MATTE_DETERMINISTIC_PAD),
+				});
+	const mask = rasterizePolygon(quad, content.width, content.height);
+	return composeMatte(content, mask, opts);
 }

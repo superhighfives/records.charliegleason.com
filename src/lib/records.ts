@@ -22,6 +22,7 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
+import { generateMatteFromCapture } from "#/lib/matte";
 import {
 	detectCaptureCorners,
 	professionalPipeline,
@@ -37,6 +38,7 @@ import {
 } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 import {
+	parseReframeParams,
 	type ReframeParams,
 	sanitizeReframeParams,
 } from "#/lib/reframe-params";
@@ -77,6 +79,8 @@ const ADMIN_ONLY_FIELDS = [
 	"sleeveCornersJson",
 	"professionalParamsJson",
 	"professionalPredictionId",
+	// Whether the matte came from the matting model or the deterministic path — internal.
+	"professionalAlphaSource",
 ] as const;
 
 /** The public shape of a record — the full row minus the admin-only fields. */
@@ -97,15 +101,20 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 		sleeveCornersJson: _corners,
 		professionalParamsJson: _proParams,
 		professionalPredictionId: _proPrediction,
+		professionalAlphaSource: _alphaSource,
 		...rest
 	} = row;
+	const approved = rest.professionalStatus === "approved";
 	return {
 		...rest,
-		// Only expose the professional image once it's approved. `/api/photos/$`
+		// Only expose the professional image + matte once approved. `/api/photos/$`
 		// serves any R2 key by passthrough, so leaking a `ready` (unreviewed) key
 		// here would make the generation publicly fetchable and bypass the review gate.
-		professionalImageKey:
-			rest.professionalStatus === "approved" ? rest.professionalImageKey : null,
+		professionalImageKey: approved ? rest.professionalImageKey : null,
+		professionalAlphaKey: approved ? rest.professionalAlphaKey : null,
+		professionalAlphaCutoutKey: approved
+			? rest.professionalAlphaCutoutKey
+			: null,
 	};
 }
 
@@ -258,6 +267,18 @@ export const captureRecord = createServerFn({ method: "POST" })
 			// manual re-crop retries) rather than failing the whole capture.
 			try {
 				const { professionalKey, corners } = await professionalPipeline(row);
+				// Generate the matte from the same detected corners — deterministic (free)
+				// on capture, no paid model call; the editor's Apply can upgrade it to the
+				// matting model. Best-effort: a matte failure never fails the capture.
+				const matte = await generateMatteFromCapture(
+					capturePhotoKey,
+					corners,
+					{},
+					{ useAi: false },
+				).catch((err) => {
+					console.error("captureRecord: matte generation failed", err);
+					return null;
+				});
 				const [pro] = await db
 					.update(records)
 					.set({
@@ -265,6 +286,9 @@ export const captureRecord = createServerFn({ method: "POST" })
 						// Persist the detected seed so the editor opens pre-cropped; a later
 						// Apply overwrites it with the admin's crop.
 						sleeveCornersJson: serializeCorners(corners),
+						professionalAlphaKey: matte?.shadowKey ?? null,
+						professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
+						professionalAlphaSource: matte?.source ?? null,
 						// Generated, but not shown on the site until an admin approves it.
 						professionalStatus: "ready",
 						professionalError: null,
@@ -434,6 +458,7 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			id: number;
 			corners?: NormalizedCorners;
 			params?: ReframeParams;
+			useAi?: boolean;
 		}) => ({
 			id: input.id,
 			// Runtime-sanitise untrusted input before it drives the homography/tone math:
@@ -441,9 +466,12 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			// crop) and keep only well-typed knob values.
 			corners: parseNormalizedCorners(input.corners) ?? undefined,
 			params: sanitizeReframeParams(input.params),
+			// Whether the matte uses the paid matting model (the editor's "Use AI"
+			// checkbox); defaults off so a programmatic caller never triggers a paid run.
+			useAi: Boolean(input.useAi),
 		}),
 	)
-	.handler(({ data: { id, corners, params } }) =>
+	.handler(({ data: { id, corners, params, useAi } }) =>
 		Sentry.startSpan({ name: "reframeRecord" }, async () => {
 			const db = getDb(env.DB);
 			const [record] = await db
@@ -459,17 +487,35 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			// full-frame default for a record that's never been cropped).
 			const effectiveCorners =
 				corners ?? parseCorners(record.sleeveCornersJson);
+			// The square hero (free, fast) — generated first so a matte failure below
+			// never costs the cover.
 			const { key } = await reframeFromCapture(
 				record.capturePhotoKey,
 				effectiveCorners,
 				params,
 			);
+			// The matte, from the same corners. `useAi` picks the (paid) matting model,
+			// which internally falls back to the deterministic silhouette if it's down.
+			// Best-effort: on total failure the matte columns null out (grid falls back
+			// to the square) rather than failing the Apply.
+			const matte = await generateMatteFromCapture(
+				record.capturePhotoKey,
+				effectiveCorners,
+				params,
+				{ useAi },
+			).catch((err) => {
+				console.error("reframeRecord: matte generation failed", err);
+				return null;
+			});
 			const [row] = await db
 				.update(records)
 				.set({
 					sleeveCornersJson: serializeCorners(effectiveCorners),
 					professionalImageKey: key,
 					professionalParamsJson: JSON.stringify(params),
+					professionalAlphaKey: matte?.shadowKey ?? null,
+					professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
+					professionalAlphaSource: matte?.source ?? null,
 					// An interactive reframe always produces a reviewable image; keep an
 					// already-approved photo live so a quick tweak goes straight out.
 					professionalStatus:
@@ -481,12 +527,22 @@ export const reframeRecord = createServerFn({ method: "POST" })
 				})
 				.where(eq(records.id, id))
 				.returning();
-			// Bin the superseded professional image so re-tweaks don't accumulate
+			// Bin the superseded professional image + matte so re-tweaks don't accumulate
 			// orphaned objects in R2. Best-effort — the row already points at the new
-			// key, so a failed cleanup just leaves one stale object, never a broken ref.
-			const stale = record.professionalImageKey;
-			if (stale && stale !== key) {
-				await env.PHOTOS.delete(stale).catch(() => {});
+			// keys, so a failed cleanup just leaves stale objects, never a broken ref.
+			for (const staleKey of [
+				record.professionalImageKey,
+				record.professionalAlphaKey,
+				record.professionalAlphaCutoutKey,
+			]) {
+				if (
+					staleKey &&
+					staleKey !== key &&
+					staleKey !== matte?.shadowKey &&
+					staleKey !== matte?.cutoutKey
+				) {
+					await env.PHOTOS.delete(staleKey).catch(() => {});
+				}
 			}
 			return row ?? null;
 		}),
@@ -615,15 +671,26 @@ export const replaceCapture = createServerFn({ method: "POST" })
 			// the stored corners were for the old image. On failure keep the new capture
 			// but mark the pro track failed, so the admin can crop it by hand.
 			let professionalKey: string | null = null;
+			let matte: {
+				shadowKey: string;
+				cutoutKey: string;
+				source: "ai" | "deterministic";
+			} | null = null;
 			const proFields: {
 				professionalImageKey?: string | null;
 				sleeveCornersJson: string;
 				professionalStatus: "ready" | "failed";
 				professionalError: string | null;
+				professionalAlphaKey: string | null;
+				professionalAlphaCutoutKey: string | null;
+				professionalAlphaSource: "ai" | "deterministic" | null;
 			} = {
 				sleeveCornersJson: serializeCorners(DEFAULT_CORNERS),
 				professionalStatus: "failed",
 				professionalError: null,
+				professionalAlphaKey: null,
+				professionalAlphaCutoutKey: null,
+				professionalAlphaSource: null,
 			};
 			try {
 				const gen = await professionalPipeline({
@@ -635,6 +702,20 @@ export const replaceCapture = createServerFn({ method: "POST" })
 				proFields.professionalImageKey = gen.professionalKey;
 				proFields.sleeveCornersJson = serializeCorners(gen.corners);
 				proFields.professionalStatus = "ready";
+				// A deterministic matte from the same detected corners (free — no paid
+				// call on a capture swap). Best-effort, independent of the square.
+				matte = await generateMatteFromCapture(
+					capturePhotoKey,
+					gen.corners,
+					parseReframeParams(record.professionalParamsJson),
+					{ useAi: false },
+				).catch((err) => {
+					console.error("replaceCapture: matte generation failed", err);
+					return null;
+				});
+				proFields.professionalAlphaKey = matte?.shadowKey ?? null;
+				proFields.professionalAlphaCutoutKey = matte?.cutoutKey ?? null;
+				proFields.professionalAlphaSource = matte?.source ?? null;
 			} catch (err) {
 				proFields.professionalError =
 					err instanceof Error ? err.message : String(err);
@@ -657,11 +738,15 @@ export const replaceCapture = createServerFn({ method: "POST" })
 			for (const staleKey of [
 				record.capturePhotoKey,
 				record.professionalImageKey,
+				record.professionalAlphaKey,
+				record.professionalAlphaCutoutKey,
 			]) {
 				if (
 					staleKey &&
 					staleKey !== capturePhotoKey &&
-					staleKey !== professionalKey
+					staleKey !== professionalKey &&
+					staleKey !== matte?.shadowKey &&
+					staleKey !== matte?.cutoutKey
 				) {
 					await env.PHOTOS.delete(staleKey).catch(() => {});
 				}
@@ -723,7 +808,11 @@ export const clearProfessional = createServerFn({ method: "POST" })
 				.where(eq(records.id, id))
 				.limit(1);
 			if (!record) return null;
-			const stale = record.professionalImageKey;
+			const stale = [
+				record.professionalImageKey,
+				record.professionalAlphaKey,
+				record.professionalAlphaCutoutKey,
+			].filter((k): k is string => Boolean(k));
 			const [row] = await db
 				.update(records)
 				.set({
@@ -731,6 +820,10 @@ export const clearProfessional = createServerFn({ method: "POST" })
 					professionalStatus: "idle",
 					professionalEnhanced: false,
 					professionalError: null,
+					// Drop the matte alongside the square — both rebuild from a later edit.
+					professionalAlphaKey: null,
+					professionalAlphaCutoutKey: null,
+					professionalAlphaSource: null,
 					// Zero-state: drop the saved crop + tone so the editor reopens clean.
 					sleeveCornersJson: null,
 					professionalParamsJson: null,
@@ -740,7 +833,7 @@ export const clearProfessional = createServerFn({ method: "POST" })
 				.returning();
 			// Best-effort R2 cleanup — the row already points at no image, so a failed
 			// delete just leaves an orphan object, never a broken reference.
-			if (stale) await env.PHOTOS.delete(stale).catch(() => {});
+			if (stale.length > 0) await env.PHOTOS.delete(stale).catch(() => {});
 			return row ?? null;
 		}),
 	);
@@ -872,6 +965,8 @@ export const deleteRecord = createServerFn({ method: "POST" })
 					capturePhotoKey: records.capturePhotoKey,
 					coverImageKey: records.coverImageKey,
 					professionalImageKey: records.professionalImageKey,
+					professionalAlphaKey: records.professionalAlphaKey,
+					professionalAlphaCutoutKey: records.professionalAlphaCutoutKey,
 				})
 				.from(records)
 				.where(eq(records.id, id))
@@ -884,6 +979,8 @@ export const deleteRecord = createServerFn({ method: "POST" })
 					row.capturePhotoKey,
 					row.coverImageKey,
 					row.professionalImageKey,
+					row.professionalAlphaKey,
+					row.professionalAlphaCutoutKey,
 				].filter((key): key is string => Boolean(key));
 				if (keys.length > 0) await env.PHOTOS.delete(keys);
 			}

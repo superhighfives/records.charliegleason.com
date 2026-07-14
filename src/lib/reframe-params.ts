@@ -36,6 +36,37 @@ export const DEFAULT_REFRAME_PARAMS: Required<ReframeParams> = {
 	gamma: 1.0,
 };
 
+/**
+ * A gentler read of the knobs for the alpha matte than the square hero gets: a light
+ * touch of white-balance, and the saturation/contrast "studio pop" pulled halfway back
+ * to neutral. A strongly-coloured cover (a saturated sleeve) makes the white-patch
+ * balance over-correct — a pink cover pushes the reference toward red, greening the
+ * midtones — which is jarring on an object floating in space, so the matte wears a much
+ * softer white-balance (a quarter of the square's push) to keep that cast off.
+ * Shared by the server matte pipeline and the live preview so they match.
+ */
+export function matteToneFromParams(params: ReframeParams): {
+	tone: { wbStrength: number; lowPct: number; highPct: number } | false;
+	polish: { saturation: number; contrast: number; gamma: number };
+} {
+	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
+	const halfway = (v: number) => 1 + (v - 1) * 0.5;
+	return {
+		tone: p.skipTone
+			? false
+			: {
+					wbStrength: p.wbStrength * 0.25,
+					lowPct: p.lowPct,
+					highPct: p.highPct,
+				},
+		polish: {
+			saturation: halfway(p.saturation),
+			contrast: halfway(p.contrast),
+			gamma: p.gamma,
+		},
+	};
+}
+
 /** The numeric knobs, whose values must be finite numbers to be kept. */
 const NUMERIC_KEYS = [
 	"wbStrength",

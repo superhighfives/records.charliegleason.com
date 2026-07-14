@@ -78,12 +78,12 @@ const UPSCALE_FACTOR = 4;
 const UPSCALE_MAX = 4000;
 
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
-function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+export function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 	return new Blob([bytes as BlobPart]).stream();
 }
 
 /** Decode encoded image bytes to an {@link RgbaImage} via Photon. */
-function decodeRgba(bytes: Uint8Array): RgbaImage {
+export function decodeRgba(bytes: Uint8Array): RgbaImage {
 	const img = PhotonImage.new_from_byteslice(bytes);
 	try {
 		return {
@@ -97,7 +97,7 @@ function decodeRgba(bytes: Uint8Array): RgbaImage {
 }
 
 /** Encode an {@link RgbaImage} to PNG bytes via Photon (preserves alpha). */
-function encodePng(image: RgbaImage): Uint8Array {
+export function encodePng(image: RgbaImage): Uint8Array {
 	const img = new PhotonImage(
 		new Uint8Array(
 			image.data.buffer,
@@ -115,7 +115,7 @@ function encodePng(image: RgbaImage): Uint8Array {
 }
 
 /** Scale normalised (0..1) corners up to pixel coordinates for a `w`×`h` capture. */
-function toPixelCorners(
+export function toPixelCorners(
 	corners: NormalizedCorners,
 	w: number,
 	h: number,
@@ -124,7 +124,7 @@ function toPixelCorners(
 }
 
 /** Load + decode a capture from R2 to an {@link RgbaImage} (throws if it's missing). */
-async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
+export async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
 	const object = await env.PHOTOS.get(capturePhotoKey);
 	if (!object)
 		throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);

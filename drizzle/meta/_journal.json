@@ -78,6 +78,13 @@
       "when": 1784008046527,
       "tag": "0010_goofy_mandarin",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1784054350774,
+      "tag": "0011_blue_sentinels",
+      "breakpoints": true
     }
   ]
 }

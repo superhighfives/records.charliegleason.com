@@ -361,6 +361,17 @@ function RecordDetail() {
 	);
 	// Whether the professional-photo editor modal is open (crop + live preview + knobs).
 	const [editorOpen, setEditorOpen] = useState(false);
+	// Whether Apply generates the matte with the paid matting model ("Use AI"), vs the
+	// free deterministic silhouette. Default on; the server falls back to deterministic
+	// automatically if the model is down.
+	const [useAi, setUseAi] = useState(true);
+	// Which output the single live preview shows — the square cover or the matte —
+	// toggled by the switch in the preview's top-right corner.
+	const [previewMode, setPreviewMode] = useState<"cover" | "matte">("cover");
+	// The `/api/photos/…` src of a saved hover-reveal image that failed to load, so a
+	// stale/missing key (e.g. a matte key pointing at a since-deleted object) hides the
+	// reveal + badge instead of showing a broken-image glyph.
+	const [savedImgError, setSavedImgError] = useState<string | null>(null);
 	const [replacingCapture, setReplacingCapture] = useState(false);
 	const captureInputRef = useRef<HTMLInputElement>(null);
 
@@ -500,7 +511,7 @@ function RecordDetail() {
 	// the displayed cover, then dismiss the editor.
 	const applyPro = useMutation({
 		mutationFn: async () => {
-			await reframeRecord({ data: { id: recordId, corners, params } });
+			await reframeRecord({ data: { id: recordId, corners, params, useAi } });
 			return setProfessionalApproved({
 				data: { id: recordId, approved: true },
 			});
@@ -788,78 +799,143 @@ function RecordDetail() {
 									<p className="text-xs font-medium text-muted-foreground">
 										Preview
 									</p>
-									<p className="text-[10px] text-muted-foreground/70">
-										Live · Apply to save
-									</p>
+									{/* Cover / Matte toggle — the selected one is white + underlined,
+									    styled like the "Live · Apply to save" hint it replaces. */}
+									{record.capturePhotoKey && (
+										<div className="flex items-center gap-3 text-[10px]">
+											{(["cover", "matte"] as const).map((m) => (
+												<button
+													key={m}
+													type="button"
+													aria-pressed={previewMode === m}
+													onClick={() => setPreviewMode(m)}
+													className={cn(
+														"capitalize transition-colors",
+														previewMode === m
+															? "text-foreground underline underline-offset-4"
+															: "text-muted-foreground/70 hover:text-foreground",
+													)}
+												>
+													{m}
+												</button>
+											))}
+										</div>
+									)}
 								</div>
 								{record.capturePhotoKey && (
-									// Hover reveals the *actual saved* professional image over the
-									// live canvas preview (which is a fast approximation) — with a
-									// badge marking it a plain render or a Real-ESRGAN upscale.
+									// One live preview, toggled between the square cover and the transparent
+									// matte. Hover reveals the *actual saved* image for the current mode,
+									// badged plain / AI / upscale.
 									<div className="group relative">
 										<ProPreview
 											src={`/api/photos/${record.capturePhotoKey}`}
 											corners={corners}
 											params={params}
+											matte={previewMode === "matte"}
 										/>
-										{record.professionalImageKey && (
-											<>
-												<img
-													src={`/api/photos/${record.professionalImageKey}`}
-													alt="Saved cover render"
-													className="pointer-events-none absolute inset-0 size-full rounded-md border object-cover opacity-0 transition-opacity group-hover:opacity-100"
-												/>
-												<div
-													className="pointer-events-none absolute left-2 top-2 flex size-7 items-center justify-center rounded-md border bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100"
-													aria-hidden="true"
-												>
-													{record.professionalEnhanced ? (
-														<Sparkles className="size-4" />
-													) : (
-														<ImageIcon className="size-4" />
-													)}
-												</div>
-											</>
-										)}
+										{(() => {
+											const savedKey =
+												previewMode === "matte"
+													? record.professionalAlphaKey
+													: record.professionalImageKey;
+											const savedSrc = savedKey
+												? `/api/photos/${savedKey}`
+												: null;
+											// Nothing saved, or the saved object is missing/broken.
+											if (!savedSrc || savedImgError === savedSrc) return null;
+											const enhancedLike =
+												previewMode === "matte"
+													? record.professionalAlphaSource === "ai"
+													: record.professionalEnhanced;
+											return (
+												<>
+													{/* An opaque backing (checkerboard for the matte) so the saved
+													    image fully *swaps* over the live preview on hover rather
+													    than laying transparently on top of it. */}
+													<div
+														className="pointer-events-none absolute inset-0 hidden overflow-hidden rounded-md border bg-background group-hover:block"
+														style={
+															previewMode === "matte"
+																? {
+																		backgroundImage:
+																			"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
+																		backgroundSize: "24px 24px",
+																	}
+																: undefined
+														}
+													>
+														<img
+															src={savedSrc}
+															alt={
+																previewMode === "matte"
+																	? "Saved matte"
+																	: "Saved cover render"
+															}
+															onError={() => setSavedImgError(savedSrc)}
+															className={cn(
+																"size-full",
+																previewMode === "matte"
+																	? "object-contain"
+																	: "object-cover",
+															)}
+														/>
+													</div>
+													<div
+														className="pointer-events-none absolute left-2 top-2 hidden size-7 items-center justify-center rounded-md border bg-background/80 text-foreground shadow-sm backdrop-blur group-hover:flex"
+														aria-hidden="true"
+													>
+														{enhancedLike ? (
+															<Sparkles className="size-4" />
+														) : (
+															<ImageIcon className="size-4" />
+														)}
+													</div>
+												</>
+											);
+										})()}
 									</div>
 								)}
 								{/* Optional, on-demand super-resolution — laid out like the crop
 								    side's "Detect corners" row (hint left, button right). Only
 								    offered once there's a saved photo with no pending edits; it
-								    bakes the applied crop/tone, then runs it through Real-ESRGAN. */}
-								<div className="flex items-center justify-between gap-2">
-									<p className="text-xs text-muted-foreground">
-										Upscales the photo with Real-ESRGAN.
-									</p>
-									<Button
-										type="button"
-										size="sm"
-										variant="outline"
-										disabled={!proIsLive || editorBusy}
-										title={
-											proIsLive
-												? undefined
-												: isDirty
-													? "Apply your changes first."
-													: "Apply the photo as the cover first."
-										}
-										onClick={() => enhancePro.mutate()}
-									>
-										{enhancePro.isPending ? (
-											<Loader2 className="size-4 animate-spin" />
-										) : (
-											<Sparkles className="size-4" />
-										)}
-										{/* "Re-enhance" only while it's actually re-runnable (enhanced
-										    and unchanged). Once an edit is pending it flips back to
-										    "Enhance", since Re-applying will discard the upscale. */}
-										{enhancePro.isPending
-											? "Enhancing…"
-											: record.professionalEnhanced && !isDirty
-												? "Re-enhance"
-												: "Enhance"}
-									</Button>
-								</div>
+								    bakes the applied crop/tone, then runs it through Real-ESRGAN.
+								    Hidden in matte mode — Enhance upscales the *square* cover, so
+								    it has no bearing on the matte the user is looking at. */}
+								{previewMode !== "matte" && (
+									<div className="flex items-center justify-between gap-2">
+										<p className="text-xs text-muted-foreground">
+											Upscales the photo with Real-ESRGAN.
+										</p>
+										<Button
+											type="button"
+											size="sm"
+											variant="outline"
+											disabled={!proIsLive || editorBusy}
+											title={
+												proIsLive
+													? undefined
+													: isDirty
+														? "Apply your changes first."
+														: "Apply the photo as the cover first."
+											}
+											onClick={() => enhancePro.mutate()}
+										>
+											{enhancePro.isPending ? (
+												<Loader2 className="size-4 animate-spin" />
+											) : (
+												<Sparkles className="size-4" />
+											)}
+											{/* "Re-enhance" only while it's actually re-runnable (enhanced
+											    and unchanged). Once an edit is pending it flips back to
+											    "Enhance", since Re-applying will discard the upscale. */}
+											{enhancePro.isPending
+												? "Enhancing…"
+												: record.professionalEnhanced && !isDirty
+													? "Re-enhance"
+													: "Enhance"}
+										</Button>
+									</div>
+								)}
 							</div>
 						</div>
 
@@ -953,7 +1029,22 @@ function RecordDetail() {
 							) : (
 								<span />
 							)}
-							<div className="flex gap-2">
+							<div className="flex items-center gap-2">
+								{/* Matte fidelity for Apply: on = the paid matting model (best
+								    edges, ~10–30s like Enhance, auto-falls back if it's down);
+								    off = the free deterministic silhouette. */}
+								<label
+									htmlFor="pro-use-ai"
+									className="mr-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+								>
+									<Checkbox
+										id="pro-use-ai"
+										checked={useAi}
+										disabled={editorBusy}
+										onChange={(e) => setUseAi(e.currentTarget.checked)}
+									/>
+									Use AI to generate images
+								</label>
 								{/* Discard unsaved edits: snap the working copy back to what's
 								    saved on the row. Purely client-side — no re-warp, no write —
 								    so it can't leave a half-applied state. Disabled when there's

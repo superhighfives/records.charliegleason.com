@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
 	autoTone,
+	boxBlur1,
+	buildTrimap,
 	type Corners,
+	composeMatte,
+	deskewToLevel,
 	detectSleeveCorners,
 	homography,
+	keepLargestComponent,
+	matteFromCorners,
+	offsetQuad,
 	padToCanvas,
 	type RgbaImage,
+	rasterizePolygon,
+	refineQuadEdges,
 	reframeFromCorners,
+	shadowFromAlpha,
+	warpToQuad,
 	warpToSquare,
 } from "./photo-processing";
 
@@ -247,5 +258,242 @@ describe("reframeFromCorners", () => {
 		// The default (toned) output must differ — auto-tone changed the pixels.
 		const toned = reframeFromCorners(cap, corners, opts);
 		expect(toned.image.data).not.toEqual(raw.image.data);
+	});
+});
+
+describe("warpToQuad", () => {
+	it("is byte-identical to warpToSquare for a square destination", () => {
+		const corners: Corners = [
+			[140, 90],
+			[770, 160],
+			[810, 740],
+			[95, 690],
+		];
+		const cap = synthCapture(checkerboard(256), 900, corners);
+		const size = 200;
+		const viaQuad = warpToQuad(
+			cap,
+			corners,
+			[
+				[0, 0],
+				[size - 1, 0],
+				[size - 1, size - 1],
+				[0, size - 1],
+			],
+			size,
+			size,
+		);
+		expect(viaQuad.data).toEqual(warpToSquare(cap, corners, size).data);
+	});
+});
+
+describe("deskewToLevel", () => {
+	it("removes the capture's tilt without squaring (recovers side lengths, levels the top edge)", () => {
+		// A 200×100 rectangle rotated by 20° — deskew should undo the rotation, so its
+		// bounding box is back to 200×100 and the (former) top edge is horizontal again.
+		const t = (20 * Math.PI) / 180;
+		const cos = Math.cos(t);
+		const sin = Math.sin(t);
+		const rot = ([x, y]: [number, number]): [number, number] => [
+			x * cos - y * sin,
+			x * sin + y * cos,
+		];
+		const corners: Corners = [
+			rot([0, 0]),
+			rot([200, 0]),
+			rot([200, 100]),
+			rot([0, 100]),
+		];
+		const { dst, width, height } = deskewToLevel(corners);
+		expect(width).toBeCloseTo(200, 0);
+		expect(height).toBeCloseTo(100, 0);
+		// The top edge (dst[0]→dst[1]) is level again.
+		expect(Math.abs(dst[0][1] - dst[1][1])).toBeLessThan(1);
+	});
+});
+
+describe("rasterizePolygon", () => {
+	it("fills the interior of a polygon and leaves the outside empty", () => {
+		const mask = rasterizePolygon(
+			[
+				[10, 10],
+				[40, 10],
+				[40, 40],
+				[10, 40],
+			],
+			50,
+			50,
+		);
+		expect(mask[25 * 50 + 25]).toBe(255); // inside
+		expect(mask[2 * 50 + 2]).toBe(0); // outside
+		expect(mask[25 * 50 + 45]).toBe(0); // outside, to the right
+	});
+});
+
+describe("boxBlur1", () => {
+	it("spreads a single bright column into its neighbours", () => {
+		const w = 21;
+		const h = 3;
+		const src = new Uint8ClampedArray(w * h);
+		for (let y = 0; y < h; y++) src[y * w + 10] = 255; // one bright column
+		const out = boxBlur1(src, w, h, 3, 1);
+		expect(out[1 * w + 10]).toBeLessThan(255); // centre spread out (dimmer)
+		expect(out[1 * w + 8]).toBeGreaterThan(0); // neighbour picked up light
+	});
+});
+
+describe("refineQuadEdges", () => {
+	it("expands an inset quad out to the true rectangle edges", () => {
+		// A bright rectangle [40,160)² on a dark field. Start from a quad picked *inside*
+		// it; refinement should push each edge out to the real ~40/160 boundary.
+		const size = 200;
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const inside = x >= 40 && x < 160 && y >= 40 && y < 160;
+				const i = (y * size + x) * 4;
+				data[i] = data[i + 1] = data[i + 2] = inside ? 220 : 30;
+				data[i + 3] = 255;
+			}
+		const inset: Corners = [
+			[60, 60],
+			[140, 60],
+			[140, 140],
+			[60, 140],
+		];
+		const refined = refineQuadEdges(
+			{ data, width: size, height: size },
+			inset,
+			{ search: 40 },
+		);
+		// Each corner should land near the true (40,40)…(160,160) rectangle.
+		for (const [x, y] of refined) {
+			expect(Math.min(Math.abs(x - 40), Math.abs(x - 160))).toBeLessThan(4);
+			expect(Math.min(Math.abs(y - 40), Math.abs(y - 160))).toBeLessThan(4);
+		}
+	});
+});
+
+describe("offsetQuad", () => {
+	it("dilates outward and erodes inward by the given px", () => {
+		const quad: Corners = [
+			[50, 50],
+			[150, 50],
+			[150, 150],
+			[50, 150],
+		];
+		const out = offsetQuad(quad, 10); // grow 10px each edge
+		expect(out[0][0]).toBeCloseTo(40, 5);
+		expect(out[0][1]).toBeCloseTo(40, 5);
+		expect(out[2][0]).toBeCloseTo(160, 5);
+		expect(out[2][1]).toBeCloseTo(160, 5);
+		const shrunk = offsetQuad(quad, -10); // shrink 10px each edge
+		expect(shrunk[0][0]).toBeCloseTo(60, 5);
+		expect(shrunk[2][0]).toBeCloseTo(140, 5);
+	});
+});
+
+describe("buildTrimap", () => {
+	it("locks foreground/background and leaves a band unknown", () => {
+		const size = 200;
+		const quad: Corners = [
+			[60, 60],
+			[140, 60],
+			[140, 140],
+			[60, 140],
+		];
+		const trimap = buildTrimap(quad, size, size, { erode: 15, dilate: 15 });
+		// Deep inside the eroded quad → definite foreground.
+		expect(trimap[100 * size + 100]).toBe(255);
+		// Well outside the dilated quad → definite background.
+		expect(trimap[10 * size + 10]).toBe(0);
+		// On the picked edge, within the ±15 band → unknown.
+		expect(trimap[100 * size + 60]).toBe(128);
+	});
+});
+
+describe("keepLargestComponent", () => {
+	it("keeps the biggest blob and drops disconnected strays", () => {
+		const w = 20;
+		const h = 20;
+		const mask = new Uint8ClampedArray(w * h);
+		// A big 8×8 block (the "cover") and a stray 2×2 speck in the corner.
+		for (let y = 2; y < 10; y++)
+			for (let x = 2; x < 10; x++) mask[y * w + x] = 255;
+		for (let y = 16; y < 18; y++)
+			for (let x = 16; x < 18; x++) mask[y * w + x] = 255;
+		const out = keepLargestComponent(mask, w, h);
+		expect(out[5 * w + 5]).toBe(255); // inside the big blob — kept
+		expect(out[17 * w + 17]).toBe(0); // the stray speck — dropped
+	});
+});
+
+describe("shadowFromAlpha", () => {
+	it("casts a blurred, offset shadow beyond the silhouette", () => {
+		// A small opaque square in the top-left of a transparent field.
+		const size = 40;
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let y = 5; y < 15; y++)
+			for (let x = 5; x < 15; x++) {
+				const i = (y * size + x) * 4;
+				data[i] = 200;
+				data[i + 3] = 255;
+			}
+		const shadow = shadowFromAlpha(
+			{ data, width: size, height: size },
+			{ blur: 3, offsetX: 4, offsetY: 4, opacity: 0.5 },
+		);
+		// A pixel just past the square's lower-right (where the offset shadow lands) is
+		// tinted, even though the source there was fully transparent.
+		expect(shadow.data[(17 * size + 17) * 4 + 3]).toBeGreaterThan(0);
+	});
+});
+
+describe("matteFromCorners", () => {
+	it("floats a toned, shadowed cutout on a transparent margin", () => {
+		// A bright sleeve on dark wood, under a slight perspective — the deterministic
+		// silhouette should cut it out, centre it, and leave a transparent margin.
+		const corners: Corners = [
+			[150, 110],
+			[760, 150],
+			[800, 720],
+			[110, 700],
+		];
+		const cap = synthCapture(checkerboard(512), 900, corners);
+		const opts = {
+			canvasSize: 200,
+			contentSize: 170,
+			shadow: { blur: 6, offsetX: 4, offsetY: 6, opacity: 0.35 },
+		} as const;
+		const { cutout, shadow } = matteFromCorners(cap, corners, opts);
+
+		expect(cutout.width).toBe(200);
+		expect(cutout.height).toBe(200);
+		// Centre is opaque sleeve; the extreme corner is transparent margin.
+		expect(cutout.data[(100 * 200 + 100) * 4 + 3]).toBeGreaterThan(200);
+		expect(cutout.data[3]).toBe(0);
+		// The shadow variant differs from the pure cutout (it gained shadow pixels).
+		expect(shadow.data).not.toEqual(cutout.data);
+	});
+});
+
+describe("composeMatte", () => {
+	it("cuts content to the mask and centres it with a margin", () => {
+		// Solid opaque content, fully-inside mask → after padding, the centre is opaque
+		// and the outer margin (beyond contentSize) is transparent.
+		const cw = 80;
+		const content: RgbaImage = {
+			data: new Uint8ClampedArray(cw * cw * 4).fill(255),
+			width: cw,
+			height: cw,
+		};
+		const mask = new Uint8ClampedArray(cw * cw).fill(255);
+		const { cutout } = composeMatte(content, mask, {
+			canvasSize: 200,
+			contentSize: 80,
+			tone: false,
+		});
+		expect(cutout.data[(100 * 200 + 100) * 4 + 3]).toBe(255); // centre opaque
+		expect(cutout.data[3]).toBe(0); // top-left corner is margin
 	});
 });

@@ -104,7 +104,10 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body className="flex min-h-dvh flex-col">
 				<ClerkProvider>
-					{children}
+					{/* A flex-1 column so a route's content (or a full-height ErrorScreen,
+					    which fills with `flex-1`) grows to the available space — the same
+					    shell the admin layout provides via its own <main>. */}
+					<div className="flex min-h-0 flex-1 flex-col">{children}</div>
 					<Toaster />
 					{/* Dev-only: keep the router/query devtools out of the production bundle. */}
 					{import.meta.env.DEV && (

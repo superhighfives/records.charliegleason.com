@@ -4,11 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import {
 	applyPolish,
 	type Corners,
+	type MatteOptions,
+	matteFromCorners,
 	type RgbaImage,
 	reframeFromCorners,
 } from "#/lib/photo-processing";
 import {
 	DEFAULT_REFRAME_PARAMS,
+	matteToneFromParams,
 	type ReframeParams,
 } from "#/lib/reframe-params";
 import type { NormalizedCorners } from "#/lib/sleeve-corners";
@@ -30,6 +33,8 @@ import { cn } from "#/lib/utils";
 
 // Preview render resolution — small enough to warp per animation frame on the main thread.
 const PREVIEW_SIZE = 448;
+// The matte's transparent margin (fraction per side) — mirrors the server's ~7%.
+const MATTE_MARGIN = 0.07;
 // Cap the decoded capture's longest side so warp sampling stays cheap (corners are
 // normalised, so a downscaled source maps identically).
 const SOURCE_MAX = 1100;
@@ -59,11 +64,17 @@ export function ProPreview({
 	src,
 	corners,
 	params,
+	matte = false,
 	className,
 }: {
 	src: string;
 	corners: NormalizedCorners;
 	params: ReframeParams;
+	/** Render the transparent, true-edged matte (shadow variant) on a checkerboard,
+	 *  rather than the square hero. Runs the *deterministic* silhouette client-side —
+	 *  the paid matting path isn't client-runnable, so (like Enhance) it only appears
+	 *  after Apply, via the hover-reveal of the stored image. */
+	matte?: boolean;
 	className?: string;
 }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -97,14 +108,36 @@ export function ProPreview({
 				x * (source.width - 1),
 				y * (source.height - 1),
 			]) as Corners;
-			const { image } = reframeFromCorners(source, px, {
-				canvasSize: PREVIEW_SIZE,
-				contentSize: PREVIEW_SIZE,
-				tone: p.skipTone
-					? false
-					: { wbStrength: p.wbStrength, lowPct: p.lowPct, highPct: p.highPct },
-			});
-			applyPolish(image, p.saturation, p.contrast, p.gamma);
+			const tone = p.skipTone
+				? false
+				: { wbStrength: p.wbStrength, lowPct: p.lowPct, highPct: p.highPct };
+			let image: RgbaImage;
+			if (matte) {
+				// The matte wears the same softened grade the server stores (gentler
+				// white-balance + polish than the square hero), so the preview matches.
+				const matteGrade = matteToneFromParams(params);
+				const opts: MatteOptions = {
+					canvasSize: PREVIEW_SIZE,
+					contentSize: Math.round(PREVIEW_SIZE * (1 - 2 * MATTE_MARGIN)),
+					feather: 2,
+					tone: matteGrade.tone,
+					polish: matteGrade.polish,
+					shadow: {
+						blur: Math.round(PREVIEW_SIZE * 0.02),
+						offsetX: Math.round(PREVIEW_SIZE * 0.006),
+						offsetY: Math.round(PREVIEW_SIZE * 0.012),
+						opacity: 0.34,
+					},
+				};
+				image = matteFromCorners(source, px, opts).shadow;
+			} else {
+				image = reframeFromCorners(source, px, {
+					canvasSize: PREVIEW_SIZE,
+					contentSize: PREVIEW_SIZE,
+					tone,
+				}).image;
+				applyPolish(image, p.saturation, p.contrast, p.gamma);
+			}
 			canvas.width = image.width;
 			canvas.height = image.height;
 			const ctx = canvas.getContext("2d");
@@ -118,14 +151,26 @@ export function ProPreview({
 		return () => {
 			if (rafRef.current) cancelAnimationFrame(rafRef.current);
 		};
-	}, [source, corners, params]);
+	}, [source, corners, params, matte]);
 
 	return (
 		<div
 			className={cn(
-				"relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-md border bg-muted",
+				"relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-md border",
+				matte ? "bg-background" : "bg-muted",
 				className,
 			)}
+			// A checkerboard behind the matte, so its transparent margin + soft edges
+			// read as transparency (not a solid fill) while dragging.
+			style={
+				matte
+					? {
+							backgroundImage:
+								"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
+							backgroundSize: "24px 24px",
+						}
+					: undefined
+			}
 		>
 			<canvas ref={canvasRef} className="size-full" />
 			{!source && (
