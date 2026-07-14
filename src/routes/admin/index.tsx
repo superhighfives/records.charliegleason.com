@@ -157,6 +157,21 @@ const FACET_GROUPS: Array<{
 			},
 		],
 	},
+	{
+		key: "enhance",
+		options: [
+			{
+				token: "enhanced",
+				label: "Enhanced",
+				test: (r) => r.professionalEnhanced === true,
+			},
+			{
+				token: "unenhanced",
+				label: "Unenhanced",
+				test: (r) => r.professionalEnhanced !== true,
+			},
+		],
+	},
 ];
 
 // Attention states that aren't clean opposites — simple on/off toggles.

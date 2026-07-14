@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Info, Loader2 } from "lucide-react";
+import { Info, Loader2, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -40,6 +40,7 @@ import type { RecordFormValues } from "#/lib/record-schema";
 import {
 	deleteRecord,
 	detectCorners,
+	enhanceProfessional,
 	fetchRecordValue,
 	generateProfessional,
 	getDiscogsRelease,
@@ -360,9 +361,6 @@ function RecordDetail() {
 	);
 	// Whether the professional-photo editor modal is open (crop + live preview + knobs).
 	const [editorOpen, setEditorOpen] = useState(false);
-	// The editor's "Use as cover" toggle — pre-checked on open so applying an edit
-	// promotes it to the shown cover by default (uncheck to keep it un-approved).
-	const [useAsCover, setUseAsCover] = useState(true);
 	const [replacingCapture, setReplacingCapture] = useState(false);
 	const captureInputRef = useRef<HTMLInputElement>(null);
 
@@ -458,7 +456,6 @@ function RecordDetail() {
 			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
 			setCorners(parseCorners(row.sleeveCornersJson));
 			setParams(parseReframeParams(row.professionalParamsJson));
-			setUseAsCover(true);
 			setEditorOpen(true);
 			toast.success("Capture replaced — review the crop, then Apply.");
 		},
@@ -537,13 +534,13 @@ function RecordDetail() {
 			),
 	});
 
-	// Apply the edit: warp the capture to the current corners + tone, set whether it's
-	// used as the cover (the modal's checkbox), then dismiss the editor.
+	// Apply the edit: warp the capture to the current corners + tone, promote it to
+	// the displayed cover, then dismiss the editor.
 	const applyPro = useMutation({
 		mutationFn: async () => {
 			await reframeRecord({ data: { id: recordId, corners, params } });
 			return setProfessionalApproved({
-				data: { id: recordId, approved: useAsCover },
+				data: { id: recordId, approved: true },
 			});
 		},
 		onSuccess: async (row) => {
@@ -558,13 +555,49 @@ function RecordDetail() {
 			),
 	});
 
+	// The paid "Enhance": bake the current edit, then super-resolve it through
+	// Real-ESRGAN for a sharper, higher-res master. Takes ~10–30s (a real GPU run),
+	// so the button shows a spinner. Preserves approval, so a live cover stays live.
+	const enhancePro = useMutation({
+		mutationFn: () =>
+			enhanceProfessional({ data: { id: recordId, corners, params } }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			toast.success("Enhanced — the photo was upscaled.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't enhance the photo.",
+			),
+	});
+
+	// Take the photo back down as the displayed cover: unapprove it (the pixels stay
+	// in R2, just aren't shown — the header falls back to the raw capture), then close
+	// the editor and return to the detail view.
+	const removeCover = useMutation({
+		mutationFn: () =>
+			setProfessionalApproved({ data: { id: recordId, approved: false } }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			setEditorOpen(false);
+			toast.success("Cover removed.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't remove the cover.",
+			),
+	});
+
 	// Open the editor, syncing the working copies to the row and seeding a first pass if
 	// the record has never been cropped (so the preview pane isn't empty). "Use as cover"
 	// starts checked — editing implies you want to show the result.
 	const openEditor = () => {
 		setCorners(parseCorners(record?.sleeveCornersJson));
 		setParams(parseReframeParams(record?.professionalParamsJson));
-		setUseAsCover(true);
 		setEditorOpen(true);
 		if (!record?.professionalImageKey && !generateFirst.isPending) {
 			generateFirst.mutate();
@@ -784,6 +817,36 @@ function RecordDetail() {
 										params={params}
 									/>
 								)}
+								{/* Optional, on-demand super-resolution. Bakes the current crop/
+								    tone, then runs it through Real-ESRGAN — most useful when the
+								    sleeve was small in frame and the reframe had to upsample it. */}
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									className="w-full"
+									disabled={
+										enhancePro.isPending ||
+										reframePro.isPending ||
+										applyPro.isPending
+									}
+									onClick={() => enhancePro.mutate()}
+								>
+									{enhancePro.isPending ? (
+										<>
+											<Loader2 className="animate-spin" />
+											Enhancing…
+										</>
+									) : (
+										<>
+											<Sparkles />
+											Enhance
+										</>
+									)}
+								</Button>
+								<p className="text-[10px] text-muted-foreground/70">
+									Upscales the photo with Real-ESRGAN — takes a few seconds.
+								</p>
 							</div>
 						</div>
 
@@ -857,21 +920,28 @@ function RecordDetail() {
 							</div>
 						</div>
 
-						{/* Use-as-cover on the left; Reset + Apply on the right (Apply last).
-						    Apply saves the crop/tone, sets approval, and dismisses. */}
+						{/* Destructive "Remove cover" on the left (only when there's an
+						    approved cover to take down); Reset + Apply on the right (Apply
+						    last). Apply saves the crop/tone and promotes it to the cover;
+						    Remove cover unapproves it and returns to the detail view. */}
 						<DialogFooter className="items-center justify-between sm:justify-between">
-							<label
-								htmlFor="pro-usecover"
-								className="flex items-center gap-2 text-sm"
-							>
-								<Checkbox
-									id="pro-usecover"
-									checked={useAsCover}
-									disabled={applyPro.isPending}
-									onChange={(e) => setUseAsCover(e.currentTarget.checked)}
-								/>
-								Use as cover
-							</label>
+							{record.professionalStatus === "approved" ? (
+								<Button
+									type="button"
+									size="sm"
+									variant="destructive"
+									disabled={
+										removeCover.isPending ||
+										applyPro.isPending ||
+										reframePro.isPending
+									}
+									onClick={() => removeCover.mutate()}
+								>
+									{removeCover.isPending ? "Removing…" : "Remove cover"}
+								</Button>
+							) : (
+								<span />
+							)}
 							<div className="flex gap-2">
 								<Button
 									type="button"

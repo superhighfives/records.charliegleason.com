@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { PhotonImage } from "@cf-wasm/photon";
 
 import type { Record } from "#/db/schema";
+import { bytesToBase64 } from "#/lib/image-data";
 import {
 	applyPolish,
 	type Corners,
@@ -14,6 +15,7 @@ import {
 	parseReframeParams,
 	type ReframeParams,
 } from "#/lib/reframe-params";
+import { firstOutputUrl, runVersion } from "#/lib/replicate";
 import {
 	DEFAULT_CORNERS,
 	type NormalizedCorners,
@@ -58,6 +60,16 @@ const CANVAS_SIZE = 2000;
 // Sharpen strength for the final Images pass. Gentle — just enough to counter the
 // bilinear softening from the warp, not enough to crunch the halftone.
 const FINAL_SHARPEN = 1.0;
+
+// On-demand "Enhance": Real-ESRGAN super-resolution. Faithful (no diffusion, so it
+// sharpens + denoises without inventing cover art / text), cheap, and quick. Pinned
+// to a known version so the input schema can't shift under us. 2× turns the 2000px
+// reframe into a 4000px master — enough to rescue a sleeve that was small in frame.
+const REAL_ESRGAN_VERSION =
+	"b3ef194191d13140337468c916c2c5b96dd0cb06dffc032a022a31807f6a5ea8";
+const UPSCALE_FACTOR = 2;
+// Bound the stored master so a big upscale can't balloon R2 — a no-op at 2× of 2000.
+const UPSCALE_MAX = 4000;
 
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
 function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
@@ -172,6 +184,51 @@ export async function reframeFromCapture(
 	params: ReframeParams = {},
 ): Promise<{ key: string }> {
 	return warpEncodeStore(await loadCapture(capturePhotoKey), corners, params);
+}
+
+/**
+ * The PAID "Enhance" step: super-resolve an existing professional image (an R2 key)
+ * through Real-ESRGAN and store the higher-res master under a fresh `professional/`
+ * key. Reads the stored webp, ships it to Replicate as a data URI (the R2 object
+ * isn't publicly reachable), fetches the upscaled result back, then canonicalises it
+ * to a bounded webp via the Images binding — same format as everything else. Returns
+ * the new key; throws on any Replicate/fetch/store failure so the caller can leave
+ * the record's current cover untouched.
+ */
+export async function upscaleProfessional(
+	professionalKey: string,
+): Promise<{ key: string }> {
+	const object = await env.PHOTOS.get(professionalKey);
+	if (!object)
+		throw new Error(`professional photo missing in R2: ${professionalKey}`);
+	const sourceBytes = new Uint8Array(await object.arrayBuffer());
+	const dataUri = `data:image/webp;base64,${bytesToBase64(sourceBytes)}`;
+
+	const prediction = await runVersion(REAL_ESRGAN_VERSION, {
+		image: dataUri,
+		scale: UPSCALE_FACTOR,
+		// Album art, not portraits — GFPGAN face restoration would meddle with cover
+		// faces/text, so leave it off for a faithful upscale.
+		face_enhance: false,
+	});
+	const outputUrl = firstOutputUrl(prediction.output);
+	if (!outputUrl) throw new Error("Replicate returned no upscaled image");
+
+	const upscaled = await fetch(outputUrl);
+	if (!upscaled.ok || !upscaled.body) {
+		throw new Error(`Fetching the upscaled image failed (${upscaled.status})`);
+	}
+
+	const out = await env.IMAGES.input(upscaled.body)
+		.transform({ width: UPSCALE_MAX, height: UPSCALE_MAX, fit: "scale-down" })
+		.output({ format: "image/webp", quality: 92 });
+	const buffer = await out.response().arrayBuffer();
+
+	const key = `professional/${crypto.randomUUID()}.webp`;
+	await env.PHOTOS.put(key, buffer, {
+		httpMetadata: { contentType: "image/webp" },
+	});
+	return { key };
 }
 
 /**

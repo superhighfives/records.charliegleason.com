@@ -77,6 +77,12 @@ export const records = sqliteTable("records", {
 	professionalStatus: text("professional_status", {
 		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
 	}).default("idle"),
+	// Whether `professionalImageKey` is a Real-ESRGAN-upscaled master (the editor's
+	// paid "Enhance"), vs a plain reframe of the capture. Reset to false whenever the
+	// photo is regenerated from the capture. Powers the admin "Enhanced" filter.
+	professionalEnhanced: integer("professional_enhanced", {
+		mode: "boolean",
+	}).default(false),
 	professionalError: text("professional_error"), // last generation error, surfaced in admin
 	// Vestigial — the pipeline no longer makes any Replicate call. Kept as a nullable
 	// column (not dropped) so a migration never has to remove something the currently

@@ -18,7 +18,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "wrangler d1 migrations apply records --remote",
     "db:migrate:local": "wrangler d1 migrations apply records --local",
-    "db:migrate:preview": "wrangler d1 migrations apply records-preview --remote",
+    "db:migrate:preview": "wrangler d1 migrations apply records-preview --remote --env preview",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"
   },

@@ -26,6 +26,7 @@ import {
 	detectCaptureCorners,
 	professionalPipeline,
 	reframeFromCapture,
+	upscaleProfessional,
 } from "#/lib/professional";
 import {
 	enqueueAnalyze,
@@ -68,6 +69,7 @@ const ADMIN_ONLY_FIELDS = [
 	// sleeve corners, the reframe knob settings and the vestigial prediction id are
 	// never public.
 	"professionalError",
+	"professionalEnhanced",
 	"sleeveCornersJson",
 	"professionalParamsJson",
 	"professionalPredictionId",
@@ -87,6 +89,7 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 		discogsValueJson: _valueJson,
 		discogsValueFetchedAt: _fetchedAt,
 		professionalError: _proError,
+		professionalEnhanced: _proEnhanced,
 		sleeveCornersJson: _corners,
 		professionalParamsJson: _proParams,
 		professionalPredictionId: _proPrediction,
@@ -421,6 +424,8 @@ export const generateProfessional = createServerFn({ method: "POST" })
 					sleeveCornersJson: serializeCorners(corners),
 					professionalStatus:
 						record.professionalStatus === "approved" ? "approved" : "ready",
+					// A fresh generation is a plain reframe, not an upscale.
+					professionalEnhanced: false,
 					professionalError: null,
 					updatedAt: new Date(),
 				})
@@ -511,6 +516,8 @@ export const reframeRecord = createServerFn({ method: "POST" })
 					// already-approved photo live so a quick tweak goes straight out.
 					professionalStatus:
 						record.professionalStatus === "approved" ? "approved" : "ready",
+					// A plain reframe supersedes any prior Real-ESRGAN upscale.
+					professionalEnhanced: false,
 					professionalError: null,
 					updatedAt: new Date(),
 				})
@@ -521,6 +528,85 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			// key, so a failed cleanup just leaves one stale object, never a broken ref.
 			const stale = record.professionalImageKey;
 			if (stale && stale !== key) {
+				await env.PHOTOS.delete(stale).catch(() => {});
+			}
+			return row ?? null;
+		}),
+	);
+
+/**
+ * The PAID "Enhance" action under the editor preview. Bakes the current corners +
+ * tone into a fresh reframe (so what's upscaled matches what the admin sees), runs
+ * that through Real-ESRGAN for a higher-res, sharper master, and stores it as the
+ * professional image. Approval is preserved — enhancing an already-live cover keeps
+ * it live. Atomic: any Replicate/fetch failure throws and leaves the current cover
+ * untouched (the throwaway reframe is cleaned up). Returns the updated row, or null
+ * if the record is gone.
+ */
+export const enhanceProfessional = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(
+		(input: {
+			id: number;
+			corners?: NormalizedCorners;
+			params?: ReframeParams;
+		}) => ({
+			id: input.id,
+			corners: input.corners,
+			params: input.params ?? {},
+		}),
+	)
+	.handler(({ data: { id, corners, params } }) =>
+		Sentry.startSpan({ name: "enhanceProfessional" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+			if (!record.capturePhotoKey) {
+				throw new Error("This record has no capture photo to enhance.");
+			}
+			const effectiveCorners =
+				corners ?? parseCorners(record.sleeveCornersJson);
+			// Bake the current edit first so the upscale operates on exactly what the
+			// preview shows, then super-resolve it. If the (paid) upscale throws, bin
+			// the throwaway reframe and rethrow — the record keeps its current cover.
+			const { key: baseKey } = await reframeFromCapture(
+				record.capturePhotoKey,
+				effectiveCorners,
+				params,
+			);
+			let upscaledKey: string;
+			try {
+				({ key: upscaledKey } = await upscaleProfessional(baseKey));
+			} catch (err) {
+				await env.PHOTOS.delete(baseKey).catch(() => {});
+				throw err;
+			}
+			// The reframe was only a staging step for the upscale — don't leave it in R2.
+			await env.PHOTOS.delete(baseKey).catch(() => {});
+
+			const [row] = await db
+				.update(records)
+				.set({
+					sleeveCornersJson: serializeCorners(effectiveCorners),
+					professionalImageKey: upscaledKey,
+					professionalParamsJson: JSON.stringify(params),
+					professionalStatus:
+						record.professionalStatus === "approved" ? "approved" : "ready",
+					// This master came out of Real-ESRGAN — mark it so the admin filter
+					// (and any future badge) can tell it apart from a plain reframe.
+					professionalEnhanced: true,
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			// Bin the superseded professional image, best-effort.
+			const stale = record.professionalImageKey;
+			if (stale && stale !== upscaledKey) {
 				await env.PHOTOS.delete(stale).catch(() => {});
 			}
 			return row ?? null;
@@ -595,7 +681,13 @@ export const replaceCapture = createServerFn({ method: "POST" })
 
 			const [row] = await db
 				.update(records)
-				.set({ capturePhotoKey, ...proFields, updatedAt: new Date() })
+				.set({
+					capturePhotoKey,
+					...proFields,
+					// A new capture regenerates from scratch — no longer an upscale.
+					professionalEnhanced: false,
+					updatedAt: new Date(),
+				})
 				.where(eq(records.id, id))
 				.returning();
 
