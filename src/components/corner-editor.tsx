@@ -347,8 +347,6 @@ export function CornerEditor({
 							style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
 							onPointerEnter={() => setHover(i)}
 							onPointerLeave={() => setHover((h) => (h === i ? null : h))}
-							onFocus={() => setHover(i)}
-							onBlur={() => setHover((h) => (h === i ? null : h))}
 							onKeyDown={(e) => {
 								const d: Record<string, NormalizedCorner> = {
 									ArrowLeft: [-NUDGE, 0],

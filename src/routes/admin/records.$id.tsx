@@ -30,12 +30,12 @@ import {
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
+import { displayCoverKey } from "#/lib/cover";
 import type {
 	DiscogsCandidate,
 	DiscogsValue,
 	SearchParams,
 } from "#/lib/discogs";
-import { squareDownscale } from "#/lib/image-resize";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
 	deleteRecord,
@@ -47,11 +47,10 @@ import {
 	previewReleaseValue,
 	publishRecord,
 	reframeRecord,
-	refreshRecord,
+	replaceCapture,
 	reprocessRecord,
 	searchDiscogs,
 	setProfessionalApproved,
-	uploadCover,
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 import {
@@ -73,7 +72,7 @@ function looksLikeReleaseId(input: string): boolean {
 	return /^\d+$/.test(s) || /\/releases?\/\d+/.test(s);
 }
 
-/** Read a file to a data URL (fallback when the browser can't crop/decode it). */
+/** Read a file to a data URL — used to ship a replacement capture to the server. */
 function readFileAsDataUrl(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -81,15 +80,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(file);
 	});
-}
-
-/** Square-crop + downscale a chosen cover, falling back to the raw file. */
-async function prepareCover(file: File): Promise<string> {
-	try {
-		return (await squareDownscale(file)).dataUrl;
-	} catch {
-		return readFileAsDataUrl(file);
-	}
 }
 
 function TabButton({
@@ -358,8 +348,6 @@ function RecordDetail() {
 	const [tab, setTab] = useState<"search" | "url">("url");
 	const [showAdvanced, setShowAdvanced] = useState(false);
 	const [discogsUrl, setDiscogsUrl] = useState("");
-	// Briefly shown after a refresh so the enrichment landing isn't silent.
-	const [justRefreshed, setJustRefreshed] = useState(false);
 	// Editable reframe knobs, seeded from whatever's stored on the record. This is the
 	// working copy the sliders drive; "Apply" sends it to the (free) reframe step.
 	const [params, setParams] = useState<ReframeParams>(() =>
@@ -372,13 +360,11 @@ function RecordDetail() {
 	);
 	// Whether the professional-photo editor modal is open (crop + live preview + knobs).
 	const [editorOpen, setEditorOpen] = useState(false);
-	// A user-uploaded cover overrides the auto-sourced Discogs artwork on publish.
-	const [customCover, setCustomCover] = useState<{
-		key: string;
-		preview: string;
-	} | null>(null);
-	const [uploadingCover, setUploadingCover] = useState(false);
-	const coverInputRef = useRef<HTMLInputElement>(null);
+	// The editor's "Use as cover" toggle — pre-checked on open so applying an edit
+	// promotes it to the shown cover by default (uncheck to keep it un-approved).
+	const [useAsCover, setUseAsCover] = useState(true);
+	const [replacingCapture, setReplacingCapture] = useState(false);
+	const captureInputRef = useRef<HTMLInputElement>(null);
 
 	// When a Discogs candidate is picked, grab its full-res cover through our own
 	// proxy so we can (a) show a zoomable preview of the actual artwork that will
@@ -456,15 +442,40 @@ function RecordDetail() {
 		},
 	});
 
-	async function handleCoverFile(file: File | undefined) {
+	// Replace the source capture with a freshly chosen photo, regenerate the crop
+	// server-side, then open the editor on the new image so it can be reviewed.
+	const replaceCaptureMut = useMutation({
+		mutationFn: (input: { dataUrl: string; mediaType: string }) =>
+			replaceCapture({
+				data: {
+					id: recordId,
+					imageBase64: input.dataUrl,
+					mediaType: input.mediaType,
+				},
+			}),
+		onSuccess: (row) => {
+			if (!row) return;
+			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			setCorners(parseCorners(row.sleeveCornersJson));
+			setParams(parseReframeParams(row.professionalParamsJson));
+			setUseAsCover(true);
+			setEditorOpen(true);
+			toast.success("Capture replaced — review the crop, then Apply.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't replace the capture.",
+			),
+	});
+
+	async function handleCaptureFile(file: File | undefined) {
 		if (!file || !file.type.startsWith("image/")) return;
-		setUploadingCover(true);
+		setReplacingCapture(true);
 		try {
-			const dataUrl = await prepareCover(file);
-			const key = await uploadCover({ data: { imageBase64: dataUrl } });
-			if (key) setCustomCover({ key, preview: dataUrl });
+			const dataUrl = await readFileAsDataUrl(file);
+			await replaceCaptureMut.mutateAsync({ dataUrl, mediaType: file.type });
 		} finally {
-			setUploadingCover(false);
+			setReplacingCapture(false);
 		}
 	}
 
@@ -526,18 +537,34 @@ function RecordDetail() {
 			),
 	});
 
-	// Approve (promote) or unapprove the generated professional photo.
-	const approvePro = useMutation({
-		mutationFn: (approved: boolean) =>
-			setProfessionalApproved({ data: { id: recordId, approved } }),
-		onSuccess: invalidate,
+	// Apply the edit: warp the capture to the current corners + tone, set whether it's
+	// used as the cover (the modal's checkbox), then dismiss the editor.
+	const applyPro = useMutation({
+		mutationFn: async () => {
+			await reframeRecord({ data: { id: recordId, corners, params } });
+			return setProfessionalApproved({
+				data: { id: recordId, approved: useAsCover },
+			});
+		},
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			setEditorOpen(false);
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't apply the changes.",
+			),
 	});
 
 	// Open the editor, syncing the working copies to the row and seeding a first pass if
-	// the record has never been cropped (so the preview pane isn't empty).
+	// the record has never been cropped (so the preview pane isn't empty). "Use as cover"
+	// starts checked — editing implies you want to show the result.
 	const openEditor = () => {
 		setCorners(parseCorners(record?.sleeveCornersJson));
 		setParams(parseReframeParams(record?.professionalParamsJson));
+		setUseAsCover(true);
 		setEditorOpen(true);
 		if (!record?.professionalImageKey && !generateFirst.isPending) {
 			generateFirst.mutate();
@@ -577,20 +604,6 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn’t fetch a value from Discogs."),
 	});
 
-	// Re-pull the enrichment fields from the stored Discogs release (no re-scan of
-	// the photo). Clears any locally picked candidate so the form shows fresh data.
-	const refresh = useMutation({
-		mutationFn: () => refreshRecord({ data: recordId }),
-		onSuccess: async () => {
-			setPicked(null);
-			setResults(null);
-			await invalidate();
-			// Surface that fresh content landed, then let the message fade out.
-			setJustRefreshed(true);
-			setTimeout(() => setJustRefreshed(false), 2500);
-		},
-	});
-
 	if (!record) {
 		return <p className="text-muted-foreground">Record not found.</p>;
 	}
@@ -613,26 +626,22 @@ function RecordDetail() {
 	// queue state to poll — the editor's own mutations report their progress. `p` merges
 	// the working-copy params over the defaults so the sliders always have a concrete value.
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
-	// Whichever image the editor's preview pane should show: the generated professional
-	// photo, else the raw capture as a stand-in while the first pass generates.
-	const proPreviewSrc = record.professionalImageKey
-		? `/api/photos/${record.professionalImageKey}`
-		: record.capturePhotoKey
-			? `/api/photos/${record.capturePhotoKey}`
-			: null;
 
 	// Cover preview source, best-first: the freshly downloaded full-res artwork,
 	// then the picked candidate's thumbnail (instant, while the full-res loads or
-	// if it failed), then the stored cover when nothing is picked.
+	// if it failed), then the stored cover when nothing is picked. Discogs-only —
+	// shown inside the Discogs section, never used as the record's display image.
 	const coverPreviewSrc =
 		coverProbe.status === "ready"
 			? coverProbe.url
 			: (picked?.thumb ??
 				(record.coverImageKey ? `/api/photos/${record.coverImageKey}` : null));
-	// Header photo: the raw capture if there is one, else the best cover we have.
-	const headerPhotoSrc = record.capturePhotoKey
-		? `/api/photos/${record.capturePhotoKey}`
-		: coverPreviewSrc;
+	// Header photo: the approved professional crop, else the raw capture. Never the
+	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
+	const headerCoverKey = displayCoverKey(record, { includeCapture: true });
+	const headerPhotoSrc = headerCoverKey
+		? `/api/photos/${headerCoverKey}`
+		: null;
 
 	return (
 		<div className="mx-auto max-w-2xl space-y-6">
@@ -709,328 +718,210 @@ function RecordDetail() {
 				</p>
 			)}
 
-			{/* Upload your own cover — overrides the Discogs artwork on publish. */}
-			{!inFlight && (
-				<div className="flex items-center gap-2">
+			{/* Two actions on the capture: swap the source photo, or open the crop/
+			    tone editor. The image itself is shown (bottom-aligned) in the header. */}
+			{!inFlight && record.capturePhotoKey && (
+				<div className="flex flex-wrap items-center gap-2">
 					<input
-						ref={coverInputRef}
+						ref={captureInputRef}
 						type="file"
 						accept="image/*"
 						className="hidden"
 						onChange={(e) => {
-							handleCoverFile(e.target.files?.[0]);
-							// Allow re-selecting the same file after a remove.
+							handleCaptureFile(e.target.files?.[0]);
+							// Allow re-selecting the same file after a cancel.
 							e.target.value = "";
 						}}
 					/>
-					{record.discogsId ? (
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							disabled={refresh.isPending}
-							onClick={() => refresh.mutate()}
-						>
-							{refresh.isPending ? "Refreshing…" : "Refresh"}
-						</Button>
-					) : (
-						// Unmatched: no release to refresh from yet. Re-run the analysis to
-						// take another shot at reading the cover and matching Discogs (the
-						// fetch retries mean a transient miss is worth retrying).
-						record.status === "review" && (
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={retry.isPending}
-								onClick={() => retry.mutate()}
-							>
-								{retry.isPending ? "Matching…" : "Match"}
-							</Button>
-						)
-					)}
 					<Button
 						type="button"
 						size="sm"
 						variant="outline"
-						disabled={uploadingCover}
-						onClick={() => coverInputRef.current?.click()}
+						disabled={replacingCapture}
+						onClick={() => captureInputRef.current?.click()}
 					>
-						{uploadingCover
-							? "Uploading…"
-							: customCover
-								? "Replace cover"
-								: "Upload cover"}
+						{replacingCapture ? "Replacing…" : "Replace capture"}
 					</Button>
-					{customCover && (
-						<button
-							type="button"
-							onClick={() => setCustomCover(null)}
-							className="text-sm text-muted-foreground underline underline-offset-4"
-						>
-							Remove
-						</button>
-					)}
-					{justRefreshed && (
-						<span className="text-sm text-muted-foreground">
-							Updating content…
-						</span>
-					)}
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						onClick={openEditor}
+					>
+						Edit image
+					</Button>
+					{record.professionalStatus === "failed" &&
+						record.professionalError && (
+							<span className="text-xs text-red-600 dark:text-red-400">
+								Last generation failed: {record.professionalError}. Open the
+								editor and adjust the corners to try again.
+							</span>
+						)}
 				</div>
 			)}
 
-			{/* Professional studio photo — a deterministic crop/straighten/tone of the
-			    capture (no AI), edited in a modal, then preferred over the Discogs cover
-			    once approved. Click the photo to open the corner + tone editor. */}
+			{/* The editor: crop on the left, live output on the right, knobs below.
+			    "Use as cover" (footer checkbox) controls whether Apply promotes it. */}
 			{!inFlight && record.capturePhotoKey && (
-				<div className="space-y-3 rounded-lg border p-3">
-					<div className="flex items-start justify-between gap-2">
-						<div>
-							<h2 className="text-sm font-semibold">Professional photo</h2>
-							<p className="text-xs text-muted-foreground">
-								A straight-on, cropped, evenly-toned square built from your
-								capture — not repainted. Click it to view it large, or Edit to
-								crop the sleeve and tune the tone. Once approved it’s shown
-								across the site in place of the cover.
-							</p>
-						</div>
-						{record.professionalStatus === "approved" && (
-							<span className="shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
-								Live
-							</span>
-						)}
-					</div>
+				<Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+					<DialogContent className="max-w-5xl">
+						<DialogHeader>
+							<DialogTitle>Edit image</DialogTitle>
+							<DialogDescription>
+								Drag the corners to the sleeve’s edges (or auto-detect), then
+								tune the tone — the preview updates live. Apply saves it.
+							</DialogDescription>
+						</DialogHeader>
 
-					{/* Thumbnail → click to zoom the actual stored photo full-size; edit via
-					    the button below. Shows the generated photo, or the raw capture as a
-					    stand-in until a first pass exists. */}
-					<figure className="space-y-1">
-						{proPreviewSrc && (
-							<ImageZoom
-								src={proPreviewSrc}
-								alt="Straightened sleeve"
-								className="size-40 bg-muted"
-							/>
-						)}
-						<figcaption className="text-xs text-muted-foreground">
-							{record.professionalImageKey
-								? record.professionalStatus === "approved"
-									? "Approved — shown on the site"
-									: "Generated — not shown until approved"
-								: "Not generated yet — use Edit to create the first pass"}
-						</figcaption>
-					</figure>
-
-					<div className="flex flex-wrap gap-2">
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							onClick={openEditor}
-						>
-							Edit crop &amp; tone
-						</Button>
-						{record.professionalStatus === "approved" ? (
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={approvePro.isPending}
-								onClick={() => approvePro.mutate(false)}
-							>
-								{approvePro.isPending ? "Stopping…" : "Stop using"}
-							</Button>
-						) : (
-							<Button
-								type="button"
-								size="sm"
-								disabled={!record.professionalImageKey || approvePro.isPending}
-								onClick={() => approvePro.mutate(true)}
-							>
-								{approvePro.isPending ? "Using…" : "Use as cover"}
-							</Button>
-						)}
-					</div>
-
-					{record.professionalStatus === "failed" &&
-						record.professionalError && (
-							<p className="text-xs text-red-600 dark:text-red-400">
-								Last generation failed: {record.professionalError}. Open the
-								editor and adjust the corners to try again.
-							</p>
-						)}
-
-					{/* The editor: crop on the left, live output on the right, knobs below. */}
-					<Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-						<DialogContent className="max-w-5xl">
-							<DialogHeader>
-								<DialogTitle>Professional photo</DialogTitle>
-								<DialogDescription>
-									Drag the corners to the sleeve’s edges (or auto-detect), then
-									tune the tone — the preview updates live. Apply saves it.
-								</DialogDescription>
-							</DialogHeader>
-
-							<div className="grid gap-4 sm:grid-cols-2">
-								<div className="space-y-1">
+						<div className="grid gap-4 sm:grid-cols-2">
+							<div className="space-y-1">
+								<p className="text-xs font-medium text-muted-foreground">
+									Crop
+								</p>
+								<CornerEditor
+									src={`/api/photos/${record.capturePhotoKey}`}
+									value={corners}
+									onChange={setCorners}
+									onDetect={async () => {
+										const res = await detectCorners({ data: recordId });
+										return res.corners;
+									}}
+									disabled={reframePro.isPending}
+								/>
+							</div>
+							<div className="space-y-1">
+								<div className="flex items-baseline justify-between">
 									<p className="text-xs font-medium text-muted-foreground">
-										Crop
+										Preview
 									</p>
-									<CornerEditor
+									<p className="text-[10px] text-muted-foreground/70">
+										Live · Apply to save
+									</p>
+								</div>
+								{record.capturePhotoKey && (
+									<ProPreview
 										src={`/api/photos/${record.capturePhotoKey}`}
-										value={corners}
-										onChange={setCorners}
-										onDetect={async () => {
-											const res = await detectCorners({ data: recordId });
-											return res.corners;
-										}}
-										disabled={reframePro.isPending}
+										corners={corners}
+										params={params}
 									/>
-								</div>
-								<div className="space-y-1">
-									<div className="flex items-baseline justify-between">
-										<p className="text-xs font-medium text-muted-foreground">
-											Preview
-										</p>
-										<p className="text-[10px] text-muted-foreground/70">
-											Live · Apply to save
-										</p>
-									</div>
-									{record.capturePhotoKey && (
-										<ProPreview
-											src={`/api/photos/${record.capturePhotoKey}`}
-											corners={corners}
-											params={params}
-										/>
-									)}
-								</div>
-							</div>
-
-							{/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
-							    the polish factors below map straight to the Cloudflare Images
-							    encode pass. Every Apply re-warps + re-tones — all free. */}
-							<div className="space-y-3 rounded-md border bg-muted/30 p-3">
-								<label
-									htmlFor="pro-autotone"
-									className="flex items-center gap-2 text-xs text-muted-foreground"
-								>
-									<Checkbox
-										id="pro-autotone"
-										checked={!p.skipTone}
-										disabled={reframePro.isPending}
-										onChange={(e) =>
-											setParams({
-												...params,
-												skipTone: !e.currentTarget.checked,
-											})
-										}
-									/>
-									Auto-tone (levels + white balance)
-								</label>
-								{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
-								<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-									<Knob
-										label="White balance"
-										display={`${Math.round(p.wbStrength * 100)}%`}
-										value={Math.round(p.wbStrength * 100)}
-										min={0}
-										max={100}
-										step={1}
-										disabled={p.skipTone || reframePro.isPending}
-										onChange={(v) =>
-											setParams({ ...params, wbStrength: v / 100 })
-										}
-									/>
-									<Knob
-										label="Saturation"
-										display={`${Math.round(p.saturation * 100)}%`}
-										value={Math.round(p.saturation * 100)}
-										min={0}
-										max={200}
-										step={5}
-										disabled={reframePro.isPending}
-										onChange={(v) =>
-											setParams({ ...params, saturation: v / 100 })
-										}
-									/>
-									<Knob
-										label="Contrast"
-										display={`${Math.round(p.contrast * 100)}%`}
-										value={Math.round(p.contrast * 100)}
-										min={50}
-										max={200}
-										step={5}
-										disabled={reframePro.isPending}
-										onChange={(v) =>
-											setParams({ ...params, contrast: v / 100 })
-										}
-									/>
-									<Knob
-										label="Gamma"
-										display={p.gamma.toFixed(2)}
-										value={Math.round(p.gamma * 100)}
-										min={50}
-										max={200}
-										step={5}
-										disabled={reframePro.isPending}
-										onChange={(v) => setParams({ ...params, gamma: v / 100 })}
-									/>
-								</div>
-							</div>
-
-							<DialogFooter className="justify-between">
-								<div className="flex flex-wrap gap-2">
-									<Button
-										type="button"
-										size="sm"
-										disabled={reframePro.isPending}
-										onClick={() => reframePro.mutate({ corners, params })}
-									>
-										{reframePro.isPending ? "Applying…" : "Apply"}
-									</Button>
-									<Button
-										type="button"
-										size="sm"
-										variant="ghost"
-										disabled={reframePro.isPending}
-										onClick={() => {
-											setParams({});
-											setCorners(DEFAULT_CORNERS);
-											reframePro.mutate({
-												corners: DEFAULT_CORNERS,
-												params: {},
-											});
-										}}
-									>
-										Reset
-									</Button>
-								</div>
-								{record.professionalStatus === "approved" ? (
-									<Button
-										type="button"
-										size="sm"
-										variant="outline"
-										disabled={approvePro.isPending}
-										onClick={() => approvePro.mutate(false)}
-									>
-										{approvePro.isPending ? "Stopping…" : "Stop using as cover"}
-									</Button>
-								) : (
-									<Button
-										type="button"
-										size="sm"
-										disabled={
-											!record.professionalImageKey || approvePro.isPending
-										}
-										onClick={() => approvePro.mutate(true)}
-									>
-										{approvePro.isPending ? "Using…" : "Use as cover"}
-									</Button>
 								)}
-							</DialogFooter>
-						</DialogContent>
-					</Dialog>
-				</div>
+							</div>
+						</div>
+
+						{/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
+						    the polish factors below map straight to the pixel encode pass.
+						    Every Apply re-warps + re-tones — all free. */}
+						<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+							<label
+								htmlFor="pro-autotone"
+								className="flex items-center gap-2 text-xs text-muted-foreground"
+							>
+								<Checkbox
+									id="pro-autotone"
+									checked={!p.skipTone}
+									disabled={reframePro.isPending}
+									onChange={(e) =>
+										setParams({
+											...params,
+											skipTone: !e.currentTarget.checked,
+										})
+									}
+								/>
+								Auto-tone (levels + white balance)
+							</label>
+							{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
+							<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+								<Knob
+									label="White balance"
+									display={`${Math.round(p.wbStrength * 100)}%`}
+									value={Math.round(p.wbStrength * 100)}
+									min={0}
+									max={100}
+									step={1}
+									disabled={p.skipTone || reframePro.isPending}
+									onChange={(v) =>
+										setParams({ ...params, wbStrength: v / 100 })
+									}
+								/>
+								<Knob
+									label="Saturation"
+									display={`${Math.round(p.saturation * 100)}%`}
+									value={Math.round(p.saturation * 100)}
+									min={0}
+									max={200}
+									step={5}
+									disabled={reframePro.isPending}
+									onChange={(v) =>
+										setParams({ ...params, saturation: v / 100 })
+									}
+								/>
+								<Knob
+									label="Contrast"
+									display={`${Math.round(p.contrast * 100)}%`}
+									value={Math.round(p.contrast * 100)}
+									min={50}
+									max={200}
+									step={5}
+									disabled={reframePro.isPending}
+									onChange={(v) => setParams({ ...params, contrast: v / 100 })}
+								/>
+								<Knob
+									label="Gamma"
+									display={p.gamma.toFixed(2)}
+									value={Math.round(p.gamma * 100)}
+									min={50}
+									max={200}
+									step={5}
+									disabled={reframePro.isPending}
+									onChange={(v) => setParams({ ...params, gamma: v / 100 })}
+								/>
+							</div>
+						</div>
+
+						{/* Use-as-cover on the left; Reset + Apply on the right (Apply last).
+						    Apply saves the crop/tone, sets approval, and dismisses. */}
+						<DialogFooter className="items-center justify-between sm:justify-between">
+							<label
+								htmlFor="pro-usecover"
+								className="flex items-center gap-2 text-sm"
+							>
+								<Checkbox
+									id="pro-usecover"
+									checked={useAsCover}
+									disabled={applyPro.isPending}
+									onChange={(e) => setUseAsCover(e.currentTarget.checked)}
+								/>
+								Use as cover
+							</label>
+							<div className="flex gap-2">
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									disabled={reframePro.isPending || applyPro.isPending}
+									onClick={() => {
+										setParams({});
+										setCorners(DEFAULT_CORNERS);
+										reframePro.mutate({
+											corners: DEFAULT_CORNERS,
+											params: {},
+										});
+									}}
+								>
+									Reset
+								</Button>
+								<Button
+									type="button"
+									size="sm"
+									disabled={applyPro.isPending}
+									onClick={() => applyPro.mutate()}
+								>
+									{applyPro.isPending ? "Applying…" : "Apply"}
+								</Button>
+							</div>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
 			)}
 
 			{/* In-flight: just wait and poll. */}
@@ -1087,34 +978,18 @@ function RecordDetail() {
 						{/* Wrong match? The sourced cover sits to the left of the search /
 						    paste-a-URL controls. */}
 						<div className="flex gap-3 p-3">
-							{(coverPreviewSrc || customCover) && (
+							{coverPreviewSrc && (
 								<div className="flex shrink-0 flex-col gap-2">
-									{coverPreviewSrc && (
-										<figure className="space-y-1">
-											<ImageZoom
-												src={coverPreviewSrc}
-												alt={
-													picked ? "Selected Discogs cover" : "Sourced cover"
-												}
-												className="size-32"
-											/>
-											<figcaption className="text-xs text-muted-foreground">
-												{picked ? "Discogs (selected)" : "Discogs"}
-											</figcaption>
-										</figure>
-									)}
-									{customCover && (
-										<figure className="space-y-1">
-											<ImageZoom
-												src={customCover.preview}
-												alt="Uploaded cover"
-												className="size-32"
-											/>
-											<figcaption className="text-xs text-muted-foreground">
-												Upload
-											</figcaption>
-										</figure>
-									)}
+									<figure className="space-y-1">
+										<ImageZoom
+											src={coverPreviewSrc}
+											alt={picked ? "Selected Discogs cover" : "Sourced cover"}
+											className="size-32"
+										/>
+										<figcaption className="text-xs text-muted-foreground">
+											{picked ? "Discogs (selected)" : "Discogs"}
+										</figcaption>
+									</figure>
 								</div>
 							)}
 							<div className="min-w-0 flex-1 space-y-3">
@@ -1433,7 +1308,7 @@ function RecordDetail() {
 										data: input,
 										discogsId: picked?.discogsId ?? record.discogsId ?? null,
 										discogsUrl: picked?.discogsUrl ?? record.discogsUrl ?? null,
-										coverImageKey: customCover?.key ?? null,
+										coverImageKey: null,
 									},
 								});
 								if (!result) {

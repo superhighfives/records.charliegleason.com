@@ -37,6 +37,7 @@ import {
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 import type { ReframeParams } from "#/lib/reframe-params";
 import {
+	DEFAULT_CORNERS,
 	type NormalizedCorners,
 	parseCorners,
 	serializeCorners,
@@ -521,6 +522,96 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			const stale = record.professionalImageKey;
 			if (stale && stale !== key) {
 				await env.PHOTOS.delete(stale).catch(() => {});
+			}
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Swap a record's source capture for a freshly uploaded photo, then regenerate the
+ * first-pass professional crop from it — re-detecting the sleeve, since the stored
+ * corners were for the old image. The result drops back to `ready` (unapproved), so
+ * the admin re-approves via the editor. Best-effort R2 cleanup of the superseded
+ * capture + professional objects. Returns the updated row, or null if it's gone.
+ */
+export const replaceCapture = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => {
+		const d = (data ?? {}) as Record<string, unknown>;
+		if (typeof d.id !== "number") throw new Error("id must be a number");
+		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
+			throw new Error("imageBase64 must be a non-empty string");
+		}
+		const mediaType =
+			typeof d.mediaType === "string" && d.mediaType.startsWith("image/")
+				? d.mediaType
+				: "image/jpeg";
+		return { id: d.id, imageBase64: d.imageBase64, mediaType };
+	})
+	.handler(({ data: { id, imageBase64, mediaType } }) =>
+		Sentry.startSpan({ name: "replaceCapture" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+
+			const bytes = base64ToBytes(stripDataUrl(imageBase64));
+			const { key: capturePhotoKey } = await storeCapturePhoto(
+				bytes,
+				mediaType,
+			);
+
+			// Regenerate from the new capture. Re-detect the sleeve (pass a null crop) —
+			// the stored corners were for the old image. On failure keep the new capture
+			// but mark the pro track failed, so the admin can crop it by hand.
+			let professionalKey: string | null = null;
+			const proFields: {
+				professionalImageKey?: string | null;
+				sleeveCornersJson: string;
+				professionalStatus: "ready" | "failed";
+				professionalError: string | null;
+			} = {
+				sleeveCornersJson: serializeCorners(DEFAULT_CORNERS),
+				professionalStatus: "failed",
+				professionalError: null,
+			};
+			try {
+				const gen = await professionalPipeline({
+					capturePhotoKey,
+					sleeveCornersJson: null,
+					professionalParamsJson: record.professionalParamsJson,
+				});
+				professionalKey = gen.professionalKey;
+				proFields.professionalImageKey = gen.professionalKey;
+				proFields.sleeveCornersJson = serializeCorners(gen.corners);
+				proFields.professionalStatus = "ready";
+			} catch (err) {
+				proFields.professionalError =
+					err instanceof Error ? err.message : String(err);
+			}
+
+			const [row] = await db
+				.update(records)
+				.set({ capturePhotoKey, ...proFields, updatedAt: new Date() })
+				.where(eq(records.id, id))
+				.returning();
+
+			// Bin the superseded objects — best-effort, so a transient R2 failure just
+			// leaves an orphan rather than breaking the (already-updated) row.
+			for (const staleKey of [
+				record.capturePhotoKey,
+				record.professionalImageKey,
+			]) {
+				if (
+					staleKey &&
+					staleKey !== capturePhotoKey &&
+					staleKey !== professionalKey
+				) {
+					await env.PHOTOS.delete(staleKey).catch(() => {});
+				}
 			}
 			return row ?? null;
 		}),
