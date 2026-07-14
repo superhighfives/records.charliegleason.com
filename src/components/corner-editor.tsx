@@ -372,7 +372,7 @@ export function CornerEditor({
 			</div>
 			<div className="flex items-center justify-between gap-2">
 				<p className="text-xs text-muted-foreground">
-					Drag a corner or edge, or click to move the nearest corner.
+					Drag a corner or edge, or click to move.
 				</p>
 				{onDetect && (
 					<Button

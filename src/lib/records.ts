@@ -743,6 +743,45 @@ export const setProfessionalApproved = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Remove the professional photo entirely — the "Remove cover" action. Deletes the
+ * stored image from R2 and clears the record's professional* state back to "no photo
+ * yet" (status `idle`, no key, not enhanced), so the header falls back to the raw
+ * capture and a later edit regenerates from scratch. No-op (returns the row/null) if
+ * there was nothing to remove. The crop/tone knob settings are left intact so a
+ * regenerate can reuse them.
+ */
+export const clearProfessional = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "clearProfessional" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+			const stale = record.professionalImageKey;
+			const [row] = await db
+				.update(records)
+				.set({
+					professionalImageKey: null,
+					professionalStatus: "idle",
+					professionalEnhanced: false,
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			// Best-effort R2 cleanup — the row already points at no image, so a failed
+			// delete just leaves an orphan object, never a broken reference.
+			if (stale) await env.PHOTOS.delete(stale).catch(() => {});
+			return row ?? null;
+		}),
+	);
+
+/**
  * Fetch just the Discogs value estimate for a single record (seller price
  * suggestions, falling back to the lowest listing) and store it. Runs
  * synchronously so the detail page gets the updated row straight back. Returns

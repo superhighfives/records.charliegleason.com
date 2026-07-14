@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Info, Loader2, Sparkles } from "lucide-react";
+import { Image as ImageIcon, Info, Loader2, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -60,9 +60,9 @@ import {
 	type ReframeParams,
 } from "#/lib/reframe-params";
 import {
-	DEFAULT_CORNERS,
 	type NormalizedCorners,
 	parseCorners,
+	serializeCorners,
 } from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
@@ -496,24 +496,6 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn't delete this record."),
 	});
 
-	// The free interactive reframe: warp the capture to the current corners + knobs.
-	// Synchronous — the server returns the updated row, which we drop straight into the
-	// cache so the preview updates in place (no queue, no polling).
-	const reframePro = useMutation({
-		mutationFn: (input: {
-			corners: NormalizedCorners;
-			params: ReframeParams;
-		}) => reframeRecord({ data: { id: recordId, ...input } }),
-		onSuccess: (row) => {
-			if (row)
-				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-		},
-		onError: (err) =>
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't apply the changes.",
-			),
-	});
-
 	// First-pass generation for a record that has no professional photo yet (captured
 	// before auto-generation, or a prior failure). Detects the sleeve, warps and tones —
 	// synchronously — so opening the editor always has something to preview and tweak.
@@ -547,7 +529,8 @@ function RecordDetail() {
 			if (row)
 				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
 			await invalidate();
-			setEditorOpen(false);
+			// Stay open: with the edit now saved and the working copy matching the
+			// row, the footer's primary button flips from Apply/Re-apply to Close.
 		},
 		onError: (err) =>
 			toast.error(
@@ -659,6 +642,30 @@ function RecordDetail() {
 	// queue state to poll — the editor's own mutations report their progress. `p` merges
 	// the working-copy params over the defaults so the sliders always have a concrete value.
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
+
+	// Is there a saved professional photo, and does the working copy (corners + tone)
+	// differ from what's saved on the row? Both signatures normalise (round corners /
+	// merge tone defaults + sort keys) so a reopened-but-untouched editor reads clean.
+	const hasProImage = record.professionalImageKey != null;
+	const paramSig = (v: ReframeParams) =>
+		JSON.stringify(
+			Object.entries({ ...DEFAULT_REFRAME_PARAMS, ...v }).sort(([a], [b]) =>
+				a < b ? -1 : a > b ? 1 : 0,
+			),
+		);
+	const isDirty =
+		serializeCorners(corners) !==
+			serializeCorners(parseCorners(record.sleeveCornersJson)) ||
+		paramSig(params) !==
+			paramSig(parseReframeParams(record.professionalParamsJson));
+	// "Live" = the saved photo is the approved cover *and* the working copy is
+	// unchanged — nothing left to apply, so the primary button becomes a plain Close.
+	// A generated-but-unapproved photo (a fresh capture is `ready`) is not live: you
+	// still Apply to promote it.
+	const proIsLive = record.professionalStatus === "approved" && !isDirty;
+	// Any editor mutation in flight — used to disable the controls while one runs.
+	const editorBusy =
+		applyPro.isPending || enhancePro.isPending || generateFirst.isPending;
 
 	// Header photo: the approved professional crop, else the raw capture. Never the
 	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
@@ -798,10 +805,10 @@ function RecordDetail() {
 										const res = await detectCorners({ data: recordId });
 										return res.corners;
 									}}
-									disabled={reframePro.isPending}
+									disabled={editorBusy}
 								/>
 							</div>
-							<div className="space-y-1">
+							<div className="space-y-2">
 								<div className="flex items-baseline justify-between">
 									<p className="text-xs font-medium text-muted-foreground">
 										Preview
@@ -811,42 +818,73 @@ function RecordDetail() {
 									</p>
 								</div>
 								{record.capturePhotoKey && (
-									<ProPreview
-										src={`/api/photos/${record.capturePhotoKey}`}
-										corners={corners}
-										params={params}
-									/>
+									// Hover reveals the *actual saved* professional image over the
+									// live canvas preview (which is a fast approximation) — with a
+									// badge marking it a plain render or a Real-ESRGAN upscale.
+									<div className="group relative">
+										<ProPreview
+											src={`/api/photos/${record.capturePhotoKey}`}
+											corners={corners}
+											params={params}
+										/>
+										{record.professionalImageKey && (
+											<>
+												<img
+													src={`/api/photos/${record.professionalImageKey}`}
+													alt="Saved cover render"
+													className="pointer-events-none absolute inset-0 size-full rounded-md border object-cover opacity-0 transition-opacity group-hover:opacity-100"
+												/>
+												<div
+													className="pointer-events-none absolute left-2 top-2 flex size-7 items-center justify-center rounded-md border bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100"
+													aria-hidden="true"
+												>
+													{record.professionalEnhanced ? (
+														<Sparkles className="size-4" />
+													) : (
+														<ImageIcon className="size-4" />
+													)}
+												</div>
+											</>
+										)}
+									</div>
 								)}
-								{/* Optional, on-demand super-resolution. Bakes the current crop/
-								    tone, then runs it through Real-ESRGAN — most useful when the
-								    sleeve was small in frame and the reframe had to upsample it. */}
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									className="w-full"
-									disabled={
-										enhancePro.isPending ||
-										reframePro.isPending ||
-										applyPro.isPending
-									}
-									onClick={() => enhancePro.mutate()}
-								>
-									{enhancePro.isPending ? (
-										<>
-											<Loader2 className="animate-spin" />
-											Enhancing…
-										</>
-									) : (
-										<>
-											<Sparkles />
-											Enhance
-										</>
-									)}
-								</Button>
-								<p className="text-[10px] text-muted-foreground/70">
-									Upscales the photo with Real-ESRGAN — takes a few seconds.
-								</p>
+								{/* Optional, on-demand super-resolution — laid out like the crop
+								    side's "Detect corners" row (hint left, button right). Only
+								    offered once there's a saved photo with no pending edits; it
+								    bakes the applied crop/tone, then runs it through Real-ESRGAN. */}
+								<div className="flex items-center justify-between gap-2">
+									<p className="text-xs text-muted-foreground">
+										Upscales the photo with Real-ESRGAN — a few seconds.
+									</p>
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										disabled={!hasProImage || isDirty || editorBusy}
+										title={
+											!hasProImage
+												? "Apply a photo first."
+												: isDirty
+													? "Apply your changes first."
+													: undefined
+										}
+										onClick={() => enhancePro.mutate()}
+									>
+										{enhancePro.isPending ? (
+											<Loader2 className="size-4 animate-spin" />
+										) : (
+											<Sparkles className="size-4" />
+										)}
+										{/* "Re-enhance" only while it's actually re-runnable (enhanced
+										    and unchanged). Once an edit is pending it flips back to
+										    "Enhance", since Re-applying will discard the upscale. */}
+										{enhancePro.isPending
+											? "Enhancing…"
+											: record.professionalEnhanced && !isDirty
+												? "Re-enhance"
+												: "Enhance"}
+									</Button>
+								</div>
 							</div>
 						</div>
 
@@ -861,7 +899,7 @@ function RecordDetail() {
 								<Checkbox
 									id="pro-autotone"
 									checked={!p.skipTone}
-									disabled={reframePro.isPending}
+									disabled={editorBusy}
 									onChange={(e) =>
 										setParams({
 											...params,
@@ -880,7 +918,7 @@ function RecordDetail() {
 									min={0}
 									max={100}
 									step={1}
-									disabled={p.skipTone || reframePro.isPending}
+									disabled={p.skipTone || editorBusy}
 									onChange={(v) =>
 										setParams({ ...params, wbStrength: v / 100 })
 									}
@@ -892,7 +930,7 @@ function RecordDetail() {
 									min={0}
 									max={200}
 									step={5}
-									disabled={reframePro.isPending}
+									disabled={editorBusy}
 									onChange={(v) =>
 										setParams({ ...params, saturation: v / 100 })
 									}
@@ -904,7 +942,7 @@ function RecordDetail() {
 									min={50}
 									max={200}
 									step={5}
-									disabled={reframePro.isPending}
+									disabled={editorBusy}
 									onChange={(v) => setParams({ ...params, contrast: v / 100 })}
 								/>
 								<Knob
@@ -914,7 +952,7 @@ function RecordDetail() {
 									min={50}
 									max={200}
 									step={5}
-									disabled={reframePro.isPending}
+									disabled={editorBusy}
 									onChange={(v) => setParams({ ...params, gamma: v / 100 })}
 								/>
 							</div>
@@ -931,9 +969,7 @@ function RecordDetail() {
 									size="sm"
 									variant="destructive"
 									disabled={
-										removeCover.isPending ||
-										applyPro.isPending ||
-										reframePro.isPending
+										removeCover.isPending || applyPro.isPending || editorBusy
 									}
 									onClick={() => removeCover.mutate()}
 								>
@@ -943,29 +979,44 @@ function RecordDetail() {
 								<span />
 							)}
 							<div className="flex gap-2">
+								{/* Discard unsaved edits: snap the working copy back to what's
+								    saved on the row. Purely client-side — no re-warp, no write —
+								    so it can't leave a half-applied state. Disabled when there's
+								    nothing to discard. */}
 								<Button
 									type="button"
 									size="sm"
 									variant="ghost"
-									disabled={reframePro.isPending || applyPro.isPending}
+									disabled={!isDirty || editorBusy}
 									onClick={() => {
-										setParams({});
-										setCorners(DEFAULT_CORNERS);
-										reframePro.mutate({
-											corners: DEFAULT_CORNERS,
-											params: {},
-										});
+										setCorners(parseCorners(record.sleeveCornersJson));
+										setParams(
+											parseReframeParams(record.professionalParamsJson),
+										);
 									}}
 								>
 									Reset
 								</Button>
+								{/* One primary action, three states: Apply (nothing live yet),
+								    Re-apply (live, but the crop/tone has been nudged), or a
+								    plain Close (live and unchanged — nothing left to do). Only
+								    the first two mutate; Close just dismisses. */}
 								<Button
 									type="button"
 									size="sm"
-									disabled={applyPro.isPending}
-									onClick={() => applyPro.mutate()}
+									variant={proIsLive ? "outline" : "default"}
+									disabled={proIsLive ? false : editorBusy}
+									onClick={() =>
+										proIsLive ? setEditorOpen(false) : applyPro.mutate()
+									}
 								>
-									{applyPro.isPending ? "Applying…" : "Apply"}
+									{applyPro.isPending
+										? "Applying…"
+										: proIsLive
+											? "Close"
+											: hasProImage && isDirty
+												? "Re-apply"
+												: "Apply"}
 								</Button>
 							</div>
 						</DialogFooter>
