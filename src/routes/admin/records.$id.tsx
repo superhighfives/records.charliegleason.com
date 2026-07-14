@@ -840,7 +840,7 @@ function RecordDetail() {
 								disabled={approvePro.isPending}
 								onClick={() => approvePro.mutate(false)}
 							>
-								{approvePro.isPending ? "…" : "Stop using"}
+								{approvePro.isPending ? "Stopping…" : "Stop using"}
 							</Button>
 						) : (
 							<Button
@@ -849,7 +849,7 @@ function RecordDetail() {
 								disabled={!record.professionalImageKey || approvePro.isPending}
 								onClick={() => approvePro.mutate(true)}
 							>
-								{approvePro.isPending ? "…" : "Use as cover"}
+								{approvePro.isPending ? "Using…" : "Use as cover"}
 							</Button>
 						)}
 					</div>
@@ -1011,7 +1011,7 @@ function RecordDetail() {
 										disabled={approvePro.isPending}
 										onClick={() => approvePro.mutate(false)}
 									>
-										{approvePro.isPending ? "…" : "Stop using as cover"}
+										{approvePro.isPending ? "Stopping…" : "Stop using as cover"}
 									</Button>
 								) : (
 									<Button
@@ -1022,7 +1022,7 @@ function RecordDetail() {
 										}
 										onClick={() => approvePro.mutate(true)}
 									>
-										{approvePro.isPending ? "…" : "Use as cover"}
+										{approvePro.isPending ? "Using…" : "Use as cover"}
 									</Button>
 								)}
 							</DialogFooter>
@@ -1313,7 +1313,7 @@ function RecordDetail() {
 													lookup.isPending || !looksLikeReleaseId(discogsUrl)
 												}
 											>
-												{lookup.isPending ? "…" : "Fetch release"}
+												{lookup.isPending ? "Fetching…" : "Fetch release"}
 											</Button>
 										</div>
 									</form>

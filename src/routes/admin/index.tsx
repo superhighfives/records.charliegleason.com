@@ -16,7 +16,7 @@ import {
 	type SortingState,
 	useReactTable,
 } from "@tanstack/react-table";
-import { BadgeCheck, ChevronDownIcon } from "lucide-react";
+import { BadgeCheck, ChevronDownIcon, EllipsisVertical } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -611,32 +611,45 @@ function AdminRecords() {
 				header: "",
 				enableSorting: false,
 				cell: ({ row }) => (
-					<div className="flex justify-end gap-2">
-						<Link
-							to="/admin/records/$id"
-							params={{ id: String(row.original.id) }}
-							className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
-						>
-							View
-						</Link>
-						<button
-							type="button"
-							className="text-sm text-destructive underline underline-offset-4 disabled:opacity-50"
-							disabled={deleteMutation.isPending}
-							onClick={(e) => {
-								e.stopPropagation();
-								if (confirm(`Delete "${row.original.title}"?`)) {
-									deleteMutation.mutate(row.original.id);
-								}
-							}}
-						>
-							Delete
-						</button>
+					<div className="flex justify-end">
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon-sm"
+									aria-label="Row actions"
+									onClick={(e) => e.stopPropagation()}
+								>
+									<EllipsisVertical className="size-4" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end">
+								<DropdownMenuItem asChild>
+									<Link
+										to="/admin/records/$id"
+										params={{ id: String(row.original.id) }}
+									>
+										View
+									</Link>
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									variant="destructive"
+									onSelect={() => {
+										if (confirm(`Delete "${row.original.title}"?`)) {
+											deleteMutation.mutate(row.original.id);
+										}
+									}}
+								>
+									Delete
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
 					</div>
 				),
 			},
 		],
-		[liveIds, deleteMutation.isPending, deleteMutation.mutate],
+		[liveIds, deleteMutation.mutate],
 	);
 
 	// Filter, then float the records that still need attention to the top

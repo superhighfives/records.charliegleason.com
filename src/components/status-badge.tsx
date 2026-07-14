@@ -3,29 +3,28 @@ import { cn } from "#/lib/utils";
 
 type Status = NonNullable<Record["status"]>;
 
+// Outlined pills — a coloured border + text on a transparent fill, matching the
+// admin filter chips. One accent colour per status.
 const STYLES: Record2<Status, { label: string; className: string }> = {
 	pending: {
 		label: "Queued",
-		className:
-			"bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
+		className: "border-amber-500/40 text-amber-600 dark:text-amber-400",
 	},
 	processing: {
 		label: "Analyzing…",
-		className: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
+		className: "border-blue-500/40 text-blue-600 dark:text-blue-400",
 	},
 	review: {
 		label: "Needs review",
-		className:
-			"bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-200",
+		className: "border-purple-500/40 text-purple-600 dark:text-purple-400",
 	},
 	failed: {
 		label: "Failed",
-		className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
+		className: "border-red-500/40 text-red-600 dark:text-red-400",
 	},
 	complete: {
 		label: "Published",
-		className:
-			"bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
+		className: "border-green-500/40 text-green-600 dark:text-green-400",
 	},
 };
 
@@ -43,7 +42,7 @@ export function StatusBadge({
 	return (
 		<span
 			className={cn(
-				"inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium",
+				"inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium",
 				style.className,
 				className,
 			)}
