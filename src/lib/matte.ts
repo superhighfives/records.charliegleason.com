@@ -76,10 +76,11 @@ const TRIMAP_DILATE = Math.round(MODEL_SIZE * 0.07);
 // The pinned matting model version (Replicate): our own ViTMatte cog (see
 // `cog/vitmatte-trimap/`), which takes `image` + `trimap` and returns a grayscale alpha
 // (read via `maskFromModelOutput`'s luminance path). Pinned to a known version so the
-// input schema can't shift under us. UNSET until the cog is pushed — while empty,
-// `matteAI` throws and callers fall back to the deterministic silhouette, so the AI
-// checkbox degrades gracefully. After `cog push`, paste the returned version hash here.
-const MATTE_MODEL_VERSION = "";
+// input schema can't shift under us. If it's ever unset/down, `matteAI` throws and
+// callers fall back to the deterministic silhouette, so the AI checkbox degrades
+// gracefully. Update this after re-pushing the cog (`superhighfives/vitmatte-trimap`).
+const MATTE_MODEL_VERSION =
+	"db47c8e79ec5cc6a56feb4984258fc46fb22ec4da0c2b0a58692455c414212e0";
 
 /** Build the shared matte options from the record's reframe knobs (softened grade). */
 function matteOptions(params: ReframeParams): MatteOptions {
