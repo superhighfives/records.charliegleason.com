@@ -17,7 +17,7 @@ import {
 	useReactTable,
 } from "@tanstack/react-table";
 import { BadgeCheck, ChevronDownIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
@@ -44,41 +44,168 @@ import {
 	retryRecords,
 } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
+import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
 
 type RecordStatus = NonNullable<Record["status"]>;
-type StatusFilter =
-	| RecordStatus
-	| "all"
-	| "unpublished"
-	| "unmatched"
-	| "duplicate"
-	| "confirmed"
-	| "valued"
-	| "unvalued"
-	| "professionalNone"
-	| "professionalReady"
-	| "professionalLive";
+type FacetTest = (r: Record, liveIds: Set<number>) => boolean;
+interface FacetOption {
+	token: string;
+	label: string;
+	test: FacetTest;
+}
 
-const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
-	{ value: "all", label: "All" },
-	{ value: "unpublished", label: "Unpublished" },
-	{ value: "pending", label: "Queued" },
-	{ value: "processing", label: "Analyzing" },
-	{ value: "review", label: "Needs review" },
-	{ value: "unmatched", label: "Unmatched" },
-	{ value: "failed", label: "Failed" },
-	{ value: "complete", label: "Published" },
-	{ value: "duplicate", label: "Duplicate" },
-	{ value: "confirmed", label: "Confirmed" },
-	{ value: "valued", label: "Valued" },
-	{ value: "unvalued", label: "Unvalued" },
-	{ value: "professionalNone", label: "No pro photo" },
-	{ value: "professionalReady", label: "Pro photo ready" },
-	{ value: "professionalLive", label: "Pro photo live" },
+// Filters are independent facets combined with AND. The tri-state segmented pairs let
+// you pick one side, the other, or neither (= don't care); the flag pills below are
+// simple on/off. Each token belongs to a group, and only one token per group is active.
+const FACET_GROUPS: Array<{
+	key: string;
+	options: [FacetOption, FacetOption];
+}> = [
+	{
+		key: "publish",
+		options: [
+			{
+				token: "published",
+				label: "Published",
+				test: (r) => (r.status ?? "complete") === "complete",
+			},
+			{
+				token: "unpublished",
+				label: "Unpublished",
+				test: (r) => (r.status ?? "complete") !== "complete",
+			},
+		],
+	},
+	{
+		key: "match",
+		options: [
+			{ token: "matched", label: "Matched", test: (r) => r.discogsId != null },
+			{
+				token: "unmatched",
+				label: "Unmatched",
+				test: (r) => r.discogsId == null,
+			},
+		],
+	},
+	{
+		key: "value",
+		options: [
+			{
+				token: "valued",
+				label: "Valued",
+				test: (r) => effectiveValue(r) != null,
+			},
+			{
+				token: "unvalued",
+				label: "Unvalued",
+				test: (r) => effectiveValue(r) == null,
+			},
+		],
+	},
+	{
+		key: "confirm",
+		options: [
+			{
+				token: "confirmed",
+				label: "Confirmed",
+				test: (r) => r.confirmedRelease === true,
+			},
+			{
+				token: "unconfirmed",
+				label: "Unconfirmed",
+				test: (r) => r.confirmedRelease !== true,
+			},
+		],
+	},
+	{
+		key: "photo",
+		options: [
+			{
+				token: "hasPhoto",
+				label: "Has photo",
+				test: (r) => r.professionalImageKey != null,
+			},
+			{
+				token: "usingUpload",
+				label: "Using upload",
+				test: (r) => r.coverIsUpload === true,
+			},
+		],
+	},
 ];
 
-const STATUS_FILTER_VALUES = STATUS_FILTERS.map((f) => f.value);
+// Attention states that aren't clean opposites — simple on/off toggles.
+const FLAG_FACETS: FacetOption[] = [
+	{
+		token: "review",
+		label: "Needs review",
+		test: (r) => (r.status ?? "complete") === "review",
+	},
+	{ token: "failed", label: "Failed", test: (r) => r.status === "failed" },
+	{
+		token: "duplicate",
+		label: "Duplicate",
+		test: (r, live) => r.duplicateOf != null && live.has(r.duplicateOf),
+	},
+];
+
+// token → its option + the group it belongs to (flags are their own single-token group).
+const TOKEN_INFO: globalThis.Record<
+	string,
+	{ option: FacetOption; groupKey: string }
+> = {};
+for (const g of FACET_GROUPS)
+	for (const o of g.options)
+		TOKEN_INFO[o.token] = { option: o, groupKey: g.key };
+for (const f of FLAG_FACETS)
+	TOKEN_INFO[f.token] = { option: f, groupKey: f.token };
+
+/** Parse the `f` search param into active tokens: known only, at most one per group. */
+function parseFacetTokens(raw: unknown): string[] {
+	if (typeof raw !== "string" || !raw) return [];
+	const groups = new Set<string>();
+	const out: string[] = [];
+	for (const t of raw.split(",")) {
+		const info = TOKEN_INFO[t];
+		if (!info || groups.has(info.groupKey)) continue;
+		groups.add(info.groupKey);
+		out.push(t);
+	}
+	return out;
+}
+
+/** A record matches when every active facet's test passes (AND). */
+function matchesFacets(
+	r: Record,
+	active: string[],
+	liveIds: Set<number>,
+): boolean {
+	return active.every((t) => TOKEN_INFO[t].option.test(r, liveIds));
+}
+
+/** How many records an option would show, honouring the *other* groups' active facets. */
+function facetCount(
+	rows: Record[],
+	active: string[],
+	option: FacetOption,
+	groupKey: string,
+	liveIds: Set<number>,
+): number {
+	const others = active.filter((t) => TOKEN_INFO[t].groupKey !== groupKey);
+	return rows.filter(
+		(r) =>
+			others.every((t) => TOKEN_INFO[t].option.test(r, liveIds)) &&
+			option.test(r, liveIds),
+	).length;
+}
+
+/** Toggle a token: off if already on, else select it (replacing any sibling in its group). */
+function toggleFacet(active: string[], token: string): string[] {
+	if (active.includes(token)) return active.filter((t) => t !== token);
+	const { groupKey } = TOKEN_INFO[token];
+	return [...active.filter((t) => TOKEN_INFO[t].groupKey !== groupKey), token];
+}
 
 // Bulk row actions. Each hands the selected ids to a single batched server
 // endpoint (one round trip, not N parallel calls). `match` re-queues analysis
@@ -126,8 +253,6 @@ const STATUS_PRIORITY: globalThis.Record<RecordStatus, number> = {
 	complete: 4,
 };
 
-const isUnpublished = (status: RecordStatus) => status !== "complete";
-
 /**
  * The title cell / card heading. A record has no title until analysis writes one.
  * For `failed` rows we show a neutral placeholder (rather than the misleading
@@ -171,60 +296,65 @@ function EmptyState({ filtered }: { filtered: boolean }) {
 			</p>
 			<p className="text-sm text-muted-foreground">
 				{filtered
-					? "Try a different tab, or clear the search."
+					? "Try different filters, or clear the search."
 					: "Add one with “Add manually”, or capture a record."}
 			</p>
 		</div>
 	);
 }
 
-function matchesFilter(
-	record: Record,
-	filter: StatusFilter,
-	liveIds: Set<number>,
-): boolean {
-	const status = record.status ?? "complete";
-	if (filter === "all") return true;
-	if (filter === "unpublished") return isUnpublished(status);
-	// "Unmatched" and "Duplicate" aren't real statuses — they're derived flags.
-	// Mirror the badge conditions (see UnmatchedBadge / DuplicateBadge in the
-	// status cell) so a tab and its badge always agree on what counts.
-	if (filter === "unmatched") return status === "review" && !record.discogsId;
-	if (filter === "duplicate")
-		return record.duplicateOf != null && liveIds.has(record.duplicateOf);
-	if (filter === "confirmed") return record.confirmedRelease === true;
-	// "Valued" / "Unvalued" split on whether the record has an effective value at
-	// all (manual figure or Discogs guess) — mirroring the Value column's em dash.
-	if (filter === "valued") return effectiveValue(record) != null;
-	if (filter === "unvalued") return effectiveValue(record) == null;
-	// Professional studio photo, in three states: none generated at all; generated
-	// but still awaiting approval (a photo exists yet the site keeps showing the
-	// Discogs cover); and live — approved, so it's the image actually displayed
-	// (mirroring displayCoverKey's approved-and-present promotion rule).
-	if (filter === "professionalNone") return record.professionalImageKey == null;
-	if (filter === "professionalReady")
-		return (
-			record.professionalImageKey != null &&
-			record.professionalStatus !== "approved"
-		);
-	if (filter === "professionalLive")
-		return (
-			record.professionalImageKey != null &&
-			record.professionalStatus === "approved"
-		);
-	return status === filter;
+/** One tri-state segmented pair — pick a side, the other, or neither (= don't care). */
+function SegmentedFilter({
+	group,
+	active,
+	rows,
+	liveIds,
+	onToggle,
+}: {
+	group: { key: string; options: [FacetOption, FacetOption] };
+	active: string[];
+	rows: Record[];
+	liveIds: Set<number>;
+	onToggle: (token: string) => void;
+}) {
+	return (
+		<div className="inline-flex shrink-0 items-stretch overflow-hidden rounded-full border">
+			{group.options.map((opt, i) => {
+				const isActive = active.includes(opt.token);
+				const count = facetCount(rows, active, opt, group.key, liveIds);
+				return (
+					<Fragment key={opt.token}>
+						{i === 1 && (
+							<span aria-hidden className="w-px self-stretch bg-border" />
+						)}
+						<button
+							type="button"
+							onClick={() => onToggle(opt.token)}
+							className={cn(
+								"whitespace-nowrap px-3 py-1 text-xs transition-colors",
+								isActive
+									? "bg-foreground text-background"
+									: "text-muted-foreground hover:bg-accent",
+							)}
+						>
+							{opt.label}{" "}
+							<span className="tabular-nums opacity-70">{count}</span>
+						</button>
+					</Fragment>
+				);
+			})}
+		</div>
+	);
 }
 
 export const Route = createFileRoute("/admin/")({
-	// Deep-link the active tab so back/forward and shared URLs restore the filter.
-	// `all` is the default, so we drop it from the URL to keep things clean.
+	// Deep-link the active facets (a comma list in `f`) so back/forward and shared URLs
+	// restore the filter; an empty selection drops the param to keep the URL clean.
 	validateSearch: (
 		search: globalThis.Record<string, unknown>,
-	): { status?: StatusFilter } => {
-		const status = search.status as StatusFilter | undefined;
-		return status && status !== "all" && STATUS_FILTER_VALUES.includes(status)
-			? { status }
-			: {};
+	): { f?: string } => {
+		const tokens = parseFacetTokens(search.f);
+		return tokens.length ? { f: tokens.join(",") } : {};
 	},
 	loader: ({ context }) =>
 		context.queryClient.ensureQueryData(recordsQueryOptions),
@@ -241,9 +371,21 @@ function AdminRecords() {
 	const navigate = useNavigate();
 	const searchRef = useRef<HTMLInputElement>(null);
 
-	// The active tab lives in the URL (?status=…) so it survives navigating into a
-	// record and pressing back, and can be shared/bookmarked.
-	const { status: statusFilter = "all" } = Route.useSearch();
+	// The active facets live in the URL (?f=token,token) so they survive navigating into
+	// a record and pressing back, and can be shared/bookmarked.
+	const { f: rawFacets } = Route.useSearch();
+	const activeFacets = useMemo(() => parseFacetTokens(rawFacets), [rawFacets]);
+	const setFacets = (tokens: string[]) =>
+		navigate({
+			to: "/admin",
+			search: (prev) => ({
+				...prev,
+				f: tokens.length ? tokens.join(",") : undefined,
+			}),
+			replace: true,
+		});
+	const toggleFilter = (token: string) =>
+		setFacets(toggleFacet(activeFacets, token));
 	const [filter, setFilter] = useState("");
 	const [sorting, setSorting] = useState<SortingState>([]);
 	// Bulk selection, keyed by record id (see `getRowId`) so a selection survives
@@ -484,14 +626,14 @@ function AdminRecords() {
 	const rows = useMemo(
 		() =>
 			data
-				.filter((r) => matchesFilter(r, statusFilter, liveIds))
+				.filter((r) => matchesFacets(r, activeFacets, liveIds))
 				.sort((a, b) => {
 					const pa = STATUS_PRIORITY[a.status ?? "complete"];
 					const pb = STATUS_PRIORITY[b.status ?? "complete"];
 					if (pa !== pb) return pa - pb;
 					return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
 				}),
-		[data, statusFilter, liveIds],
+		[data, activeFacets, liveIds],
 	);
 
 	const table = useReactTable({
@@ -537,10 +679,10 @@ function AdminRecords() {
 	const selectAllVisible = () => {
 		for (const r of table.getRowModel().rows) r.toggleSelected(true);
 	};
-	// A search/tab filter is narrowing things when there's data but nothing shown.
+	// A facet/search filter is narrowing things when there's data but nothing shown.
 	const isFiltered =
 		data.length > 0 &&
-		(statusFilter !== "all" || debouncedFilter.trim() !== "");
+		(activeFacets.length > 0 || debouncedFilter.trim() !== "");
 
 	// Quick-view drawer: page through exactly what's on screen (the table's sorted +
 	// filtered rows), tracked by id so re-sorting never jumps to the wrong record.
@@ -626,38 +768,55 @@ function AdminRecords() {
 				</div>
 			</div>
 
-			<div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible">
-				{STATUS_FILTERS.map((f) => {
-					const count = data.filter((r) =>
-						matchesFilter(r, f.value, liveIds),
-					).length;
-					const active = statusFilter === f.value;
+			{/* Facet filters: tri-state segmented pairs + on/off flags, combined with AND.
+			    Each pill shows how many records that option would leave, honouring the
+			    other groups already picked. Selecting all-or-nothing keeps the URL clean. */}
+			<div className="-mx-1 flex flex-wrap items-center gap-2 px-1 pb-1">
+				{FACET_GROUPS.map((group) => (
+					<SegmentedFilter
+						key={group.key}
+						group={group}
+						active={activeFacets}
+						rows={data}
+						liveIds={liveIds}
+						onToggle={toggleFilter}
+					/>
+				))}
+				{FLAG_FACETS.map((flag) => {
+					const isActive = activeFacets.includes(flag.token);
+					const count = facetCount(
+						data,
+						activeFacets,
+						flag,
+						flag.token,
+						liveIds,
+					);
 					return (
 						<button
-							key={f.value}
+							key={flag.token}
 							type="button"
-							onClick={() =>
-								navigate({
-									to: "/admin",
-									// Switching tabs replaces history so it doesn't pile up entries;
-									// only navigating into a record pushes, so back returns here.
-									search: (prev) => ({
-										...prev,
-										status: f.value === "all" ? undefined : f.value,
-									}),
-									replace: true,
-								})
-							}
-							className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs ${
-								active
+							onClick={() => toggleFilter(flag.token)}
+							className={cn(
+								"shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors",
+								isActive
 									? "border-foreground bg-foreground text-background"
-									: "text-muted-foreground hover:bg-accent"
-							}`}
+									: "text-muted-foreground hover:bg-accent",
+							)}
 						>
-							{f.label} ({count})
+							{flag.label}{" "}
+							<span className="tabular-nums opacity-70">{count}</span>
 						</button>
 					);
 				})}
+				{activeFacets.length > 0 && (
+					<button
+						type="button"
+						onClick={() => setFacets([])}
+						className="shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
+					>
+						Clear
+					</button>
+				)}
 			</div>
 
 			{/* Bulk actions. The bar stays put whenever there are rows to act on (so

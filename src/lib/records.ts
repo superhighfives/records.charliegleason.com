@@ -153,8 +153,10 @@ export const createRecord = createServerFn({ method: "POST" })
 			const db = getDb(env.DB);
 			const { source, coverImageKey: provided, ...rest } = data;
 
-			// Display cover comes from Discogs (resized → R2), not the iPhone shot.
+			// Display cover comes from Discogs (resized → R2), not the iPhone shot —
+			// unless one was provided (a manual upload), which we mark as such.
 			let coverImageKey = provided ?? null;
+			const coverIsUpload = Boolean(provided);
 			if (!coverImageKey && rest.discogsId) {
 				coverImageKey = await sourceCoverFromDiscogs(rest.discogsId);
 			}
@@ -164,6 +166,7 @@ export const createRecord = createServerFn({ method: "POST" })
 				.values({
 					...rest,
 					coverImageKey,
+					coverIsUpload,
 					source: source ?? "manual",
 					// Manually entered / imported records are ready to show immediately.
 					status: "complete",
@@ -320,10 +323,12 @@ export const publishRecord = createServerFn({ method: "POST" })
 				if (!current) return null;
 
 				let coverImageKey = current.coverImageKey;
+				let coverIsUpload = current.coverIsUpload ?? false;
 				let coverFetchFailed = false;
 				if (uploaded) {
 					// A user-uploaded cover always wins over the Discogs artwork.
 					coverImageKey = uploaded;
+					coverIsUpload = true;
 				} else if (discogsId && discogsId !== current.discogsId) {
 					// New match → re-source its cover. If that fails, clear the cover
 					// rather than keep the previous release's artwork (which would now be
@@ -331,6 +336,7 @@ export const publishRecord = createServerFn({ method: "POST" })
 					// back so the admin gets a toast and can retry or upload manually.
 					coverImageKey = await sourceCoverFromDiscogs(discogsId);
 					coverFetchFailed = !coverImageKey;
+					coverIsUpload = false;
 				}
 
 				const [row] = await db
@@ -340,6 +346,7 @@ export const publishRecord = createServerFn({ method: "POST" })
 						discogsId,
 						discogsUrl,
 						coverImageKey,
+						coverIsUpload,
 						status: "complete",
 						error: null,
 						updatedAt: new Date(),

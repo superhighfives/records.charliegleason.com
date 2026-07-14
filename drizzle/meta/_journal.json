@@ -64,6 +64,13 @@
       "when": 1783968813586,
       "tag": "0008_sleeve_corners",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1783989472890,
+      "tag": "0009_cover_is_upload",
+      "breakpoints": true
     }
   ]
 }

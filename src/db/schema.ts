@@ -49,6 +49,10 @@ export const records = sqliteTable("records", {
 
 	// Storage / provenance
 	coverImageKey: text("cover_image_key"), // R2 key — good cover, sourced + resized (public)
+	// Whether `coverImageKey` came from a manual upload (true) vs Discogs-sourced
+	// artwork (false/default). Both live under `covers/`, so this is the only way to
+	// tell them apart — used by the admin "Using upload" filter.
+	coverIsUpload: integer("cover_is_upload", { mode: "boolean" }).default(false),
 	capturePhotoKey: text("capture_photo_key"), // R2 key — the original iPhone shot (admin only)
 
 	// Professional studio photo — a straight-on, cropped, evenly-toned square built
