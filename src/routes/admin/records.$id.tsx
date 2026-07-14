@@ -869,8 +869,7 @@ function RecordDetail() {
 								<DialogTitle>Professional photo</DialogTitle>
 								<DialogDescription>
 									Drag the corners to the sleeve’s edges (or auto-detect), then
-									tune the tone — the preview updates live. Apply saves it. All
-									deterministic — no AI, no external call.
+									tune the tone — the preview updates live. Apply saves it.
 								</DialogDescription>
 							</DialogHeader>
 
