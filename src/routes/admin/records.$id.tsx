@@ -627,15 +627,6 @@ function RecordDetail() {
 	// the working-copy params over the defaults so the sliders always have a concrete value.
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
 
-	// Cover preview source, best-first: the freshly downloaded full-res artwork,
-	// then the picked candidate's thumbnail (instant, while the full-res loads or
-	// if it failed), then the stored cover when nothing is picked. Discogs-only —
-	// shown inside the Discogs section, never used as the record's display image.
-	const coverPreviewSrc =
-		coverProbe.status === "ready"
-			? coverProbe.url
-			: (picked?.thumb ??
-				(record.coverImageKey ? `/api/photos/${record.coverImageKey}` : null));
 	// Header photo: the approved professional crop, else the raw capture. Never the
 	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
 	const headerCoverKey = displayCoverKey(record, { includeCapture: true });
@@ -958,17 +949,10 @@ function RecordDetail() {
 							</div>
 						)}
 
-						{/* Wrong match? The sourced cover sits to the left of the search /
-						    paste-a-URL controls. */}
-						<div className="flex gap-3 p-3">
-							{coverPreviewSrc && (
-								<ImageZoom
-									src={coverPreviewSrc}
-									alt={picked ? "Selected Discogs cover" : "Sourced cover"}
-									className="size-32 shrink-0"
-								/>
-							)}
-							<div className="min-w-0 flex-1 space-y-3">
+						{/* Wrong match? Search or paste a Discogs URL. The sourced cover isn't
+						    previewed here — it's visible in the candidate thumbnails below. */}
+						<div className="p-3">
+							<div className="min-w-0 space-y-3">
 								{/* Tabs on the left; the cover-download status (progress →
 								    size/type, or a failure) sits opposite, on the same row. */}
 								<div className="flex items-center justify-between gap-2 border-b">
