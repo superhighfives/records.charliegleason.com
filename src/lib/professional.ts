@@ -63,12 +63,17 @@ const FINAL_SHARPEN = 1.0;
 
 // On-demand "Enhance": Real-ESRGAN super-resolution. Faithful (no diffusion, so it
 // sharpens + denoises without inventing cover art / text), cheap, and quick. Pinned
-// to a known version so the input schema can't shift under us. 2× turns the 2000px
-// reframe into a 4000px master — enough to rescue a sleeve that was small in frame.
+// to a known version so the input schema can't shift under us.
 const REAL_ESRGAN_VERSION =
 	"b3ef194191d13140337468c916c2c5b96dd0cb06dffc032a022a31807f6a5ea8";
-const UPSCALE_FACTOR = 2;
-// Bound the stored master so a big upscale can't balloon R2 — a no-op at 2× of 2000.
+// The model's GPU caps the *input* at ~2.1M pixels, so the full 2000² reframe (4M)
+// won't fit — downscale it under the budget first, then let the model scale it back
+// up and beyond. 1400² = 1.96M pixels, comfortably under the ceiling.
+const UPSCALE_INPUT_MAX = 1400;
+// 4× the (downscaled) input, so a 1400px source comes back as a 5600px master —
+// plenty of headroom for the model to recover detail before we cap it below.
+const UPSCALE_FACTOR = 4;
+// Bound the stored master so a big upscale can't balloon R2.
 const UPSCALE_MAX = 4000;
 
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
@@ -189,11 +194,12 @@ export async function reframeFromCapture(
 /**
  * The PAID "Enhance" step: super-resolve an existing professional image (an R2 key)
  * through Real-ESRGAN and store the higher-res master under a fresh `professional/`
- * key. Reads the stored webp, ships it to Replicate as a data URI (the R2 object
- * isn't publicly reachable), fetches the upscaled result back, then canonicalises it
- * to a bounded webp via the Images binding — same format as everything else. Returns
- * the new key; throws on any Replicate/fetch/store failure so the caller can leave
- * the record's current cover untouched.
+ * key. The model's GPU caps the input at ~2.1M pixels, so the full-size reframe is
+ * first downscaled under that budget (Images binding), then shipped to Replicate as a
+ * data URI (the R2 object isn't publicly reachable), and the upscaled result is
+ * fetched back and canonicalised to a bounded webp — same format as everything else.
+ * Returns the new key; throws on any Replicate/fetch/store failure so the caller can
+ * leave the record's current cover untouched.
  */
 export async function upscaleProfessional(
 	professionalKey: string,
@@ -201,8 +207,18 @@ export async function upscaleProfessional(
 	const object = await env.PHOTOS.get(professionalKey);
 	if (!object)
 		throw new Error(`professional photo missing in R2: ${professionalKey}`);
-	const sourceBytes = new Uint8Array(await object.arrayBuffer());
-	const dataUri = `data:image/webp;base64,${bytesToBase64(sourceBytes)}`;
+
+	// Downscale under the model's input-pixel ceiling before sending. A no-op if the
+	// source is already small enough; otherwise this is what the model upscales from.
+	const fitted = await env.IMAGES.input(object.body)
+		.transform({
+			width: UPSCALE_INPUT_MAX,
+			height: UPSCALE_INPUT_MAX,
+			fit: "scale-down",
+		})
+		.output({ format: "image/webp", quality: 92 });
+	const fittedBytes = new Uint8Array(await fitted.response().arrayBuffer());
+	const dataUri = `data:image/webp;base64,${bytesToBase64(fittedBytes)}`;
 
 	const prediction = await runVersion(REAL_ESRGAN_VERSION, {
 		image: dataUri,
