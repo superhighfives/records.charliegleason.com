@@ -102,7 +102,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: tiny inline theme bootstrap, no user input */}
 				<script dangerouslySetInnerHTML={{ __html: themeScript }} />
 			</head>
-			<body>
+			<body className="flex min-h-dvh flex-col">
 				<ClerkProvider>
 					{children}
 					<Toaster />

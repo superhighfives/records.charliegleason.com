@@ -38,11 +38,11 @@ import type {
 } from "#/lib/discogs";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
+	clearProfessional,
 	deleteRecord,
 	detectCorners,
 	enhanceProfessional,
 	fetchRecordValue,
-	generateProfessional,
 	getDiscogsRelease,
 	lookupDiscogsRelease,
 	previewReleaseValue,
@@ -496,26 +496,6 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn't delete this record."),
 	});
 
-	// First-pass generation for a record that has no professional photo yet (captured
-	// before auto-generation, or a prior failure). Detects the sleeve, warps and tones —
-	// synchronously — so opening the editor always has something to preview and tweak.
-	const generateFirst = useMutation({
-		mutationFn: () => generateProfessional({ data: recordId }),
-		onSuccess: (row) => {
-			if (!row) return;
-			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-			// Adopt the detected crop so the editor + live preview reflect it.
-			setCorners(parseCorners(row.sleeveCornersJson));
-			setParams(parseReframeParams(row.professionalParamsJson));
-		},
-		onError: (err) =>
-			toast.error(
-				err instanceof Error
-					? err.message
-					: "Couldn't generate the professional photo.",
-			),
-	});
-
 	// Apply the edit: warp the capture to the current corners + tone, promote it to
 	// the displayed cover, then dismiss the editor.
 	const applyPro = useMutation({
@@ -556,12 +536,11 @@ function RecordDetail() {
 			),
 	});
 
-	// Take the photo back down as the displayed cover: unapprove it (the pixels stay
-	// in R2, just aren't shown — the header falls back to the raw capture), then close
-	// the editor and return to the detail view.
+	// Remove the professional photo altogether: delete it from R2 and clear the record
+	// back to a zero-state (no image, default crop + tone), then close the editor and
+	// return to the detail view. A later edit regenerates from scratch.
 	const removeCover = useMutation({
-		mutationFn: () =>
-			setProfessionalApproved({ data: { id: recordId, approved: false } }),
+		mutationFn: () => clearProfessional({ data: recordId }),
 		onSuccess: async (row) => {
 			if (row)
 				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
@@ -575,16 +554,13 @@ function RecordDetail() {
 			),
 	});
 
-	// Open the editor, syncing the working copies to the row and seeding a first pass if
-	// the record has never been cropped (so the preview pane isn't empty). "Use as cover"
-	// starts checked — editing implies you want to show the result.
+	// Open the editor, syncing the working copies to the saved crop/tone. Non-destructive:
+	// nothing is generated or stored until Apply — the live preview renders client-side
+	// from the capture, so it's never empty even when there's no saved professional photo.
 	const openEditor = () => {
 		setCorners(parseCorners(record?.sleeveCornersJson));
 		setParams(parseReframeParams(record?.professionalParamsJson));
 		setEditorOpen(true);
-		if (!record?.professionalImageKey && !generateFirst.isPending) {
-			generateFirst.mutate();
-		}
 	};
 
 	// Pull a fresh Discogs value estimate (seller price suggestions, falling back
@@ -643,10 +619,9 @@ function RecordDetail() {
 	// the working-copy params over the defaults so the sliders always have a concrete value.
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
 
-	// Is there a saved professional photo, and does the working copy (corners + tone)
-	// differ from what's saved on the row? Both signatures normalise (round corners /
-	// merge tone defaults + sort keys) so a reopened-but-untouched editor reads clean.
-	const hasProImage = record.professionalImageKey != null;
+	// Does the working copy (corners + tone) differ from what's saved on the row? Both
+	// signatures normalise (round corners / merge tone defaults + sort keys) so a
+	// reopened-but-untouched editor reads clean.
 	const paramSig = (v: ReframeParams) =>
 		JSON.stringify(
 			Object.entries({ ...DEFAULT_REFRAME_PARAMS, ...v }).sort(([a], [b]) =>
@@ -658,14 +633,14 @@ function RecordDetail() {
 			serializeCorners(parseCorners(record.sleeveCornersJson)) ||
 		paramSig(params) !==
 			paramSig(parseReframeParams(record.professionalParamsJson));
-	// "Live" = the saved photo is the approved cover *and* the working copy is
-	// unchanged — nothing left to apply, so the primary button becomes a plain Close.
-	// A generated-but-unapproved photo (a fresh capture is `ready`) is not live: you
-	// still Apply to promote it.
-	const proIsLive = record.professionalStatus === "approved" && !isDirty;
+	// The photo's relationship to the shown cover drives the button states:
+	//  - approved  → it's the live cover;
+	//  - "live"    → approved *and* unchanged, so the primary button is a plain Close;
+	//  - "Re-apply" only makes sense against a live cover; anything else is a first Apply.
+	const isApproved = record.professionalStatus === "approved";
+	const proIsLive = isApproved && !isDirty;
 	// Any editor mutation in flight — used to disable the controls while one runs.
-	const editorBusy =
-		applyPro.isPending || enhancePro.isPending || generateFirst.isPending;
+	const editorBusy = applyPro.isPending || enhancePro.isPending;
 
 	// Header photo: the approved professional crop, else the raw capture. Never the
 	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
@@ -854,19 +829,19 @@ function RecordDetail() {
 								    bakes the applied crop/tone, then runs it through Real-ESRGAN. */}
 								<div className="flex items-center justify-between gap-2">
 									<p className="text-xs text-muted-foreground">
-										Upscales the photo with Real-ESRGAN — a few seconds.
+										Upscales the photo with Real-ESRGAN.
 									</p>
 									<Button
 										type="button"
 										size="sm"
 										variant="outline"
-										disabled={!hasProImage || isDirty || editorBusy}
+										disabled={!proIsLive || editorBusy}
 										title={
-											!hasProImage
-												? "Apply a photo first."
+											proIsLive
+												? undefined
 												: isDirty
 													? "Apply your changes first."
-													: undefined
+													: "Apply the photo as the cover first."
 										}
 										onClick={() => enhancePro.mutate()}
 									>
@@ -1014,7 +989,7 @@ function RecordDetail() {
 										? "Applying…"
 										: proIsLive
 											? "Close"
-											: hasProImage && isDirty
+											: isApproved && isDirty
 												? "Re-apply"
 												: "Apply"}
 								</Button>

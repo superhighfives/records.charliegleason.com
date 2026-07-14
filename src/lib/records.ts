@@ -392,55 +392,6 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Generate a first-pass professional photo for a captured record, synchronously: detect
- * the sleeve's corners, warp/crop/tone the capture, store the result, and persist the
- * detected corners + `ready` status — all inline (free pixel math, no queue). This is the
- * on-demand seed for records captured before auto-generation existed; the detail page calls
- * it when the editor opens on a record that has no professional photo yet, so there's
- * something to preview and tweak. Returns the updated row, or null if the record is gone.
- * Throws if there's no capture to work from so the UI can say why. Interactive corner edits
- * + knob re-tweaks go through {@link reframeRecord}.
- */
-export const generateProfessional = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((id: number) => id)
-	.handler(({ data: id }) =>
-		Sentry.startSpan({ name: "generateProfessional" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record) return null;
-			if (!record.capturePhotoKey) {
-				throw new Error("This record has no capture photo to work from.");
-			}
-			const { professionalKey, corners } = await professionalPipeline(record);
-			const [row] = await db
-				.update(records)
-				.set({
-					professionalImageKey: professionalKey,
-					sleeveCornersJson: serializeCorners(corners),
-					professionalStatus:
-						record.professionalStatus === "approved" ? "approved" : "ready",
-					// A fresh generation is a plain reframe, not an upscale.
-					professionalEnhanced: false,
-					professionalError: null,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, id))
-				.returning();
-			// Supersede any previous professional object so a re-seed doesn't orphan it.
-			const stale = record.professionalImageKey;
-			if (stale && stale !== professionalKey) {
-				await env.PHOTOS.delete(stale).catch(() => {});
-			}
-			return row ?? null;
-		}),
-	);
-
-/**
  * Detect the sleeve's corners in a record's capture on demand — the corner editor's
  * "Detect corners" button. Runs the lightweight, free detector server-side and returns the
  * suggested corners for the admin to review before applying (or null if it can't find the
@@ -744,11 +695,11 @@ export const setProfessionalApproved = createServerFn({ method: "POST" })
 
 /**
  * Remove the professional photo entirely — the "Remove cover" action. Deletes the
- * stored image from R2 and clears the record's professional* state back to "no photo
- * yet" (status `idle`, no key, not enhanced), so the header falls back to the raw
- * capture and a later edit regenerates from scratch. No-op (returns the row/null) if
- * there was nothing to remove. The crop/tone knob settings are left intact so a
- * regenerate can reuse them.
+ * stored image from R2 and resets the record's whole professional* state to zero:
+ * no key, status `idle`, not enhanced, and the crop corners + tone knobs cleared back
+ * to their defaults. So the header falls back to the raw capture and a later edit opens
+ * on a clean full-frame, default-tone slate. No-op (returns the row/null) if the record
+ * is gone.
  */
 export const clearProfessional = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -770,6 +721,9 @@ export const clearProfessional = createServerFn({ method: "POST" })
 					professionalStatus: "idle",
 					professionalEnhanced: false,
 					professionalError: null,
+					// Zero-state: drop the saved crop + tone so the editor reopens clean.
+					sleeveCornersJson: null,
+					professionalParamsJson: null,
 					updatedAt: new Date(),
 				})
 				.where(eq(records.id, id))

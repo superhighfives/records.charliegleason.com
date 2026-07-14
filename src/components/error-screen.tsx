@@ -15,7 +15,7 @@ export function ErrorScreen({
 	message: string;
 }) {
 	return (
-		<div className="mx-auto flex min-h-dvh max-w-5xl flex-col items-center justify-center px-4 py-10 text-center sm:px-6">
+		<div className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-4 py-10 text-center sm:px-6">
 			<img
 				src={emojiSrc(emoji)}
 				alt=""

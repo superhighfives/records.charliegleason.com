@@ -58,7 +58,7 @@ function AdminGate() {
 
 	return (
 		<HotkeysProvider>
-			<div className="min-h-screen">
+			<div className="flex min-h-dvh flex-col">
 				<header className="flex items-center justify-between border-b border-border px-6 py-4">
 					<nav className="flex items-center gap-2">
 						<span className="size-2 rounded-full bg-brand" />
@@ -74,7 +74,7 @@ function AdminGate() {
 						<UserButton />
 					</div>
 				</header>
-				<main className="p-6">
+				<main className="flex min-h-0 flex-1 flex-col p-6">
 					<Outlet />
 				</main>
 			</div>
