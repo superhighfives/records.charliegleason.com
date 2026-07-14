@@ -643,7 +643,9 @@ function RecordDetail() {
 				>
 					← Collection
 				</Link>
-				<div className="mt-3 flex items-start gap-4">
+				{/* Photo, text and badges share one bottom baseline (items-end) so the
+				    status badge sits opposite the Context line rather than the title. */}
+				<div className="mt-3 flex items-end gap-4">
 					{headerPhotoSrc && (
 						<ImageZoom
 							src={headerPhotoSrc}
@@ -652,31 +654,27 @@ function RecordDetail() {
 						/>
 					)}
 					<div className="min-w-0 flex-1">
-						<div className="flex items-start justify-between gap-2">
-							<div className="min-w-0">
-								{record.artist && (
-									<p className="truncate text-sm text-muted-foreground">
-										{record.artist}
-									</p>
-								)}
-								<h1 className="text-2xl font-semibold leading-tight">
-									{record.title || "Captured record"}
-								</h1>
-							</div>
-							<div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-								{record.status === "review" && !record.discogsId && (
-									<UnmatchedBadge />
-								)}
-								{record.duplicateOf != null && <DuplicateBadge />}
-								<StatusBadge status={record.status} />
-							</div>
-						</div>
+						{record.artist && (
+							<p className="truncate text-sm text-muted-foreground">
+								{record.artist}
+							</p>
+						)}
+						<h1 className="text-2xl font-semibold leading-tight">
+							{record.title || "Captured record"}
+						</h1>
 						{record.captureContext && (
 							<p className="mt-1 text-sm text-muted-foreground">
 								<span className="font-medium text-foreground">Context:</span>{" "}
 								{record.captureContext}
 							</p>
 						)}
+					</div>
+					<div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+						{record.status === "review" && !record.discogsId && (
+							<UnmatchedBadge />
+						)}
+						{record.duplicateOf != null && <DuplicateBadge />}
+						<StatusBadge status={record.status} />
 					</div>
 				</div>
 			</div>
