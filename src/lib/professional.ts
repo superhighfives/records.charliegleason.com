@@ -3,6 +3,7 @@ import { PhotonImage } from "@cf-wasm/photon";
 
 import type { Record } from "#/db/schema";
 import {
+	applyPolish,
 	type Corners,
 	detectSleeveCorners,
 	type RgbaImage,
@@ -138,18 +139,17 @@ async function warpEncodeStore(
 		},
 	);
 
+	// The "polish" factors (saturation/contrast/gamma) go on in pixels — the same
+	// math (and order) the live client preview uses — so the stored image matches
+	// what the admin saw, and it applies identically in local dev (where the Images
+	// binding's colour transforms are a no-op) and production. 1.0 = no-op per factor.
+	applyPolish(image, p.saturation, p.contrast, p.gamma);
+
 	const png = encodePng(image);
-	// Final encode pass: gentle sharpen to counter the warp's bilinear softening, plus
-	// the "polish" factors (saturation/contrast/gamma) as blunt global multipliers on
-	// top of the foreground-aware auto-tone already baked into the pixels. 1.0 = no-op,
-	// so an untouched knob costs nothing.
+	// Final encode pass: gentle sharpen to counter the warp's bilinear softening, then
+	// canonicalise to webp. (Colour is already baked into the pixels above.)
 	const out = await env.IMAGES.input(blobStream(png))
-		.transform({
-			sharpen: FINAL_SHARPEN,
-			saturation: p.saturation,
-			contrast: p.contrast,
-			gamma: p.gamma,
-		})
+		.transform({ sharpen: FINAL_SHARPEN })
 		.output({ format: "image/webp", quality: 92 });
 	const buffer = await out.response().arrayBuffer();
 

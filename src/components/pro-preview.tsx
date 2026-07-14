@@ -2,6 +2,7 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import {
+	applyPolish,
 	type Corners,
 	type RgbaImage,
 	reframeFromCorners,
@@ -20,9 +21,9 @@ import { cn } from "#/lib/utils";
  * knobs change — so the admin sees the result while dragging, not only after Apply.
  *
  * Two deliberate approximations vs the server's authoritative render (`Apply`):
- *  - the polish factors (saturation/contrast/gamma) are applied here as plain pixel
- *    ops rather than through the Cloudflare Images pass, so they're close but not bit-
- *    identical; and there's no final sharpen. Apply still produces the real, stored image.
+ *  - the polish factors (saturation/contrast/gamma) run through the *same* {@link
+ *    applyPolish} the server uses, so they match; there's just no final sharpen here.
+ *    Apply still produces the real, stored image.
  *  - it renders at a small {@link PREVIEW_SIZE} from a downscaled capture, to stay smooth
  *    on the main thread while dragging.
  */
@@ -52,46 +53,6 @@ async function decodeToRgba(src: string): Promise<RgbaImage> {
 	ctx.drawImage(img, 0, 0, w, h);
 	const { data } = ctx.getImageData(0, 0, w, h);
 	return { data, width: w, height: h };
-}
-
-/**
- * Apply the "polish" factors in place (approximating the Cloudflare Images pass):
- * saturation around luma, then contrast around mid-grey, then gamma. 1.0 = no change,
- * so untouched knobs are a fast no-op. Uint8ClampedArray clamps writes to [0,255].
- */
-function applyPolish(
-	img: RgbaImage,
-	sat: number,
-	contrast: number,
-	gamma: number,
-): void {
-	if (sat === 1 && contrast === 1 && gamma === 1) return;
-	const d = img.data;
-	const gInv = 1 / gamma;
-	for (let i = 0; i < d.length; i += 4) {
-		let r = d[i];
-		let g = d[i + 1];
-		let b = d[i + 2];
-		if (sat !== 1) {
-			const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-			r = l + (r - l) * sat;
-			g = l + (g - l) * sat;
-			b = l + (b - l) * sat;
-		}
-		if (contrast !== 1) {
-			r = (r - 128) * contrast + 128;
-			g = (g - 128) * contrast + 128;
-			b = (b - 128) * contrast + 128;
-		}
-		if (gamma !== 1) {
-			r = 255 * (Math.max(0, r) / 255) ** gInv;
-			g = 255 * (Math.max(0, g) / 255) ** gInv;
-			b = 255 * (Math.max(0, b) / 255) ** gInv;
-		}
-		d[i] = r;
-		d[i + 1] = g;
-		d[i + 2] = b;
-	}
 }
 
 export function ProPreview({

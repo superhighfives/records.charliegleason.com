@@ -450,3 +450,48 @@ export function reframeFromCorners(
 		image: { data: framed.data, width: framed.width, height: framed.height },
 	};
 }
+
+/**
+ * Apply the "polish" factors to `img` **in place**: saturation around per-pixel luma,
+ * then contrast around mid-grey, then gamma. `1.0` = no change for each, so untouched
+ * knobs are a fast no-op. `data` is a Uint8ClampedArray, so writes clamp to [0,255].
+ *
+ * Deliberately done in pixels (not via the Cloudflare Images `.transform()` colour
+ * pass) so the stored image matches the client preview exactly, and so it works the
+ * same in local dev — where the Images binding resizes/sharpens but does *not* apply
+ * colour transforms — as it does in production.
+ */
+export function applyPolish(
+	img: RgbaImage,
+	sat: number,
+	contrast: number,
+	gamma: number,
+): void {
+	if (sat === 1 && contrast === 1 && gamma === 1) return;
+	const d = img.data;
+	const gInv = 1 / gamma;
+	for (let i = 0; i < d.length; i += 4) {
+		let r = d[i];
+		let g = d[i + 1];
+		let b = d[i + 2];
+		if (sat !== 1) {
+			const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+			r = l + (r - l) * sat;
+			g = l + (g - l) * sat;
+			b = l + (b - l) * sat;
+		}
+		if (contrast !== 1) {
+			r = (r - 128) * contrast + 128;
+			g = (g - 128) * contrast + 128;
+			b = (b - 128) * contrast + 128;
+		}
+		if (gamma !== 1) {
+			r = 255 * (Math.max(0, r) / 255) ** gInv;
+			g = 255 * (Math.max(0, g) / 255) ** gInv;
+			b = 255 * (Math.max(0, b) / 255) ** gInv;
+		}
+		d[i] = r;
+		d[i + 1] = g;
+		d[i + 2] = b;
+	}
+}
