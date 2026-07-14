@@ -150,6 +150,24 @@ const FLAG_FACETS: FacetOption[] = [
 	},
 ];
 
+// Per-flag accent colours (needs review = purple, failed = red, duplicate = orange),
+// for both the active (filled) and idle (outlined) states.
+const FLAG_COLORS: globalThis.Record<string, { active: string; idle: string }> =
+	{
+		review: {
+			active: "border-purple-600 bg-purple-600 text-white",
+			idle: "border-purple-500/40 text-purple-600 hover:bg-purple-500/10 dark:text-purple-400",
+		},
+		failed: {
+			active: "border-red-600 bg-red-600 text-white",
+			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
+		},
+		duplicate: {
+			active: "border-orange-600 bg-orange-600 text-white",
+			idle: "border-orange-500/40 text-orange-600 hover:bg-orange-500/10 dark:text-orange-400",
+		},
+	};
+
 // token → its option + the group it belongs to (flags are their own single-token group).
 const TOKEN_INFO: globalThis.Record<
 	string,
@@ -791,6 +809,7 @@ function AdminRecords() {
 						flag.token,
 						liveIds,
 					);
+					const color = FLAG_COLORS[flag.token];
 					return (
 						<button
 							key={flag.token}
@@ -798,9 +817,7 @@ function AdminRecords() {
 							onClick={() => toggleFilter(flag.token)}
 							className={cn(
 								"shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors",
-								isActive
-									? "border-foreground bg-foreground text-background"
-									: "text-muted-foreground hover:bg-accent",
+								isActive ? color.active : color.idle,
 							)}
 						>
 							{flag.label}{" "}
