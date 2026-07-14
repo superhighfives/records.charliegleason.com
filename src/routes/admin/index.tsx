@@ -14,10 +14,19 @@ import {
 	getSortedRowModel,
 	type RowSelectionState,
 	type SortingState,
+	type Row as TableRow,
 	useReactTable,
 } from "@tanstack/react-table";
 import { BadgeCheck, ChevronDownIcon, EllipsisVertical } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+	Fragment,
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
@@ -326,6 +335,77 @@ function EmptyState({ filtered }: { filtered: boolean }) {
 	);
 }
 
+/**
+ * One desktop table row, memoised so toggling *another* row's selection (or the
+ * filter) doesn't re-render all ~290 rows — only the row whose `isSelected` or
+ * underlying data actually changed. `isSelected` is passed explicitly so React's
+ * memo can see the change; `row` identity is stable while its data is unchanged.
+ */
+const AdminTableRow = memo(function AdminTableRow({
+	row,
+	isSelected,
+	onNavigate,
+}: {
+	row: TableRow<Record>;
+	isSelected: boolean;
+	onNavigate: (id: number) => void;
+}) {
+	return (
+		<tr
+			className={cn(
+				"cursor-pointer border-b hover:bg-accent/40",
+				isSelected && "bg-accent/40",
+			)}
+			onClick={(e) => {
+				// Pointer convenience only — keyboard users (and screen readers)
+				// use the real links in the row. Let nested links/buttons handle
+				// their own clicks, and don't hijack ⌘/Ctrl/Shift-click (which
+				// the links use to open in a new tab).
+				if (
+					e.metaKey ||
+					e.ctrlKey ||
+					e.shiftKey ||
+					(e.target as HTMLElement).closest("a, button, input, label")
+				) {
+					return;
+				}
+				onNavigate(row.original.id);
+			}}
+		>
+			{row.getVisibleCells().map((cell) => (
+				<td
+					key={cell.id}
+					className={
+						// Padding-free + `relative` so the checkbox label fills the cell;
+						// the fixed width stops the otherwise-empty cell collapsing.
+						cell.column.id === "select" ? "relative w-12 p-0" : "px-3 py-2"
+					}
+				>
+					{flexRender(cell.column.columnDef.cell, cell.getContext())}
+				</td>
+			))}
+		</tr>
+	);
+});
+
+/**
+ * Which layout to render — the desktop table or the mobile card list. We render
+ * only one (not both hidden behind CSS) so a filter toggle reconciles ~290 rows
+ * instead of ~580. Defaults to desktop on the server and first client render so
+ * hydration matches; an effect corrects it to the real viewport after mount.
+ */
+function useIsDesktop() {
+	const [isDesktop, setIsDesktop] = useState(true);
+	useEffect(() => {
+		const mq = window.matchMedia("(min-width: 768px)");
+		const update = () => setIsDesktop(mq.matches);
+		update();
+		mq.addEventListener("change", update);
+		return () => mq.removeEventListener("change", update);
+	}, []);
+	return isDesktop;
+}
+
 /** One tri-state segmented pair — pick a side, the other, or neither (= don't care). */
 function SegmentedFilter({
 	group,
@@ -393,6 +473,14 @@ function AdminRecords() {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const searchRef = useRef<HTMLInputElement>(null);
+	const isDesktop = useIsDesktop();
+	// Stable across renders (useNavigate is stable) so the memoised rows don't
+	// all re-render when this callback would otherwise be re-created.
+	const navigateToRecord = useCallback(
+		(id: number) =>
+			navigate({ to: "/admin/records/$id", params: { id: String(id) } }),
+		[navigate],
+	);
 
 	// The active facets live in the URL (?f=token,token) so they survive navigating into
 	// a record and pressing back, and can be shared/bookmarked.
@@ -526,6 +614,8 @@ function AdminRecords() {
 								<img
 									src={`/api/photos/${key}`}
 									alt=""
+									loading="lazy"
+									decoding="async"
 									className="size-10 min-w-10 rounded object-cover"
 								/>
 							) : (
@@ -796,7 +886,7 @@ function AdminRecords() {
 							className="w-full pr-9"
 						/>
 						{!filter && (
-							<kbd className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 select-none items-center rounded border bg-muted px-1.5 font-mono text-xs text-muted-foreground md:inline-flex">
+							<kbd className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 select-none items-center rounded border bg-muted px-1.5 font-mono text-xs text-muted-foreground md:inline-flex border">
 								/
 							</kbd>
 						)}
@@ -1016,192 +1106,154 @@ function AdminRecords() {
 				</div>
 			)}
 
-			{/* Mobile: stacked cards (the wide table doesn't fit a phone). */}
-			<ul className="space-y-2 md:hidden">
-				{table.getRowModel().rows.map((row) => {
-					const r = row.original;
-					const thumb = displayCoverKey(r, {
-						includeCapture: true,
-						preferCapture: true,
-					});
-					return (
-						<li
-							key={row.id}
-							className="flex items-center gap-3 rounded-lg border border-border p-3 hover:bg-accent/40"
-						>
-							<label
-								htmlFor={`select-m-${row.id}`}
-								className="-m-1 flex shrink-0 cursor-pointer items-center p-1"
+			{/* Mobile: stacked cards (the wide table doesn't fit a phone). Rendered
+			    only below md — see useIsDesktop — so we don't reconcile both layouts. */}
+			{!isDesktop && (
+				<ul className="space-y-2">
+					{table.getRowModel().rows.map((row) => {
+						const r = row.original;
+						const thumb = displayCoverKey(r, {
+							includeCapture: true,
+							preferCapture: true,
+						});
+						return (
+							<li
+								key={row.id}
+								className="flex items-center gap-3 rounded-lg border border-border p-3 hover:bg-accent/40"
 							>
-								<Checkbox
-									id={`select-m-${row.id}`}
-									aria-label="Select record"
-									checked={row.getIsSelected()}
-									onChange={row.getToggleSelectedHandler()}
-								/>
-							</label>
-							{/* Link wraps only the non-destructive content; the Delete button is
-							    a sibling so we don't nest interactive elements inside an <a>. */}
-							<button
-								type="button"
-								aria-label="Quick view"
-								onClick={() => setPreviewId(r.id)}
-								className="shrink-0 rounded"
-							>
-								{thumb ? (
-									<img
-										src={`/api/photos/${thumb}`}
-										alt=""
-										className="size-14 shrink-0 rounded object-cover"
-									/>
-								) : (
-									<div className="size-14 shrink-0 rounded bg-muted" />
-								)}
-							</button>
-							<Link
-								to="/admin/records/$id"
-								params={{ id: String(r.id) }}
-								className="flex min-w-0 flex-1 items-center gap-3"
-							>
-								<div className="min-w-0 flex-1">
-									<p className="truncate font-medium">
-										<RecordTitle record={r} />
-									</p>
-									<p className="truncate text-sm text-muted-foreground">
-										{r.artist || "—"}
-										{r.year ? ` · ${r.year}` : ""}
-									</p>
-									<div className="mt-1.5 flex flex-wrap items-center gap-1">
-										<StatusBadge status={r.status} />
-										{r.status === "review" && !r.discogsId && (
-											<UnmatchedBadge />
-										)}
-										{r.duplicateOf != null && <DuplicateBadge />}
-										{r.pitchforkScore != null && (
-											<span className="text-xs text-muted-foreground tabular-nums">
-												Pitchfork {r.pitchforkScore}
-											</span>
-										)}
-										<StatusError record={r} />
-									</div>
-								</div>
-							</Link>
-							<button
-								type="button"
-								className="shrink-0 self-start text-sm text-destructive underline underline-offset-4 disabled:opacity-50"
-								disabled={deleteMutation.isPending}
-								onClick={() => {
-									if (confirm(`Delete "${r.title || "this record"}"?`)) {
-										deleteMutation.mutate(r.id);
-									}
-								}}
-							>
-								Delete
-							</button>
-						</li>
-					);
-				})}
-				{visibleRowCount === 0 && (
-					<li className="rounded-lg border border-dashed border-border px-3 py-10 text-center">
-						<EmptyState filtered={isFiltered} />
-					</li>
-				)}
-			</ul>
-
-			{/* Desktop: the full sortable table. */}
-			<table className="hidden w-full border-collapse text-sm md:table">
-				<thead>
-					{table.getHeaderGroups().map((hg) => (
-						<tr key={hg.id} className="border-b text-left">
-							{hg.headers.map((header) => (
-								<th
-									key={header.id}
-									className={
-										// The select column drops its padding and goes `relative` so the
-										// checkbox label can absolutely fill it; a fixed width keeps the
-										// padding-free cell from collapsing.
-										header.column.id === "select"
-											? "relative w-12 p-0 font-medium"
-											: "px-3 py-2 font-medium"
-									}
+								<label
+									htmlFor={`select-m-${row.id}`}
+									className="-m-1 flex shrink-0 cursor-pointer items-center p-1"
 								>
-									{header.isPlaceholder ? null : header.column.getCanSort() ? (
-										<button
-											type="button"
-											className="flex items-center gap-1"
-											onClick={header.column.getToggleSortingHandler()}
-										>
-											{flexRender(
+									<Checkbox
+										id={`select-m-${row.id}`}
+										aria-label="Select record"
+										checked={row.getIsSelected()}
+										onChange={row.getToggleSelectedHandler()}
+									/>
+								</label>
+								<button
+									type="button"
+									aria-label="Quick view"
+									onClick={() => setPreviewId(r.id)}
+									className="shrink-0 rounded"
+								>
+									{thumb ? (
+										<img
+											src={`/api/photos/${thumb}`}
+											alt=""
+											loading="lazy"
+											decoding="async"
+											className="size-14 shrink-0 rounded object-cover"
+										/>
+									) : (
+										<div className="size-14 shrink-0 rounded bg-muted" />
+									)}
+								</button>
+								<Link
+									to="/admin/records/$id"
+									params={{ id: String(r.id) }}
+									className="flex min-w-0 flex-1 items-center gap-3"
+								>
+									<div className="min-w-0 flex-1">
+										<p className="truncate font-medium">
+											<RecordTitle record={r} />
+										</p>
+										<p className="truncate text-sm text-muted-foreground">
+											{r.artist || "—"}
+											{r.year ? ` · ${r.year}` : ""}
+										</p>
+										<div className="mt-1.5 flex flex-wrap items-center gap-1">
+											<StatusBadge status={r.status} />
+											{r.status === "review" && !r.discogsId && (
+												<UnmatchedBadge />
+											)}
+											{r.duplicateOf != null && <DuplicateBadge />}
+											{r.pitchforkScore != null && (
+												<span className="text-xs text-muted-foreground tabular-nums">
+													Pitchfork {r.pitchforkScore}
+												</span>
+											)}
+											<StatusError record={r} />
+										</div>
+									</div>
+								</Link>
+							</li>
+						);
+					})}
+					{visibleRowCount === 0 && (
+						<li className="rounded-lg border border-dashed border-border px-3 py-10 text-center">
+							<EmptyState filtered={isFiltered} />
+						</li>
+					)}
+				</ul>
+			)}
+
+			{/* Desktop: the full sortable table. Rendered only at md+ — see useIsDesktop. */}
+			{isDesktop && (
+				<table className="w-full border-collapse text-sm">
+					<thead>
+						{table.getHeaderGroups().map((hg) => (
+							<tr key={hg.id} className="border-b text-left">
+								{hg.headers.map((header) => (
+									<th
+										key={header.id}
+										className={
+											// The select column drops its padding and goes `relative` so the
+											// checkbox label can absolutely fill it; a fixed width keeps the
+											// padding-free cell from collapsing.
+											header.column.id === "select"
+												? "relative w-12 p-0 font-medium"
+												: "px-3 py-2 font-medium"
+										}
+									>
+										{header.isPlaceholder ? null : header.column.getCanSort() ? (
+											<button
+												type="button"
+												className="flex items-center gap-1"
+												onClick={header.column.getToggleSortingHandler()}
+											>
+												{flexRender(
+													header.column.columnDef.header,
+													header.getContext(),
+												)}
+												{{ asc: " ↑", desc: " ↓" }[
+													header.column.getIsSorted() as string
+												] ?? null}
+											</button>
+										) : (
+											// Non-sortable headers (the select checkbox, cover, actions)
+											// render bare — wrapping them in a disabled <button> both nests
+											// interactive controls illegally and swallows the checkbox's clicks.
+											flexRender(
 												header.column.columnDef.header,
 												header.getContext(),
-											)}
-											{{ asc: " ↑", desc: " ↓" }[
-												header.column.getIsSorted() as string
-											] ?? null}
-										</button>
-									) : (
-										// Non-sortable headers (the select checkbox, cover, actions)
-										// render bare — wrapping them in a disabled <button> both nests
-										// interactive controls illegally and swallows the checkbox's clicks.
-										flexRender(
-											header.column.columnDef.header,
-											header.getContext(),
-										)
-									)}
-								</th>
-							))}
-						</tr>
-					))}
-				</thead>
-				<tbody>
-					{table.getRowModel().rows.map((row) => (
-						<tr
-							key={row.id}
-							className="cursor-pointer border-b hover:bg-accent/40"
-							onClick={(e) => {
-								// Pointer convenience only — keyboard users (and screen readers)
-								// use the real links in the row. Let nested links/buttons handle
-								// their own clicks, and don't hijack ⌘/Ctrl/Shift-click (which
-								// the links use to open in a new tab).
-								if (
-									e.metaKey ||
-									e.ctrlKey ||
-									e.shiftKey ||
-									(e.target as HTMLElement).closest("a, button, input, label")
-								) {
-									return;
-								}
-								navigate({
-									to: "/admin/records/$id",
-									params: { id: String(row.original.id) },
-								});
-							}}
-						>
-							{row.getVisibleCells().map((cell) => (
-								<td
-									key={cell.id}
-									className={
-										// Padding-free + `relative` so the checkbox label fills the cell;
-										// the fixed width stops the otherwise-empty cell collapsing.
-										cell.column.id === "select"
-											? "relative w-12 p-0"
-											: "px-3 py-2"
-									}
-								>
-									{flexRender(cell.column.columnDef.cell, cell.getContext())}
+											)
+										)}
+									</th>
+								))}
+							</tr>
+						))}
+					</thead>
+					<tbody>
+						{table.getRowModel().rows.map((row) => (
+							<AdminTableRow
+								key={row.id}
+								row={row}
+								isSelected={row.getIsSelected()}
+								onNavigate={navigateToRecord}
+							/>
+						))}
+						{visibleRowCount === 0 && (
+							<tr>
+								<td colSpan={columns.length} className="px-3 py-12 text-center">
+									<EmptyState filtered={isFiltered} />
 								</td>
-							))}
-						</tr>
-					))}
-					{visibleRowCount === 0 && (
-						<tr>
-							<td colSpan={columns.length} className="px-3 py-12 text-center">
-								<EmptyState filtered={isFiltered} />
-							</td>
-						</tr>
-					)}
-				</tbody>
-			</table>
+							</tr>
+						)}
+					</tbody>
+				</table>
+			)}
 
 			{/* Quick-view drawer — the same panel the public site uses, in admin mode
 			    so it surfaces the private valuation + confirmed-release status. */}
