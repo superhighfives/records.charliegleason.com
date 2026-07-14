@@ -700,7 +700,7 @@ function RecordDetail() {
 							className="size-32"
 						/>
 						<figcaption className="text-xs text-muted-foreground">
-							{picked ? "Cover (selected)" : "Cover"}
+							{picked ? "Discogs (selected)" : "Discogs"}
 						</figcaption>
 					</figure>
 				)}
