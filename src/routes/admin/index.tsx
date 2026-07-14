@@ -32,6 +32,11 @@ import {
 	DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu";
 import { Input } from "#/components/ui/input";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "#/components/ui/popover";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
@@ -790,63 +795,106 @@ function AdminRecords() {
 						placeholder="Filter records…  ( / )"
 						className="w-full sm:w-56"
 					/>
-					<Button asChild variant="outline" className="flex-1 sm:flex-none">
-						<Link to="/admin/records/new">Add manually</Link>
-					</Button>
-					<Button asChild className="flex-1 sm:flex-none">
-						<Link to="/admin/capture">Capture record</Link>
-					</Button>
-				</div>
-			</div>
 
-			{/* Facet filters: tri-state segmented pairs + on/off flags, combined with AND.
-			    Each pill shows how many records that option would leave, honouring the
-			    other groups already picked. Selecting all-or-nothing keeps the URL clean. */}
-			<div className="-mx-1 flex flex-wrap items-center gap-2 px-1 pb-1">
-				{FACET_GROUPS.map((group) => (
-					<SegmentedFilter
-						key={group.key}
-						group={group}
-						active={activeFacets}
-						rows={data}
-						liveIds={liveIds}
-						onToggle={toggleFilter}
-					/>
-				))}
-				{FLAG_FACETS.map((flag) => {
-					const isActive = activeFacets.includes(flag.token);
-					const count = facetCount(
-						data,
-						activeFacets,
-						flag,
-						flag.token,
-						liveIds,
-					);
-					const color = FLAG_COLORS[flag.token];
-					return (
-						<button
-							key={flag.token}
-							type="button"
-							onClick={() => toggleFilter(flag.token)}
-							className={cn(
-								"shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors",
-								isActive ? color.active : color.idle,
-							)}
+					{/* Facet filters live in a popover so the header stays a single tidy row
+					    on mobile. The trigger badges the active count; the panel holds the
+					    tri-state segmented pairs + on/off flags, combined with AND. Each
+					    pill shows how many records that option would leave, honouring the
+					    other groups already picked. */}
+					<Popover>
+						<PopoverTrigger asChild>
+							<Button
+								variant="outline"
+								className="flex-1 sm:flex-none"
+								aria-label="Filters"
+							>
+								Filters
+								{activeFacets.length > 0 && (
+									<span className="rounded-full bg-foreground px-1.5 text-xs tabular-nums text-background">
+										{activeFacets.length}
+									</span>
+								)}
+								<ChevronDownIcon className="size-4 opacity-60" />
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent
+							align="end"
+							className="w-[min(24rem,calc(100vw-2rem))] space-y-2"
 						>
-							{flag.label}{" "}
-							<span className="tabular-nums opacity-70">{count}</span>
-						</button>
-					);
-				})}
-				{activeFacets.length > 0 && (
-					<button
-						type="button"
-						onClick={() => setFacets([])}
-						className="shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
-					>
-						Clear
-					</button>
-				)}
+							<div className="flex flex-wrap items-center gap-2">
+								{FACET_GROUPS.map((group) => (
+									<SegmentedFilter
+										key={group.key}
+										group={group}
+										active={activeFacets}
+										rows={data}
+										liveIds={liveIds}
+										onToggle={toggleFilter}
+									/>
+								))}
+							</div>
+							<div className="flex flex-wrap items-center gap-2">
+								{FLAG_FACETS.map((flag) => {
+									const isActive = activeFacets.includes(flag.token);
+									const count = facetCount(
+										data,
+										activeFacets,
+										flag,
+										flag.token,
+										liveIds,
+									);
+									const color = FLAG_COLORS[flag.token];
+									return (
+										<button
+											key={flag.token}
+											type="button"
+											onClick={() => toggleFilter(flag.token)}
+											className={cn(
+												"shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors",
+												isActive ? color.active : color.idle,
+											)}
+										>
+											{flag.label}{" "}
+											<span className="tabular-nums opacity-70">{count}</span>
+										</button>
+									);
+								})}
+								{activeFacets.length > 0 && (
+									<button
+										type="button"
+										onClick={() => setFacets([])}
+										className="shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
+									>
+										Clear
+									</button>
+								)}
+							</div>
+						</PopoverContent>
+					</Popover>
+
+					{/* Split primary action: "Capture record" is the common path; the caret
+					    tucks the rarer "Add manually" behind a dropdown. */}
+					<div className="flex flex-1 sm:flex-none">
+						<Button asChild className="flex-1 rounded-r-none sm:flex-none">
+							<Link to="/admin/capture">Capture record</Link>
+						</Button>
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									aria-label="More add options"
+									className="rounded-l-none border-l border-neutral-900/20 px-2"
+								>
+									<ChevronDownIcon className="size-4" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end">
+								<DropdownMenuItem asChild>
+									<Link to="/admin/records/new">Add manually</Link>
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
+				</div>
 			</div>
 
 			{/* Bulk actions. The bar stays put whenever there are rows to act on (so
@@ -856,7 +904,7 @@ function AdminRecords() {
 			    same size whether or not the (button-height) actions are showing, so
 			    selecting a row doesn't resize it. Hidden entirely when empty. */}
 			{visibleRowCount > 0 && (
-				<div className="flex min-h-14 sticky top-4 z-10 items-center gap-2 rounded-lg border border-sidebar-accent bg-sidebar/80 px-3 py-2">
+				<div className="flex min-h-14 sticky top-4 z-10 items-center gap-2 rounded-lg border border-sidebar-accent bg-sidebar/80 px-5 py-2">
 					{hasSelection ? (
 						<span className="text-sm font-medium whitespace-nowrap">
 							{selectedIds.length} selected
