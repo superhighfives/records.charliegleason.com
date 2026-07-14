@@ -962,56 +962,49 @@ function RecordDetail() {
 						    paste-a-URL controls. */}
 						<div className="flex gap-3 p-3">
 							{coverPreviewSrc && (
-								<div className="flex shrink-0 flex-col gap-2">
-									<figure className="space-y-1">
-										<ImageZoom
-											src={coverPreviewSrc}
-											alt={picked ? "Selected Discogs cover" : "Sourced cover"}
-											className="size-32"
-										/>
-										<figcaption className="space-y-0.5 text-xs text-muted-foreground">
-											<span className="block">
-												{picked ? "Discogs (selected)" : "Discogs"}
-											</span>
-											{/* Cover-download shorthand: progress while grabbing, then
-											    size/type once it lands (or a short failure note). */}
-											{picked && coverProbe.status !== "idle" && (
-												<span
-													className={cn(
-														"block",
-														coverProbe.status === "error" &&
-															"text-red-600 dark:text-red-400",
-													)}
-													aria-live="polite"
-												>
-													{coverProbe.status === "loading" && "0% downloaded"}
-													{coverProbe.status === "ready" &&
-														`${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}`}
-													{coverProbe.status === "error" && "Download failed"}
-												</span>
-											)}
-										</figcaption>
-									</figure>
-								</div>
+								<ImageZoom
+									src={coverPreviewSrc}
+									alt={picked ? "Selected Discogs cover" : "Sourced cover"}
+									className="size-32 shrink-0"
+								/>
 							)}
 							<div className="min-w-0 flex-1 space-y-3">
-								<div
-									role="tablist"
-									aria-label="Discogs lookup method"
-									className="flex gap-1 border-b"
-								>
-									<TabButton
-										active={tab === "url"}
-										onClick={() => setTab("url")}
+								{/* Tabs on the left; the cover-download status (progress →
+								    size/type, or a failure) sits opposite, on the same row. */}
+								<div className="flex items-center justify-between gap-2 border-b">
+									<div
+										role="tablist"
+										aria-label="Discogs lookup method"
+										className="flex gap-1"
 									>
-										Discogs URL
-									</TabButton>
-									<TabButton
-										active={tab === "search"}
-										onClick={() => setTab("search")}
-									>
-										Search
-									</TabButton>
+										<TabButton
+											active={tab === "url"}
+											onClick={() => setTab("url")}
+										>
+											Discogs URL
+										</TabButton>
+										<TabButton
+											active={tab === "search"}
+											onClick={() => setTab("search")}
+										>
+											Search
+										</TabButton>
+									</div>
+									{picked && coverProbe.status !== "idle" && (
+										<span
+											className={cn(
+												"shrink-0 text-xs text-muted-foreground",
+												coverProbe.status === "error" &&
+													"text-red-600 dark:text-red-400",
+											)}
+											aria-live="polite"
+										>
+											{coverProbe.status === "loading" && "Downloading…"}
+											{coverProbe.status === "ready" &&
+												`${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}`}
+											{coverProbe.status === "error" && "Download failed"}
+										</span>
+									)}
 								</div>
 
 								{tab === "search" ? (
