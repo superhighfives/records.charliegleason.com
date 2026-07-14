@@ -12,6 +12,7 @@ import {
 	getCoreRowModel,
 	getFilteredRowModel,
 	getSortedRowModel,
+	type RowData,
 	type RowSelectionState,
 	type SortingState,
 	type Row as TableRow,
@@ -60,6 +61,15 @@ import {
 import { recordsQueryOptions } from "#/lib/records-queries";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
+
+// Let a column carry an extra Tailwind class, applied to both its <th> and
+// <td> — used to hide lower-priority columns (Label, Pitchfork, Value,
+// Confirmed) below the `lg` breakpoint so the table stays legible on tablets.
+declare module "@tanstack/react-table" {
+	interface ColumnMeta<TData extends RowData, TValue> {
+		className?: string;
+	}
+}
 
 type RecordStatus = NonNullable<Record["status"]>;
 type FacetTest = (r: Record, liveIds: Set<number>) => boolean;
@@ -375,11 +385,12 @@ const AdminTableRow = memo(function AdminTableRow({
 			{row.getVisibleCells().map((cell) => (
 				<td
 					key={cell.id}
-					className={
+					className={cn(
 						// Padding-free + `relative` so the checkbox label fills the cell;
 						// the fixed width stops the otherwise-empty cell collapsing.
-						cell.column.id === "select" ? "relative w-12 p-0" : "px-3 py-2"
-					}
+						cell.column.id === "select" ? "relative w-12 p-0" : "px-3 py-2",
+						cell.column.columnDef.meta?.className,
+					)}
 				>
 					{flexRender(cell.column.columnDef.cell, cell.getContext())}
 				</td>
@@ -639,15 +650,21 @@ function AdminRecords() {
 				cell: ({ row }) => <RecordTitle record={row.original} />,
 			},
 			{ accessorKey: "year", header: "Year" },
-			{ accessorKey: "label", header: "Label" },
+			{
+				accessorKey: "label",
+				header: "Label",
+				meta: { className: "hidden lg:table-cell" },
+			},
 			{
 				accessorKey: "pitchforkScore",
 				header: "Pitchfork",
 				cell: ({ getValue }) => getValue<number | null>() ?? "—",
+				meta: { className: "hidden lg:table-cell" },
 			},
 			{
 				id: "value",
 				header: "Value",
+				meta: { className: "hidden lg:table-cell" },
 				// The effective value: manual (confirmed) figure if set, else the guess.
 				accessorFn: (row) => effectiveValue(row),
 				cell: ({ row }) => {
@@ -671,6 +688,7 @@ function AdminRecords() {
 			{
 				id: "confirmed",
 				header: "Confirmed",
+				meta: { className: "hidden lg:table-cell" },
 				accessorFn: (row) => (row.confirmedRelease ? 1 : 0),
 				cell: ({ row }) =>
 					row.original.confirmedRelease ? (
@@ -1198,14 +1216,15 @@ function AdminRecords() {
 								{hg.headers.map((header) => (
 									<th
 										key={header.id}
-										className={
+										className={cn(
 											// The select column drops its padding and goes `relative` so the
 											// checkbox label can absolutely fill it; a fixed width keeps the
 											// padding-free cell from collapsing.
 											header.column.id === "select"
 												? "relative w-12 p-0 font-medium"
-												: "px-3 py-2 font-medium"
-										}
+												: "px-3 py-2 font-medium",
+											header.column.columnDef.meta?.className,
+										)}
 									>
 										{header.isPlaceholder ? null : header.column.getCanSort() ? (
 											<button
