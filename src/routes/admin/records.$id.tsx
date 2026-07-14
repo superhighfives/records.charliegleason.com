@@ -647,38 +647,43 @@ function RecordDetail() {
 				    to the far right; on mobile they stack into two rows (photo + text,
 				    then the badges). Everything shares one bottom baseline so the status
 				    badge sits opposite the Context line. */}
-				<div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
-					<div className="flex min-w-0 items-end gap-4 sm:w-1/2">
-						{headerPhotoSrc && (
-							<ImageZoom
-								src={headerPhotoSrc}
-								alt="Record photo"
-								className="size-24 shrink-0"
-							/>
+				<div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-end">
+					{headerPhotoSrc && (
+						<ImageZoom
+							src={headerPhotoSrc}
+							alt="Record photo"
+							className="aspect-square w-full shrink-0 sm:w-1/2"
+						/>
+					)}
+					<div className="min-w-0 flex-1">
+						{record.artist && (
+							<p className="truncate text-sm text-muted-foreground">
+								{record.artist}
+							</p>
 						)}
-						<div className="min-w-0 flex-1">
-							{record.artist && (
-								<p className="truncate text-sm text-muted-foreground">
-									{record.artist}
-								</p>
-							)}
-							<h1 className="text-2xl font-semibold leading-tight">
-								{record.title || "Captured record"}
-							</h1>
-							{record.captureContext && (
-								<p className="mt-1 text-sm text-muted-foreground">
+						<h1 className="text-2xl font-semibold leading-tight">
+							{record.title || "Captured record"}
+						</h1>
+						{/* Context and the status badges share a row on desktop (badge pushed
+						    right, opposite the context); on mobile the badges drop to their
+						    own line below the context. */}
+						<div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+							{record.captureContext ? (
+								<p className="min-w-0 text-sm text-muted-foreground">
 									<span className="font-medium text-foreground">Context:</span>{" "}
 									{record.captureContext}
 								</p>
+							) : (
+								<span />
 							)}
+							<div className="flex flex-wrap items-center gap-1">
+								{record.status === "review" && !record.discogsId && (
+									<UnmatchedBadge />
+								)}
+								{record.duplicateOf != null && <DuplicateBadge />}
+								<StatusBadge status={record.status} />
+							</div>
 						</div>
-					</div>
-					<div className="flex flex-wrap items-center gap-1 sm:justify-end">
-						{record.status === "review" && !record.discogsId && (
-							<UnmatchedBadge />
-						)}
-						{record.duplicateOf != null && <DuplicateBadge />}
-						<StatusBadge status={record.status} />
 					</div>
 				</div>
 			</div>
