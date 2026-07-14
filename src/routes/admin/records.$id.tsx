@@ -652,33 +652,37 @@ function RecordDetail() {
 				>
 					← Collection
 				</Link>
-				{/* Photo, text and badges share one bottom baseline (items-end) so the
-				    status badge sits opposite the Context line rather than the title. */}
-				<div className="mt-3 flex items-end gap-4">
-					{headerPhotoSrc && (
-						<ImageZoom
-							src={headerPhotoSrc}
-							alt="Record photo"
-							className="size-24 shrink-0"
-						/>
-					)}
-					<div className="min-w-0 flex-1">
-						{record.artist && (
-							<p className="truncate text-sm text-muted-foreground">
-								{record.artist}
-							</p>
+				{/* Photo + text take ~half the width on desktop, with the badges pushed
+				    to the far right; on mobile they stack into two rows (photo + text,
+				    then the badges). Everything shares one bottom baseline so the status
+				    badge sits opposite the Context line. */}
+				<div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+					<div className="flex min-w-0 items-end gap-4 sm:w-1/2">
+						{headerPhotoSrc && (
+							<ImageZoom
+								src={headerPhotoSrc}
+								alt="Record photo"
+								className="size-24 shrink-0"
+							/>
 						)}
-						<h1 className="text-2xl font-semibold leading-tight">
-							{record.title || "Captured record"}
-						</h1>
-						{record.captureContext && (
-							<p className="mt-1 text-sm text-muted-foreground">
-								<span className="font-medium text-foreground">Context:</span>{" "}
-								{record.captureContext}
-							</p>
-						)}
+						<div className="min-w-0 flex-1">
+							{record.artist && (
+								<p className="truncate text-sm text-muted-foreground">
+									{record.artist}
+								</p>
+							)}
+							<h1 className="text-2xl font-semibold leading-tight">
+								{record.title || "Captured record"}
+							</h1>
+							{record.captureContext && (
+								<p className="mt-1 text-sm text-muted-foreground">
+									<span className="font-medium text-foreground">Context:</span>{" "}
+									{record.captureContext}
+								</p>
+							)}
+						</div>
 					</div>
-					<div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+					<div className="flex flex-wrap items-center gap-1 sm:justify-end">
 						{record.status === "review" && !record.discogsId && (
 							<UnmatchedBadge />
 						)}
@@ -702,22 +706,6 @@ function RecordDetail() {
 				</div>
 			)}
 
-			{/* Download status for the picked candidate's cover — confirms the grab
-			    worked (with size/type) or surfaces why it didn't. */}
-			{picked && coverProbe.status !== "idle" && (
-				<p className="text-xs text-muted-foreground" aria-live="polite">
-					{coverProbe.status === "loading" && "Downloading cover from Discogs…"}
-					{coverProbe.status === "ready" &&
-						`Cover downloaded — ${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}.`}
-					{coverProbe.status === "error" && (
-						<span className="text-red-600 dark:text-red-400">
-							Couldn’t download cover: {coverProbe.message}. It’ll be re-sourced
-							on publish.
-						</span>
-					)}
-				</p>
-			)}
-
 			{/* Two actions on the capture: swap the source photo, or open the crop/
 			    tone editor. The image itself is shown (bottom-aligned) in the header. */}
 			{!inFlight && record.capturePhotoKey && (
@@ -733,6 +721,9 @@ function RecordDetail() {
 							e.target.value = "";
 						}}
 					/>
+					<Button type="button" size="sm" onClick={openEditor}>
+						Edit image
+					</Button>
 					<Button
 						type="button"
 						size="sm"
@@ -741,14 +732,6 @@ function RecordDetail() {
 						onClick={() => captureInputRef.current?.click()}
 					>
 						{replacingCapture ? "Replacing…" : "Replace capture"}
-					</Button>
-					<Button
-						type="button"
-						size="sm"
-						variant="outline"
-						onClick={openEditor}
-					>
-						Edit image
 					</Button>
 					{record.professionalStatus === "failed" &&
 						record.professionalError && (
@@ -986,8 +969,27 @@ function RecordDetail() {
 											alt={picked ? "Selected Discogs cover" : "Sourced cover"}
 											className="size-32"
 										/>
-										<figcaption className="text-xs text-muted-foreground">
-											{picked ? "Discogs (selected)" : "Discogs"}
+										<figcaption className="space-y-0.5 text-xs text-muted-foreground">
+											<span className="block">
+												{picked ? "Discogs (selected)" : "Discogs"}
+											</span>
+											{/* Cover-download shorthand: progress while grabbing, then
+											    size/type once it lands (or a short failure note). */}
+											{picked && coverProbe.status !== "idle" && (
+												<span
+													className={cn(
+														"block",
+														coverProbe.status === "error" &&
+															"text-red-600 dark:text-red-400",
+													)}
+													aria-live="polite"
+												>
+													{coverProbe.status === "loading" && "0% downloaded"}
+													{coverProbe.status === "ready" &&
+														`${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}`}
+													{coverProbe.status === "error" && "Download failed"}
+												</span>
+											)}
 										</figcaption>
 									</figure>
 								</div>
