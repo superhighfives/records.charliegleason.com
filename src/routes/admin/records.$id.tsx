@@ -929,50 +929,55 @@ function RecordDetail() {
 									/>
 									Auto-tone (levels + white balance)
 								</label>
-								<Knob
-									label="White balance"
-									display={`${Math.round(p.wbStrength * 100)}%`}
-									value={Math.round(p.wbStrength * 100)}
-									min={0}
-									max={100}
-									step={1}
-									disabled={p.skipTone || reframePro.isPending}
-									onChange={(v) =>
-										setParams({ ...params, wbStrength: v / 100 })
-									}
-								/>
-								<Knob
-									label="Saturation"
-									display={`${Math.round(p.saturation * 100)}%`}
-									value={Math.round(p.saturation * 100)}
-									min={0}
-									max={200}
-									step={5}
-									disabled={reframePro.isPending}
-									onChange={(v) =>
-										setParams({ ...params, saturation: v / 100 })
-									}
-								/>
-								<Knob
-									label="Contrast"
-									display={`${Math.round(p.contrast * 100)}%`}
-									value={Math.round(p.contrast * 100)}
-									min={50}
-									max={200}
-									step={5}
-									disabled={reframePro.isPending}
-									onChange={(v) => setParams({ ...params, contrast: v / 100 })}
-								/>
-								<Knob
-									label="Gamma"
-									display={p.gamma.toFixed(2)}
-									value={Math.round(p.gamma * 100)}
-									min={50}
-									max={200}
-									step={5}
-									disabled={reframePro.isPending}
-									onChange={(v) => setParams({ ...params, gamma: v / 100 })}
-								/>
+								{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
+								<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+									<Knob
+										label="White balance"
+										display={`${Math.round(p.wbStrength * 100)}%`}
+										value={Math.round(p.wbStrength * 100)}
+										min={0}
+										max={100}
+										step={1}
+										disabled={p.skipTone || reframePro.isPending}
+										onChange={(v) =>
+											setParams({ ...params, wbStrength: v / 100 })
+										}
+									/>
+									<Knob
+										label="Saturation"
+										display={`${Math.round(p.saturation * 100)}%`}
+										value={Math.round(p.saturation * 100)}
+										min={0}
+										max={200}
+										step={5}
+										disabled={reframePro.isPending}
+										onChange={(v) =>
+											setParams({ ...params, saturation: v / 100 })
+										}
+									/>
+									<Knob
+										label="Contrast"
+										display={`${Math.round(p.contrast * 100)}%`}
+										value={Math.round(p.contrast * 100)}
+										min={50}
+										max={200}
+										step={5}
+										disabled={reframePro.isPending}
+										onChange={(v) =>
+											setParams({ ...params, contrast: v / 100 })
+										}
+									/>
+									<Knob
+										label="Gamma"
+										display={p.gamma.toFixed(2)}
+										value={Math.round(p.gamma * 100)}
+										min={50}
+										max={200}
+										step={5}
+										disabled={reframePro.isPending}
+										onChange={(v) => setParams({ ...params, gamma: v / 100 })}
+									/>
+								</div>
 							</div>
 
 							<DialogFooter className="justify-between">
