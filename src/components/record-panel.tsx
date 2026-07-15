@@ -36,6 +36,9 @@ export type PanelRecord = PublicRecord &
 			| "discogsValueCurrency"
 			| "discogsValueJson"
 			| "discogsValueFetchedAt"
+			// Admin drawer only — used for the reference-image links (capture is
+			// admin-only, so it's absent on public records).
+			| "capturePhotoKey"
 		>
 	>;
 
@@ -179,6 +182,22 @@ export function RecordPanel({
 	// Admin drawer falls back to the raw capture so an in-progress record still
 	// shows an image; the public panel shows only an approved photo (else nothing).
 	const cover = displayCoverKey(record, { includeCapture: admin });
+
+	// Direct links to the record's stored renders, for reference. The square hero and
+	// both matte variants are public (already served, gated to approved on public
+	// records); the raw capture is admin-only, so it's only offered in the admin drawer.
+	const referenceImages = (
+		[
+			{ label: "Square cover", key: record.professionalImageKey },
+			{ label: "Matte (shadow)", key: record.professionalAlphaKey },
+			{ label: "Matte (cutout)", key: record.professionalAlphaCutoutKey },
+			admin
+				? { label: "Original capture", key: record.capturePhotoKey ?? null }
+				: null,
+		] as Array<{ label: string; key: string | null } | null>
+	).filter(
+		(r): r is { label: string; key: string } => r != null && r.key != null,
+	);
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
@@ -327,6 +346,33 @@ export function RecordPanel({
 						<div>
 							<h3 className="mb-1 text-sm font-semibold">Notes</h3>
 							<p className="text-sm text-muted-foreground">{record.notes}</p>
+						</div>
+					)}
+
+					{referenceImages.length > 0 && (
+						<div>
+							<h3 className="mb-1 text-sm font-semibold">Reference images</h3>
+							<dl className="divide-y divide-border">
+								{referenceImages.map(({ label, key }) => (
+									<div
+										key={key}
+										className="flex items-baseline justify-between gap-4 py-2 text-sm"
+									>
+										<dt className="shrink-0 text-muted-foreground">{label}</dt>
+										<dd className="min-w-0 text-right">
+											<a
+												href={`/api/photos/${key}`}
+												target="_blank"
+												rel="noreferrer"
+												className="inline-flex items-center gap-1 text-brand hover:text-brand-strong"
+											>
+												Open
+												<ExternalLink className="size-3" />
+											</a>
+										</dd>
+									</div>
+								))}
+							</dl>
 						</div>
 					)}
 				</div>

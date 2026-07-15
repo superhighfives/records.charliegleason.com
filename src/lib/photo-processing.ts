@@ -1236,6 +1236,87 @@ export function composeMatte(
 	return frameCutout(masked, opts);
 }
 
+/**
+ * Perspective-warp an already-cut sleeve so its (refined) `quad` maps onto an upright
+ * rectangle filling the content area — a clean, front-on floating sleeve rather than the
+ * tilted/keystoned capture — then tone, polish and add a contact shadow. The quad's own
+ * edge lengths set the rectangle's aspect ratio, so a near-square sleeve stays near-square
+ * and a taller one stays taller. `content` must already carry the cutout alpha
+ * (transparent outside the sleeve); pixels outside the quad are never shown, since the
+ * output beyond the rectangle inverse-maps to that transparent surround.
+ */
+export function warpMatteToSquare(
+	content: RgbaImage,
+	quad: Corners,
+	opts: MatteOptions,
+): MatteResult {
+	const dist = (a: Corner, b: Corner) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+	const w = (dist(quad[0], quad[1]) + dist(quad[3], quad[2])) / 2;
+	const h = (dist(quad[0], quad[3]) + dist(quad[1], quad[2])) / 2;
+	const scale = opts.contentSize / Math.max(w, h);
+	const rw = Math.max(1, w * scale);
+	const rh = Math.max(1, h * scale);
+	const ox = (opts.canvasSize - rw) / 2;
+	const oy = (opts.canvasSize - rh) / 2;
+	const rect: Corners = [
+		[ox, oy],
+		[ox + rw, oy],
+		[ox + rw, oy + rh],
+		[ox, oy + rh],
+	];
+	const warped = warpToQuad(
+		content,
+		quad,
+		rect,
+		opts.canvasSize,
+		opts.canvasSize,
+	);
+	const toned: RgbaImage =
+		opts.tone === false ? warped : autoTone(warped, opts.tone);
+	if (opts.polish) {
+		applyPolish(
+			toned,
+			opts.polish.saturation,
+			opts.polish.contrast,
+			opts.polish.gamma,
+		);
+	}
+	const framed: RgbaImage = {
+		data: toned.data,
+		width: toned.width,
+		height: toned.height,
+	};
+	if (!opts.shadow) return { cutout: framed, shadow: framed };
+	const shadow = compositeUnder(framed, shadowFromAlpha(framed, opts.shadow));
+	return { cutout: framed, shadow };
+}
+
+/**
+ * Cut `content` to `mask`, feather it, and perspective-warp the result onto an upright
+ * rectangle via {@link warpMatteToSquare} — the squared-up floating-sleeve tail shared by
+ * the deterministic and AI matte paths, both of which have a clean refined `quad`.
+ */
+export function composeMatteWarped(
+	content: RgbaImage,
+	mask: Uint8ClampedArray,
+	quad: Corners,
+	opts: MatteOptions,
+): MatteResult {
+	const feathered = featherMask(
+		mask,
+		content.width,
+		content.height,
+		opts.feather ?? 2,
+	);
+	const masked: RgbaImage = {
+		data: content.data.slice(),
+		width: content.width,
+		height: content.height,
+	};
+	applyMask(masked, feathered);
+	return warpMatteToSquare(masked, quad, opts);
+}
+
 // The deterministic matte deskews with this much surrounding capture (wood) around the
 // picked quad, so {@link refineQuadEdges} has a band to search outward into for the true
 // sleeve edge — since the admin picks corners *inside* the cover.
@@ -1273,5 +1354,5 @@ export function matteFromCorners(
 					search: Math.round(outSize * MATTE_DETERMINISTIC_PAD),
 				});
 	const mask = rasterizePolygon(quad, content.width, content.height);
-	return composeMatte(content, mask, opts);
+	return composeMatteWarped(content, mask, quad, opts);
 }

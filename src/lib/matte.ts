@@ -6,14 +6,14 @@ import {
 	buildTrimap,
 	deskewContentPadded,
 	featherMask,
-	frameCutout,
 	keepLargestComponent,
 	type MatteOptions,
 	type MatteResult,
 	matteFromCorners,
-	refineQuadEdges,
 	type RgbaImage,
+	refineQuadEdges,
 	type ShadowOptions,
+	warpMatteToSquare,
 } from "#/lib/photo-processing";
 import {
 	blobStream,
@@ -30,7 +30,9 @@ import type { NormalizedCorners } from "#/lib/sleeve-corners";
  * The second render: a transparent, true-edged sleeve floating on breathing room with
  * a soft contact shadow — the sleeve as an *object in space*, next to the square hero.
  *
- * Two ways to cut the sleeve out, sharing one tail ({@link composeMatte}):
+ * Both paths perspective-warp the cut sleeve onto an upright rectangle that fills the
+ * frame ({@link warpMatteToSquare}) — a clean, front-on floating card with a tight
+ * contact shadow, rather than the tilted capture. Two ways to cut it out:
  *   - the FREE, deterministic {@link matteFromCorners} (edge-snap silhouette) — also
  *     the automatic fallback when the paid path is unavailable;
  *   - the PAID {@link matteAI}: deskew the sleeve upright with a wood margin, derive a
@@ -47,17 +49,20 @@ import type { NormalizedCorners } from "#/lib/sleeve-corners";
  * `alpha/`, served by the existing `/api/photos/$` passthrough. Server-only.
  */
 
-// Same master resolution as the square hero, with a ~7% transparent margin each side.
+// Same master resolution as the square hero. The sleeve is perspective-warped to fill
+// most of the frame, with a small transparent margin left for the contact shadow.
 const CANVAS_SIZE = 2000;
-const MARGIN = 0.07;
+const MARGIN = 0.05;
 const CONTENT_SIZE = Math.round(CANVAS_SIZE * (1 - 2 * MARGIN));
-// Feather (applied at content scale) and a soft down-right contact shadow (canvas scale).
+// Feather (applied at content scale) and a tight down-right contact shadow (canvas
+// scale) — close and fairly crisp, so the sleeve reads as a card resting on a surface
+// rather than floating high above it.
 const FEATHER = 4;
 const SHADOW: ShadowOptions = {
-	blur: Math.round(CANVAS_SIZE * 0.02),
-	offsetX: Math.round(CANVAS_SIZE * 0.006),
-	offsetY: Math.round(CANVAS_SIZE * 0.012),
-	opacity: 0.34,
+	blur: Math.round(CANVAS_SIZE * 0.012),
+	offsetX: Math.round(CANVAS_SIZE * 0.003),
+	offsetY: Math.round(CANVAS_SIZE * 0.007),
+	opacity: 0.3,
 };
 
 // The deskewed square (sleeve + a margin of surrounding capture) we send the matting
@@ -242,7 +247,10 @@ async function matteAI(
 		height: content.height,
 	};
 	applyMask(cutout, feathered);
-	return frameCutout(cutout, matteOptions(params));
+	// Perspective-warp the model's cutout onto an upright rectangle (using the same
+	// refined quad the trimap came from) so it fills the square as a clean front-on
+	// sleeve, then tone + tight shadow.
+	return warpMatteToSquare(cutout, refined, matteOptions(params));
 }
 
 /**

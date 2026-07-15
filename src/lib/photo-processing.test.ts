@@ -5,6 +5,7 @@ import {
 	buildTrimap,
 	type Corners,
 	composeMatte,
+	composeMatteWarped,
 	deskewToLevel,
 	detectSleeveCorners,
 	homography,
@@ -474,6 +475,42 @@ describe("matteFromCorners", () => {
 		expect(cutout.data[3]).toBe(0);
 		// The shadow variant differs from the pure cutout (it gained shadow pixels).
 		expect(shadow.data).not.toEqual(cutout.data);
+	});
+});
+
+describe("warpMatteToSquare", () => {
+	it("straightens a tilted cut sleeve to an upright, centred rectangle", () => {
+		// A tilted quad cut out of opaque content (transparent outside it). Warping should
+		// straighten it to a centred upright rectangle of ~contentSize.
+		const cw = 200;
+		const content: RgbaImage = {
+			data: new Uint8ClampedArray(cw * cw * 4).fill(255),
+			width: cw,
+			height: cw,
+		};
+		const quad: Corners = [
+			[50, 40],
+			[150, 55],
+			[160, 150],
+			[45, 140],
+		];
+		const mask = rasterizePolygon(quad, cw, cw);
+		const { cutout } = composeMatteWarped(content, mask, quad, {
+			canvasSize: 200,
+			contentSize: 160,
+			feather: 0,
+			tone: false,
+		});
+		// Centre is opaque sleeve; the extreme corner is transparent margin.
+		expect(cutout.data[(100 * 200 + 100) * 4 + 3]).toBe(255);
+		expect(cutout.data[3]).toBe(0);
+		// The sleeve is centred: symmetric opaque span across the middle row.
+		const row = 100;
+		let left = 0;
+		while (left < 200 && cutout.data[(row * 200 + left) * 4 + 3] < 128) left++;
+		let right = 199;
+		while (right > 0 && cutout.data[(row * 200 + right) * 4 + 3] < 128) right--;
+		expect(Math.abs(left - (200 - 1 - right))).toBeLessThan(6);
 	});
 });
 
