@@ -10,7 +10,9 @@ import {
 	type MatteOptions,
 	type MatteResult,
 	matteFromCorners,
+	offsetQuad,
 	type RgbaImage,
+	rasterizePolygon,
 	refineQuadEdges,
 	type ShadowOptions,
 	warpMatteToSquare,
@@ -81,8 +83,15 @@ const MODEL_PAD = 0.2;
 // unknown band around that refined edge. A narrow band centred on the real boundary is
 // what keeps the model from keeping wood — it only decides a thin strip at the edge,
 // rather than a wide inside-cover-to-deep-wood zone.
-const TRIMAP_REFINE_SEARCH = Math.round(MODEL_SIZE * 0.08);
+const TRIMAP_REFINE_SEARCH = Math.round(MODEL_SIZE * 0.05);
 const TRIMAP_BAND = Math.round(MODEL_SIZE * 0.025);
+
+// The final cut is clamped to the refined sleeve rectangle, eroded inward by this much,
+// then the model's alpha can only ever sit *inside* it — so no wood beyond the sleeve can
+// ride along (the failure when the model or the edge-refine reaches a hair past the true
+// edge). The small inward bias also clears the sleeve's own bright paper edge; since the
+// admin picks corners inside the cover, losing this sliver is invisible.
+const MATTE_EDGE_INSET = Math.round(MODEL_SIZE * 0.012);
 
 // Resolution the matting model computes its alpha at (its `max_size` input). Higher than
 // its 1280 default so the *edge* is crisper — the alpha is the blurriest link, since we
@@ -279,31 +288,34 @@ async function matteAI(
 	if (!res.ok) throw new Error(`fetching the matte failed (${res.status})`);
 	const model = decodeRgba(new Uint8Array(await res.arrayBuffer()));
 
-	// The model's alpha at content resolution — largest blob only (drop stray specks),
-	// lightly feathered for a clean anti-aliased edge.
+	// Clamp the model's alpha to the refined sleeve rectangle (eroded inward a touch): a
+	// hard cut so nothing beyond the sleeve — wood the model kept, or an edge-refine that
+	// reached a hair too far — can survive. The model still shapes the edge *inside* the
+	// rectangle; it just can't extend past it.
+	const cutQuad = offsetQuad(refined, -MATTE_EDGE_INSET);
+	const clamp = rasterizePolygon(cutQuad, content.width, content.height);
+	const raw = maskFromModelOutput(model, content.width, content.height);
+	for (let i = 0; i < raw.length; i++) if (!clamp[i]) raw[i] = 0;
+	// Largest blob only (drop stray specks), lightly feathered for a clean anti-aliased edge.
 	const feathered = featherMask(
-		keepLargestComponent(
-			maskFromModelOutput(model, content.width, content.height),
-			content.width,
-			content.height,
-		),
+		keepLargestComponent(raw, content.width, content.height),
 		content.width,
 		content.height,
 		FEATHER,
 	);
 
-	// Super-resolve the opaque sleeve+wood content, then re-cut it with the model's alpha
-	// (and the refined quad) scaled up to match — real-pixel RGB at ESRGAN resolution, a
-	// model-quality edge. ESRGAN drops alpha, so we re-attach our own.
+	// Super-resolve the opaque sleeve+wood content, then re-cut it with the clamped alpha
+	// and the (same) cut quad scaled up to match — real-pixel RGB at ESRGAN resolution, a
+	// model-quality edge with no wood. ESRGAN drops alpha, so we re-attach our own.
 	const hi = await upscaleImage(content, { maxSize: MATTE_ESRGAN_MAX });
 	const scale = hi.width / content.width;
 	applyMask(
 		hi,
 		resizeMask(feathered, content.width, content.height, hi.width, hi.height),
 	);
-	const quadHi = refined.map(
+	const quadHi = cutQuad.map(
 		([x, y]) => [x * scale, y * scale] as [number, number],
-	) as typeof refined;
+	) as typeof cutQuad;
 	// Perspective-warp the hi-res cutout onto an upright rectangle so it fills the square
 	// as a clean front-on sleeve, then tone + tight shadow.
 	return warpMatteToSquare(hi, quadHi, matteOptions(params));
