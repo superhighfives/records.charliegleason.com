@@ -6,6 +6,7 @@ import {
 	buildTrimap,
 	deskewContentPadded,
 	featherMask,
+	frameCutout,
 	keepLargestComponent,
 	type MatteOptions,
 	type MatteResult,
@@ -15,7 +16,6 @@ import {
 	rasterizePolygon,
 	refineQuadEdges,
 	type ShadowOptions,
-	warpMatteToSquare,
 } from "#/lib/photo-processing";
 import {
 	blobStream,
@@ -33,9 +33,10 @@ import type { NormalizedCorners } from "#/lib/sleeve-corners";
  * The second render: a transparent, true-edged sleeve floating on breathing room with
  * a soft contact shadow — the sleeve as an *object in space*, next to the square hero.
  *
- * Both paths perspective-warp the cut sleeve onto an upright rectangle that fills the
- * frame ({@link warpMatteToSquare}) — a clean, front-on floating card with a tight
- * contact shadow, rather than the tilted capture. Two ways to cut it out:
+ * Both paths deskew the sleeve level, cut it out, then crop to its real outline, centre
+ * it on breathing room and add a tight contact shadow ({@link frameCutout}) — keeping the
+ * sleeve's true edge and natural perspective so it reads as a physical object in space
+ * (not a flat, perfectly-rectangular swatch). Two ways to cut it out:
  *   - the FREE, deterministic {@link matteFromCorners} (edge-snap silhouette) — also
  *     the automatic fallback when the paid path is unavailable;
  *   - the PAID {@link matteAI}: deskew the sleeve upright with a wood margin, derive a
@@ -305,20 +306,17 @@ async function matteAI(
 	);
 
 	// Super-resolve the opaque sleeve+wood content, then re-cut it with the clamped alpha
-	// and the (same) cut quad scaled up to match — real-pixel RGB at ESRGAN resolution, a
-	// model-quality edge with no wood. ESRGAN drops alpha, so we re-attach our own.
+	// scaled up to match — real-pixel RGB at ESRGAN resolution over a model-quality edge
+	// with no wood. ESRGAN drops alpha, so we re-attach our own.
 	const hi = await upscaleImage(content, { maxSize: MATTE_ESRGAN_MAX });
-	const scale = hi.width / content.width;
 	applyMask(
 		hi,
 		resizeMask(feathered, content.width, content.height, hi.width, hi.height),
 	);
-	const quadHi = cutQuad.map(
-		([x, y]) => [x * scale, y * scale] as [number, number],
-	) as typeof cutQuad;
-	// Perspective-warp the hi-res cutout onto an upright rectangle so it fills the square
-	// as a clean front-on sleeve, then tone + tight shadow.
-	return warpMatteToSquare(hi, quadHi, matteOptions(params));
+	// Frame the organic cutout — crop to its real outline, centre it, add the contact
+	// shadow — rather than warping it to a perfect rectangle: keeps the sleeve's true edge
+	// and natural perspective, so it reads as a physical object, not a flat swatch.
+	return frameCutout(hi, matteOptions(params));
 }
 
 /**

@@ -1360,5 +1360,5 @@ export function matteFromCorners(
 	// Bias the cut a hair inside the refined edge so wood / the paper edge never shows.
 	const quad = offsetQuad(refined, -Math.round(outSize * MATTE_EDGE_INSET));
 	const mask = rasterizePolygon(quad, content.width, content.height);
-	return composeMatteWarped(content, mask, quad, opts);
+	return composeMatte(content, mask, opts);
 }
