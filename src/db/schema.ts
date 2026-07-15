@@ -66,16 +66,26 @@ export const records = sqliteTable("records", {
 	//      pixel math), so it runs synchronously — a first pass inline on capture, and again
 	//      whenever the admin nudges the corners or the `professionalParamsJson` tone/polish
 	//      knobs. There is no queue and no async job to wait on.
-	// `professionalStatus`: `idle` = nothing generated yet; `ready` = a photo exists but is
-	// not shown on the site (awaiting approval); `approved` = promoted and preferred over the
-	// Discogs cover for display (see displayCoverKey); `failed` = the inline generation errored
-	// (a re-crop retries). The `pending`/`processing` values are legacy (the old queued flow)
-	// and no longer written — kept in the enum only so historical rows still type-check.
+	// `professionalStatus` is the *display/approval* state of the current image (separate
+	// from whether a generation job is running — that's `professionalJobStatus` below):
+	// `idle` = nothing generated yet; `ready` = a photo exists but isn't shown on the site
+	// (awaiting approval); `approved` = promoted and preferred over the Discogs cover for
+	// display (see displayCoverKey); `failed` = generation errored. `pending`/`processing`
+	// are kept in the enum only for historical rows. Crucially this is NOT downgraded while
+	// a re-generation runs, so an approved cover stays live until the new one swaps in.
 	sleeveCornersJson: text("sleeve_corners_json"), // normalised sleeve corners (JSON), admin-picked
 	professionalImageKey: text("professional_image_key"), // R2 key — pro photo (public once approved)
 	professionalParamsJson: text("professional_params_json"), // last reframe knob settings (JSON)
 	professionalStatus: text("professional_status", {
 		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
+	}).default("idle"),
+	// The background-job lifecycle for the (queued) Apply pipeline — reframe + Real-ESRGAN
+	// enhance + AI matte, run in the queue consumer. `idle` = nothing running; `queued` =
+	// enqueued, awaiting the consumer; `processing` = the consumer is running it; `failed`
+	// = it errored after retries. Powers the header "in flight" menu and the editor's
+	// generating state, independently of the display `professionalStatus` above.
+	professionalJobStatus: text("professional_job_status", {
+		enum: ["idle", "queued", "processing", "failed"],
 	}).default("idle"),
 	// Whether `professionalImageKey` is a Real-ESRGAN-upscaled master (the editor's
 	// paid "Enhance"), vs a plain reframe of the capture. Reset to false whenever the
@@ -84,6 +94,18 @@ export const records = sqliteTable("records", {
 		mode: "boolean",
 	}).default(false),
 	professionalError: text("professional_error"), // last generation error, surfaced in admin
+	// The "alpha matte": a second render — a transparent, true-edged sleeve floating on
+	// a margin with a soft contact shadow — generated alongside the square from the same
+	// corners on Apply. `professionalAlphaKey` is the shadow variant (used on the homepage
+	// grid; public once the square is `approved`); `…CutoutKey` is the shadowless pure
+	// cutout for compositing onto any background. `professionalAlphaSource` records whether
+	// a matting model (`ai`) or the free deterministic edge-snap (`deterministic`) cut it
+	// out. Both are stored under `alpha/` and cleared/rebuilt in lockstep with the square.
+	professionalAlphaKey: text("professional_alpha_key"),
+	professionalAlphaCutoutKey: text("professional_alpha_cutout_key"),
+	professionalAlphaSource: text("professional_alpha_source", {
+		enum: ["ai", "deterministic"],
+	}),
 	// Vestigial — the pipeline no longer makes any Replicate call. Kept as a nullable
 	// column (not dropped) so a migration never has to remove something the currently
 	// deployed production code still selects; a later migration can drop it post-merge.

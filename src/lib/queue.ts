@@ -7,6 +7,7 @@ import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
 import { getReleaseDetail, getReleaseValue } from "#/lib/discogs";
+import { generateProfessionalPhoto } from "#/lib/professional-pipeline";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -29,6 +30,11 @@ function analyzeQueue(): Queue<AnalyzeMessage> {
 /** Enqueue a captured record for background analysis. */
 export async function enqueueAnalyze(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId });
+}
+
+/** Enqueue a record for the paid Apply pipeline (reframe + enhance + AI matte). */
+export async function enqueueProfessional(recordId: number): Promise<void> {
+	await analyzeQueue().send({ recordId, mode: "professional" });
 }
 
 /**
@@ -163,6 +169,60 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			Sentry.captureException(err);
 		}
 		message.ack();
+		return;
+	}
+
+	// The paid Apply pipeline — reframe + Real-ESRGAN enhance + AI matte. The
+	// display `professionalStatus` is left untouched while this runs (an already
+	// live cover stays live); only `professionalJobStatus` tracks the job so the
+	// header "in flight" menu and the editor can show progress.
+	if (mode === "professional") {
+		try {
+			const [record] = await db
+				.update(records)
+				.set({
+					professionalJobStatus: "processing",
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, recordId))
+				.returning();
+
+			// Deleted between enqueue and delivery — nothing to do.
+			if (!record) {
+				message.ack();
+				return;
+			}
+
+			await generateProfessionalPhoto(record);
+			message.ack();
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			const willRetry = message.attempts <= MAX_RETRIES;
+			console.error(
+				`[queue] professional failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
+			);
+			Sentry.captureException(err);
+
+			// Only the job status flips to failed — the display `professionalStatus`
+			// is preserved so an approved cover survives a failed regeneration.
+			await db
+				.update(records)
+				.set({
+					professionalJobStatus: willRetry ? "queued" : "failed",
+					professionalError: detail,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, recordId))
+				.catch(() => {});
+
+			if (willRetry) {
+				const delaySeconds = Math.min(60, 15 * 2 ** (message.attempts - 1));
+				message.retry({ delaySeconds });
+			} else {
+				message.ack();
+			}
+		}
 		return;
 	}
 

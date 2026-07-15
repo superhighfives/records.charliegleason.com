@@ -1,8 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap');
-@import 'tailwindcss';
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap");
+@import "tailwindcss";
 @plugin '@tailwindcss/typography';
 
-@import 'tw-animate-css';
+@import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -97,9 +97,13 @@
 }
 
 @theme inline {
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  --font-serif: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -143,7 +147,7 @@
 html,
 body,
 #app {
-  min-height: 100%;
+  min-height: 100dvh;
 }
 
 body {
@@ -166,7 +170,11 @@ body {
 @layer base {
   a {
     color: inherit;
-    text-decoration-color: color-mix(in oklab, var(--accent-yellow) 70%, transparent);
+    text-decoration-color: color-mix(
+      in oklab,
+      var(--accent-yellow) 70%,
+      transparent
+    );
     text-underline-offset: 3px;
   }
 }
@@ -304,10 +312,20 @@ a {
 .grain::after {
   content: "";
   position: absolute;
-  inset: -75%;
+  /* Flush to the card's clip box. The layer must NOT overflow: a `mix-blend-mode:
+   * multiply` pseudo-element that spills past its `overflow: hidden` host renders a
+   * hairline seam along the clip edge in Chrome — the "line of static" that swept
+   * across the top once the grain faded back to full strength. Keeping it inset: 0
+   * removes the overflow, so the jitter shifts the *background-position* inside an
+   * oversized image (below) instead of translating the whole layer past the edge. */
+  inset: 0;
   pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='200'%20height='200'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='4'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncG%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncB%20type='linear'%20slope='5'%20intercept='-2'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='200'%20height='200'%20filter='url(%23n)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='400'%20height='400'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='4'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncG%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncB%20type='linear'%20slope='5'%20intercept='-2'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='400'%20height='400'%20filter='url(%23n)'/%3E%3C/svg%3E");
+  /* One copy, oversized so the position-jitter always has image to slide into (no
+   * gaps, no tile-repeat seams). */
+  background-repeat: no-repeat;
+  background-size: 160%;
+  background-position: center;
   /* Static fallback (reduced-motion, no animation); the keyframes take over and
    * flicker around this value when motion is allowed. */
   opacity: var(--grain-alpha);
@@ -355,50 +373,52 @@ a {
 
 /* Two things move each step: the texture jitters (so one static noise reads as
  * motion) and its opacity flickers around --grain-alpha, like a struggling
- * signal. Scaling by the property keeps the hover fade-out intact. */
+ * signal. The jitter is a background-position shift (not a transform) so the layer
+ * itself never moves past its clip edge — see the seam note on .grain::after.
+ * Values stay within 37–63% so the oversized background always covers the box. */
 @keyframes grain {
   0% {
-    transform: translate(0, 0);
+    background-position: 50% 50%;
     opacity: var(--grain-alpha);
   }
   10% {
-    transform: translate(-4%, -6%);
+    background-position: 44% 40%;
     opacity: calc(var(--grain-alpha) * 0.9);
   }
   20% {
-    transform: translate(-8%, 2%);
+    background-position: 37% 53%;
     opacity: calc(var(--grain-alpha) * 0.97);
   }
   30% {
-    transform: translate(6%, -8%);
+    background-position: 60% 37%;
     opacity: calc(var(--grain-alpha) * 0.87);
   }
   40% {
-    transform: translate(-2%, 8%);
+    background-position: 47% 63%;
     opacity: var(--grain-alpha);
   }
   50% {
-    transform: translate(-8%, 4%);
+    background-position: 37% 56%;
     opacity: calc(var(--grain-alpha) * 0.93);
   }
   60% {
-    transform: translate(8%, 0);
+    background-position: 63% 50%;
     opacity: calc(var(--grain-alpha) * 0.88);
   }
   70% {
-    transform: translate(0, 6%);
+    background-position: 50% 60%;
     opacity: calc(var(--grain-alpha) * 0.98);
   }
   80% {
-    transform: translate(4%, -4%);
+    background-position: 56% 44%;
     opacity: calc(var(--grain-alpha) * 0.91);
   }
   90% {
-    transform: translate(-6%, -2%);
+    background-position: 40% 47%;
     opacity: calc(var(--grain-alpha) * 0.95);
   }
   100% {
-    transform: translate(0, 0);
+    background-position: 50% 50%;
     opacity: var(--grain-alpha);
   }
 }

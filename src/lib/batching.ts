@@ -11,10 +11,10 @@
 /** Message enqueued for the analyze consumer. Re-exported from `#/lib/queue`. */
 export interface AnalyzeMessage {
 	recordId: number;
-	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls
-	// the Discogs release for an already-identified record. (The professional studio
-	// photo is generated synchronously, inline — it's free pixel math, no queue.)
-	mode?: "analyze" | "refresh";
+	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls the
+	// Discogs release for an already-identified record; "professional" runs the paid
+	// photo pipeline (reframe + Real-ESRGAN enhance + AI matte) for an Apply.
+	mode?: "analyze" | "refresh" | "professional";
 }
 
 /**

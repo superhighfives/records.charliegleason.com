@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Image as ImageIcon, Info, Loader2, Sparkles } from "lucide-react";
+import { ExternalLink, Info, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -41,7 +41,6 @@ import {
 	clearProfessional,
 	deleteRecord,
 	detectCorners,
-	enhanceProfessional,
 	fetchRecordValue,
 	getDiscogsRelease,
 	lookupDiscogsRelease,
@@ -51,7 +50,6 @@ import {
 	replaceCapture,
 	reprocessRecord,
 	searchDiscogs,
-	setProfessionalApproved,
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 import {
@@ -60,9 +58,10 @@ import {
 	type ReframeParams,
 } from "#/lib/reframe-params";
 import {
-	type NormalizedCorners,
-	parseCorners,
-	serializeCorners,
+	type CornerBand,
+	isBandValid,
+	parseCornerBand,
+	serializeCornerBand,
 } from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
@@ -318,14 +317,32 @@ function RecordDetail() {
 
 	const { data: record } = useQuery({
 		...recordQueryOptions(recordId),
-		// Poll only while the background analysis is in flight. The professional photo
-		// is generated synchronously (no queue), so there's never a pro job to wait on.
+		// Poll while anything's in flight: the background analysis (`status`) OR the queued
+		// Apply photo job (`professionalJobStatus`). Without the latter the editor would sit
+		// on "Generating…" until a manual refresh — the header queue (own poll) would show
+		// then clear the job while this view stayed stale.
 		refetchInterval: (query) => {
-			const status = query.state.data?.status;
-			const active = status === "pending" || status === "processing";
+			const r = query.state.data;
+			const active =
+				r?.status === "pending" ||
+				r?.status === "processing" ||
+				r?.professionalJobStatus === "queued" ||
+				r?.professionalJobStatus === "processing";
 			return active ? 2000 : false;
 		},
 	});
+
+	// When an Apply photo job finishes, flip the Edit/Outputs tabs to Outputs so the
+	// freshly generated renders are what's shown. The editor stays open through Apply,
+	// so if it's still open this lands live; otherwise it's ready the next time it opens.
+	const wasGeneratingRef = useRef(false);
+	useEffect(() => {
+		const generating =
+			record?.professionalJobStatus === "queued" ||
+			record?.professionalJobStatus === "processing";
+		if (wasGeneratingRef.current && !generating) setToolTab("outputs");
+		wasGeneratingRef.current = generating;
+	}, [record?.professionalJobStatus]);
 
 	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
 	const [results, setResults] = useState<Array<DiscogsCandidate> | null>(null);
@@ -354,13 +371,25 @@ function RecordDetail() {
 	const [params, setParams] = useState<ReframeParams>(() =>
 		parseReframeParams(record?.professionalParamsJson),
 	);
-	// Working copy of the sleeve corners the crop editor drives, seeded from the row
-	// (full-frame default if it's never been cropped). "Apply" warps the capture to these.
-	const [corners, setCorners] = useState<NormalizedCorners>(() =>
-		parseCorners(record?.sleeveCornersJson),
+	// Working copy of the corner band the crop editor drives, seeded from the row
+	// (full-frame default if it's never been cropped; legacy single-quad rows are
+	// synthesised into a band). "Apply" warps the capture to this.
+	const [band, setBand] = useState<CornerBand>(() =>
+		parseCornerBand(record?.sleeveCornersJson),
 	);
 	// Whether the professional-photo editor modal is open (crop + live preview + knobs).
 	const [editorOpen, setEditorOpen] = useState(false);
+	// Which output the live editing preview shows — the matte (default, the primary
+	// render) or the square cover — toggled by the switch in the preview's top-right.
+	const [previewMode, setPreviewMode] = useState<"matte" | "cover">("matte");
+	// Which panel below the crop/preview shows — the tone knobs ("Edit") or the links to
+	// the stored renders ("Outputs"). Same little tab style as the matte/cover toggle.
+	const [toolTab, setToolTab] = useState<"edit" | "outputs">("edit");
+	// `/api/photos/…` srcs of saved renders that failed to load, so a stale/missing key
+	// hides that image instead of showing a broken-image glyph.
+	const [savedImgError, setSavedImgError] = useState<Set<string>>(
+		() => new Set(),
+	);
 	const [replacingCapture, setReplacingCapture] = useState(false);
 	const captureInputRef = useRef<HTMLInputElement>(null);
 
@@ -454,7 +483,7 @@ function RecordDetail() {
 		onSuccess: (row) => {
 			if (!row) return;
 			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-			setCorners(parseCorners(row.sleeveCornersJson));
+			setBand(parseCornerBand(row.sleeveCornersJson));
 			setParams(parseReframeParams(row.professionalParamsJson));
 			setEditorOpen(true);
 			toast.success("Capture replaced — review the crop, then Apply.");
@@ -496,43 +525,23 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn't delete this record."),
 	});
 
-	// Apply the edit: warp the capture to the current corners + tone, promote it to
-	// the displayed cover, then dismiss the editor.
+	// Apply the edit: persist the current corner band + tone and enqueue the paid pipeline
+	// (reframe + Real-ESRGAN enhance + AI matte), which runs in the background. Returns
+	// immediately; the editor stays open showing the regenerating state, and the record
+	// view polls and swaps in the generated cover + matte in place when it lands.
 	const applyPro = useMutation({
-		mutationFn: async () => {
-			await reframeRecord({ data: { id: recordId, corners, params } });
-			return setProfessionalApproved({
-				data: { id: recordId, approved: true },
-			});
-		},
+		mutationFn: () => reframeRecord({ data: { id: recordId, band, params } }),
 		onSuccess: async (row) => {
 			if (row)
 				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
 			await invalidate();
-			// Stay open: with the edit now saved and the working copy matching the
-			// row, the footer's primary button flips from Apply/Re-apply to Close.
+			// Keep the editor open so the Generated panel shows the regenerating state
+			// (gray + spinner) and swaps in the new render in place when the job lands.
+			toast.success("Generating photo...");
 		},
 		onError: (err) =>
 			toast.error(
 				err instanceof Error ? err.message : "Couldn't apply the changes.",
-			),
-	});
-
-	// The paid "Enhance": bake the current edit, then super-resolve it through
-	// Real-ESRGAN for a sharper, higher-res master. Takes ~10–30s (a real GPU run),
-	// so the button shows a spinner. Preserves approval, so a live cover stays live.
-	const enhancePro = useMutation({
-		mutationFn: () =>
-			enhanceProfessional({ data: { id: recordId, corners, params } }),
-		onSuccess: async (row) => {
-			if (row)
-				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-			await invalidate();
-			toast.success("Enhanced — the photo was upscaled.");
-		},
-		onError: (err) =>
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't enhance the photo.",
 			),
 	});
 
@@ -558,7 +567,7 @@ function RecordDetail() {
 	// nothing is generated or stored until Apply — the live preview renders client-side
 	// from the capture, so it's never empty even when there's no saved professional photo.
 	const openEditor = () => {
-		setCorners(parseCorners(record?.sleeveCornersJson));
+		setBand(parseCornerBand(record?.sleeveCornersJson));
 		setParams(parseReframeParams(record?.professionalParamsJson));
 		setEditorOpen(true);
 	};
@@ -619,7 +628,7 @@ function RecordDetail() {
 	// the working-copy params over the defaults so the sliders always have a concrete value.
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
 
-	// Does the working copy (corners + tone) differ from what's saved on the row? Both
+	// Does the working copy (band + tone) differ from what's saved on the row? Both
 	// signatures normalise (round corners / merge tone defaults + sort keys) so a
 	// reopened-but-untouched editor reads clean.
 	const paramSig = (v: ReframeParams) =>
@@ -629,8 +638,8 @@ function RecordDetail() {
 			),
 		);
 	const isDirty =
-		serializeCorners(corners) !==
-			serializeCorners(parseCorners(record.sleeveCornersJson)) ||
+		serializeCornerBand(band) !==
+			serializeCornerBand(parseCornerBand(record.sleeveCornersJson)) ||
 		paramSig(params) !==
 			paramSig(parseReframeParams(record.professionalParamsJson));
 	// The photo's relationship to the shown cover drives the button states:
@@ -638,9 +647,28 @@ function RecordDetail() {
 	//  - "live"    → approved *and* unchanged, so the primary button is a plain Close;
 	//  - "Re-apply" only makes sense against a live cover; anything else is a first Apply.
 	const isApproved = record.professionalStatus === "approved";
+	// The last background job ended in an error (e.g. a transient matte failure that
+	// preserved the old cover/matte). The primary button offers a retry even when the
+	// cover is live and unchanged, so a hiccup isn't a dead end behind a plain "Close".
+	const jobFailed = record.professionalJobStatus === "failed";
 	const proIsLive = isApproved && !isDirty;
-	// Any editor mutation in flight — used to disable the controls while one runs.
-	const editorBusy = applyPro.isPending || enhancePro.isPending;
+	// A background Apply job (reframe + enhance + matte) is queued or running for this
+	// record — the record view polls, so this flips true/false on its own.
+	const proGenerating =
+		record.professionalJobStatus === "queued" ||
+		record.professionalJobStatus === "processing";
+	// Any editor mutation in flight, or a background job running — disables the controls
+	// (a second Apply while one is generating would just stack jobs).
+	const editorBusy = applyPro.isPending || proGenerating;
+
+	// Links to every stored render for this record, for the "Outputs" tab — the original
+	// capture, the square hero, and both matte variants. Only the keys that exist show.
+	const referenceImages = [
+		{ label: "Original capture", key: record.capturePhotoKey },
+		{ label: "Square cover", key: record.professionalImageKey },
+		{ label: "Matte (shadow)", key: record.professionalAlphaKey },
+		{ label: "Matte (cutout)", key: record.professionalAlphaCutoutKey },
+	].filter((r): r is { label: string; key: string } => r.key != null);
 
 	// Header photo: the approved professional crop, else the raw capture. Never the
 	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
@@ -744,11 +772,16 @@ function RecordDetail() {
 					>
 						{replacingCapture ? "Replacing…" : "Replace capture"}
 					</Button>
-					{record.professionalStatus === "failed" &&
+					{proGenerating && (
+						<span className="text-xs text-muted-foreground">
+							Generating photo… this runs in the background.
+						</span>
+					)}
+					{record.professionalJobStatus === "failed" &&
 						record.professionalError && (
 							<span className="text-xs text-red-600 dark:text-red-400">
 								Last generation failed: {record.professionalError}. Open the
-								editor and adjust the corners to try again.
+								editor and Apply again to retry.
 							</span>
 						)}
 				</div>
@@ -762,20 +795,22 @@ function RecordDetail() {
 						<DialogHeader>
 							<DialogTitle>Edit image</DialogTitle>
 							<DialogDescription>
-								Drag the corners to the sleeve’s edges (or auto-detect), then
-								tune the tone — the preview updates live. Apply saves it.
+								Drag the outer frame onto the background and the inner one onto
+								the sleeve (or auto-detect), then tune the tone — the preview
+								updates live. Apply runs the whole pipeline (enhance + AI matte)
+								and can take a minute.
 							</DialogDescription>
 						</DialogHeader>
 
 						<div className="grid gap-4 sm:grid-cols-2">
-							<div className="space-y-1">
+							<div className="space-y-2">
 								<p className="text-xs font-medium text-muted-foreground">
 									Crop
 								</p>
 								<CornerEditor
 									src={`/api/photos/${record.capturePhotoKey}`}
-									value={corners}
-									onChange={setCorners}
+									value={band}
+									onChange={setBand}
 									onDetect={async () => {
 										const res = await detectCorners({ data: recordId });
 										return res.corners;
@@ -786,151 +821,230 @@ function RecordDetail() {
 							<div className="space-y-2">
 								<div className="flex items-baseline justify-between">
 									<p className="text-xs font-medium text-muted-foreground">
-										Preview
+										{proIsLive ? "Generated" : "Preview"}
 									</p>
-									<p className="text-[10px] text-muted-foreground/70">
-										Live · Apply to save
-									</p>
+									{/* Matte / Cover toggle — picks which saved render the generated
+									    view shows. Only shown once generated: both saved renders are
+									    high-res, whereas the live editing preview's client-side matte
+									    is too low-res to be useful, so editing just shows the cover. */}
+									{proIsLive && record.capturePhotoKey && (
+										<div className="flex items-center gap-3 text-[10px]">
+											{(["matte", "cover"] as const).map((m) => (
+												<button
+													key={m}
+													type="button"
+													aria-pressed={previewMode === m}
+													onClick={() => setPreviewMode(m)}
+													className={cn(
+														"capitalize transition-colors",
+														previewMode === m
+															? "text-foreground underline underline-offset-4"
+															: "text-muted-foreground/70 hover:text-foreground",
+													)}
+												>
+													{m}
+												</button>
+											))}
+										</div>
+									)}
 								</div>
-								{record.capturePhotoKey && (
-									// Hover reveals the *actual saved* professional image over the
-									// live canvas preview (which is a fast approximation) — with a
-									// badge marking it a plain render or a Real-ESRGAN upscale.
-									<div className="group relative">
+								{record.capturePhotoKey &&
+									(proGenerating ? (
+										// A job is running: don't keep showing the stale saved render
+										// (it "flicks" the old matte back in until the swap). Show a
+										// neutral placeholder + spinner so it reads as regenerating.
+										<div className="flex aspect-square items-center justify-center rounded-md border bg-muted">
+											<Loader2 className="size-6 animate-spin text-muted-foreground" />
+										</div>
+									) : proIsLive ? (
+										(() => {
+											// Generated + unchanged: show the saved render for the selected
+											// tab in high res. Editing any corner/knob drops back to the
+											// live preview below until Apply/Reset.
+											const saved =
+												previewMode === "matte"
+													? { key: record.professionalAlphaKey, checker: true }
+													: {
+															key: record.professionalImageKey,
+															checker: false,
+														};
+											const src = saved.key ? `/api/photos/${saved.key}` : null;
+											if (!src || savedImgError.has(src)) {
+												return (
+													<div className="flex aspect-square items-center justify-center rounded-md border bg-muted/30 text-xs text-muted-foreground">
+														No {previewMode} generated
+													</div>
+												);
+											}
+											return (
+												<div
+													className="overflow-hidden rounded-md border bg-background"
+													style={
+														saved.checker
+															? {
+																	backgroundImage:
+																		"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
+																	backgroundSize: "24px 24px",
+																}
+															: undefined
+													}
+												>
+													<img
+														src={src}
+														alt={`Saved ${previewMode}`}
+														onError={() =>
+															setSavedImgError((s) => new Set(s).add(src))
+														}
+														className={cn(
+															"block aspect-square size-full",
+															saved.checker ? "object-contain" : "object-cover",
+														)}
+													/>
+												</div>
+											);
+										})()
+									) : (
+										// Editing (never applied, or dirty): the live client-side cover
+										// preview, updating as band/knobs change. No matte here — the
+										// client-side matte is too low-res; the real one comes on Apply.
 										<ProPreview
 											src={`/api/photos/${record.capturePhotoKey}`}
-											corners={corners}
+											band={band}
 											params={params}
 										/>
-										{record.professionalImageKey && (
-											<>
-												<img
-													src={`/api/photos/${record.professionalImageKey}`}
-													alt="Saved cover render"
-													className="pointer-events-none absolute inset-0 size-full rounded-md border object-cover opacity-0 transition-opacity group-hover:opacity-100"
-												/>
-												<div
-													className="pointer-events-none absolute left-2 top-2 flex size-7 items-center justify-center rounded-md border bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100"
-													aria-hidden="true"
-												>
-													{record.professionalEnhanced ? (
-														<Sparkles className="size-4" />
-													) : (
-														<ImageIcon className="size-4" />
-													)}
-												</div>
-											</>
-										)}
-									</div>
-								)}
-								{/* Optional, on-demand super-resolution — laid out like the crop
-								    side's "Detect corners" row (hint left, button right). Only
-								    offered once there's a saved photo with no pending edits; it
-								    bakes the applied crop/tone, then runs it through Real-ESRGAN. */}
-								<div className="flex items-center justify-between gap-2">
-									<p className="text-xs text-muted-foreground">
-										Upscales the photo with Real-ESRGAN.
-									</p>
-									<Button
-										type="button"
-										size="sm"
-										variant="outline"
-										disabled={!proIsLive || editorBusy}
-										title={
-											proIsLive
-												? undefined
-												: isDirty
-													? "Apply your changes first."
-													: "Apply the photo as the cover first."
-										}
-										onClick={() => enhancePro.mutate()}
-									>
-										{enhancePro.isPending ? (
-											<Loader2 className="size-4 animate-spin" />
-										) : (
-											<Sparkles className="size-4" />
-										)}
-										{/* "Re-enhance" only while it's actually re-runnable (enhanced
-										    and unchanged). Once an edit is pending it flips back to
-										    "Enhance", since Re-applying will discard the upscale. */}
-										{enhancePro.isPending
-											? "Enhancing…"
-											: record.professionalEnhanced && !isDirty
-												? "Re-enhance"
-												: "Enhance"}
-									</Button>
-								</div>
+									))}
 							</div>
 						</div>
 
-						{/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
-						    the polish factors below map straight to the pixel encode pass.
-						    Every Apply re-warps + re-tones — all free. */}
-						<div className="space-y-3 rounded-md border bg-muted/30 p-3">
-							<label
-								htmlFor="pro-autotone"
-								className="flex items-center gap-2 text-xs text-muted-foreground"
-							>
-								<Checkbox
-									id="pro-autotone"
-									checked={!p.skipTone}
-									disabled={editorBusy}
-									onChange={(e) =>
-										setParams({
-											...params,
-											skipTone: !e.currentTarget.checked,
-										})
-									}
-								/>
-								Auto-tone (levels + white balance)
-							</label>
-							{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
-							<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-								<Knob
-									label="White balance"
-									display={`${Math.round(p.wbStrength * 100)}%`}
-									value={Math.round(p.wbStrength * 100)}
-									min={0}
-									max={100}
-									step={1}
-									disabled={p.skipTone || editorBusy}
-									onChange={(v) =>
-										setParams({ ...params, wbStrength: v / 100 })
-									}
-								/>
-								<Knob
-									label="Saturation"
-									display={`${Math.round(p.saturation * 100)}%`}
-									value={Math.round(p.saturation * 100)}
-									min={0}
-									max={200}
-									step={5}
-									disabled={editorBusy}
-									onChange={(v) =>
-										setParams({ ...params, saturation: v / 100 })
-									}
-								/>
-								<Knob
-									label="Contrast"
-									display={`${Math.round(p.contrast * 100)}%`}
-									value={Math.round(p.contrast * 100)}
-									min={50}
-									max={200}
-									step={5}
-									disabled={editorBusy}
-									onChange={(v) => setParams({ ...params, contrast: v / 100 })}
-								/>
-								<Knob
-									label="Gamma"
-									display={p.gamma.toFixed(2)}
-									value={Math.round(p.gamma * 100)}
-									min={50}
-									max={200}
-									step={5}
-									disabled={editorBusy}
-									onChange={(v) => setParams({ ...params, gamma: v / 100 })}
-								/>
+						{/* Edit / Outputs tabs — the tone knobs vs links to the stored renders,
+						    switched with the same little tab style as the matte/cover toggle. */}
+						<div className="space-y-3">
+							<div className="flex items-center gap-3 text-[10px]">
+								{(
+									[
+										["edit", "Edit"],
+										...(referenceImages.length > 0
+											? ([["outputs", "Outputs"]] as const)
+											: []),
+									] as const
+								).map(([id, label]) => (
+									<button
+										key={id}
+										type="button"
+										aria-pressed={toolTab === id}
+										onClick={() => setToolTab(id)}
+										className={cn(
+											"transition-colors",
+											toolTab === id
+												? "text-foreground underline underline-offset-4"
+												: "text-muted-foreground/70 hover:text-foreground",
+										)}
+									>
+										{label}
+									</button>
+								))}
 							</div>
+
+							{toolTab === "edit" || referenceImages.length === 0 ? (
+								/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
+								   the polish factors below map straight to the pixel encode pass.
+								   Every Apply re-warps + re-tones — all free. */
+								<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+									<label
+										htmlFor="pro-autotone"
+										className="flex items-center gap-2 text-xs text-muted-foreground"
+									>
+										<Checkbox
+											id="pro-autotone"
+											checked={!p.skipTone}
+											disabled={editorBusy}
+											onChange={(e) =>
+												setParams({
+													...params,
+													skipTone: !e.currentTarget.checked,
+												})
+											}
+										/>
+										Auto-tone (levels + white balance)
+									</label>
+									{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
+									<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+										<Knob
+											label="White balance"
+											display={`${Math.round(p.wbStrength * 100)}%`}
+											value={Math.round(p.wbStrength * 100)}
+											min={0}
+											max={100}
+											step={1}
+											disabled={p.skipTone || editorBusy}
+											onChange={(v) =>
+												setParams({ ...params, wbStrength: v / 100 })
+											}
+										/>
+										<Knob
+											label="Saturation"
+											display={`${Math.round(p.saturation * 100)}%`}
+											value={Math.round(p.saturation * 100)}
+											min={0}
+											max={200}
+											step={5}
+											disabled={editorBusy}
+											onChange={(v) =>
+												setParams({ ...params, saturation: v / 100 })
+											}
+										/>
+										<Knob
+											label="Contrast"
+											display={`${Math.round(p.contrast * 100)}%`}
+											value={Math.round(p.contrast * 100)}
+											min={50}
+											max={200}
+											step={5}
+											disabled={editorBusy}
+											onChange={(v) =>
+												setParams({ ...params, contrast: v / 100 })
+											}
+										/>
+										<Knob
+											label="Gamma"
+											display={p.gamma.toFixed(2)}
+											value={Math.round(p.gamma * 100)}
+											min={50}
+											max={200}
+											step={5}
+											disabled={editorBusy}
+											onChange={(v) => setParams({ ...params, gamma: v / 100 })}
+										/>
+									</div>
+								</div>
+							) : (
+								/* Outputs tab: links to every stored render for this record. */
+								<div className="rounded-md border bg-muted/30 p-3">
+									<dl className="divide-y divide-border">
+										{referenceImages.map(({ label, key }) => (
+											<div
+												key={key}
+												className="flex items-baseline justify-between gap-4 py-1.5 text-xs"
+											>
+												<dt className="shrink-0 text-muted-foreground">
+													{label}
+												</dt>
+												<dd className="min-w-0 text-right">
+													<a
+														href={`/api/photos/${key}`}
+														target="_blank"
+														rel="noreferrer"
+														className="inline-flex items-center gap-1 text-foreground hover:text-brand"
+													>
+														Open
+														<ExternalLink className="size-3" />
+													</a>
+												</dd>
+											</div>
+										))}
+									</dl>
+								</div>
+							)}
 						</div>
 
 						{/* Destructive "Remove cover" on the left (only when there's an
@@ -953,7 +1067,7 @@ function RecordDetail() {
 							) : (
 								<span />
 							)}
-							<div className="flex gap-2">
+							<div className="flex items-center gap-2">
 								{/* Discard unsaved edits: snap the working copy back to what's
 								    saved on the row. Purely client-side — no re-warp, no write —
 								    so it can't leave a half-applied state. Disabled when there's
@@ -964,7 +1078,7 @@ function RecordDetail() {
 									variant="ghost"
 									disabled={!isDirty || editorBusy}
 									onClick={() => {
-										setCorners(parseCorners(record.sleeveCornersJson));
+										setBand(parseCornerBand(record.sleeveCornersJson));
 										setParams(
 											parseReframeParams(record.professionalParamsJson),
 										);
@@ -979,19 +1093,31 @@ function RecordDetail() {
 								<Button
 									type="button"
 									size="sm"
-									variant={proIsLive ? "outline" : "default"}
-									disabled={proIsLive ? false : editorBusy}
+									variant={proIsLive && !jobFailed ? "outline" : "default"}
+									// Disabled while a job runs (editorBusy) — including the
+									// "Generating…" state — so a second Apply can't stack, and
+									// while the band is invalid (inner corners outside the outer
+									// frame) so a self-contradictory trimap can't be applied. When
+									// live + idle it's a plain Close, which is always allowed.
+									disabled={
+										editorBusy ||
+										(!(proIsLive && !jobFailed) && !isBandValid(band))
+									}
 									onClick={() =>
-										proIsLive ? setEditorOpen(false) : applyPro.mutate()
+										proIsLive && !jobFailed
+											? setEditorOpen(false)
+											: applyPro.mutate()
 									}
 								>
-									{applyPro.isPending
-										? "Applying…"
-										: proIsLive
-											? "Close"
-											: isApproved && isDirty
-												? "Re-apply"
-												: "Apply"}
+									{applyPro.isPending || proGenerating
+										? "Generating…"
+										: jobFailed
+											? "Retry"
+											: proIsLive
+												? "Close"
+												: isApproved && isDirty
+													? "Re-apply"
+													: "Apply"}
 								</Button>
 							</div>
 						</DialogFooter>

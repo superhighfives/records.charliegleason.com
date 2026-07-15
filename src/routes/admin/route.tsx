@@ -8,6 +8,7 @@ import {
 import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 
+import { QueueMenu } from "#/components/queue-menu";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { isAdmin } from "#/lib/roles";
 
@@ -70,6 +71,7 @@ function AdminGate() {
 						</Link>
 					</nav>
 					<div className="flex items-center gap-3">
+						<QueueMenu />
 						<ThemeToggle />
 						<UserButton />
 					</div>

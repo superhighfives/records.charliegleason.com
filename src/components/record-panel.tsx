@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
+import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Button } from "#/components/ui/button";
 import {
 	SheetDescription,
@@ -257,12 +258,14 @@ export function RecordPanel({
 
 			<div className="flex-1 overflow-y-auto">
 				<div className="aspect-square">
-					{cover && (
+					{cover ? (
 						<img
 							src={`/api/photos/${cover}`}
 							alt=""
 							className="block size-full object-cover"
 						/>
+					) : (
+						<SleevePlaceholder />
 					)}
 				</div>
 				<div className="p-6 space-y-6">

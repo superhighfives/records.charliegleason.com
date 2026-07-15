@@ -1,0 +1,14 @@
+# ViTMatte trimap matting — packaged for Replicate via Cog.
+# Takes an RGB image + a 0/128/255 trimap and returns a grayscale alpha matte.
+# See README.md for build + push instructions.
+build:
+  gpu: true
+  cuda: "12.1"
+  python_version: "3.11"
+  python_requirements: requirements.txt
+  # NOTE: no weight-baking `run:` step on purpose. Executing torch/transformers at
+  # build time OOMs BuildKit when this linux/amd64 CUDA image is built under emulation
+  # on an Apple Silicon Mac. `setup()` downloads the (~100 MB) weights at first boot on
+  # Replicate's real GPU instead — one slow cold start, then cached.
+
+run: "run.py:Runner"

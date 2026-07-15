@@ -17,9 +17,11 @@ import {
 } from "#/lib/reframe-params";
 import { firstOutputUrl, runVersion } from "#/lib/replicate";
 import {
-	DEFAULT_CORNERS,
+	bandFromQuad,
+	type CornerBand,
+	DEFAULT_BAND,
 	type NormalizedCorners,
-	parseCorners,
+	parseCornerBand,
 } from "#/lib/sleeve-corners";
 
 /**
@@ -78,12 +80,12 @@ const UPSCALE_FACTOR = 4;
 const UPSCALE_MAX = 4000;
 
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
-function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+export function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 	return new Blob([bytes as BlobPart]).stream();
 }
 
 /** Decode encoded image bytes to an {@link RgbaImage} via Photon. */
-function decodeRgba(bytes: Uint8Array): RgbaImage {
+export function decodeRgba(bytes: Uint8Array): RgbaImage {
 	const img = PhotonImage.new_from_byteslice(bytes);
 	try {
 		return {
@@ -97,7 +99,7 @@ function decodeRgba(bytes: Uint8Array): RgbaImage {
 }
 
 /** Encode an {@link RgbaImage} to PNG bytes via Photon (preserves alpha). */
-function encodePng(image: RgbaImage): Uint8Array {
+export function encodePng(image: RgbaImage): Uint8Array {
 	const img = new PhotonImage(
 		new Uint8Array(
 			image.data.buffer,
@@ -115,7 +117,7 @@ function encodePng(image: RgbaImage): Uint8Array {
 }
 
 /** Scale normalised (0..1) corners up to pixel coordinates for a `w`×`h` capture. */
-function toPixelCorners(
+export function toPixelCorners(
 	corners: NormalizedCorners,
 	w: number,
 	h: number,
@@ -124,7 +126,7 @@ function toPixelCorners(
 }
 
 /** Load + decode a capture from R2 to an {@link RgbaImage} (throws if it's missing). */
-async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
+export async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
 	const object = await env.PHOTOS.get(capturePhotoKey);
 	if (!object)
 		throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);
@@ -138,13 +140,16 @@ async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
  */
 async function warpEncodeStore(
 	capture: RgbaImage,
-	corners: NormalizedCorners,
+	band: CornerBand,
 	params: ReframeParams,
 ): Promise<{ key: string }> {
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
 	const { image } = reframeFromCorners(
 		capture,
-		toPixelCorners(corners, capture.width, capture.height),
+		// The cover is opaque edge-to-edge, so it warps from the band's INNER quad —
+		// certified wholly on the sleeve, so it can never drag a sliver of background
+		// into its border. The matte paths use the full band (they resolve the true edge).
+		toPixelCorners(band.inner, capture.width, capture.height),
 		{
 			canvasSize: CANVAS_SIZE,
 			// The sleeve fills the whole canvas — no transparent margin.
@@ -186,10 +191,50 @@ async function warpEncodeStore(
  */
 export async function reframeFromCapture(
 	capturePhotoKey: string,
-	corners: NormalizedCorners,
+	band: CornerBand,
 	params: ReframeParams = {},
 ): Promise<{ key: string }> {
-	return warpEncodeStore(await loadCapture(capturePhotoKey), corners, params);
+	return warpEncodeStore(await loadCapture(capturePhotoKey), band, params);
+}
+
+/**
+ * Super-resolve an in-memory RGBA image through Real-ESRGAN — the reusable core the
+ * matte pipeline shares with {@link upscaleProfessional}. Downscales under the model's
+ * input-pixel ceiling first, ships it as a data URI, and returns the model's (larger)
+ * output decoded back to RGBA, capped at `maxSize` (default {@link UPSCALE_MAX}) so a
+ * big result can't run the pure-JS matte math too hot or blow the Worker's memory.
+ * Opaque input only — ESRGAN drops alpha, so callers re-attach their own.
+ */
+export async function upscaleImage(
+	img: RgbaImage,
+	opts: { maxSize?: number } = {},
+): Promise<RgbaImage> {
+	const cap = opts.maxSize ?? UPSCALE_MAX;
+	const fitted = await env.IMAGES.input(blobStream(encodePng(img)))
+		.transform({
+			width: UPSCALE_INPUT_MAX,
+			height: UPSCALE_INPUT_MAX,
+			fit: "scale-down",
+		})
+		.output({ format: "image/webp", quality: 92 });
+	const fittedBytes = new Uint8Array(await fitted.response().arrayBuffer());
+	const dataUri = `data:image/webp;base64,${bytesToBase64(fittedBytes)}`;
+
+	const prediction = await runVersion(REAL_ESRGAN_VERSION, {
+		image: dataUri,
+		scale: UPSCALE_FACTOR,
+		face_enhance: false,
+	});
+	const url = firstOutputUrl(prediction.output);
+	if (!url) throw new Error("Replicate returned no upscaled image");
+	const res = await fetch(url);
+	if (!res.ok || !res.body)
+		throw new Error(`Fetching the upscaled image failed (${res.status})`);
+
+	const capped = await env.IMAGES.input(res.body)
+		.transform({ width: cap, height: cap, fit: "scale-down" })
+		.output({ format: "image/webp", quality: 92 });
+	return decodeRgba(new Uint8Array(await capped.response().arrayBuffer()));
 }
 
 /**
@@ -261,10 +306,11 @@ export async function detectCaptureCorners(
 
 /**
  * Reframe a record end-to-end for the queue (auto-on-capture + bulk). Decodes the capture
- * once, then picks the corners: the admin's stored crop if there is one, otherwise a
- * best-effort {@link detectSleeveCorners} seed (full-frame default when detection can't
- * find the sleeve). Returns the new professional R2 key AND the corners used, so the
- * consumer can persist them — that seed is what the corner editor opens pre-cropped to.
+ * once, then picks the corner band: the admin's stored band if there is one (legacy
+ * single-quad rows are synthesised into a band at parse time), otherwise a band seeded
+ * from a best-effort {@link detectSleeveCorners} pass (full-frame default when detection
+ * can't find the sleeve). Returns the new professional R2 key AND the band used, so the
+ * consumer can persist it — that seed is what the corner editor opens pre-cropped to.
  * Does NOT touch the DB itself.
  */
 export async function professionalPipeline(
@@ -272,19 +318,23 @@ export async function professionalPipeline(
 		Record,
 		"capturePhotoKey" | "sleeveCornersJson" | "professionalParamsJson"
 	>,
-): Promise<{ professionalKey: string; corners: NormalizedCorners }> {
+): Promise<{ professionalKey: string; band: CornerBand }> {
 	if (!record.capturePhotoKey) {
 		throw new Error("record has no capture photo to work from");
 	}
 	const capture = await loadCapture(record.capturePhotoKey);
-	// Respect a stored crop; otherwise seed by detecting the sleeve (full-frame fallback).
-	const corners = record.sleeveCornersJson
-		? parseCorners(record.sleeveCornersJson)
-		: (detectSleeveCorners(capture) ?? DEFAULT_CORNERS);
+	// Respect a stored band; otherwise seed by detecting the sleeve (full-frame fallback).
+	let band: CornerBand;
+	if (record.sleeveCornersJson) {
+		band = parseCornerBand(record.sleeveCornersJson);
+	} else {
+		const detected = detectSleeveCorners(capture);
+		band = detected ? bandFromQuad(detected) : DEFAULT_BAND;
+	}
 	const { key: professionalKey } = await warpEncodeStore(
 		capture,
-		corners,
+		band,
 		parseReframeParams(record.professionalParamsJson),
 	);
-	return { professionalKey, corners };
+	return { professionalKey, band };
 }

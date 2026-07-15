@@ -33,3 +33,17 @@ export function displayCoverKey(
 	}
 	return null;
 }
+
+/**
+ * The record's alpha matte — the transparent, true-edged sleeve floating on a margin
+ * with a soft shadow — for surfaces that want the object rather than the square hero
+ * (the homepage grid). Like {@link displayCoverKey}, only an *approved* photo's matte
+ * goes live; callers fall back to {@link displayCoverKey} when this is null.
+ */
+export function displayMatteKey(
+	record: Pick<Record, "professionalAlphaKey" | "professionalStatus">,
+): string | null {
+	return record.professionalStatus === "approved" && record.professionalAlphaKey
+		? record.professionalAlphaKey
+		: null;
+}

@@ -1,9 +1,29 @@
-import { Loader2, Scan } from "lucide-react";
+import { Info, Loader2, Scan } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "#/components/ui/button";
-import type { NormalizedCorner, NormalizedCorners } from "#/lib/sleeve-corners";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "#/components/ui/tooltip";
+import {
+	type Corners,
+	EDGE_CONFIDENCE_MIN,
+	type EdgeConfidence,
+	edgeDistances,
+	midQuad,
+	type RgbaImage,
+	refineQuadEdgesDetailed,
+} from "#/lib/photo-processing";
+import {
+	bandFromQuad,
+	type CornerBand,
+	isBandValid,
+	type NormalizedCorner,
+	type NormalizedCorners,
+} from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 
 const CORNER_LABELS = ["Top-left", "Top-right", "Bottom-right", "Bottom-left"];
@@ -14,14 +34,46 @@ const EDGES: Array<[number, number]> = [
 	[2, 3],
 	[3, 0],
 ];
+// The two quads of the corner band, with their editor affordances. The OUTER quad is
+// drawn wholly on the background (everything beyond it is certified background); the
+// INNER quad wholly on the sleeve (everything within it is certified sleeve). The true
+// edge lies in the band between — the dashed overlay shows where the cut will find it.
+const QUADS = ["outer", "inner"] as const;
+type QuadKey = (typeof QUADS)[number];
 const NUDGE = 0.005; // arrow-key step, as a fraction of the image
-const CORNER_GRAB_PX = 20; // press within this of a corner → grab just that corner
-const EDGE_GRAB_PX = 16; // else within this of an edge → grab the whole edge
+const CORNER_GRAB_PX = 14; // press within this of a corner → grab just that corner
+const EDGE_GRAB_PX = 12; // else within this of an edge → grab the whole edge
 const LOUPE_SIZE = 132; // magnifier diameter, px
 const LOUPE_ZOOM = 3; // magnification factor
 const LOUPE_GAP = 20; // gap between the corner and the magnifier, px
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+
+// The refined-edge overlay runs the same edge search the server does, on a small
+// decode of the capture — big enough that the sleeve edge survives downscaling,
+// small enough to re-run on every corner move without jank.
+const REFINE_SOURCE_MAX = 800;
+
+/** Decode an image URL to RGBA, downscaled so its longest side ≤ `max`. */
+async function decodeDownscaled(src: string, max: number): Promise<RgbaImage> {
+	const img = new Image();
+	img.src = src; // same-origin (/api/photos/…), so the canvas is never tainted
+	await img.decode();
+	const scale = Math.min(
+		1,
+		max / Math.max(img.naturalWidth, img.naturalHeight),
+	);
+	const w = Math.max(1, Math.round(img.naturalWidth * scale));
+	const h = Math.max(1, Math.round(img.naturalHeight * scale));
+	const canvas = document.createElement("canvas");
+	canvas.width = w;
+	canvas.height = h;
+	const ctx = canvas.getContext("2d", { willReadFrequently: true });
+	if (!ctx) throw new Error("no 2d context");
+	ctx.drawImage(img, 0, 0, w, h);
+	const { data } = ctx.getImageData(0, 0, w, h);
+	return { data, width: w, height: h };
+}
 
 /** Distance (px) from point P to segment AB, with the clamped projection parameter t. */
 function segmentDistance(
@@ -43,9 +95,10 @@ function segmentDistance(
 }
 
 type DragState =
-	| { kind: "corner"; index: number }
+	| { kind: "corner"; quad: QuadKey; index: number }
 	| {
 			kind: "edge";
+			quad: QuadKey;
 			a: number;
 			b: number;
 			startA: NormalizedCorner;
@@ -104,11 +157,14 @@ function Loupe({
 }
 
 /**
- * A draggable four-corner crop editor over the capture. The admin marks the sleeve's
- * corners; the parent turns those into a deterministic perspective-warp. Controlled:
- * `value` is the current {@link NormalizedCorners} (0..1, TL,TR,BR,BL) and `onChange`
+ * A draggable corner-BAND editor over the capture: two nested quads bracketing the
+ * sleeve's true edge. The admin drags the OUTER quad (brand-coloured) so it sits wholly
+ * on the background just past the sleeve, and the INNER quad (sky-coloured) so it sits
+ * wholly on the sleeve just inside the edge — the band between is the matting trimap's
+ * unknown region, and the dashed overlay shows where the edge search will actually cut
+ * inside it. Controlled: `value` is the current {@link CornerBand} and `onChange`
  * reports every move. Three ways to adjust:
- *  - drag a corner handle to move it precisely;
+ *  - drag a corner handle (either quad) to move it precisely;
  *  - drag an edge to slide its two corners together (rigidly);
  *  - click anywhere else to jump the nearest corner to that spot (then keep dragging it).
  */
@@ -120,8 +176,8 @@ export function CornerEditor({
 	disabled,
 }: {
 	src: string;
-	value: NormalizedCorners;
-	onChange: (corners: NormalizedCorners) => void;
+	value: CornerBand;
+	onChange: (band: CornerBand) => void;
 	/** Optional: run detection (server-side) and return suggested corners to seed. */
 	onDetect?: () => Promise<NormalizedCorners | null>;
 	disabled?: boolean;
@@ -129,11 +185,73 @@ export function CornerEditor({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [drag, setDrag] = useState<DragState | null>(null);
 	const [detecting, setDetecting] = useState(false);
-	// Which corner the loupe magnifies — the hovered/focused handle, or the one
-	// being dragged. The rendered image box size, tracked so the magnifier can map
+	// Which handle the loupe magnifies — the hovered/focused one, or the one being
+	// dragged. The rendered image box size, tracked so the magnifier can map
 	// normalised corner coords to background pixels.
-	const [hover, setHover] = useState<number | null>(null);
+	const [hover, setHover] = useState<{ quad: QuadKey; index: number } | null>(
+		null,
+	);
 	const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+	// The refined-edge overlay: where the server's edge search will snap each edge
+	// inside the band, and how confident it is per edge — so a disagreement (or an
+	// amber no-boundary edge) is visible *before* Apply, not a minute after.
+	const [refineSource, setRefineSource] = useState<RgbaImage | null>(null);
+	const [refined, setRefined] = useState<{
+		corners: NormalizedCorners;
+		confidence: EdgeConfidence;
+	} | null>(null);
+	const refineRafRef = useRef<number | null>(null);
+
+	const bandValid = isBandValid(value);
+
+	useEffect(() => {
+		let cancelled = false;
+		setRefineSource(null);
+		setRefined(null);
+		decodeDownscaled(src, REFINE_SOURCE_MAX)
+			.then((rgba) => {
+				if (!cancelled) setRefineSource(rgba);
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [src]);
+
+	// Re-run the edge search whenever the band moves — coalesced to one animation
+	// frame so a fast drag doesn't queue a search per pointer event. The search runs
+	// from the band midline, bounded per edge by the inner/outer quads — exactly the
+	// server's cut.
+	useEffect(() => {
+		if (!refineSource || !bandValid) {
+			if (!bandValid) setRefined(null);
+			return;
+		}
+		if (refineRafRef.current) cancelAnimationFrame(refineRafRef.current);
+		refineRafRef.current = requestAnimationFrame(() => {
+			const { width, height } = refineSource;
+			const toPx = (quad: NormalizedCorners) =>
+				quad.map(([x, y]) => [x * (width - 1), y * (height - 1)]) as Corners;
+			const innerPx = toPx(value.inner);
+			const outerPx = toPx(value.outer);
+			const mid = midQuad(innerPx, outerPx);
+			const result = refineQuadEdgesDetailed(refineSource, mid, {
+				outward: edgeDistances(mid, outerPx),
+				inward: edgeDistances(mid, innerPx),
+				minConfidence: EDGE_CONFIDENCE_MIN,
+			});
+			setRefined({
+				corners: result.corners.map(([x, y]) => [
+					clamp01(x / (width - 1)),
+					clamp01(y / (height - 1)),
+				]) as NormalizedCorners,
+				confidence: result.confidence,
+			});
+		});
+		return () => {
+			if (refineRafRef.current) cancelAnimationFrame(refineRafRef.current);
+		};
+	}, [refineSource, value, bandValid]);
 
 	useEffect(() => {
 		const el = containerRef.current;
@@ -151,11 +269,13 @@ export function CornerEditor({
 		try {
 			const found = await onDetect();
 			if (found) {
-				onChange(found);
+				// The detector returns a single quad on the edge — seed the band around it.
+				onChange(bandFromQuad(found));
 				toast.success("Detected the sleeve — nudge the handles to fine-tune.");
 			} else {
 				toast.message("Couldn't find the sleeve automatically.", {
-					description: "Drag the four corners to the edges of the sleeve.",
+					description:
+						"Drag the outer handles onto the background and the inner ones onto the sleeve.",
 				});
 			}
 		} catch (err) {
@@ -167,10 +287,13 @@ export function CornerEditor({
 		}
 	};
 
-	const setCorner = (index: number, point: NormalizedCorner) => {
-		onChange(
-			value.map((c, i) => (i === index ? point : c)) as NormalizedCorners,
-		);
+	const setCorner = (quad: QuadKey, index: number, point: NormalizedCorner) => {
+		onChange({
+			...value,
+			[quad]: value[quad].map((c, i) =>
+				i === index ? point : c,
+			) as NormalizedCorners,
+		});
 	};
 
 	const pointerToNorm = (
@@ -186,75 +309,82 @@ export function CornerEditor({
 	};
 
 	// Press anywhere on the image: decide whether the intent is a corner, an edge, or a
-	// click-to-move, then start the matching drag (all pointer moves flow to the container
-	// via pointer capture, so a fast drag never outruns the handles).
+	// click-to-move (across BOTH quads — nearest wins), then start the matching drag
+	// (all pointer moves flow to the container via pointer capture, so a fast drag never
+	// outruns the handles).
 	const onPointerDown = (e: React.PointerEvent) => {
 		if (disabled) return;
 		const rect = containerRef.current?.getBoundingClientRect();
 		if (!rect) return;
 		const px = e.clientX - rect.left;
 		const py = e.clientY - rect.top;
-		const pts = value.map(
-			([x, y]) => [x * rect.width, y * rect.height] as const,
-		);
+		const pts = (quad: QuadKey) =>
+			value[quad].map(([x, y]) => [x * rect.width, y * rect.height] as const);
 
-		// Nearest corner.
-		let corner = 0;
+		// Nearest corner across both quads.
+		let corner: { quad: QuadKey; index: number } = { quad: "outer", index: 0 };
 		let cornerDist = Number.POSITIVE_INFINITY;
-		pts.forEach(([x, y], i) => {
-			const d = Math.hypot(px - x, py - y);
-			if (d < cornerDist) {
-				cornerDist = d;
-				corner = i;
-			}
-		});
+		for (const quad of QUADS) {
+			pts(quad).forEach(([x, y], i) => {
+				const d = Math.hypot(px - x, py - y);
+				if (d < cornerDist) {
+					cornerDist = d;
+					corner = { quad, index: i };
+				}
+			});
+		}
 
-		// Nearest edge (distance to the segment, so a click past an endpoint doesn't count).
-		let edge = 0;
+		// Nearest edge across both quads (distance to the segment, so a click past an
+		// endpoint doesn't count).
+		let edge: { quad: QuadKey; index: number } = { quad: "outer", index: 0 };
 		let edgeDist = Number.POSITIVE_INFINITY;
-		EDGES.forEach(([a, b], k) => {
-			const { dist } = segmentDistance(
-				px,
-				py,
-				pts[a][0],
-				pts[a][1],
-				pts[b][0],
-				pts[b][1],
-			);
-			if (dist < edgeDist) {
-				edgeDist = dist;
-				edge = k;
-			}
-		});
+		for (const quad of QUADS) {
+			const p = pts(quad);
+			EDGES.forEach(([a, b], k) => {
+				const { dist } = segmentDistance(
+					px,
+					py,
+					p[a][0],
+					p[a][1],
+					p[b][0],
+					p[b][1],
+				);
+				if (dist < edgeDist) {
+					edgeDist = dist;
+					edge = { quad, index: k };
+				}
+			});
+		}
 
 		e.preventDefault();
 		containerRef.current?.setPointerCapture(e.pointerId);
 
 		if (cornerDist <= CORNER_GRAB_PX) {
 			// Grab the corner in place — don't jump it to the (slightly-off) press point.
-			setDrag({ kind: "corner", index: corner });
+			setDrag({ kind: "corner", quad: corner.quad, index: corner.index });
 		} else if (edgeDist <= EDGE_GRAB_PX) {
-			const [a, b] = EDGES[edge];
+			const [a, b] = EDGES[edge.index];
 			setDrag({
 				kind: "edge",
+				quad: edge.quad,
 				a,
 				b,
-				startA: value[a],
-				startB: value[b],
+				startA: value[edge.quad][a],
+				startB: value[edge.quad][b],
 				originX: e.clientX,
 				originY: e.clientY,
 			});
 		} else {
 			// Open space: jump the nearest corner here, then keep dragging it.
-			setCorner(corner, pointerToNorm(e.clientX, e.clientY));
-			setDrag({ kind: "corner", index: corner });
+			setCorner(corner.quad, corner.index, pointerToNorm(e.clientX, e.clientY));
+			setDrag({ kind: "corner", quad: corner.quad, index: corner.index });
 		}
 	};
 
 	const onPointerMove = (e: React.PointerEvent) => {
 		if (!drag) return;
 		if (drag.kind === "corner") {
-			setCorner(drag.index, pointerToNorm(e.clientX, e.clientY));
+			setCorner(drag.quad, drag.index, pointerToNorm(e.clientX, e.clientY));
 			return;
 		}
 		const rect = containerRef.current?.getBoundingClientRect();
@@ -273,11 +403,12 @@ export function CornerEditor({
 		);
 		const na: NormalizedCorner = [drag.startA[0] + dx, drag.startA[1] + dy];
 		const nb: NormalizedCorner = [drag.startB[0] + dx, drag.startB[1] + dy];
-		onChange(
-			value.map((c, i) =>
+		onChange({
+			...value,
+			[drag.quad]: value[drag.quad].map((c, i) =>
 				i === drag.a ? na : i === drag.b ? nb : c,
 			) as NormalizedCorners,
-		);
+		});
 	};
 
 	const endDrag = (e: React.PointerEvent) => {
@@ -285,17 +416,20 @@ export function CornerEditor({
 		setDrag(null);
 	};
 
-	const isActive = (i: number) =>
+	const isActive = (quad: QuadKey, i: number) =>
 		drag?.kind === "corner"
-			? drag.index === i
-			: drag?.kind === "edge" && (drag.a === i || drag.b === i);
+			? drag.quad === quad && drag.index === i
+			: drag?.kind === "edge" &&
+				drag.quad === quad &&
+				(drag.a === i || drag.b === i);
 
 	// SVG polygon points in a 0..100 viewBox (preserveAspectRatio none → stretches to
-	// the image box); a non-scaling stroke keeps the outline crisp despite the stretch.
-	const polyPoints = value.map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
+	// the image box); a non-scaling stroke keeps the outlines crisp despite the stretch.
+	const polyPoints = (quad: QuadKey) =>
+		value[quad].map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
 
 	// Show the magnifier for the corner being dragged, else the hovered/focused one.
-	const loupeIndex = drag?.kind === "corner" ? drag.index : hover;
+	const loupe = drag?.kind === "corner" ? drag : hover;
 
 	return (
 		<div className="space-y-2">
@@ -324,55 +458,135 @@ export function CornerEditor({
 						preserveAspectRatio="none"
 						aria-hidden="true"
 					>
+						{/* Outer quad: wholly on the background — everything beyond it is
+						    certified background. */}
 						<polygon
-							points={polyPoints}
-							className="fill-brand/10 stroke-brand"
+							points={polyPoints("outer")}
+							className={cn(
+								"fill-brand/10",
+								bandValid ? "stroke-brand" : "stroke-red-500",
+							)}
 							strokeWidth={2}
 							vectorEffect="non-scaling-stroke"
 						/>
-					</svg>
-					{value.map(([x, y], i) => (
-						<button
-							// biome-ignore lint/suspicious/noArrayIndexKey: fixed 4 corners, order is stable
-							key={i}
-							type="button"
-							aria-label={`${CORNER_LABELS[i]} corner`}
-							disabled={disabled}
+						{/* Inner quad: wholly on the sleeve — everything within it is
+						    certified sleeve. The band between the two is the unknown region
+						    the cut is resolved in. */}
+						<polygon
+							points={polyPoints("inner")}
 							className={cn(
-								"absolute size-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-brand bg-background shadow",
-								"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
-								isActive(i) && "ring-2 ring-brand",
-								disabled ? "cursor-not-allowed opacity-50" : "cursor-grab",
+								"fill-transparent",
+								bandValid ? "stroke-sky-400" : "stroke-red-500",
 							)}
-							style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
-							onPointerEnter={() => setHover(i)}
-							onPointerLeave={() => setHover((h) => (h === i ? null : h))}
-							onKeyDown={(e) => {
-								const d: Record<string, NormalizedCorner> = {
-									ArrowLeft: [-NUDGE, 0],
-									ArrowRight: [NUDGE, 0],
-									ArrowUp: [0, -NUDGE],
-									ArrowDown: [0, NUDGE],
-								};
-								const step = d[e.key];
-								if (!step) return;
-								e.preventDefault();
-								setCorner(i, [clamp01(x + step[0]), clamp01(y + step[1])]);
-							}}
+							strokeWidth={1.5}
+							vectorEffect="non-scaling-stroke"
 						/>
-					))}
+						{/* Where the edge search will actually cut, inside the band: dashed,
+						    per edge. Emerald = a clear boundary was found; amber = no clear
+						    boundary (that edge will cut straight along the band midline —
+						    tighten the band around the true edge there). */}
+						{refined &&
+							!disabled &&
+							EDGES.map(([a, b], e) => (
+								<line
+									// biome-ignore lint/suspicious/noArrayIndexKey: fixed 4 edges, order is stable
+									key={e}
+									x1={refined.corners[a][0] * 100}
+									y1={refined.corners[a][1] * 100}
+									x2={refined.corners[b][0] * 100}
+									y2={refined.corners[b][1] * 100}
+									className={
+										refined.confidence[e] >= EDGE_CONFIDENCE_MIN
+											? "stroke-emerald-400"
+											: "stroke-amber-400"
+									}
+									strokeWidth={1.5}
+									strokeDasharray="6 4"
+									vectorEffect="non-scaling-stroke"
+								/>
+							))}
+					</svg>
+					{QUADS.map((quad) =>
+						value[quad].map(([x, y], i) => (
+							<button
+								key={`${quad}-${CORNER_LABELS[i]}`}
+								type="button"
+								aria-label={`${CORNER_LABELS[i]} ${quad} corner`}
+								disabled={disabled}
+								className={cn(
+									"absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-background shadow",
+									"focus-visible:outline-none focus-visible:ring-2",
+									quad === "outer"
+										? "size-3.5 border-brand focus-visible:ring-brand"
+										: "size-3 border-sky-400 focus-visible:ring-sky-400",
+									isActive(quad, i) &&
+										(quad === "outer"
+											? "ring-2 ring-brand"
+											: "ring-2 ring-sky-400"),
+									disabled ? "cursor-not-allowed opacity-50" : "cursor-grab",
+								)}
+								style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
+								onPointerEnter={() => setHover({ quad, index: i })}
+								onPointerLeave={() =>
+									setHover((h) =>
+										h?.quad === quad && h.index === i ? null : h,
+									)
+								}
+								onKeyDown={(e) => {
+									const d: Record<string, NormalizedCorner> = {
+										ArrowLeft: [-NUDGE, 0],
+										ArrowRight: [NUDGE, 0],
+										ArrowUp: [0, -NUDGE],
+										ArrowDown: [0, NUDGE],
+									};
+									const step = d[e.key];
+									if (!step) return;
+									e.preventDefault();
+									setCorner(quad, i, [
+										clamp01(x + step[0]),
+										clamp01(y + step[1]),
+									]);
+								}}
+							/>
+						)),
+					)}
 				</div>
 				{/* Magnifier: a 3× loupe of the capture centred on the active corner, with a
 			    crosshair marking the exact point — so a corner can be placed precisely
 			    even though the handle itself sits under the finger/cursor. Purely visual
 			    (pointer-events-none); the handle beneath still drives the drag. */}
-				{loupeIndex != null && box.w > 0 && !disabled && (
-					<Loupe src={src} point={value[loupeIndex]} box={box} />
+				{loupe != null && box.w > 0 && !disabled && (
+					<Loupe src={src} point={value[loupe.quad][loupe.index]} box={box} />
 				)}
 			</div>
+			{!bandValid && (
+				<p className="text-xs text-red-600 dark:text-red-400" role="alert">
+					The inner (blue) corners must all sit inside the outer frame — fix the
+					crossed handles before applying.
+				</p>
+			)}
 			<div className="flex items-center justify-between gap-2">
 				<p className="text-xs text-muted-foreground">
-					Drag a corner or edge, or click to move.
+					Outer handles on the background, inner on the sleeve.
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<span className="ml-1 inline-flex cursor-help align-middle text-muted-foreground hover:text-foreground">
+								<Info
+									className="size-3.5"
+									aria-label="About the corner band and detected-edge overlay"
+								/>
+							</span>
+						</TooltipTrigger>
+						<TooltipContent align="start" className="max-w-xs text-xs">
+							Two frames bracket the sleeve's true edge: the outer sits wholly
+							on the background, the inner wholly on the sleeve (it's also the
+							exact crop the square cover uses). The dashed line is the detected
+							edge in between — <span className="text-emerald-500">green</span>{" "}
+							found a clear boundary,{" "}
+							<span className="text-amber-500">amber</span> didn't (that edge
+							cuts straight midway through the band).
+						</TooltipContent>
+					</Tooltip>
 				</p>
 				{onDetect && (
 					<Button

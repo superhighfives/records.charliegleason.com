@@ -3,12 +3,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { RecordPanel } from "#/components/record-panel";
+import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
-import { displayCoverKey } from "#/lib/cover";
+import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import { emojiSrc } from "#/lib/emoji";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
+import { cn } from "#/lib/utils";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
 const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
@@ -121,15 +123,24 @@ function Home() {
 								<div className="cover-lift">
 									<div className="album-card grain aspect-square overflow-hidden">
 										{(() => {
-											const cover = displayCoverKey(r);
+											// Prefer the floating matte (transparent, true edges) when the
+											// record has one; its baked shadow + margin read as an object
+											// on the card. Fall back to the square cover otherwise.
+											const matte = displayMatteKey(r);
+											const cover = matte ?? displayCoverKey(r);
 											return cover ? (
 												<img
 													src={`/api/photos/${cover}`}
 													alt={`${r.artist} — ${r.title}`}
-													className="size-full object-cover grayscale transition-[filter] duration-500 ease-out group-hover:grayscale-0"
+													className={cn(
+														"size-full grayscale transition-[filter] duration-500 ease-out group-hover:grayscale-0",
+														matte ? "object-contain" : "object-cover",
+													)}
 													loading="lazy"
 												/>
-											) : null;
+											) : (
+												<SleevePlaceholder />
+											);
 										})()}
 									</div>
 								</div>
