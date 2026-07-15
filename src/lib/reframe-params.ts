@@ -27,7 +27,10 @@ export interface ReframeParams {
 }
 
 export const DEFAULT_REFRAME_PARAMS: Required<ReframeParams> = {
-	skipTone: false,
+	// Auto-tone is off by default — it tends to crush already-well-exposed captures
+	// (e.g. darkening a dark mat into noisy black); enable it per-record when a shot
+	// genuinely needs levelling. The polish factors below still apply either way.
+	skipTone: true,
 	wbStrength: 1.0,
 	lowPct: 0.005,
 	highPct: 0.995,
