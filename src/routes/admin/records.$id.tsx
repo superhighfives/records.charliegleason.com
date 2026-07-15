@@ -50,7 +50,6 @@ import {
 	replaceCapture,
 	reprocessRecord,
 	searchDiscogs,
-	setProfessionalApproved,
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 import {
@@ -503,21 +502,19 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn't delete this record."),
 	});
 
-	// Apply the edit: warp the capture to the current corners + tone, promote it to
-	// the displayed cover, then dismiss the editor.
+	// Apply the edit: persist the current corners + tone and enqueue the paid pipeline
+	// (reframe + Real-ESRGAN enhance + AI matte), which runs in the background. Returns
+	// immediately, so we close the editor and let the header queue menu track it — the
+	// record view polls and swaps in the generated cover + matte when it lands.
 	const applyPro = useMutation({
-		mutationFn: async () => {
-			await reframeRecord({ data: { id: recordId, corners, params } });
-			return setProfessionalApproved({
-				data: { id: recordId, approved: true },
-			});
-		},
+		mutationFn: () =>
+			reframeRecord({ data: { id: recordId, corners, params } }),
 		onSuccess: async (row) => {
 			if (row)
 				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
 			await invalidate();
-			// Stay open: with the edit now saved and the working copy matching the
-			// row, the footer's primary button flips from Apply/Re-apply to Close.
+			setEditorOpen(false);
+			toast.success("Generating photo — track it from the queue up top.");
 		},
 		onError: (err) =>
 			toast.error(
@@ -628,8 +625,14 @@ function RecordDetail() {
 	//  - "Re-apply" only makes sense against a live cover; anything else is a first Apply.
 	const isApproved = record.professionalStatus === "approved";
 	const proIsLive = isApproved && !isDirty;
-	// Any editor mutation in flight — used to disable the controls while one runs.
-	const editorBusy = applyPro.isPending;
+	// A background Apply job (reframe + enhance + matte) is queued or running for this
+	// record — the record view polls, so this flips true/false on its own.
+	const proGenerating =
+		record.professionalJobStatus === "queued" ||
+		record.professionalJobStatus === "processing";
+	// Any editor mutation in flight, or a background job running — disables the controls
+	// (a second Apply while one is generating would just stack jobs).
+	const editorBusy = applyPro.isPending || proGenerating;
 
 	// Header photo: the approved professional crop, else the raw capture. Never the
 	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
@@ -733,11 +736,16 @@ function RecordDetail() {
 					>
 						{replacingCapture ? "Replacing…" : "Replace capture"}
 					</Button>
-					{record.professionalStatus === "failed" &&
+					{proGenerating && (
+						<span className="text-xs text-muted-foreground">
+							Generating photo… this runs in the background.
+						</span>
+					)}
+					{record.professionalJobStatus === "failed" &&
 						record.professionalError && (
 							<span className="text-xs text-red-600 dark:text-red-400">
 								Last generation failed: {record.professionalError}. Open the
-								editor and adjust the corners to try again.
+								editor and Apply again to retry.
 							</span>
 						)}
 				</div>
@@ -1040,8 +1048,8 @@ function RecordDetail() {
 										proIsLive ? setEditorOpen(false) : applyPro.mutate()
 									}
 								>
-									{applyPro.isPending
-										? "Applying…"
+									{applyPro.isPending || proGenerating
+										? "Generating…"
 										: proIsLive
 											? "Close"
 											: isApproved && isDirty

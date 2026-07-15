@@ -1,12 +1,13 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn } from "@tanstack/react-start";
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type Record as RecordRow, records } from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
+import { displayCoverKey } from "#/lib/cover";
 import {
 	getReleaseCandidate,
 	getReleaseDetail,
@@ -23,15 +24,11 @@ import {
 	storeUploadedCover,
 } from "#/lib/images";
 import { generateMatteFromCapture } from "#/lib/matte";
-import {
-	detectCaptureCorners,
-	professionalPipeline,
-	reframeFromCapture,
-	upscaleProfessional,
-} from "#/lib/professional";
+import { detectCaptureCorners, professionalPipeline } from "#/lib/professional";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
+	enqueueProfessional,
 	enqueueRefreshBatch,
 	fetchValueForRecord,
 	refreshRecordById,
@@ -161,6 +158,57 @@ export const getRecord = createServerFn({ method: "GET" })
 			return row ?? null;
 		}),
 	);
+
+/** One entry in the header "in flight" menu — a record with a running background job. */
+export interface InFlightItem {
+	id: number;
+	artist: string;
+	title: string;
+	thumbKey: string | null;
+	/** What's running, for the menu label. */
+	kind: "analyze" | "professional";
+	/** The finer-grained state (all actively running — the menu shows a spinner). */
+	state: "pending" | "processing" | "queued";
+}
+
+/**
+ * Everything currently in flight, for the admin header's queue dropdown: captures being
+ * analysed (`status` pending/processing) and Apply jobs generating a photo
+ * (`professionalJobStatus` queued/processing). Admin-only; returns a lightweight shape
+ * (no capture bytes) polled on a short interval while anything is running. A record with
+ * both a running analyze and pro job surfaces as its analyze (the more fundamental step).
+ */
+export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
+	Sentry.startSpan({ name: "listInFlight" }, async () => {
+		if (!(await getAdminSession())) return [] as InFlightItem[];
+
+		const db = getDb(env.DB);
+		const rows = await db
+			.select()
+			.from(records)
+			.where(
+				or(
+					inArray(records.status, ["pending", "processing"]),
+					inArray(records.professionalJobStatus, ["queued", "processing"]),
+				),
+			)
+			.orderBy(desc(records.updatedAt));
+
+		return rows.map((row): InFlightItem => {
+			const analyzing = row.status === "pending" || row.status === "processing";
+			return {
+				id: row.id,
+				artist: row.artist,
+				title: row.title,
+				thumbKey: displayCoverKey(row, { includeCapture: true }),
+				kind: analyzing ? "analyze" : "professional",
+				state: analyzing
+					? (row.status as "pending" | "processing")
+					: (row.professionalJobStatus as "queued" | "processing"),
+			};
+		});
+	}),
+);
 
 export const createRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -444,12 +492,14 @@ export const detectCorners = createServerFn({ method: "POST" })
 	);
 
 /**
- * The FREE interactive reframe — the corner editor and the tone/margin knobs both call
- * this. Perspective-warps the real capture using the given (or stored) sleeve `corners`,
- * crops/squares/tones it, and stores the result, synchronously: no queue, so the admin
- * gets the updated image back in one request. Persists the corners in `sleeveCornersJson`
- * and the knobs in `professionalParamsJson` so they seed the next edit. Requires a capture
- * to warp — throws if there's none. Returns the updated row, or null if the record's gone.
+ * Kick off the paid "Apply" pipeline for a record — reframe + Real-ESRGAN enhance + AI
+ * matte. The actual GPU work (~a minute) runs in the queue consumer
+ * ({@link generateProfessionalPhoto}); this only persists the edited corners + tone knobs,
+ * flags `professionalJobStatus: "queued"`, and enqueues the job, returning immediately so
+ * the editor can close and the admin can move on. Crucially it does NOT touch the display
+ * `professionalStatus`, so an already-approved cover stays live until the consumer swaps in
+ * the new keys. Requires a capture to warp — throws if there's none. Returns the updated
+ * row (now `queued`), or null if the record's gone.
  */
 export const reframeRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -460,9 +510,9 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			params?: ReframeParams;
 		}) => ({
 			id: input.id,
-			// Runtime-sanitise untrusted input before it drives the homography/tone math:
-			// drop malformed corners (out of 0..1 or non-finite → fall back to the stored
-			// crop) and keep only well-typed knob values.
+			// Runtime-sanitise untrusted input before it's persisted and later drives the
+			// homography/tone math in the consumer: drop malformed corners (out of 0..1 or
+			// non-finite → fall back to the stored crop) and keep only well-typed knobs.
 			corners: parseNormalizedCorners(input.corners) ?? undefined,
 			params: sanitizeReframeParams(input.params),
 		}),
@@ -483,73 +533,20 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			// full-frame default for a record that's never been cropped).
 			const effectiveCorners =
 				corners ?? parseCorners(record.sleeveCornersJson);
-			// Apply runs the whole pipeline in one action: reframe the square (free), then
-			// — in parallel, both paid + independent — super-resolve it through Real-ESRGAN
-			// and generate the AI matte. Both are best-effort: on failure the enhance falls
-			// back to the plain reframe and the matte columns null out, so a Replicate hiccup
-			// degrades gracefully instead of failing the Apply.
-			const { key: baseKey } = await reframeFromCapture(
-				record.capturePhotoKey,
-				effectiveCorners,
-				params,
-			);
-			const [enhancedKey, matte] = await Promise.all([
-				upscaleProfessional(baseKey)
-					.then((r) => r.key)
-					.catch((err) => {
-						console.error("reframeRecord: enhance failed", err);
-						return null;
-					}),
-				generateMatteFromCapture(
-					record.capturePhotoKey,
-					effectiveCorners,
-					params,
-					{ useAi: true },
-				).catch((err) => {
-					console.error("reframeRecord: matte generation failed", err);
-					return null;
-				}),
-			]);
-			// When the enhance succeeds, the base reframe was only a staging step — bin it.
-			const professionalImageKey = enhancedKey ?? baseKey;
-			if (enhancedKey) await env.PHOTOS.delete(baseKey).catch(() => {});
+			// Persist the crop + knobs so the consumer can pick them up, mark the job
+			// queued, and hand off. `professionalStatus` is deliberately left as-is.
 			const [row] = await db
 				.update(records)
 				.set({
 					sleeveCornersJson: serializeCorners(effectiveCorners),
-					professionalImageKey,
 					professionalParamsJson: JSON.stringify(params),
-					professionalAlphaKey: matte?.shadowKey ?? null,
-					professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
-					professionalAlphaSource: matte?.source ?? null,
-					// An interactive reframe always produces a reviewable image; keep an
-					// already-approved photo live so a quick tweak goes straight out.
-					professionalStatus:
-						record.professionalStatus === "approved" ? "approved" : "ready",
-					// The square went through Real-ESRGAN unless that step failed.
-					professionalEnhanced: enhancedKey != null,
+					professionalJobStatus: "queued",
 					professionalError: null,
 					updatedAt: new Date(),
 				})
 				.where(eq(records.id, id))
 				.returning();
-			// Bin the superseded professional image + matte so re-tweaks don't accumulate
-			// orphaned objects in R2. Best-effort — the row already points at the new
-			// keys, so a failed cleanup just leaves stale objects, never a broken ref.
-			for (const staleKey of [
-				record.professionalImageKey,
-				record.professionalAlphaKey,
-				record.professionalAlphaCutoutKey,
-			]) {
-				if (
-					staleKey &&
-					staleKey !== professionalImageKey &&
-					staleKey !== matte?.shadowKey &&
-					staleKey !== matte?.cutoutKey
-				) {
-					await env.PHOTOS.delete(staleKey).catch(() => {});
-				}
-			}
+			await enqueueProfessional(id);
 			return row ?? null;
 		}),
 	);
