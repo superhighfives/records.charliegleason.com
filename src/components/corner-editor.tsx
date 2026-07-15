@@ -517,8 +517,8 @@ export function CornerEditor({
 									"absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-background shadow",
 									"focus-visible:outline-none focus-visible:ring-2",
 									quad === "outer"
-										? "size-5 border-brand focus-visible:ring-brand"
-										: "size-4 border-sky-400 focus-visible:ring-sky-400",
+										? "size-3.5 border-brand focus-visible:ring-brand"
+										: "size-3 border-sky-400 focus-visible:ring-sky-400",
 									isActive(quad, i) &&
 										(quad === "outer"
 											? "ring-2 ring-brand"
