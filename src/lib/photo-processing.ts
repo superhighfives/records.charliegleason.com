@@ -1356,24 +1356,11 @@ export function warpMatteToSquare(
 		opts.canvasSize,
 		opts.canvasSize,
 	);
-	const toned: RgbaImage =
-		opts.tone === false ? warped : autoTone(warped, opts.tone);
-	if (opts.polish) {
-		applyPolish(
-			toned,
-			opts.polish.saturation,
-			opts.polish.contrast,
-			opts.polish.gamma,
-		);
-	}
-	const framed: RgbaImage = {
-		data: toned.data,
-		width: toned.width,
-		height: toned.height,
-	};
-	if (!opts.shadow) return { cutout: framed, shadow: framed };
-	const shadow = compositeUnder(framed, shadowFromAlpha(framed, opts.shadow));
-	return { cutout: framed, shadow };
+	// Hand off to the shared framing tail: tight-crop to the warped sleeve's alpha bounds,
+	// re-fit centred at contentSize, then tone + shadow. This is the same crop the
+	// deterministic path uses, so both centre and fill the frame consistently — the warp
+	// above only fixes the sleeve's *shape* (straighten), not its size/position.
+	return frameCutout(warped, opts);
 }
 
 /**

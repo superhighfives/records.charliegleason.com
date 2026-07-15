@@ -10,6 +10,7 @@ import {
 	type MatteOptions,
 	type MatteResult,
 	matteFromCorners,
+	offsetQuad,
 	type RgbaImage,
 	rasterizePolygon,
 	refineQuadEdges,
@@ -60,7 +61,8 @@ import type { NormalizedCorners } from "#/lib/sleeve-corners";
 // CPU + 128 MB memory budget. The sleeve is perspective-warped to fill most of the frame,
 // with a small (4%) transparent margin left for the contact shadow.
 const CANVAS_SIZE = 2400;
-const MARGIN = 0.04;
+// The sleeve fills 96% of the square (a 2% transparent margin each side for the shadow).
+const MARGIN = 0.02;
 const CONTENT_SIZE = Math.round(CANVAS_SIZE * (1 - 2 * MARGIN));
 // Feather (applied at content scale, kept small for a crisp edge) and a tight, dark
 // down-right contact shadow (canvas scale) — so the sleeve reads as a card pressed
@@ -93,6 +95,13 @@ const TRIMAP_BAND = Math.round(MODEL_SIZE * 0.025);
 // fringe). This kills the fringe *without* choking the alpha, so the model's ragged edge
 // and rounded/worn corners stay fully intact. Scaled for the hi-res (~2800) AI content.
 const MATTE_BLEED = 10;
+
+// Let the clamp reach this many px *past* the picked corners. A hard cut exactly at the
+// pick leaves the feather nothing to blend against, choking the rough edge and rounded
+// corners; a few px of headroom lets the model's real edge + feather breathe. It stays
+// well short of the wood — and the colour-bleed keeps wood out of the soft edge anyway —
+// so no floor sneaks back in. (Content-frame px, ~MODEL_SIZE resolution.)
+const MATTE_CLAMP_EXPAND = 4;
 
 // How far the sleeve is straightened toward a perfect upright rectangle (0…1). Half:
 // upright-ish but keeping some of the real photographic lean, so it doesn't read as a flat
@@ -301,13 +310,18 @@ async function matteAI(
 	// model's ragged edge, rounded corners and worn-edge dips all survive. The wood fringe
 	// that would otherwise ride the soft edge is handled by the colour bleed in the warp.
 	//
-	// Use the *intersection* of the refined edge and the admin's picked corners: refine can
-	// pull the cut tighter (inward) for a clean line, but never push it outward past where
-	// the admin drew — a low-contrast mat/wood edge can fool refine into snapping onto a
-	// wood-plank seam beyond the sleeve, and that overshoot must never survive into the
-	// matte. Since the wood only ever sits outside the picked quad, this removes it whole.
+	// Use the *intersection* of the refined edge and the admin's picked corners (grown by a
+	// few px, {@link MATTE_CLAMP_EXPAND}, so the feather has real content to blend against):
+	// refine can pull the cut tighter (inward) for a clean line, but never push it outward
+	// past where the admin drew — a low-contrast mat/wood edge can fool refine into snapping
+	// onto a wood-plank seam beyond the sleeve, and that overshoot must never survive into
+	// the matte. Since the wood only ever sits outside the picked quad, this removes it whole.
 	const refinedMask = rasterizePolygon(refined, content.width, content.height);
-	const pickedMask = rasterizePolygon(inset, content.width, content.height);
+	const pickedMask = rasterizePolygon(
+		offsetQuad(inset, MATTE_CLAMP_EXPAND),
+		content.width,
+		content.height,
+	);
 	const clamp = new Uint8ClampedArray(refinedMask.length);
 	for (let i = 0; i < clamp.length; i++)
 		clamp[i] = refinedMask[i] && pickedMask[i] ? 255 : 0;
