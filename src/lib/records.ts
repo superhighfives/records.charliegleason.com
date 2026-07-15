@@ -458,7 +458,6 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			id: number;
 			corners?: NormalizedCorners;
 			params?: ReframeParams;
-			useAi?: boolean;
 		}) => ({
 			id: input.id,
 			// Runtime-sanitise untrusted input before it drives the homography/tone math:
@@ -466,12 +465,9 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			// crop) and keep only well-typed knob values.
 			corners: parseNormalizedCorners(input.corners) ?? undefined,
 			params: sanitizeReframeParams(input.params),
-			// Whether the matte uses the paid matting model (the editor's "Use AI"
-			// checkbox); defaults off so a programmatic caller never triggers a paid run.
-			useAi: Boolean(input.useAi),
 		}),
 	)
-	.handler(({ data: { id, corners, params, useAi } }) =>
+	.handler(({ data: { id, corners, params } }) =>
 		Sentry.startSpan({ name: "reframeRecord" }, async () => {
 			const db = getDb(env.DB);
 			const [record] = await db
@@ -487,31 +483,41 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			// full-frame default for a record that's never been cropped).
 			const effectiveCorners =
 				corners ?? parseCorners(record.sleeveCornersJson);
-			// The square hero (free, fast) — generated first so a matte failure below
-			// never costs the cover.
-			const { key } = await reframeFromCapture(
+			// Apply runs the whole pipeline in one action: reframe the square (free), then
+			// — in parallel, both paid + independent — super-resolve it through Real-ESRGAN
+			// and generate the AI matte. Both are best-effort: on failure the enhance falls
+			// back to the plain reframe and the matte columns null out, so a Replicate hiccup
+			// degrades gracefully instead of failing the Apply.
+			const { key: baseKey } = await reframeFromCapture(
 				record.capturePhotoKey,
 				effectiveCorners,
 				params,
 			);
-			// The matte, from the same corners. `useAi` picks the (paid) matting model,
-			// which internally falls back to the deterministic silhouette if it's down.
-			// Best-effort: on total failure the matte columns null out (grid falls back
-			// to the square) rather than failing the Apply.
-			const matte = await generateMatteFromCapture(
-				record.capturePhotoKey,
-				effectiveCorners,
-				params,
-				{ useAi },
-			).catch((err) => {
-				console.error("reframeRecord: matte generation failed", err);
-				return null;
-			});
+			const [enhancedKey, matte] = await Promise.all([
+				upscaleProfessional(baseKey)
+					.then((r) => r.key)
+					.catch((err) => {
+						console.error("reframeRecord: enhance failed", err);
+						return null;
+					}),
+				generateMatteFromCapture(
+					record.capturePhotoKey,
+					effectiveCorners,
+					params,
+					{ useAi: true },
+				).catch((err) => {
+					console.error("reframeRecord: matte generation failed", err);
+					return null;
+				}),
+			]);
+			// When the enhance succeeds, the base reframe was only a staging step — bin it.
+			const professionalImageKey = enhancedKey ?? baseKey;
+			if (enhancedKey) await env.PHOTOS.delete(baseKey).catch(() => {});
 			const [row] = await db
 				.update(records)
 				.set({
 					sleeveCornersJson: serializeCorners(effectiveCorners),
-					professionalImageKey: key,
+					professionalImageKey,
 					professionalParamsJson: JSON.stringify(params),
 					professionalAlphaKey: matte?.shadowKey ?? null,
 					professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
@@ -520,8 +526,8 @@ export const reframeRecord = createServerFn({ method: "POST" })
 					// already-approved photo live so a quick tweak goes straight out.
 					professionalStatus:
 						record.professionalStatus === "approved" ? "approved" : "ready",
-					// A plain reframe supersedes any prior Real-ESRGAN upscale.
-					professionalEnhanced: false,
+					// The square went through Real-ESRGAN unless that step failed.
+					professionalEnhanced: enhancedKey != null,
 					professionalError: null,
 					updatedAt: new Date(),
 				})
@@ -537,94 +543,12 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			]) {
 				if (
 					staleKey &&
-					staleKey !== key &&
+					staleKey !== professionalImageKey &&
 					staleKey !== matte?.shadowKey &&
 					staleKey !== matte?.cutoutKey
 				) {
 					await env.PHOTOS.delete(staleKey).catch(() => {});
 				}
-			}
-			return row ?? null;
-		}),
-	);
-
-/**
- * The PAID "Enhance" action under the editor preview. Bakes the current corners +
- * tone into a fresh reframe (so what's upscaled matches what the admin sees), runs
- * that through Real-ESRGAN for a higher-res, sharper master, and stores it as the
- * professional image. Approval is preserved — enhancing an already-live cover keeps
- * it live. Atomic: any Replicate/fetch failure throws and leaves the current cover
- * untouched (the throwaway reframe is cleaned up). Returns the updated row, or null
- * if the record is gone.
- */
-export const enhanceProfessional = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(
-		(input: {
-			id: number;
-			corners?: NormalizedCorners;
-			params?: ReframeParams;
-		}) => ({
-			id: input.id,
-			// Runtime-sanitise untrusted input before it drives the homography/tone math:
-			// drop malformed corners (out of 0..1 or non-finite → fall back to the stored
-			// crop) and keep only well-typed knob values.
-			corners: parseNormalizedCorners(input.corners) ?? undefined,
-			params: sanitizeReframeParams(input.params),
-		}),
-	)
-	.handler(({ data: { id, corners, params } }) =>
-		Sentry.startSpan({ name: "enhanceProfessional" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record) return null;
-			if (!record.capturePhotoKey) {
-				throw new Error("This record has no capture photo to enhance.");
-			}
-			const effectiveCorners =
-				corners ?? parseCorners(record.sleeveCornersJson);
-			// Bake the current edit first so the upscale operates on exactly what the
-			// preview shows, then super-resolve it. If the (paid) upscale throws, bin
-			// the throwaway reframe and rethrow — the record keeps its current cover.
-			const { key: baseKey } = await reframeFromCapture(
-				record.capturePhotoKey,
-				effectiveCorners,
-				params,
-			);
-			let upscaledKey: string;
-			try {
-				({ key: upscaledKey } = await upscaleProfessional(baseKey));
-			} catch (err) {
-				await env.PHOTOS.delete(baseKey).catch(() => {});
-				throw err;
-			}
-			// The reframe was only a staging step for the upscale — don't leave it in R2.
-			await env.PHOTOS.delete(baseKey).catch(() => {});
-
-			const [row] = await db
-				.update(records)
-				.set({
-					sleeveCornersJson: serializeCorners(effectiveCorners),
-					professionalImageKey: upscaledKey,
-					professionalParamsJson: JSON.stringify(params),
-					professionalStatus:
-						record.professionalStatus === "approved" ? "approved" : "ready",
-					// This master came out of Real-ESRGAN — mark it so the admin filter
-					// (and any future badge) can tell it apart from a plain reframe.
-					professionalEnhanced: true,
-					professionalError: null,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, id))
-				.returning();
-			// Bin the superseded professional image, best-effort.
-			const stale = record.professionalImageKey;
-			if (stale && stale !== upscaledKey) {
-				await env.PHOTOS.delete(stale).catch(() => {});
 			}
 			return row ?? null;
 		}),
