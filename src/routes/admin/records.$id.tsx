@@ -786,10 +786,11 @@ function RecordDetail() {
 									<p className="text-xs font-medium text-muted-foreground">
 										{proIsLive ? "Generated" : "Preview"}
 									</p>
-									{/* Matte / Cover toggle — matte first (the primary render). Shown
-									    in both states: it switches the live editing preview, and picks
-									    which saved render the generated view shows. */}
-									{record.capturePhotoKey && (
+									{/* Matte / Cover toggle — picks which saved render the generated
+									    view shows. Only shown once generated: both saved renders are
+									    high-res, whereas the live editing preview's client-side matte
+									    is too low-res to be useful, so editing just shows the cover. */}
+									{proIsLive && record.capturePhotoKey && (
 										<div className="flex items-center gap-3 text-[10px]">
 											{(["matte", "cover"] as const).map((m) => (
 												<button
@@ -859,13 +860,13 @@ function RecordDetail() {
 											);
 										})()
 									) : (
-										// Editing (never applied, or dirty): the live client-side
-										// preview of the selected mode, updating as corners/knobs change.
+										// Editing (never applied, or dirty): the live client-side cover
+										// preview, updating as corners/knobs change. No matte here — the
+										// client-side matte is too low-res; the real one comes on Apply.
 										<ProPreview
 											src={`/api/photos/${record.capturePhotoKey}`}
 											corners={corners}
 											params={params}
-											matte={previewMode === "matte"}
 										/>
 									))}
 							</div>
