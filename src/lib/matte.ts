@@ -21,6 +21,7 @@ import {
 	encodePng,
 	loadCapture,
 	toPixelCorners,
+	upscaleImage,
 } from "#/lib/professional";
 import { matteToneFromParams, type ReframeParams } from "#/lib/reframe-params";
 import { firstOutputUrl, runVersion } from "#/lib/replicate";
@@ -49,14 +50,18 @@ import type { NormalizedCorners } from "#/lib/sleeve-corners";
  * `alpha/`, served by the existing `/api/photos/$` passthrough. Server-only.
  */
 
-// Same master resolution as the square hero. The sleeve is perspective-warped to fill
-// most of the frame, with a small (4%) transparent margin left for the contact shadow.
-const CANVAS_SIZE = 2000;
+// Master resolution for the matte. Bumped above the 2000² square hero because the AI
+// path super-resolves the sleeve (below) and can fill a bigger canvas with real detail;
+// kept at 2400 (not higher) so the pure-JS warp/feather/shadow stay within the Worker's
+// CPU + 128 MB memory budget. The sleeve is perspective-warped to fill most of the frame,
+// with a small (4%) transparent margin left for the contact shadow.
+const CANVAS_SIZE = 2400;
 const MARGIN = 0.04;
 const CONTENT_SIZE = Math.round(CANVAS_SIZE * (1 - 2 * MARGIN));
-// Feather (applied at content scale) and a tight, dark down-right contact shadow (canvas
-// scale) — close and crisp, so the sleeve reads as a card pressed against the surface.
-const FEATHER = 4;
+// Feather (applied at content scale, kept small for a crisp edge) and a tight, dark
+// down-right contact shadow (canvas scale) — so the sleeve reads as a card pressed
+// against the surface.
+const FEATHER = 2;
 const SHADOW: ShadowOptions = {
 	blur: Math.round(CANVAS_SIZE * 0.006),
 	offsetX: Math.round(CANVAS_SIZE * 0.002),
@@ -78,6 +83,16 @@ const MODEL_PAD = 0.2;
 // rather than a wide inside-cover-to-deep-wood zone.
 const TRIMAP_REFINE_SEARCH = Math.round(MODEL_SIZE * 0.08);
 const TRIMAP_BAND = Math.round(MODEL_SIZE * 0.025);
+
+// Resolution the matting model computes its alpha at (its `max_size` input). Higher than
+// its 1280 default so the *edge* is crisper — the alpha is the blurriest link, since we
+// upsample it over the super-resolved sleeve. 2048 is the cog's ceiling.
+const MATTE_MODEL_MAX_SIZE = 2048;
+
+// Cap for the ESRGAN super-resolve of the (opaque) sleeve+wood content on the AI path.
+// Keeps the hi-res RGBA buffers the pure-JS re-cut allocates under the Worker's memory
+// budget (2800² RGBA ≈ 31 MB) while still giving the 2400 canvas real detail to sample.
+const MATTE_ESRGAN_MAX = 2800;
 
 // The pinned matting model version (Replicate): our own ViTMatte cog (see
 // `cog/vitmatte-trimap/`), which takes `image` + `trimap` and returns a grayscale alpha
@@ -185,10 +200,42 @@ function grayToRgba(mask: Uint8ClampedArray, w: number, h: number): RgbaImage {
 }
 
 /**
+ * Bilinearly resample a single-channel mask to `tw`×`th`, allocating only the output
+ * (no big RGBA temporaries) so the hi-res re-cut stays inside the Worker's memory budget.
+ */
+function resizeMask(
+	mask: Uint8ClampedArray,
+	w: number,
+	h: number,
+	tw: number,
+	th: number,
+): Uint8ClampedArray {
+	const out = new Uint8ClampedArray(tw * th);
+	for (let y = 0; y < th; y++) {
+		const sy = ((y + 0.5) * h) / th - 0.5;
+		const y0 = Math.max(0, Math.min(h - 1, Math.floor(sy)));
+		const y1 = Math.min(h - 1, y0 + 1);
+		const fy = sy - Math.floor(sy);
+		for (let x = 0; x < tw; x++) {
+			const sx = ((x + 0.5) * w) / tw - 0.5;
+			const x0 = Math.max(0, Math.min(w - 1, Math.floor(sx)));
+			const x1 = Math.min(w - 1, x0 + 1);
+			const fx = sx - Math.floor(sx);
+			const top =
+				mask[y0 * w + x0] + (mask[y0 * w + x1] - mask[y0 * w + x0]) * fx;
+			const bot =
+				mask[y1 * w + x0] + (mask[y1 * w + x1] - mask[y1 * w + x0]) * fx;
+			out[y * tw + x] = top + (bot - top) * fy;
+		}
+	}
+	return out;
+}
+
+/**
  * The paid matte: deskew the sleeve upright with a wood margin, build a trimap from the
- * picked corners, run image + trimap through the pinned ViTMatte deployment, and
- * composite the returned alpha over our own deskewed capture pixels. Throws if the model
- * isn't configured or errors — the caller falls back to the deterministic path.
+ * picked corners, run image + trimap through the pinned ViTMatte deployment, then
+ * super-resolve the sleeve and composite the model's alpha over those higher-res pixels.
+ * Throws if the model isn't configured or errors — the caller falls back to deterministic.
  */
 async function matteAI(
 	capture: RgbaImage,
@@ -223,6 +270,7 @@ async function matteAI(
 	const prediction = await runVersion(MATTE_MODEL_VERSION, {
 		image: imageUri,
 		trimap: trimapUri,
+		max_size: MATTE_MODEL_MAX_SIZE,
 	});
 	const url = firstOutputUrl(prediction.output);
 	if (!url) throw new Error("matting model returned no image");
@@ -231,25 +279,34 @@ async function matteAI(
 	if (!res.ok) throw new Error(`fetching the matte failed (${res.status})`);
 	const model = decodeRgba(new Uint8Array(await res.arrayBuffer()));
 
-	// Composite the model's alpha over our own real capture pixels, then crop back to the
-	// sleeve + frame it — model-quality edge, real pixels. Keep only the largest blob
-	// first, so a stray speck doesn't inflate the crop box and push the cover off-centre.
-	const alpha = keepLargestComponent(
-		maskFromModelOutput(model, content.width, content.height),
+	// The model's alpha at content resolution — largest blob only (drop stray specks),
+	// lightly feathered for a clean anti-aliased edge.
+	const feathered = featherMask(
+		keepLargestComponent(
+			maskFromModelOutput(model, content.width, content.height),
+			content.width,
+			content.height,
+		),
 		content.width,
 		content.height,
+		FEATHER,
 	);
-	const feathered = featherMask(alpha, content.width, content.height, 3);
-	const cutout: RgbaImage = {
-		data: content.data.slice(),
-		width: content.width,
-		height: content.height,
-	};
-	applyMask(cutout, feathered);
-	// Perspective-warp the model's cutout onto an upright rectangle (using the same
-	// refined quad the trimap came from) so it fills the square as a clean front-on
-	// sleeve, then tone + tight shadow.
-	return warpMatteToSquare(cutout, refined, matteOptions(params));
+
+	// Super-resolve the opaque sleeve+wood content, then re-cut it with the model's alpha
+	// (and the refined quad) scaled up to match — real-pixel RGB at ESRGAN resolution, a
+	// model-quality edge. ESRGAN drops alpha, so we re-attach our own.
+	const hi = await upscaleImage(content, { maxSize: MATTE_ESRGAN_MAX });
+	const scale = hi.width / content.width;
+	applyMask(
+		hi,
+		resizeMask(feathered, content.width, content.height, hi.width, hi.height),
+	);
+	const quadHi = refined.map(
+		([x, y]) => [x * scale, y * scale] as [number, number],
+	) as typeof refined;
+	// Perspective-warp the hi-res cutout onto an upright rectangle so it fills the square
+	// as a clean front-on sleeve, then tone + tight shadow.
+	return warpMatteToSquare(hi, quadHi, matteOptions(params));
 }
 
 /**

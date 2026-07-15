@@ -193,6 +193,46 @@ export async function reframeFromCapture(
 }
 
 /**
+ * Super-resolve an in-memory RGBA image through Real-ESRGAN — the reusable core the
+ * matte pipeline shares with {@link upscaleProfessional}. Downscales under the model's
+ * input-pixel ceiling first, ships it as a data URI, and returns the model's (larger)
+ * output decoded back to RGBA, capped at `maxSize` (default {@link UPSCALE_MAX}) so a
+ * big result can't run the pure-JS matte math too hot or blow the Worker's memory.
+ * Opaque input only — ESRGAN drops alpha, so callers re-attach their own.
+ */
+export async function upscaleImage(
+	img: RgbaImage,
+	opts: { maxSize?: number } = {},
+): Promise<RgbaImage> {
+	const cap = opts.maxSize ?? UPSCALE_MAX;
+	const fitted = await env.IMAGES.input(blobStream(encodePng(img)))
+		.transform({
+			width: UPSCALE_INPUT_MAX,
+			height: UPSCALE_INPUT_MAX,
+			fit: "scale-down",
+		})
+		.output({ format: "image/webp", quality: 92 });
+	const fittedBytes = new Uint8Array(await fitted.response().arrayBuffer());
+	const dataUri = `data:image/webp;base64,${bytesToBase64(fittedBytes)}`;
+
+	const prediction = await runVersion(REAL_ESRGAN_VERSION, {
+		image: dataUri,
+		scale: UPSCALE_FACTOR,
+		face_enhance: false,
+	});
+	const url = firstOutputUrl(prediction.output);
+	if (!url) throw new Error("Replicate returned no upscaled image");
+	const res = await fetch(url);
+	if (!res.ok || !res.body)
+		throw new Error(`Fetching the upscaled image failed (${res.status})`);
+
+	const capped = await env.IMAGES.input(res.body)
+		.transform({ width: cap, height: cap, fit: "scale-down" })
+		.output({ format: "image/webp", quality: 92 });
+	return decodeRgba(new Uint8Array(await capped.response().arrayBuffer()));
+}
+
+/**
  * The PAID "Enhance" step: super-resolve an existing professional image (an R2 key)
  * through Real-ESRGAN and store the higher-res master under a fresh `professional/`
  * key. The model's GPU caps the input at ~2.1M pixels, so the full-size reframe is
