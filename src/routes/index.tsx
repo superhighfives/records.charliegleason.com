@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { RecordPanel } from "#/components/record-panel";
+import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
@@ -137,7 +138,9 @@ function Home() {
 													)}
 													loading="lazy"
 												/>
-											) : null;
+											) : (
+												<SleevePlaceholder />
+											);
 										})()}
 									</div>
 								</div>

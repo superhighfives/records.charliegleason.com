@@ -312,10 +312,19 @@ a {
 .grain::after {
   content: "";
   position: absolute;
-  inset: -75%;
+  /* Overscan the card by 20% each side so the keyframe jitter never drags the
+   * tile's own edge into view. Small enough that a single `cover` tile stays
+   * near 1:1 (see below) rather than being upscaled into coarse blotches. */
+  inset: -20%;
   pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='200'%20height='200'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='4'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncG%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncB%20type='linear'%20slope='5'%20intercept='-2'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='200'%20height='200'%20filter='url(%23n)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='400'%20height='400'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='4'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncG%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncB%20type='linear'%20slope='5'%20intercept='-2'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='400'%20height='400'%20filter='url(%23n)'/%3E%3C/svg%3E");
+  /* One tile, no tiling — a repeated background left a faint seam where copies
+   * met, which the jitter swept across as a "line of static" near the top once
+   * the grain faded back to full strength. `cover` fills the overscanned box
+   * with a single copy, so there are no tile boundaries to seam. */
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center;
   /* Static fallback (reduced-motion, no animation); the keyframes take over and
    * flicker around this value when motion is allowed. */
   opacity: var(--grain-alpha);
