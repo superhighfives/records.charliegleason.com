@@ -132,6 +132,9 @@ export function ProPreview({
 					// Split the difference between fully-square and the natural perspective
 					// (mirrors the server MATTE_STRAIGHTEN).
 					straighten: 0.5,
+					// Bleed the sleeve colour into the margin so the warp edge stays off the
+					// wood (scaled down for the small preview).
+					bleed: 2,
 				};
 				image = matteFromCorners(source, px, opts).shadow;
 			} else {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	autoTone,
+	bleedEdgeColor,
 	boxBlur1,
 	buildTrimap,
 	type Corners,
@@ -372,6 +373,28 @@ describe("refineQuadEdges", () => {
 			expect(Math.min(Math.abs(x - 40), Math.abs(x - 160))).toBeLessThan(4);
 			expect(Math.min(Math.abs(y - 40), Math.abs(y - 160))).toBeLessThan(4);
 		}
+	});
+});
+
+describe("bleedEdgeColor", () => {
+	it("floods opaque colour outward without touching alpha", () => {
+		// A single opaque red pixel in the centre of a transparent field; after a 1px
+		// bleed, its 4-neighbours take its RGB but stay transparent.
+		const s = 5;
+		const data = new Uint8ClampedArray(s * s * 4); // all transparent
+		const c = (2 * s + 2) * 4; // centre pixel
+		data[c] = 200;
+		data[c + 1] = 30;
+		data[c + 2] = 40;
+		data[c + 3] = 255;
+		bleedEdgeColor({ data, width: s, height: s }, 1);
+		const right = (2 * s + 3) * 4;
+		expect(data[right]).toBe(200); // colour bled in
+		expect(data[right + 1]).toBe(30);
+		expect(data[right + 3]).toBe(0); // but still transparent
+		// A pixel two steps away is untouched by a 1px bleed.
+		const far = (2 * s + 4) * 4;
+		expect(data[far]).toBe(0);
 	});
 });
 

@@ -750,6 +750,42 @@ export function applyMask(img: RgbaImage, mask: Uint8ClampedArray): void {
 	}
 }
 
+/**
+ * Extend the opaque region's colour outward into the transparent margin by `radius` px
+ * (RGB only — alpha untouched), flood-filling each transparent pixel from its nearest
+ * solid neighbour. Run this on a cut-out *before* a bilinear warp/downscale: the soft
+ * edge then blends the sleeve's own colour instead of whatever sat just outside it (the
+ * tan wood fringe), so the real, ragged alpha edge survives clean — no need to choke it
+ * inward. In place.
+ */
+export function bleedEdgeColor(img: RgbaImage, radius: number): void {
+	const { data, width, height } = img;
+	const solid = new Uint8Array(width * height);
+	for (let p = 0; p < width * height; p++)
+		solid[p] = data[p * 4 + 3] >= 8 ? 1 : 0;
+	for (let pass = 0; pass < radius; pass++) {
+		const added: number[] = [];
+		for (let y = 0; y < height; y++) {
+			for (let x = 0; x < width; x++) {
+				const p = y * width + x;
+				if (solid[p]) continue;
+				let q = -1;
+				if (x > 0 && solid[p - 1]) q = p - 1;
+				else if (x < width - 1 && solid[p + 1]) q = p + 1;
+				else if (y > 0 && solid[p - width]) q = p - width;
+				else if (y < height - 1 && solid[p + width]) q = p + width;
+				if (q >= 0) {
+					data[p * 4] = data[q * 4];
+					data[p * 4 + 1] = data[q * 4 + 1];
+					data[p * 4 + 2] = data[q * 4 + 2];
+					added.push(p);
+				}
+			}
+		}
+		for (const p of added) solid[p] = 1;
+	}
+}
+
 export interface ShadowOptions {
 	/** Blur radius of the shadow, px. */
 	blur: number;
@@ -1162,6 +1198,12 @@ export interface MatteOptions {
 	 * ~0.5 splits the difference. Ignored by the crop-and-centre {@link frameCutout} tail.
 	 */
 	straighten?: number;
+	/**
+	 * Bleed the sleeve's colour this many px into the transparent margin before warping
+	 * ({@link bleedEdgeColor}), so the soft edge doesn't pick up the wood just outside it.
+	 * Lets the ragged alpha edge stay intact instead of being choked inward.
+	 */
+	bleed?: number;
 }
 
 export interface MatteResult {
@@ -1284,6 +1326,9 @@ export function warpMatteToSquare(
 		const ny = (quad[i][1] - cy) * scale + cc;
 		return [nx + (r[0] - nx) * t, ny + (r[1] - ny) * t] as Corner;
 	}) as Corners;
+	// Extend the sleeve's colour into the margin so the warp's edge blend stays off the
+	// wood — keeping the ragged alpha edge instead of choking it inward.
+	if (opts.bleed) bleedEdgeColor(content, opts.bleed);
 	const warped = warpToQuad(
 		content,
 		quad,

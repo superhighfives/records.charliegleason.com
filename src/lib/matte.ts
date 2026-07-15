@@ -10,7 +10,6 @@ import {
 	type MatteOptions,
 	type MatteResult,
 	matteFromCorners,
-	offsetQuad,
 	type RgbaImage,
 	rasterizePolygon,
 	refineQuadEdges,
@@ -89,12 +88,11 @@ const MODEL_PAD = 0.2;
 const TRIMAP_REFINE_SEARCH = Math.round(MODEL_SIZE * 0.05);
 const TRIMAP_BAND = Math.round(MODEL_SIZE * 0.025);
 
-// Choke the cut a few px inside the refined edge so the feathered / bilinear-warped edge
-// samples cover, not the wood just outside it (the thin tan fringe). Kept small — well
-// under the model's inward worn-edge dips, so those (which read as a soft dark shadow)
-// survive. This is the organic↔clean dial: bigger = cleaner/straighter, smaller = more
-// organic but risks the wood fringe.
-const MATTE_EDGE_CHOKE = Math.round(MODEL_SIZE * 0.006);
+// Bleed the sleeve's colour this many px into the transparent margin before the warp, so
+// the soft edge blends cover-into-cover instead of the wood just outside it (the tan
+// fringe). This kills the fringe *without* choking the alpha, so the model's ragged edge
+// and rounded/worn corners stay fully intact. Scaled for the hi-res (~2800) AI content.
+const MATTE_BLEED = 10;
 
 // How far the sleeve is straightened toward a perfect upright rectangle (0…1). Half:
 // upright-ish but keeping some of the real photographic lean, so it doesn't read as a flat
@@ -131,6 +129,7 @@ function matteOptions(params: ReframeParams): MatteOptions {
 		polish,
 		shadow: SHADOW,
 		straighten: MATTE_STRAIGHTEN,
+		bleed: MATTE_BLEED,
 	};
 }
 
@@ -297,12 +296,12 @@ async function matteAI(
 	if (!res.ok) throw new Error(`fetching the matte failed (${res.status})`);
 	const model = decodeRgba(new Uint8Array(await res.arrayBuffer()));
 
-	// Clamp the model's alpha to the refined sleeve rectangle, choked inward a few px: kill
-	// anything beyond the true edge (wood the model kept, or a refine that reached too far)
-	// AND keep the soft/warped edge off the wood just outside. The choke is small enough
-	// that the model's inward worn-edge dips (the soft dark-shadow look) still come through.
-	const cutQuad = offsetQuad(refined, -MATTE_EDGE_CHOKE);
-	const clamp = rasterizePolygon(cutQuad, content.width, content.height);
+	// Clamp the model's alpha *at* the refined sleeve rectangle: kill anything beyond the
+	// true edge (wood the model kept, or a refine that reached too far) but don't erode
+	// inward, so the model's ragged edge, rounded corners and worn-edge dips all survive.
+	// The wood fringe that would otherwise ride the soft edge is handled by the colour
+	// bleed in the warp, not by choking this in.
+	const clamp = rasterizePolygon(refined, content.width, content.height);
 	const raw = maskFromModelOutput(model, content.width, content.height);
 	for (let i = 0; i < raw.length; i++) if (!clamp[i]) raw[i] = 0;
 	// Largest blob only (drop stray specks), lightly feathered for a clean anti-aliased edge.
@@ -314,20 +313,20 @@ async function matteAI(
 	);
 
 	// Super-resolve the opaque sleeve+wood content, then re-cut it with the clamped alpha
-	// scaled up to match — real-pixel RGB at ESRGAN resolution over a model-quality edge
-	// with no wood. ESRGAN drops alpha, so we re-attach our own.
+	// scaled up to match — real-pixel RGB at ESRGAN resolution over a model-quality edge.
+	// ESRGAN drops alpha, so we re-attach our own.
 	const hi = await upscaleImage(content, { maxSize: MATTE_ESRGAN_MAX });
 	const scale = hi.width / content.width;
 	applyMask(
 		hi,
 		resizeMask(feathered, content.width, content.height, hi.width, hi.height),
 	);
-	// Perspective-warp the hi-res cutout upright by the cut quad so it fills the frame as a
-	// card, keeping the organic edge/corners (the alpha isn't a hard rectangle), then tone
-	// + tight shadow.
-	const quadHi = cutQuad.map(
+	// Perspective-warp the hi-res cutout upright by the refined quad so it fills the frame
+	// as a card, keeping the ragged edge/corners (the colour bleed keeps wood out), then
+	// tone + tight shadow.
+	const quadHi = refined.map(
 		([x, y]) => [x * scale, y * scale] as [number, number],
-	) as typeof cutQuad;
+	) as typeof refined;
 	return warpMatteToSquare(hi, quadHi, matteOptions(params));
 }
 
