@@ -296,12 +296,21 @@ async function matteAI(
 	if (!res.ok) throw new Error(`fetching the matte failed (${res.status})`);
 	const model = decodeRgba(new Uint8Array(await res.arrayBuffer()));
 
-	// Clamp the model's alpha *at* the refined sleeve rectangle: kill anything beyond the
-	// true edge (wood the model kept, or a refine that reached too far) but don't erode
-	// inward, so the model's ragged edge, rounded corners and worn-edge dips all survive.
-	// The wood fringe that would otherwise ride the soft edge is handled by the colour
-	// bleed in the warp, not by choking this in.
-	const clamp = rasterizePolygon(refined, content.width, content.height);
+	// Clamp the model's alpha to the sleeve rectangle: kill anything beyond the edge (wood
+	// the model kept, or a refine that reached too far) but don't erode inward, so the
+	// model's ragged edge, rounded corners and worn-edge dips all survive. The wood fringe
+	// that would otherwise ride the soft edge is handled by the colour bleed in the warp.
+	//
+	// Use the *intersection* of the refined edge and the admin's picked corners: refine can
+	// pull the cut tighter (inward) for a clean line, but never push it outward past where
+	// the admin drew — a low-contrast mat/wood edge can fool refine into snapping onto a
+	// wood-plank seam beyond the sleeve, and that overshoot must never survive into the
+	// matte. Since the wood only ever sits outside the picked quad, this removes it whole.
+	const refinedMask = rasterizePolygon(refined, content.width, content.height);
+	const pickedMask = rasterizePolygon(inset, content.width, content.height);
+	const clamp = new Uint8ClampedArray(refinedMask.length);
+	for (let i = 0; i < clamp.length; i++)
+		clamp[i] = refinedMask[i] && pickedMask[i] ? 255 : 0;
 	const raw = maskFromModelOutput(model, content.width, content.height);
 	for (let i = 0; i < raw.length; i++) if (!clamp[i]) raw[i] = 0;
 	// Largest blob only (drop stray specks), lightly feathered for a clean anti-aliased edge.
