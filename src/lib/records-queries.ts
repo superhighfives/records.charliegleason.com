@@ -46,4 +46,7 @@ export const inFlightQueryOptions = queryOptions({
 	queryKey: ["records", "in-flight"] as const,
 	queryFn: () => listInFlight(),
 	refetchInterval: 4000,
+	// Keep polling while the tab is backgrounded — the point of the queue is to kick off
+	// jobs and walk away, so it should be current the moment the user looks back.
+	refetchIntervalInBackground: true,
 });

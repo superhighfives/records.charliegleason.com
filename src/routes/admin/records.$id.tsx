@@ -316,14 +316,32 @@ function RecordDetail() {
 
 	const { data: record } = useQuery({
 		...recordQueryOptions(recordId),
-		// Poll only while the background analysis is in flight. The professional photo
-		// is generated synchronously (no queue), so there's never a pro job to wait on.
+		// Poll while anything's in flight: the background analysis (`status`) OR the queued
+		// Apply photo job (`professionalJobStatus`). Without the latter the editor would sit
+		// on "Generating…" until a manual refresh — the header queue (own poll) would show
+		// then clear the job while this view stayed stale.
 		refetchInterval: (query) => {
-			const status = query.state.data?.status;
-			const active = status === "pending" || status === "processing";
+			const r = query.state.data;
+			const active =
+				r?.status === "pending" ||
+				r?.status === "processing" ||
+				r?.professionalJobStatus === "queued" ||
+				r?.professionalJobStatus === "processing";
 			return active ? 2000 : false;
 		},
 	});
+
+	// When an Apply photo job finishes, flip the Edit/Outputs tabs to Outputs so the
+	// freshly generated renders are what's shown (the editor auto-closes on Apply, so
+	// this lands the next time it's opened — or live if it's been reopened to watch).
+	const wasGeneratingRef = useRef(false);
+	useEffect(() => {
+		const generating =
+			record?.professionalJobStatus === "queued" ||
+			record?.professionalJobStatus === "processing";
+		if (wasGeneratingRef.current && !generating) setToolTab("outputs");
+		wasGeneratingRef.current = generating;
+	}, [record?.professionalJobStatus]);
 
 	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
 	const [results, setResults] = useState<Array<DiscogsCandidate> | null>(null);
