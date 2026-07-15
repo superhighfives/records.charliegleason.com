@@ -1156,6 +1156,12 @@ export interface MatteOptions {
 	tone?: AutoToneOptions | false;
 	polish?: { saturation: number; contrast: number; gamma: number };
 	shadow?: ShadowOptions;
+	/**
+	 * How far {@link warpMatteToSquare} straightens the sleeve toward a perfect upright
+	 * rectangle: 1 (default) fully squares it, 0 keeps the real photographic perspective,
+	 * ~0.5 splits the difference. Ignored by the crop-and-centre {@link frameCutout} tail.
+	 */
+	straighten?: number;
 }
 
 export interface MatteResult {
@@ -1237,13 +1243,15 @@ export function composeMatte(
 }
 
 /**
- * Perspective-warp an already-cut sleeve so its (refined) `quad` maps onto an upright
- * rectangle filling the content area — a clean, front-on floating sleeve rather than the
- * tilted/keystoned capture — then tone, polish and add a contact shadow. The quad's own
- * edge lengths set the rectangle's aspect ratio, so a near-square sleeve stays near-square
- * and a taller one stays taller. `content` must already carry the cutout alpha
- * (transparent outside the sleeve); pixels outside the quad are never shown, since the
- * output beyond the rectangle inverse-maps to that transparent surround.
+ * Perspective-warp an already-cut sleeve so its (refined) `quad` maps toward an upright
+ * rectangle filling the content area — then tone, polish and add a contact shadow. The
+ * quad's own edge lengths set the rectangle's aspect ratio, so a near-square sleeve stays
+ * near-square and a taller one stays taller. `opts.straighten` (0…1, default 1) blends the
+ * destination between the sleeve's own natural (keystoned/tilted) shape and that perfect
+ * rectangle: 1 fully squares it, 0 keeps the real photographic perspective, ~0.5 splits
+ * the difference — upright-ish but still reading as a physical object, not a flat swatch.
+ * `content` must already carry the cutout alpha (transparent outside the sleeve); pixels
+ * outside the quad are never shown, since the output beyond it inverse-maps to transparent.
  */
 export function warpMatteToSquare(
 	content: RgbaImage,
@@ -1264,10 +1272,22 @@ export function warpMatteToSquare(
 		[ox + rw, oy + rh],
 		[ox, oy + rh],
 	];
+	// The sleeve's own shape, just scaled about its centroid to the same size and centred —
+	// keeps the natural keystone/tilt. The destination blends this toward the perfect rect
+	// by `straighten`, so a partial warp keeps some real perspective.
+	const t = opts.straighten ?? 1;
+	const cx = (quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]) / 4;
+	const cy = (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]) / 4;
+	const cc = opts.canvasSize / 2;
+	const dst = rect.map((r, i) => {
+		const nx = (quad[i][0] - cx) * scale + cc;
+		const ny = (quad[i][1] - cy) * scale + cc;
+		return [nx + (r[0] - nx) * t, ny + (r[1] - ny) * t] as Corner;
+	}) as Corners;
 	const warped = warpToQuad(
 		content,
 		quad,
-		rect,
+		dst,
 		opts.canvasSize,
 		opts.canvasSize,
 	);

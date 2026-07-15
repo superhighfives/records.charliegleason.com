@@ -96,6 +96,11 @@ const TRIMAP_BAND = Math.round(MODEL_SIZE * 0.025);
 // organic but risks the wood fringe.
 const MATTE_EDGE_CHOKE = Math.round(MODEL_SIZE * 0.006);
 
+// How far the sleeve is straightened toward a perfect upright rectangle (0…1). Half:
+// upright-ish but keeping some of the real photographic lean, so it doesn't read as a flat
+// dead-square swatch. 1 = fully square, 0 = the sleeve's natural perspective.
+const MATTE_STRAIGHTEN = 0.5;
+
 // Resolution the matting model computes its alpha at (its `max_size` input). Higher than
 // its 1280 default so the *edge* is crisper — the alpha is the blurriest link, since we
 // upsample it over the super-resolved sleeve. 2048 is the cog's ceiling.
@@ -125,6 +130,7 @@ function matteOptions(params: ReframeParams): MatteOptions {
 		tone,
 		polish,
 		shadow: SHADOW,
+		straighten: MATTE_STRAIGHTEN,
 	};
 }
 

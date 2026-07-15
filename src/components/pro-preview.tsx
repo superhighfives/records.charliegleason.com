@@ -129,6 +129,9 @@ export function ProPreview({
 						offsetY: Math.round(PREVIEW_SIZE * 0.004),
 						opacity: 0.55,
 					},
+					// Split the difference between fully-square and the natural perspective
+					// (mirrors the server MATTE_STRAIGHTEN).
+					straighten: 0.5,
 				};
 				image = matteFromCorners(source, px, opts).shadow;
 			} else {
