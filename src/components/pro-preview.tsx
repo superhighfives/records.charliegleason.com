@@ -33,8 +33,8 @@ import { cn } from "#/lib/utils";
 
 // Preview render resolution — small enough to warp per animation frame on the main thread.
 const PREVIEW_SIZE = 448;
-// The matte's transparent margin (fraction per side) — mirrors the server's ~7%.
-const MATTE_MARGIN = 0.07;
+// The matte's transparent margin (fraction per side) — mirrors the server's 4%.
+const MATTE_MARGIN = 0.04;
 // Cap the decoded capture's longest side so warp sampling stays cheap (corners are
 // normalised, so a downscaled source maps identically).
 const SOURCE_MAX = 1100;
@@ -122,11 +122,12 @@ export function ProPreview({
 					feather: 2,
 					tone: matteGrade.tone,
 					polish: matteGrade.polish,
+					// Tight, dark contact shadow (mirrors the server SHADOW fractions).
 					shadow: {
-						blur: Math.round(PREVIEW_SIZE * 0.02),
-						offsetX: Math.round(PREVIEW_SIZE * 0.006),
-						offsetY: Math.round(PREVIEW_SIZE * 0.012),
-						opacity: 0.34,
+						blur: Math.round(PREVIEW_SIZE * 0.006),
+						offsetX: Math.round(PREVIEW_SIZE * 0.002),
+						offsetY: Math.round(PREVIEW_SIZE * 0.004),
+						opacity: 0.55,
 					},
 				};
 				image = matteFromCorners(source, px, opts).shadow;

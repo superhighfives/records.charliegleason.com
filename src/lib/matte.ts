@@ -50,19 +50,18 @@ import type { NormalizedCorners } from "#/lib/sleeve-corners";
  */
 
 // Same master resolution as the square hero. The sleeve is perspective-warped to fill
-// most of the frame, with a small transparent margin left for the contact shadow.
+// most of the frame, with a small (4%) transparent margin left for the contact shadow.
 const CANVAS_SIZE = 2000;
-const MARGIN = 0.05;
+const MARGIN = 0.04;
 const CONTENT_SIZE = Math.round(CANVAS_SIZE * (1 - 2 * MARGIN));
-// Feather (applied at content scale) and a tight down-right contact shadow (canvas
-// scale) — close and fairly crisp, so the sleeve reads as a card resting on a surface
-// rather than floating high above it.
+// Feather (applied at content scale) and a tight, dark down-right contact shadow (canvas
+// scale) — close and crisp, so the sleeve reads as a card pressed against the surface.
 const FEATHER = 4;
 const SHADOW: ShadowOptions = {
-	blur: Math.round(CANVAS_SIZE * 0.012),
-	offsetX: Math.round(CANVAS_SIZE * 0.003),
-	offsetY: Math.round(CANVAS_SIZE * 0.007),
-	opacity: 0.3,
+	blur: Math.round(CANVAS_SIZE * 0.006),
+	offsetX: Math.round(CANVAS_SIZE * 0.002),
+	offsetY: Math.round(CANVAS_SIZE * 0.004),
+	opacity: 0.55,
 };
 
 // The deskewed square (sleeve + a margin of surrounding capture) we send the matting

@@ -183,21 +183,19 @@ export function RecordPanel({
 	// shows an image; the public panel shows only an approved photo (else nothing).
 	const cover = displayCoverKey(record, { includeCapture: admin });
 
-	// Direct links to the record's stored renders, for reference. The square hero and
-	// both matte variants are public (already served, gated to approved on public
-	// records); the raw capture is admin-only, so it's only offered in the admin drawer.
-	const referenceImages = (
-		[
-			{ label: "Square cover", key: record.professionalImageKey },
-			{ label: "Matte (shadow)", key: record.professionalAlphaKey },
-			{ label: "Matte (cutout)", key: record.professionalAlphaCutoutKey },
-			admin
-				? { label: "Original capture", key: record.capturePhotoKey ?? null }
-				: null,
-		] as Array<{ label: string; key: string | null } | null>
-	).filter(
-		(r): r is { label: string; key: string } => r != null && r.key != null,
-	);
+	// Direct links to the record's stored renders, for the admin's reference only — the
+	// square hero, both matte variants, and the raw iPhone capture. Empty (block hidden)
+	// on the public drawer.
+	const referenceImages = admin
+		? (
+				[
+					{ label: "Square cover", key: record.professionalImageKey },
+					{ label: "Matte (shadow)", key: record.professionalAlphaKey },
+					{ label: "Matte (cutout)", key: record.professionalAlphaCutoutKey },
+					{ label: "Original capture", key: record.capturePhotoKey ?? null },
+				] as Array<{ label: string; key: string | null }>
+			).filter((r): r is { label: string; key: string } => r.key != null)
+		: [];
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
