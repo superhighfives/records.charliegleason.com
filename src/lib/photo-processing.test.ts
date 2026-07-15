@@ -374,6 +374,42 @@ describe("refineQuadEdges", () => {
 			expect(Math.min(Math.abs(y - 40), Math.abs(y - 160))).toBeLessThan(4);
 		}
 	});
+
+	it("keeps to the true edge instead of a stronger seam further out", () => {
+		// The sleeve rect [40,160)² (value 200) on wood (60), plus a *brighter* vertical
+		// seam at x∈[176,180) (value 255) just outside the right edge — a wood-plank line
+		// in the floor. Its gradient (195) beats the sleeve's own right edge (140), so an
+		// unweighted search snaps the right edge out onto it and drags a wood strip into
+		// the cutout. Proximity weighting must keep the right edge at the true ~160.
+		const size = 220;
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const inRect = x >= 40 && x < 160 && y >= 40 && y < 160;
+				const inSeam = x >= 176 && x < 180 && y >= 40 && y < 160;
+				const v = inSeam ? 255 : inRect ? 200 : 60;
+				const i = (y * size + x) * 4;
+				data[i] = data[i + 1] = data[i + 2] = v;
+				data[i + 3] = 255;
+			}
+		const inset: Corners = [
+			[55, 55],
+			[145, 55],
+			[145, 145],
+			[55, 145],
+		];
+		const refined = refineQuadEdges(
+			{ data, width: size, height: size },
+			inset,
+			{
+				search: 40,
+			},
+		);
+		// The right-edge corners (indices 1, 2) must stay at the true edge (~160), not the
+		// seam near 178.
+		expect(Math.abs(refined[1][0] - 160)).toBeLessThan(5);
+		expect(Math.abs(refined[2][0] - 160)).toBeLessThan(5);
+	});
 });
 
 describe("bleedEdgeColor", () => {

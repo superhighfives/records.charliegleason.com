@@ -1053,13 +1053,23 @@ function lineIntersect(a1: Corner, a2: Corner, b1: Corner, b2: Corner): Corner {
 }
 
 /**
+ * How hard {@link refineQuadEdges} biases toward the picked edge over a distant one:
+ * the gradient score is scaled by `1 - FALLOFF * (distance / search)`, so at the far
+ * reach of the search a competing edge keeps only `1 - FALLOFF` of its strength. Tuned
+ * so the true sleeve edge (near the pick) wins over a stronger wood-plank seam metres of
+ * pixels away, without being so aggressive it can't reach a genuinely-offset edge.
+ */
+const EDGE_PROXIMITY_FALLOFF = 0.7;
+
+/**
  * Refine a starting `quad` (the admin's picked corners, mapped into `img`) to the
  * sleeve's true edges: slide each of the four edges along its outward normal to the
  * offset with the strongest *summed* luminance gradient — the full-length sleeve/wood
- * transition. Because the score sums the whole edge, a local bump (a neighbouring
- * record poking in) or per-pixel noise can't pull it; the result is four clean, straight
- * lines whose intersections are the refined corners. This is why the picked points
- * matter: they say where each edge roughly is, so we only search a band around it.
+ * transition — weighted toward the picked position (see {@link EDGE_PROXIMITY_FALLOFF}).
+ * Because the score sums the whole edge, a local bump (a neighbouring record poking in)
+ * or per-pixel noise can't pull it; the result is four clean, straight lines whose
+ * intersections are the refined corners. This is why the picked points matter: they say
+ * where each edge roughly is, so we only search a band around it.
  */
 export function refineQuadEdges(
 	img: RgbaImage,
@@ -1096,7 +1106,9 @@ export function refineQuadEdges(
 		let bestDelta = 0;
 		let bestScore = -1;
 		// Mostly outward (the picked corners sit inside the cover), a little inward.
-		for (let d = -Math.round(search * 0.5); d <= search; d++) {
+		const outward = Math.max(1, search);
+		const inward = Math.max(1, Math.round(search * 0.5));
+		for (let d = -inward; d <= outward; d++) {
 			let score = 0;
 			for (let s = 0; s < samples; s++) {
 				const t = (s + 0.5) / samples;
@@ -1104,6 +1116,14 @@ export function refineQuadEdges(
 				const py = ay + ey * t + ny * d;
 				score += Math.abs(lum(px + nx, py + ny) - lum(px - nx, py - ny));
 			}
+			// Prefer the edge nearest the picked line. Without this, a stronger gradient
+			// far outside the sleeve — a wood-plank seam in the floor beyond the cover, say —
+			// out-scores the true edge and drags the quad out into the background, which the
+			// trimap then locks as foreground (the big wood chunk in the matte). Falloff is
+			// normalised per side, so the true edge close to the pick wins unless a distant
+			// one is dramatically stronger.
+			const norm = d >= 0 ? d / outward : -d / inward;
+			score *= 1 - EDGE_PROXIMITY_FALLOFF * norm;
 			if (score > bestScore) {
 				bestScore = score;
 				bestDelta = d;
