@@ -183,8 +183,20 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		if (!(await getAdminSession())) return [] as InFlightItem[];
 
 		const db = getDb(env.DB);
+		// Projected to only the columns InFlightItem + displayCoverKey need — this is
+		// polled on a short interval, so pulling the whole row (incl. large JSON/text
+		// columns) every few seconds would be wasted D1 work as the table grows.
 		const rows = await db
-			.select()
+			.select({
+				id: records.id,
+				artist: records.artist,
+				title: records.title,
+				status: records.status,
+				professionalJobStatus: records.professionalJobStatus,
+				professionalStatus: records.professionalStatus,
+				professionalImageKey: records.professionalImageKey,
+				capturePhotoKey: records.capturePhotoKey,
+			})
 			.from(records)
 			.where(
 				or(
