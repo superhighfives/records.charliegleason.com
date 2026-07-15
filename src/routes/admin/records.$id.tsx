@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Image as ImageIcon, Info, Loader2, Sparkles } from "lucide-react";
+import {
+	ExternalLink,
+	Image as ImageIcon,
+	Info,
+	Loader2,
+	Sparkles,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -1008,6 +1014,54 @@ function RecordDetail() {
 								/>
 							</div>
 						</div>
+
+						{/* Direct links to every stored render for this record, for reference
+						    while editing — the original capture, the square hero, and both matte
+						    variants. Only the keys that exist are shown. */}
+						{(() => {
+							const refs = [
+								{ label: "Original capture", key: record.capturePhotoKey },
+								{ label: "Square cover", key: record.professionalImageKey },
+								{ label: "Matte (shadow)", key: record.professionalAlphaKey },
+								{
+									label: "Matte (cutout)",
+									key: record.professionalAlphaCutoutKey,
+								},
+							].filter(
+								(r): r is { label: string; key: string } => r.key != null,
+							);
+							if (refs.length === 0) return null;
+							return (
+								<div className="rounded-md border bg-muted/30 p-3">
+									<p className="mb-2 text-xs font-medium text-muted-foreground">
+										Reference images
+									</p>
+									<dl className="divide-y divide-border">
+										{refs.map(({ label, key }) => (
+											<div
+												key={key}
+												className="flex items-baseline justify-between gap-4 py-1.5 text-xs"
+											>
+												<dt className="shrink-0 text-muted-foreground">
+													{label}
+												</dt>
+												<dd className="min-w-0 text-right">
+													<a
+														href={`/api/photos/${key}`}
+														target="_blank"
+														rel="noreferrer"
+														className="inline-flex items-center gap-1 text-foreground hover:text-brand"
+													>
+														Open
+														<ExternalLink className="size-3" />
+													</a>
+												</dd>
+											</div>
+										))}
+									</dl>
+								</div>
+							);
+						})()}
 
 						{/* Destructive "Remove cover" on the left (only when there's an
 						    approved cover to take down); Reset + Apply on the right (Apply
