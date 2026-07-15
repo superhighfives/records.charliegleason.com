@@ -1321,10 +1321,10 @@ export function composeMatteWarped(
 // picked quad, so {@link refineQuadEdges} has a band to search outward into for the true
 // sleeve edge — since the admin picks corners *inside* the cover.
 const MATTE_DETERMINISTIC_PAD = 0.12;
-// Erode the cut quad inward by this fraction of the deskewed frame before rasterising, so
-// the rectangle sits a hair inside the true edge — never showing wood or the sleeve's
-// bright paper edge (mirrors the AI path's inward bias).
-const MATTE_EDGE_INSET = 0.012;
+// Erode the cut quad inward by this small fraction of the deskewed frame before
+// rasterising, so the rectangle sits a hair inside the true edge — clearing wood / the
+// bright paper edge without eating into the cover.
+const MATTE_EDGE_INSET = 0.006;
 
 /**
  * The deterministic (free) matte end-to-end: deskew the capture upright with a margin of
@@ -1360,5 +1360,5 @@ export function matteFromCorners(
 	// Bias the cut a hair inside the refined edge so wood / the paper edge never shows.
 	const quad = offsetQuad(refined, -Math.round(outSize * MATTE_EDGE_INSET));
 	const mask = rasterizePolygon(quad, content.width, content.height);
-	return composeMatte(content, mask, opts);
+	return composeMatteWarped(content, mask, quad, opts);
 }

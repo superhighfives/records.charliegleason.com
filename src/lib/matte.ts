@@ -6,16 +6,15 @@ import {
 	buildTrimap,
 	deskewContentPadded,
 	featherMask,
-	frameCutout,
 	keepLargestComponent,
 	type MatteOptions,
 	type MatteResult,
 	matteFromCorners,
-	offsetQuad,
 	type RgbaImage,
 	rasterizePolygon,
 	refineQuadEdges,
 	type ShadowOptions,
+	warpMatteToSquare,
 } from "#/lib/photo-processing";
 import {
 	blobStream,
@@ -33,10 +32,11 @@ import type { NormalizedCorners } from "#/lib/sleeve-corners";
  * The second render: a transparent, true-edged sleeve floating on breathing room with
  * a soft contact shadow — the sleeve as an *object in space*, next to the square hero.
  *
- * Both paths deskew the sleeve level, cut it out, then crop to its real outline, centre
- * it on breathing room and add a tight contact shadow ({@link frameCutout}) — keeping the
- * sleeve's true edge and natural perspective so it reads as a physical object in space
- * (not a flat, perfectly-rectangular swatch). Two ways to cut it out:
+ * Both paths deskew the sleeve, cut it out, then perspective-warp it upright to fill the
+ * frame ({@link warpMatteToSquare}) with a tight contact shadow. The cut is clamped only
+ * *at* the true sleeve edge (never eroded inside it), so ViTMatte's rounded corners and
+ * soft worn edge survive the warp — an upright card that still reads as a physical object,
+ * not a hard geometric box. Two ways to cut it out:
  *   - the FREE, deterministic {@link matteFromCorners} (edge-snap silhouette) — also
  *     the automatic fallback when the paid path is unavailable;
  *   - the PAID {@link matteAI}: deskew the sleeve upright with a wood margin, derive a
@@ -86,13 +86,6 @@ const MODEL_PAD = 0.2;
 // rather than a wide inside-cover-to-deep-wood zone.
 const TRIMAP_REFINE_SEARCH = Math.round(MODEL_SIZE * 0.05);
 const TRIMAP_BAND = Math.round(MODEL_SIZE * 0.025);
-
-// The final cut is clamped to the refined sleeve rectangle, eroded inward by this much,
-// then the model's alpha can only ever sit *inside* it — so no wood beyond the sleeve can
-// ride along (the failure when the model or the edge-refine reaches a hair past the true
-// edge). The small inward bias also clears the sleeve's own bright paper edge; since the
-// admin picks corners inside the cover, losing this sliver is invisible.
-const MATTE_EDGE_INSET = Math.round(MODEL_SIZE * 0.012);
 
 // Resolution the matting model computes its alpha at (its `max_size` input). Higher than
 // its 1280 default so the *edge* is crisper — the alpha is the blurriest link, since we
@@ -289,12 +282,10 @@ async function matteAI(
 	if (!res.ok) throw new Error(`fetching the matte failed (${res.status})`);
 	const model = decodeRgba(new Uint8Array(await res.arrayBuffer()));
 
-	// Clamp the model's alpha to the refined sleeve rectangle (eroded inward a touch): a
-	// hard cut so nothing beyond the sleeve — wood the model kept, or an edge-refine that
-	// reached a hair too far — can survive. The model still shapes the edge *inside* the
-	// rectangle; it just can't extend past it.
-	const cutQuad = offsetQuad(refined, -MATTE_EDGE_INSET);
-	const clamp = rasterizePolygon(cutQuad, content.width, content.height);
+	// Clamp the model's alpha *at* the refined sleeve rectangle: kill anything beyond it
+	// (wood the model kept, or an edge-refine that reached too far) but don't erode inward,
+	// so the model's rounded corners + soft worn edge just inside the rectangle survive.
+	const clamp = rasterizePolygon(refined, content.width, content.height);
 	const raw = maskFromModelOutput(model, content.width, content.height);
 	for (let i = 0; i < raw.length; i++) if (!clamp[i]) raw[i] = 0;
 	// Largest blob only (drop stray specks), lightly feathered for a clean anti-aliased edge.
@@ -309,14 +300,18 @@ async function matteAI(
 	// scaled up to match — real-pixel RGB at ESRGAN resolution over a model-quality edge
 	// with no wood. ESRGAN drops alpha, so we re-attach our own.
 	const hi = await upscaleImage(content, { maxSize: MATTE_ESRGAN_MAX });
+	const scale = hi.width / content.width;
 	applyMask(
 		hi,
 		resizeMask(feathered, content.width, content.height, hi.width, hi.height),
 	);
-	// Frame the organic cutout — crop to its real outline, centre it, add the contact
-	// shadow — rather than warping it to a perfect rectangle: keeps the sleeve's true edge
-	// and natural perspective, so it reads as a physical object, not a flat swatch.
-	return frameCutout(hi, matteOptions(params));
+	// Perspective-warp the hi-res cutout upright by the refined quad so it fills the frame
+	// as a card, keeping the organic edge/corners (the alpha isn't a hard rectangle), then
+	// tone + tight shadow.
+	const quadHi = refined.map(
+		([x, y]) => [x * scale, y * scale] as [number, number],
+	) as typeof refined;
+	return warpMatteToSquare(hi, quadHi, matteOptions(params));
 }
 
 /**
