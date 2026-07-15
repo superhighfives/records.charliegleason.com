@@ -8,7 +8,24 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu";
+import type { InFlightItem } from "#/lib/records";
 import { inFlightQueryOptions } from "#/lib/records-queries";
+
+/**
+ * The step label for a queued item: which stage of its pipeline it's actually in —
+ * waiting in the queue vs actively running. (The generate phase runs the enhance and
+ * matte in parallel, so there's no finer reframe→enhance→matte sequence to show.)
+ */
+function stepLabel(item: InFlightItem): string {
+	if (item.kind === "analyze") {
+		return item.state === "processing"
+			? "Analyzing capture"
+			: "Queued to analyze";
+	}
+	return item.state === "processing"
+		? "Generating photo"
+		: "Queued to generate";
+}
 
 /**
  * Header dropdown listing everything currently in flight — captures being analysed and
@@ -54,9 +71,7 @@ export function QueueMenu() {
 									{item.artist} — {item.title}
 								</span>
 								<span className="text-xs text-muted-foreground">
-									{item.kind === "analyze"
-										? "Analyzing capture"
-										: "Generating photo"}
+									{stepLabel(item)}
 								</span>
 							</span>
 						</Link>

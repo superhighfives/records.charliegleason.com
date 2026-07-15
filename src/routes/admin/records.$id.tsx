@@ -535,7 +535,7 @@ function RecordDetail() {
 				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
 			await invalidate();
 			setEditorOpen(false);
-			toast.success("Generating photo — track it from the queue up top.");
+			toast.success("Generating photo...");
 		},
 		onError: (err) =>
 			toast.error(
