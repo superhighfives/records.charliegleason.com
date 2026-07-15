@@ -17,9 +17,11 @@ import {
 } from "#/lib/reframe-params";
 import { firstOutputUrl, runVersion } from "#/lib/replicate";
 import {
-	DEFAULT_CORNERS,
+	bandFromQuad,
+	type CornerBand,
+	DEFAULT_BAND,
 	type NormalizedCorners,
-	parseCorners,
+	parseCornerBand,
 } from "#/lib/sleeve-corners";
 
 /**
@@ -138,13 +140,16 @@ export async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
  */
 async function warpEncodeStore(
 	capture: RgbaImage,
-	corners: NormalizedCorners,
+	band: CornerBand,
 	params: ReframeParams,
 ): Promise<{ key: string }> {
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
 	const { image } = reframeFromCorners(
 		capture,
-		toPixelCorners(corners, capture.width, capture.height),
+		// The cover is opaque edge-to-edge, so it warps from the band's INNER quad —
+		// certified wholly on the sleeve, so it can never drag a sliver of background
+		// into its border. The matte paths use the full band (they resolve the true edge).
+		toPixelCorners(band.inner, capture.width, capture.height),
 		{
 			canvasSize: CANVAS_SIZE,
 			// The sleeve fills the whole canvas — no transparent margin.
@@ -186,10 +191,10 @@ async function warpEncodeStore(
  */
 export async function reframeFromCapture(
 	capturePhotoKey: string,
-	corners: NormalizedCorners,
+	band: CornerBand,
 	params: ReframeParams = {},
 ): Promise<{ key: string }> {
-	return warpEncodeStore(await loadCapture(capturePhotoKey), corners, params);
+	return warpEncodeStore(await loadCapture(capturePhotoKey), band, params);
 }
 
 /**
@@ -301,10 +306,11 @@ export async function detectCaptureCorners(
 
 /**
  * Reframe a record end-to-end for the queue (auto-on-capture + bulk). Decodes the capture
- * once, then picks the corners: the admin's stored crop if there is one, otherwise a
- * best-effort {@link detectSleeveCorners} seed (full-frame default when detection can't
- * find the sleeve). Returns the new professional R2 key AND the corners used, so the
- * consumer can persist them — that seed is what the corner editor opens pre-cropped to.
+ * once, then picks the corner band: the admin's stored band if there is one (legacy
+ * single-quad rows are synthesised into a band at parse time), otherwise a band seeded
+ * from a best-effort {@link detectSleeveCorners} pass (full-frame default when detection
+ * can't find the sleeve). Returns the new professional R2 key AND the band used, so the
+ * consumer can persist it — that seed is what the corner editor opens pre-cropped to.
  * Does NOT touch the DB itself.
  */
 export async function professionalPipeline(
@@ -312,19 +318,23 @@ export async function professionalPipeline(
 		Record,
 		"capturePhotoKey" | "sleeveCornersJson" | "professionalParamsJson"
 	>,
-): Promise<{ professionalKey: string; corners: NormalizedCorners }> {
+): Promise<{ professionalKey: string; band: CornerBand }> {
 	if (!record.capturePhotoKey) {
 		throw new Error("record has no capture photo to work from");
 	}
 	const capture = await loadCapture(record.capturePhotoKey);
-	// Respect a stored crop; otherwise seed by detecting the sleeve (full-frame fallback).
-	const corners = record.sleeveCornersJson
-		? parseCorners(record.sleeveCornersJson)
-		: (detectSleeveCorners(capture) ?? DEFAULT_CORNERS);
+	// Respect a stored band; otherwise seed by detecting the sleeve (full-frame fallback).
+	let band: CornerBand;
+	if (record.sleeveCornersJson) {
+		band = parseCornerBand(record.sleeveCornersJson);
+	} else {
+		const detected = detectSleeveCorners(capture);
+		band = detected ? bandFromQuad(detected) : DEFAULT_BAND;
+	}
 	const { key: professionalKey } = await warpEncodeStore(
 		capture,
-		corners,
+		band,
 		parseReframeParams(record.professionalParamsJson),
 	);
-	return { professionalKey, corners };
+	return { professionalKey, band };
 }

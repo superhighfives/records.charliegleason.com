@@ -4,21 +4,27 @@ import {
 	bleedEdgeColor,
 	boxBlur1,
 	buildTrimap,
+	buildTrimapFromBand,
 	type Corners,
 	composeMatte,
 	composeMatteWarped,
+	deskewBandPadded,
 	deskewToLevel,
 	detectSleeveCorners,
+	edgeDistances,
 	homography,
 	keepLargestComponent,
-	matteFromCorners,
+	matteFromBand,
+	midQuad,
 	offsetQuad,
 	padToCanvas,
 	type RgbaImage,
 	rasterizePolygon,
 	refineQuadEdges,
+	refineQuadEdgesDetailed,
 	reframeFromCorners,
 	shadowFromAlpha,
+	vetoBackgroundAlpha,
 	warpToQuad,
 	warpToSquare,
 } from "./photo-processing";
@@ -410,6 +416,85 @@ describe("refineQuadEdges", () => {
 		expect(Math.abs(refined[1][0] - 160)).toBeLessThan(5);
 		expect(Math.abs(refined[2][0] - 160)).toBeLessThan(5);
 	});
+
+	it("finds a chroma-only edge that has no luminance step", () => {
+		// A warm rectangle on a cool field with (near-)identical luminance — the
+		// dark-charcoal-mat-on-dark-shadowed-wood case. A luma-only gradient sees
+		// nothing here; the per-channel colour gradient must still snap to the edge.
+		// luma(150,60,50) ≈ 78.4 vs luma(40,95,95) ≈ 83.3 — a ~5/255 luma step, but a
+		// |ΔR|+|ΔG|+|ΔB| step of 190.
+		const size = 200;
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const inside = x >= 40 && x < 160 && y >= 40 && y < 160;
+				const i = (y * size + x) * 4;
+				data[i] = inside ? 150 : 40;
+				data[i + 1] = inside ? 60 : 95;
+				data[i + 2] = inside ? 50 : 95;
+				data[i + 3] = 255;
+			}
+		const inset: Corners = [
+			[60, 60],
+			[140, 60],
+			[140, 140],
+			[60, 140],
+		];
+		const refined = refineQuadEdges(
+			{ data, width: size, height: size },
+			inset,
+			{ search: 40 },
+		);
+		for (const [x, y] of refined) {
+			expect(Math.min(Math.abs(x - 40), Math.abs(x - 160))).toBeLessThan(4);
+			expect(Math.min(Math.abs(y - 40), Math.abs(y - 160))).toBeLessThan(4);
+		}
+	});
+});
+
+describe("refineQuadEdgesDetailed", () => {
+	it("reports high confidence on a clear edge and zero on a featureless field", () => {
+		const size = 200;
+		const inset: Corners = [
+			[60, 60],
+			[140, 60],
+			[140, 140],
+			[60, 140],
+		];
+		// Clear edge: bright rect on dark field.
+		const clear = new Uint8ClampedArray(size * size * 4);
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const inside = x >= 40 && x < 160 && y >= 40 && y < 160;
+				const i = (y * size + x) * 4;
+				clear[i] = clear[i + 1] = clear[i + 2] = inside ? 220 : 30;
+				clear[i + 3] = 255;
+			}
+		const strong = refineQuadEdgesDetailed(
+			{ data: clear, width: size, height: size },
+			inset,
+			{ search: 40 },
+		);
+		for (const c of strong.confidence) expect(c).toBeGreaterThan(3);
+
+		// Featureless: a flat grey field — no boundary to find anywhere.
+		const flat = new Uint8ClampedArray(size * size * 4);
+		for (let i = 0; i < size * size; i++) {
+			flat[i * 4] = flat[i * 4 + 1] = flat[i * 4 + 2] = 100;
+			flat[i * 4 + 3] = 255;
+		}
+		const weak = refineQuadEdgesDetailed(
+			{ data: flat, width: size, height: size },
+			inset,
+			{ search: 40, minConfidence: 3 },
+		);
+		for (const c of weak.confidence) expect(c).toBeLessThan(3);
+		// With minConfidence, every edge reverts to the picked line.
+		for (let i = 0; i < 4; i++) {
+			expect(weak.corners[i][0]).toBeCloseTo(inset[i][0], 3);
+			expect(weak.corners[i][1]).toBeCloseTo(inset[i][1], 3);
+		}
+	});
 });
 
 describe("bleedEdgeColor", () => {
@@ -450,6 +535,96 @@ describe("offsetQuad", () => {
 		const shrunk = offsetQuad(quad, -10); // shrink 10px each edge
 		expect(shrunk[0][0]).toBeCloseTo(60, 5);
 		expect(shrunk[2][0]).toBeCloseTo(140, 5);
+	});
+
+	it("applies per-edge deltas independently", () => {
+		const quad: Corners = [
+			[50, 50],
+			[150, 50],
+			[150, 150],
+			[50, 150],
+		];
+		// Only the right edge (TR→BR, index 1) erodes inward by 20.
+		const out = offsetQuad(quad, [0, -20, 0, 0]);
+		expect(out[1][0]).toBeCloseTo(130, 5); // TR pulled left
+		expect(out[2][0]).toBeCloseTo(130, 5); // BR pulled left
+		expect(out[0][0]).toBeCloseTo(50, 5); // TL untouched
+		expect(out[1][1]).toBeCloseTo(50, 5); // top edge untouched
+	});
+});
+
+describe("vetoBackgroundAlpha", () => {
+	/** A grey mat [40,160)² on a warm wood field, with the cut overshooting to x<170 —
+	 *  a 10px wood sliver inside the mask, like a pick that sat a hair onto the floor. */
+	function woodScene() {
+		const size = 200;
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const mat = x >= 40 && x < 160 && y >= 40 && y < 160;
+				const i = (y * size + x) * 4;
+				// mat: neutral dark grey; wood: warm brown of similar luminance
+				data[i] = mat ? 60 : 130;
+				data[i + 1] = mat ? 60 : 95;
+				data[i + 2] = mat ? 60 : 55;
+				data[i + 3] = 255;
+			}
+		return { data, width: size, height: size };
+	}
+
+	it("strips a background-coloured sliver inside the cut", () => {
+		const img = woodScene();
+		const cut: Corners = [
+			[40, 40],
+			[170, 40], // overshoots 10px into the wood on the right
+			[170, 160],
+			[40, 160],
+		];
+		const picked: Corners = [
+			[42, 42],
+			[168, 42],
+			[168, 158],
+			[42, 158],
+		];
+		const mask = rasterizePolygon(cut, img.width, img.height);
+		const vetoed = vetoBackgroundAlpha(img, mask, cut, picked, {
+			depth: 15,
+			ring: 15,
+		});
+		expect(vetoed).toBeGreaterThan(0);
+		// The wood sliver (x in 160..170) is gone…
+		expect(mask[100 * img.width + 165]).toBe(0);
+		// …but the mat, including near its true edge, survives.
+		expect(mask[100 * img.width + 155]).toBe(255);
+		expect(mask[100 * img.width + 100]).toBe(255);
+	});
+
+	it("stands down when sleeve and background are inseparable (white on white)", () => {
+		const size = 200;
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const mat = x >= 40 && x < 160 && y >= 40 && y < 160;
+				const i = (y * size + x) * 4;
+				const v = mat ? 238 : 240; // nearly identical
+				data[i] = data[i + 1] = data[i + 2] = v;
+				data[i + 3] = 255;
+			}
+		const img = { data, width: size, height: size };
+		const cut: Corners = [
+			[40, 40],
+			[170, 40],
+			[170, 160],
+			[40, 160],
+		];
+		const mask = rasterizePolygon(cut, size, size);
+		const before = mask.slice();
+		const vetoed = vetoBackgroundAlpha(img, mask, cut, cut, {
+			depth: 15,
+			ring: 15,
+		});
+		expect(vetoed).toBe(0);
+		expect(mask).toEqual(before);
 	});
 });
 
@@ -509,10 +684,11 @@ describe("shadowFromAlpha", () => {
 	});
 });
 
-describe("matteFromCorners", () => {
+describe("matteFromBand", () => {
 	it("floats a toned, shadowed cutout on a transparent margin", () => {
 		// A bright sleeve on dark wood, under a slight perspective — the deterministic
-		// silhouette should cut it out, centre it, and leave a transparent margin.
+		// silhouette should find the edge inside the band, cut it out, centre it, and
+		// leave a transparent margin.
 		const corners: Corners = [
 			[150, 110],
 			[760, 150],
@@ -520,12 +696,17 @@ describe("matteFromCorners", () => {
 			[110, 700],
 		];
 		const cap = synthCapture(checkerboard(512), 900, corners);
+		// Bracket the true edge: inner wholly on the sleeve, outer wholly on the wood.
+		const band = {
+			inner: offsetQuad(corners, -14),
+			outer: offsetQuad(corners, 20),
+		};
 		const opts = {
 			canvasSize: 200,
 			contentSize: 170,
 			shadow: { blur: 6, offsetX: 4, offsetY: 6, opacity: 0.35 },
 		} as const;
-		const { cutout, shadow } = matteFromCorners(cap, corners, opts);
+		const { cutout, shadow } = matteFromBand(cap, band, opts);
 
 		expect(cutout.width).toBe(200);
 		expect(cutout.height).toBe(200);
@@ -534,6 +715,74 @@ describe("matteFromCorners", () => {
 		expect(cutout.data[3]).toBe(0);
 		// The shadow variant differs from the pure cutout (it gained shadow pixels).
 		expect(shadow.data).not.toEqual(cutout.data);
+	});
+});
+
+describe("midQuad / edgeDistances", () => {
+	it("midQuad is the corner-wise midpoint; edgeDistances measure the band per edge", () => {
+		const quad: Corners = [
+			[60, 60],
+			[140, 60],
+			[140, 140],
+			[60, 140],
+		];
+		const inner = offsetQuad(quad, -10);
+		const outer = offsetQuad(quad, 10);
+		const mid = midQuad(inner, outer);
+		// For an axis-aligned square, the midpoints land back on the original quad.
+		for (let i = 0; i < 4; i++) {
+			expect(mid[i][0]).toBeCloseTo(quad[i][0], 5);
+			expect(mid[i][1]).toBeCloseTo(quad[i][1], 5);
+		}
+		// Each edge sits 10 px from either side of the band.
+		for (const d of edgeDistances(mid, outer)) expect(d).toBeCloseTo(10, 5);
+		for (const d of edgeDistances(mid, inner)) expect(d).toBeCloseTo(10, 5);
+	});
+});
+
+describe("buildTrimapFromBand", () => {
+	it("locks inside the inner quad, outside the outer quad, and leaves the band unknown", () => {
+		const size = 200;
+		const quad: Corners = [
+			[60, 60],
+			[140, 60],
+			[140, 140],
+			[60, 140],
+		];
+		const inner = offsetQuad(quad, -15);
+		const outer = offsetQuad(quad, 15);
+		const trimap = buildTrimapFromBand(inner, outer, size, size);
+		// Deep inside the inner quad → definite foreground.
+		expect(trimap[100 * size + 100]).toBe(255);
+		// Well outside the outer quad → definite background.
+		expect(trimap[10 * size + 10]).toBe(0);
+		// On the bracketed edge, inside the band → unknown.
+		expect(trimap[100 * size + 60]).toBe(128);
+	});
+});
+
+describe("deskewBandPadded", () => {
+	it("maps the inner quad through the same deskew as the outer", () => {
+		const corners: Corners = [
+			[150, 110],
+			[760, 150],
+			[800, 720],
+			[110, 700],
+		];
+		const cap = synthCapture(checkerboard(256), 900, corners);
+		const band = {
+			inner: offsetQuad(corners, -20),
+			outer: offsetQuad(corners, 15),
+		};
+		const { content, inner, outer } = deskewBandPadded(cap, band, 300, 0.15);
+		expect(content.width).toBe(300);
+		expect(content.height).toBe(300);
+		// The inner quad stays strictly inside the outer quad after the mapping, and
+		// the per-edge gaps stay positive.
+		for (const [x, y] of inner) expect(pointInQuad(x, y, outer)).toBe(true);
+		for (const d of edgeDistances(midQuad(inner, outer), inner)) {
+			expect(d).toBeGreaterThan(0);
+		}
 	});
 });
 

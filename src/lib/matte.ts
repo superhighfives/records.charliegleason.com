@@ -3,17 +3,23 @@ import { env } from "cloudflare:workers";
 import { bytesToBase64 } from "#/lib/image-data";
 import {
 	applyMask,
-	buildTrimap,
-	deskewContentPadded,
+	buildTrimapFromBand,
+	deskewBandPadded,
+	EDGE_CONFIDENCE_MIN,
+	edgeDistances,
 	featherMask,
 	keepLargestComponent,
 	type MatteOptions,
 	type MatteResult,
-	matteFromCorners,
+	matteFromBand,
+	midQuad,
+	offsetQuad,
+	type PixelBand,
 	type RgbaImage,
 	rasterizePolygon,
-	refineQuadEdges,
+	refineQuadEdgesDetailed,
 	type ShadowOptions,
+	vetoBackgroundAlpha,
 	warpMatteToSquare,
 } from "#/lib/photo-processing";
 import {
@@ -26,7 +32,7 @@ import {
 } from "#/lib/professional";
 import { matteToneFromParams, type ReframeParams } from "#/lib/reframe-params";
 import { firstOutputUrl, runVersion } from "#/lib/replicate";
-import type { NormalizedCorners } from "#/lib/sleeve-corners";
+import type { CornerBand } from "#/lib/sleeve-corners";
 
 /**
  * The second render: a transparent, true-edged sleeve floating on breathing room with
@@ -38,15 +44,16 @@ import type { NormalizedCorners } from "#/lib/sleeve-corners";
  * far less than would flatten it — so ViTMatte's rounded corners and inward worn-edge dips
  * survive the warp: an upright card that still reads as a physical object, not a hard box.
  * Two ways to cut it out:
- *   - the FREE, deterministic {@link matteFromCorners} (edge-snap silhouette) — also
+ *   - the FREE, deterministic {@link matteFromBand} (edge-snap silhouette) — also
  *     the automatic fallback when the paid path is unavailable;
- *   - the PAID {@link matteAI}: deskew the sleeve upright with a wood margin, derive a
- *     *trimap* from the picked corners (cover interior = definite foreground, wood beyond
- *     the edge = definite background, a thin band around the edge = unknown), and run
- *     image + trimap through a pinned ViTMatte deployment. The trimap is the whole point:
- *     the model can only decide the unknown band, so it physically can't cut into the
- *     artwork's depicted subject or keep a neighbouring record — the exact failures a
- *     free-running segmenter hits. Its alpha is composited over our *own* capture pixels
+ *   - the PAID {@link matteAI}: deskew the sleeve upright with a wood margin and run
+ *     image + trimap through a pinned ViTMatte deployment. The trimap comes straight
+ *     from the admin's corner BAND (inner quad = certified sleeve = definite foreground,
+ *     outer quad = certified background boundary, the band between = unknown) — a
+ *     hand-drawn trimap, not an inferred one. That's the whole point: the model can only
+ *     decide the unknown band, so it physically can't cut into the artwork's depicted
+ *     subject or keep a neighbouring record — the exact failures a free-running
+ *     segmenter hits. Its alpha is composited over our *own* capture pixels
  *     (model-quality edge, real pixels).
  *
  * Each run stores TWO webp-with-alpha objects — a shadow variant (primary, for the
@@ -75,19 +82,25 @@ const SHADOW: ShadowOptions = {
 };
 
 // The deskewed square (sleeve + a margin of surrounding capture) we send the matting
-// model. The wood padding lets us bracket the true sleeve edge in the trimap's unknown
-// band, since the admin picks corners *inside* the cover. Sized large so the sleeve
-// (~60% of it) keeps plenty of real pixels after we crop + rescale to the content size.
+// model. The wood padding gives the model real background context beyond the band's
+// outer quad. Sized large so the sleeve (~60% of it) keeps plenty of real pixels after
+// we crop + rescale to the content size.
 const MODEL_SIZE = 2048;
 const MODEL_PAD = 0.2;
 
-// The picked corners sit *inside* the cover, so first snap the quad out to the true
-// sleeve edge (max-gradient search up to this far outward), then wrap a tight, symmetric
-// unknown band around that refined edge. A narrow band centred on the real boundary is
-// what keeps the model from keeping wood — it only decides a thin strip at the edge,
-// rather than a wide inside-cover-to-deep-wood zone.
-const TRIMAP_REFINE_SEARCH = Math.round(MODEL_SIZE * 0.05);
-const TRIMAP_BAND = Math.round(MODEL_SIZE * 0.025);
+// The trimap comes straight from the hand-drawn corner band (inner quad = locked
+// foreground, outer quad = locked background, the band between = unknown), so the old
+// erode/dilate guesswork is gone. Two knobs remain:
+// On a low-confidence edge (the gradient search found no clear boundary in the band),
+// the alpha clamps a hair *inside* the band midline: that edge cuts as a crisp straight
+// line at the admin's best guess rather than trusting the model in the dark.
+const CLAMP_LOWCONF_INSET = Math.round(MODEL_SIZE * 0.004);
+// The colour veto's policing depth inside the cut edge, and its sample-ring width.
+// Both rings sit on certified ground truth (outside the outer quad / inside the inner),
+// so only the policing band itself needs sizing.
+const VETO_DEPTH = Math.round(MODEL_SIZE * 0.02);
+const VETO_RING = Math.round(MODEL_SIZE * 0.02);
+const VETO_FG_INSET = Math.round(MODEL_SIZE * 0.005);
 
 // Bleed the sleeve's colour this many px into the transparent margin before the warp, so
 // the soft edge blends cover-into-cover instead of the wood just outside it (the tan
@@ -250,36 +263,53 @@ function resizeMask(
 }
 
 /**
- * The paid matte: deskew the sleeve upright with a wood margin, build a trimap from the
- * picked corners, run image + trimap through the pinned ViTMatte deployment, then
- * super-resolve the sleeve and composite the model's alpha over those higher-res pixels.
- * Throws if the model isn't configured or errors — the caller falls back to deterministic.
+ * The paid matte: deskew the sleeve upright with a wood margin, hand the model the
+ * band as a trimap (the band IS the trimap — inner locked foreground, outer locked
+ * background, between unknown), run image + trimap through the pinned ViTMatte
+ * deployment, then super-resolve the sleeve and composite the model's alpha over those
+ * higher-res pixels. Throws if the model isn't configured or errors — the caller falls
+ * back to deterministic.
  */
 async function matteAI(
 	capture: RgbaImage,
-	corners: NormalizedCorners,
+	band: CornerBand,
 	params: ReframeParams,
 ): Promise<MatteResult> {
 	if (!MATTE_MODEL_VERSION) throw new Error("matting model not configured");
-	const px = toPixelCorners(corners, capture.width, capture.height);
-	// Deskew upright with a wood margin around the sleeve; `inset` are the picked corners
-	// mapped into the deskewed frame — inside the cover, since that's how they're picked.
-	const { content, corners: inset } = deskewContentPadded(
+	const pxBand: PixelBand = {
+		inner: toPixelCorners(band.inner, capture.width, capture.height),
+		outer: toPixelCorners(band.outer, capture.width, capture.height),
+	};
+	// Deskew upright with a wood margin around the outer quad; both quads come back
+	// mapped into the deskewed frame.
+	const { content, inner, outer } = deskewBandPadded(
 		capture,
-		px,
+		pxBand,
 		MODEL_SIZE,
 		MODEL_PAD,
 	);
-	// Snap the quad out to the true sleeve edge, then build a tight trimap around it:
-	// cover interior locked foreground, wood beyond locked background, only a thin band
-	// at the refined edge left unknown for the model to resolve.
-	const refined = refineQuadEdges(content, inset, {
-		search: TRIMAP_REFINE_SEARCH,
-	});
-	const trimap = buildTrimap(refined, content.width, content.height, {
-		erode: TRIMAP_BAND,
-		dilate: TRIMAP_BAND,
-	});
+	// Find the straight-line edge inside the band (colour-gradient search from the band
+	// midline, bounded per edge by the inner/outer quads, with a per-edge confidence; an
+	// ambiguous edge reverts to the midline). This drives the final warp and the
+	// low-confidence clamp — the model itself gets the whole band via the trimap.
+	const mid = midQuad(inner, outer);
+	const toOuter = edgeDistances(mid, outer);
+	const toInner = edgeDistances(mid, inner);
+	const { corners: refined, confidence } = refineQuadEdgesDetailed(
+		content,
+		mid,
+		{
+			outward: toOuter,
+			inward: toInner,
+			minConfidence: EDGE_CONFIDENCE_MIN,
+		},
+	);
+	const trimap = buildTrimapFromBand(
+		inner,
+		outer,
+		content.width,
+		content.height,
+	);
 
 	const imageUri = `data:image/png;base64,${bytesToBase64(encodePng(content))}`;
 	const trimapUri = `data:image/png;base64,${bytesToBase64(
@@ -297,26 +327,35 @@ async function matteAI(
 	if (!res.ok) throw new Error(`fetching the matte failed (${res.status})`);
 	const model = decodeRgba(new Uint8Array(await res.arrayBuffer()));
 
-	// Clamp the model's alpha to the sleeve rectangle: kill anything beyond the edge (wood
-	// the model kept, or a refine that reached too far) but don't erode inward, so the
-	// model's ragged edge, rounded corners and worn-edge dips all survive. The wood fringe
-	// that would otherwise ride the soft edge is handled by the colour bleed in the warp.
-	//
-	// Use the *intersection* of the refined edge and the admin's picked corners: refine can
-	// pull the cut tighter (inward) for a clean line, but never push it outward past where
-	// the admin drew — a low-contrast mat/wood edge can fool refine into snapping onto a
-	// wood-plank seam beyond the sleeve, and that overshoot must never survive into the
-	// matte. The cut is tight to the pick (no outward grow): the corners often sit right on
-	// the mat/wood boundary, so any outward slack there pulls in a wedge of floor the dark
-	// model can't tell from the dark mat. The feather blends against the mat *inside* the
-	// cut, and the colour-bleed covers the transparent side, so a tight cut still softens.
-	const refinedMask = rasterizePolygon(refined, content.width, content.height);
-	const pickedMask = rasterizePolygon(inset, content.width, content.height);
-	const clamp = new Uint8ClampedArray(refinedMask.length);
-	for (let i = 0; i < clamp.length; i++)
-		clamp[i] = refinedMask[i] && pickedMask[i] ? 255 : 0;
+	// Clamp the model's alpha per edge: a confident edge lets the alpha roam the whole
+	// band up to the OUTER quad — the true edge is certified to lie inside it, so worn
+	// corners, dips and bows anywhere in the band all survive (the old "never past the
+	// pick" rule is gone; the outer quad is the new, human-certified hard wall). A
+	// low-confidence edge (no discernible boundary in the band) instead clamps a hair
+	// inside the band midline: with nothing to see there, a crisp straight cut at the
+	// admin's best guess beats trusting the model in the dark. Never erode a confident
+	// edge inward — the model's ragged edge is the point. The wood fringe that would
+	// otherwise ride the soft edge is handled by the colour bleed in the warp.
+	const clampQuad = offsetQuad(
+		mid,
+		confidence.map((c, e) =>
+			c >= EDGE_CONFIDENCE_MIN ? toOuter[e] : -CLAMP_LOWCONF_INSET,
+		) as [number, number, number, number],
+	);
+	const clamp = rasterizePolygon(clampQuad, content.width, content.height);
 	const raw = maskFromModelOutput(model, content.width, content.height);
 	for (let i = 0; i < raw.length; i++) if (!clamp[i]) raw[i] = 0;
+	// Colour-statistical backstop: strip any background-coloured sliver that survived
+	// the band + model + clamp (dark wood the model mistook for a dark mat, say).
+	// Sampled per capture with both rings on certified ground truth — background
+	// outside the outer quad, sleeve border just inside the inner quad. No-op when
+	// the two colour distributions are inseparable.
+	vetoBackgroundAlpha(content, raw, refined, inner, {
+		depth: VETO_DEPTH,
+		ring: VETO_RING,
+		bgQuad: outer,
+		fgInset: VETO_FG_INSET,
+	});
 	// Largest blob only (drop stray specks), lightly feathered for a clean anti-aliased edge.
 	const feathered = featherMask(
 		keepLargestComponent(raw, content.width, content.height),
@@ -351,7 +390,7 @@ async function matteAI(
  */
 export async function generateMatte(
 	capture: RgbaImage,
-	corners: NormalizedCorners,
+	band: CornerBand,
 	params: ReframeParams,
 	opts: { useAi: boolean },
 ): Promise<{
@@ -361,14 +400,17 @@ export async function generateMatte(
 }> {
 	if (opts.useAi) {
 		try {
-			const keys = await storeMatte(await matteAI(capture, corners, params));
+			const keys = await storeMatte(await matteAI(capture, band, params));
 			return { ...keys, source: "ai" };
 		} catch (err) {
 			console.warn("matte: AI path failed, falling back to deterministic", err);
 		}
 	}
-	const px = toPixelCorners(corners, capture.width, capture.height);
-	const result = matteFromCorners(capture, px, matteOptions(params));
+	const pxBand: PixelBand = {
+		inner: toPixelCorners(band.inner, capture.width, capture.height),
+		outer: toPixelCorners(band.outer, capture.width, capture.height),
+	};
+	const result = matteFromBand(capture, pxBand, matteOptions(params));
 	const keys = await storeMatte(result);
 	return { ...keys, source: "deterministic" };
 }
@@ -380,7 +422,7 @@ export async function generateMatte(
  */
 export async function generateMatteFromCapture(
 	capturePhotoKey: string,
-	corners: NormalizedCorners,
+	band: CornerBand,
 	params: ReframeParams,
 	opts: { useAi: boolean },
 ): Promise<{
@@ -388,10 +430,5 @@ export async function generateMatteFromCapture(
 	cutoutKey: string;
 	source: "ai" | "deterministic";
 }> {
-	return generateMatte(
-		await loadCapture(capturePhotoKey),
-		corners,
-		params,
-		opts,
-	);
+	return generateMatte(await loadCapture(capturePhotoKey), band, params, opts);
 }

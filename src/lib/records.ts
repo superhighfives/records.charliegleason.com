@@ -40,11 +40,11 @@ import {
 	sanitizeReframeParams,
 } from "#/lib/reframe-params";
 import {
-	DEFAULT_CORNERS,
-	type NormalizedCorners,
-	parseCorners,
-	parseNormalizedCorners,
-	serializeCorners,
+	type CornerBand,
+	DEFAULT_BAND,
+	parseCornerBand,
+	parseNormalizedCornerBand,
+	serializeCornerBand,
 } from "#/lib/sleeve-corners";
 
 /**
@@ -314,13 +314,13 @@ export const captureRecord = createServerFn({ method: "POST" })
 			// independent of analysis: on failure we record it on the professional* track (a
 			// manual re-crop retries) rather than failing the whole capture.
 			try {
-				const { professionalKey, corners } = await professionalPipeline(row);
-				// Generate the matte from the same detected corners — deterministic (free)
-				// on capture, no paid model call; the editor's Apply can upgrade it to the
-				// matting model. Best-effort: a matte failure never fails the capture.
+				const { professionalKey, band } = await professionalPipeline(row);
+				// Generate the matte from the same detected corner band — deterministic
+				// (free) on capture, no paid model call; the editor's Apply can upgrade it
+				// to the matting model. Best-effort: a matte failure never fails the capture.
 				const matte = await generateMatteFromCapture(
 					capturePhotoKey,
-					corners,
+					band,
 					{},
 					{ useAi: false },
 				).catch((err) => {
@@ -332,8 +332,8 @@ export const captureRecord = createServerFn({ method: "POST" })
 					.set({
 						professionalImageKey: professionalKey,
 						// Persist the detected seed so the editor opens pre-cropped; a later
-						// Apply overwrites it with the admin's crop.
-						sleeveCornersJson: serializeCorners(corners),
+						// Apply overwrites it with the admin's band.
+						sleeveCornersJson: serializeCornerBand(band),
 						professionalAlphaKey: matte?.shadowKey ?? null,
 						professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
 						professionalAlphaSource: matte?.source ?? null,
@@ -504,20 +504,16 @@ export const detectCorners = createServerFn({ method: "POST" })
 export const reframeRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator(
-		(input: {
-			id: number;
-			corners?: NormalizedCorners;
-			params?: ReframeParams;
-		}) => ({
+		(input: { id: number; band?: CornerBand; params?: ReframeParams }) => ({
 			id: input.id,
 			// Runtime-sanitise untrusted input before it's persisted and later drives the
-			// homography/tone math in the consumer: drop malformed corners (out of 0..1 or
+			// homography/tone math in the consumer: drop a malformed band (out of 0..1 or
 			// non-finite → fall back to the stored crop) and keep only well-typed knobs.
-			corners: parseNormalizedCorners(input.corners) ?? undefined,
+			band: parseNormalizedCornerBand(input.band) ?? undefined,
 			params: sanitizeReframeParams(input.params),
 		}),
 	)
-	.handler(({ data: { id, corners, params } }) =>
+	.handler(({ data: { id, band, params } }) =>
 		Sentry.startSpan({ name: "reframeRecord" }, async () => {
 			const db = getDb(env.DB);
 			const [record] = await db
@@ -529,16 +525,15 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			if (!record.capturePhotoKey) {
 				throw new Error("This record has no capture photo to reframe.");
 			}
-			// Use the edited corners if supplied, else whatever's stored (or the
+			// Use the edited band if supplied, else whatever's stored (or the
 			// full-frame default for a record that's never been cropped).
-			const effectiveCorners =
-				corners ?? parseCorners(record.sleeveCornersJson);
+			const effectiveBand = band ?? parseCornerBand(record.sleeveCornersJson);
 			// Persist the crop + knobs so the consumer can pick them up, mark the job
 			// queued, and hand off. `professionalStatus` is deliberately left as-is.
 			const [row] = await db
 				.update(records)
 				.set({
-					sleeveCornersJson: serializeCorners(effectiveCorners),
+					sleeveCornersJson: serializeCornerBand(effectiveBand),
 					professionalParamsJson: JSON.stringify(params),
 					professionalJobStatus: "queued",
 					professionalError: null,
@@ -606,7 +601,7 @@ export const replaceCapture = createServerFn({ method: "POST" })
 				professionalAlphaCutoutKey: string | null;
 				professionalAlphaSource: "ai" | "deterministic" | null;
 			} = {
-				sleeveCornersJson: serializeCorners(DEFAULT_CORNERS),
+				sleeveCornersJson: serializeCornerBand(DEFAULT_BAND),
 				professionalStatus: "failed",
 				professionalError: null,
 				professionalAlphaKey: null,
@@ -621,13 +616,13 @@ export const replaceCapture = createServerFn({ method: "POST" })
 				});
 				professionalKey = gen.professionalKey;
 				proFields.professionalImageKey = gen.professionalKey;
-				proFields.sleeveCornersJson = serializeCorners(gen.corners);
+				proFields.sleeveCornersJson = serializeCornerBand(gen.band);
 				proFields.professionalStatus = "ready";
-				// A deterministic matte from the same detected corners (free — no paid
+				// A deterministic matte from the same detected corner band (free — no paid
 				// call on a capture swap). Best-effort, independent of the square.
 				matte = await generateMatteFromCapture(
 					capturePhotoKey,
-					gen.corners,
+					gen.band,
 					parseReframeParams(record.professionalParamsJson),
 					{ useAi: false },
 				).catch((err) => {

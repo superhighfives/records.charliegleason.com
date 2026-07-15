@@ -5,7 +5,7 @@ import {
 	applyPolish,
 	type Corners,
 	type MatteOptions,
-	matteFromCorners,
+	matteFromBand,
 	type RgbaImage,
 	reframeFromCorners,
 } from "#/lib/photo-processing";
@@ -14,7 +14,7 @@ import {
 	matteToneFromParams,
 	type ReframeParams,
 } from "#/lib/reframe-params";
-import type { NormalizedCorners } from "#/lib/sleeve-corners";
+import type { CornerBand, NormalizedCorners } from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 
 /**
@@ -33,8 +33,8 @@ import { cn } from "#/lib/utils";
 
 // Preview render resolution — small enough to warp per animation frame on the main thread.
 const PREVIEW_SIZE = 448;
-// The matte's transparent margin (fraction per side) — mirrors the server's 4%.
-const MATTE_MARGIN = 0.04;
+// The matte's transparent margin (fraction per side) — mirrors the server's 2%.
+const MATTE_MARGIN = 0.02;
 // Cap the decoded capture's longest side so warp sampling stays cheap (corners are
 // normalised, so a downscaled source maps identically).
 const SOURCE_MAX = 1100;
@@ -62,13 +62,13 @@ async function decodeToRgba(src: string): Promise<RgbaImage> {
 
 export function ProPreview({
 	src,
-	corners,
+	band,
 	params,
 	matte = false,
 	className,
 }: {
 	src: string;
-	corners: NormalizedCorners;
+	band: CornerBand;
 	params: ReframeParams;
 	/** Render the transparent, true-edged matte (shadow variant) on a checkerboard,
 	 *  rather than the square hero. Runs the *deterministic* silhouette client-side —
@@ -104,10 +104,11 @@ export function ProPreview({
 			const canvas = canvasRef.current;
 			if (!canvas) return;
 			const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
-			const px = corners.map(([x, y]) => [
-				x * (source.width - 1),
-				y * (source.height - 1),
-			]) as Corners;
+			const toPx = (quad: NormalizedCorners) =>
+				quad.map(([x, y]) => [
+					x * (source.width - 1),
+					y * (source.height - 1),
+				]) as Corners;
 			const tone = p.skipTone
 				? false
 				: { wbStrength: p.wbStrength, lowPct: p.lowPct, highPct: p.highPct };
@@ -136,9 +137,16 @@ export function ProPreview({
 					// wood (scaled down for the small preview).
 					bleed: 2,
 				};
-				image = matteFromCorners(source, px, opts).shadow;
+				image = matteFromBand(
+					source,
+					{ inner: toPx(band.inner), outer: toPx(band.outer) },
+					opts,
+				).shadow;
 			} else {
-				image = reframeFromCorners(source, px, {
+				// The cover warps from the band's inner quad — certified wholly on the
+				// sleeve — exactly as the server does, so the preview shows the border
+				// the cover will keep.
+				image = reframeFromCorners(source, toPx(band.inner), {
 					canvasSize: PREVIEW_SIZE,
 					contentSize: PREVIEW_SIZE,
 					tone,
@@ -158,7 +166,7 @@ export function ProPreview({
 		return () => {
 			if (rafRef.current) cancelAnimationFrame(rafRef.current);
 		};
-	}, [source, corners, params, matte]);
+	}, [source, band, params, matte]);
 
 	return (
 		<div

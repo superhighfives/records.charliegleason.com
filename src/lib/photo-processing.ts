@@ -1039,6 +1039,71 @@ export function deskewContentPadded(
 	};
 }
 
+/** A pixel-space corner band: `outer` wholly on background, `inner` wholly on sleeve. */
+export interface PixelBand {
+	inner: Corners;
+	outer: Corners;
+}
+
+/** The corner-wise midpoint quad of a band — the best single-line guess at the edge. */
+export function midQuad(inner: Corners, outer: Corners): Corners {
+	return inner.map(([x, y], i) => [
+		(x + outer[i][0]) / 2,
+		(y + outer[i][1]) / 2,
+	]) as Corners;
+}
+
+/**
+ * Per-edge distance from each of `from`'s edges to the corresponding edge of `to`
+ * (edge midpoint to the other quad's edge line) — how much room the band gives on
+ * each side of a quad, in px. Edge order matches everywhere else (top, right,
+ * bottom, left as TL→TR, TR→BR, BR→BL, BL→TL).
+ */
+export function edgeDistances(
+	from: Corners,
+	to: Corners,
+): [number, number, number, number] {
+	const out: number[] = [];
+	for (let e = 0; e < 4; e++) {
+		const [ax, ay] = from[e];
+		const [bx, by] = from[(e + 1) % 4];
+		const mx = (ax + bx) / 2;
+		const my = (ay + by) / 2;
+		const [cx1, cy1] = to[e];
+		const [cx2, cy2] = to[(e + 1) % 4];
+		const ex = cx2 - cx1;
+		const ey = cy2 - cy1;
+		const len = Math.hypot(ex, ey) || 1;
+		out.push(Math.abs(ex * (my - cy1) - ey * (mx - cx1)) / len);
+	}
+	return out as [number, number, number, number];
+}
+
+/**
+ * Like {@link deskewContentPadded}, but for a corner band: deskew + scale by the
+ * `outer` quad (it bounds the whole sleeve, so the entire unknown band lands inside
+ * the frame with `pad` of surrounding capture around it) and map the `inner` quad
+ * through the same transform. Both returned quads are in the content's pixel space.
+ */
+export function deskewBandPadded(
+	capture: RgbaImage,
+	band: PixelBand,
+	outSize: number,
+	pad: number,
+): { content: RgbaImage; inner: Corners; outer: Corners } {
+	const { content, corners: outer } = deskewContentPadded(
+		capture,
+		band.outer,
+		outSize,
+		pad,
+	);
+	// Forward capture→content mapping (the deskew warp's inverse direction):
+	// homography(A, B) maps A-space points into B-space.
+	const H = homography(band.outer, outer);
+	const inner = band.inner.map(([x, y]) => applyH(H, x, y)) as Corners;
+	return { content, inner, outer };
+}
+
 /** Intersection point of two infinite lines, each given by two points on it. */
 function lineIntersect(a1: Corner, a2: Corner, b1: Corner, b2: Corner): Corner {
 	const d =
@@ -1062,33 +1127,89 @@ function lineIntersect(a1: Corner, a2: Corner, b1: Corner, b2: Corner): Corner {
 const EDGE_PROXIMITY_FALLOFF = 0.7;
 
 /**
+ * Below this per-edge confidence (see {@link refineQuadEdgesDetailed}), an edge's
+ * gradient search found no clear boundary — the score band is essentially flat noise —
+ * so the refinement reverts that edge to the admin's picked line rather than trusting a
+ * noise peak. Confidence is the peak-to-median ratio of the raw (unweighted) scores
+ * across the search band: a real edge is a sharp spike over a flat floor (ratio ≫ 3);
+ * dark-mat-on-dark-wood ambiguity reads as a lumpy plateau (ratio → 1–2).
+ */
+export const EDGE_CONFIDENCE_MIN = 3;
+
+/** Per-edge confidences in edge order (TL→TR, TR→BR, BR→BL, BL→TL). */
+export type EdgeConfidence = [number, number, number, number];
+
+export interface RefinedQuad {
+	corners: Corners;
+	/** Peak-to-median gradient ratio per edge; higher = clearer boundary. */
+	confidence: EdgeConfidence;
+}
+
+/**
  * Refine a starting `quad` (the admin's picked corners, mapped into `img`) to the
  * sleeve's true edges: slide each of the four edges along its outward normal to the
- * offset with the strongest *summed* luminance gradient — the full-length sleeve/wood
+ * offset with the strongest *summed* colour gradient — the full-length sleeve/background
  * transition — weighted toward the picked position (see {@link EDGE_PROXIMITY_FALLOFF}).
  * Because the score sums the whole edge, a local bump (a neighbouring record poking in)
  * or per-pixel noise can't pull it; the result is four clean, straight lines whose
  * intersections are the refined corners. This is why the picked points matter: they say
  * where each edge roughly is, so we only search a band around it.
+ *
+ * The gradient is per-channel colour difference, not luminance: a dark charcoal mat on
+ * dark shadowed wood is a near-zero *luma* step but a strong *chroma* step (neutral grey
+ * vs warm brown), and that is exactly where the corners of a matte fail. Any colour or
+ * brightness difference scores, so this is backdrop-agnostic (wood, white or grey paper).
+ *
+ * Also reports a per-edge confidence, and — when `minConfidence` is set — reverts any
+ * edge whose search found no real boundary back to the picked line, so an ambiguous
+ * edge degrades to "cut where the admin drew" instead of a noise-driven guess.
  */
-export function refineQuadEdges(
+export function refineQuadEdgesDetailed(
 	img: RgbaImage,
 	quad: Corners,
-	opts: { search?: number; samples?: number } = {},
-): Corners {
+	opts: {
+		search?: number;
+		samples?: number;
+		minConfidence?: number;
+		/**
+		 * Explicit per-edge search bounds (px along the outward normal), overriding the
+		 * `search`-derived defaults. Used with a corner band: `quad` is the band midline
+		 * and these are the per-edge distances to the outer/inner quads, so the search
+		 * can't leave the certified-unknown band.
+		 */
+		outward?: EdgeDeltas;
+		inward?: EdgeDeltas;
+	} = {},
+): RefinedQuad {
 	const { width, height, data } = img;
 	const samples = opts.samples ?? 64;
 	const search = opts.search ?? Math.round(Math.min(width, height) * 0.12);
-	const lum = (x: number, y: number): number => {
+	const idx = (x: number, y: number): number => {
 		const xi = Math.min(width - 1, Math.max(0, Math.round(x)));
 		const yi = Math.min(height - 1, Math.max(0, Math.round(y)));
-		const i = (yi * width + xi) * 4;
-		return 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+		return (yi * width + xi) * 4;
+	};
+	// Summed |ΔR|+|ΔG|+|ΔB| across the edge normal — catches chroma-only boundaries
+	// that a luminance gradient misses entirely.
+	const colorDiff = (
+		ax: number,
+		ay: number,
+		bx: number,
+		by: number,
+	): number => {
+		const i = idx(ax, ay);
+		const j = idx(bx, by);
+		return (
+			Math.abs(data[i] - data[j]) +
+			Math.abs(data[i + 1] - data[j + 1]) +
+			Math.abs(data[i + 2] - data[j + 2])
+		);
 	};
 	const cx = (quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]) / 4;
 	const cy = (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]) / 4;
 	// The four (shifted) edge lines, each as two points.
 	const lines: Array<[Corner, Corner]> = [];
+	const confidence: number[] = [];
 	for (let e = 0; e < 4; e++) {
 		const [ax, ay] = quad[e];
 		const [bx, by] = quad[(e + 1) % 4];
@@ -1105,17 +1226,24 @@ export function refineQuadEdges(
 		}
 		let bestDelta = 0;
 		let bestScore = -1;
-		// Mostly outward (the picked corners sit inside the cover), a little inward.
-		const outward = Math.max(1, search);
-		const inward = Math.max(1, Math.round(search * 0.5));
+		// Default: mostly outward (a single pick sits inside the cover), a little inward.
+		// A band caller passes explicit per-edge bounds instead (midline → outer/inner).
+		const perEdge = (d: EdgeDeltas | undefined, fallback: number): number => {
+			if (d == null) return fallback;
+			return Math.max(1, Math.round(typeof d === "number" ? d : d[e]));
+		};
+		const outward = perEdge(opts.outward, Math.max(1, search));
+		const inward = perEdge(opts.inward, Math.max(1, Math.round(search * 0.5)));
+		const rawScores: number[] = [];
 		for (let d = -inward; d <= outward; d++) {
 			let score = 0;
 			for (let s = 0; s < samples; s++) {
 				const t = (s + 0.5) / samples;
 				const px = ax + ex * t + nx * d;
 				const py = ay + ey * t + ny * d;
-				score += Math.abs(lum(px + nx, py + ny) - lum(px - nx, py - ny));
+				score += colorDiff(px + nx, py + ny, px - nx, py - ny);
 			}
+			rawScores.push(score);
 			// Prefer the edge nearest the picked line. Without this, a stronger gradient
 			// far outside the sleeve — a wood-plank seam in the floor beyond the cover, say —
 			// out-scores the true edge and drags the quad out into the background, which the
@@ -1129,27 +1257,52 @@ export function refineQuadEdges(
 				bestDelta = d;
 			}
 		}
+		// Confidence from the *raw* scores (the falloff would fake a peak at d=0 on a
+		// flat field). Median as the floor: robust to a second edge in the band.
+		const peak = Math.max(...rawScores);
+		const median = rawScores.slice().sort((a, b) => a - b)[
+			Math.floor(rawScores.length / 2)
+		];
+		const conf = peak <= 1e-3 ? 0 : peak / Math.max(median, peak * 0.01, 1e-3);
+		confidence.push(conf);
+		if (opts.minConfidence != null && conf < opts.minConfidence) bestDelta = 0;
 		lines.push([
 			[ax + nx * bestDelta, ay + ny * bestDelta],
 			[bx + nx * bestDelta, by + ny * bestDelta],
 		]);
 	}
 	// Corner i is where edge (i-1) meets edge i.
-	return [0, 1, 2, 3].map((i) => {
+	const corners = [0, 1, 2, 3].map((i) => {
 		const prev = lines[(i + 3) % 4];
 		const cur = lines[i];
 		return lineIntersect(prev[0], prev[1], cur[0], cur[1]);
 	}) as Corners;
+	return { corners, confidence: confidence as EdgeConfidence };
 }
+
+/** {@link refineQuadEdgesDetailed}, corners only — for callers that don't need confidence. */
+export function refineQuadEdges(
+	img: RgbaImage,
+	quad: Corners,
+	opts: { search?: number; samples?: number; minConfidence?: number } = {},
+): Corners {
+	return refineQuadEdgesDetailed(img, quad, opts).corners;
+}
+
+/** A uniform edge offset, or one per edge (TL→TR, TR→BR, BR→BL, BL→TL). */
+export type EdgeDeltas = number | readonly [number, number, number, number];
 
 /**
  * Shift each of the quad's four edges by `delta` px along its outward normal (positive
  * `delta` = dilate outward, negative = erode inward), then intersect adjacent shifted
  * lines for the new corners — a clean geometric grow/shrink that keeps the rectangle a
  * rectangle. Used to bracket the true sleeve edge when building a trimap from the picked
- * corners.
+ * corners. `delta` may be per-edge, so a single ambiguous edge can be treated more
+ * conservatively than its confident neighbours.
  */
-export function offsetQuad(quad: Corners, delta: number): Corners {
+export function offsetQuad(quad: Corners, delta: EdgeDeltas): Corners {
+	const deltas =
+		typeof delta === "number" ? [delta, delta, delta, delta] : delta;
 	const cx = (quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]) / 4;
 	const cy = (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]) / 4;
 	const lines: Array<[Corner, Corner]> = [];
@@ -1166,9 +1319,10 @@ export function offsetQuad(quad: Corners, delta: number): Corners {
 			nx = -nx;
 			ny = -ny;
 		}
+		const d = deltas[e];
 		lines.push([
-			[ax + nx * delta, ay + ny * delta],
-			[bx + nx * delta, by + ny * delta],
+			[ax + nx * d, ay + ny * d],
+			[bx + nx * d, by + ny * d],
 		]);
 	}
 	return [0, 1, 2, 3].map((i) => {
@@ -1193,9 +1347,17 @@ export function buildTrimap(
 	quad: Corners,
 	width: number,
 	height: number,
-	opts: { erode: number; dilate: number },
+	opts: { erode: EdgeDeltas; dilate: EdgeDeltas },
 ): Uint8ClampedArray {
-	const fg = rasterizePolygon(offsetQuad(quad, -opts.erode), width, height);
+	const negate = (d: EdgeDeltas): EdgeDeltas =>
+		typeof d === "number"
+			? -d
+			: ([-d[0], -d[1], -d[2], -d[3]] as [number, number, number, number]);
+	const fg = rasterizePolygon(
+		offsetQuad(quad, negate(opts.erode)),
+		width,
+		height,
+	);
 	const known = rasterizePolygon(offsetQuad(quad, opts.dilate), width, height);
 	const trimap = new Uint8ClampedArray(width * height);
 	for (let i = 0; i < trimap.length; i++) {
@@ -1203,6 +1365,192 @@ export function buildTrimap(
 	}
 	return trimap;
 }
+
+/**
+ * Build a trimap directly from a corner band — the hand-drawn ground truth: inside
+ * `inner` is locked foreground (certified sleeve), outside `outer` is locked
+ * background (certified floor/paper), and the band between is the unknown region the
+ * matting model resolves. No erode/dilate guesswork: the admin drew the band.
+ */
+export function buildTrimapFromBand(
+	inner: Corners,
+	outer: Corners,
+	width: number,
+	height: number,
+): Uint8ClampedArray {
+	const fg = rasterizePolygon(inner, width, height);
+	const known = rasterizePolygon(outer, width, height);
+	const trimap = new Uint8ClampedArray(width * height);
+	for (let i = 0; i < trimap.length; i++) {
+		trimap[i] = fg[i] ? 255 : known[i] ? 128 : 0;
+	}
+	return trimap;
+}
+
+/** Point-in-convex-quad test (TL,TR,BR,BL winding, either orientation). */
+function insideQuad(quad: Corners, x: number, y: number): boolean {
+	let sign = 0;
+	for (let e = 0; e < 4; e++) {
+		const [ax, ay] = quad[e];
+		const [bx, by] = quad[(e + 1) % 4];
+		const cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+		if (cross === 0) continue;
+		const s = cross > 0 ? 1 : -1;
+		if (sign === 0) sign = s;
+		else if (s !== sign) return false;
+	}
+	return true;
+}
+
+/** Per-channel mean + std of the pixels inside `outer` but outside `inner`. */
+function quadRingStats(
+	img: RgbaImage,
+	outer: Corners,
+	inner: Corners,
+): {
+	n: number;
+	mean: [number, number, number];
+	std: [number, number, number];
+} {
+	const { data, width, height } = img;
+	const xs = outer.map((c) => c[0]);
+	const ys = outer.map((c) => c[1]);
+	const x0 = Math.max(0, Math.floor(Math.min(...xs)));
+	const x1 = Math.min(width - 1, Math.ceil(Math.max(...xs)));
+	const y0 = Math.max(0, Math.floor(Math.min(...ys)));
+	const y1 = Math.min(height - 1, Math.ceil(Math.max(...ys)));
+	let n = 0;
+	const sum = [0, 0, 0];
+	const sq = [0, 0, 0];
+	for (let y = y0; y <= y1; y += 2) {
+		for (let x = x0; x <= x1; x += 2) {
+			if (!insideQuad(outer, x, y) || insideQuad(inner, x, y)) continue;
+			const i = (y * width + x) * 4;
+			for (let c = 0; c < 3; c++) {
+				const v = data[i + c];
+				sum[c] += v;
+				sq[c] += v * v;
+			}
+			n++;
+		}
+	}
+	if (n === 0) return { n: 0, mean: [0, 0, 0], std: [1, 1, 1] };
+	const mean = sum.map((s) => s / n) as [number, number, number];
+	// Floor the std so a perfectly uniform backdrop doesn't make distances explode.
+	const std = sq.map((s, c) =>
+		Math.max(4, Math.sqrt(Math.max(0, s / n - mean[c] * mean[c]))),
+	) as [number, number, number];
+	return { n, mean, std };
+}
+
+/**
+ * The last line of defence against background bleeding into the matte: kill alpha for
+ * near-edge pixels whose colour decisively matches the *sampled* background rather than
+ * the sleeve. Everything upstream (picked corners, edge refine, the matting model) is
+ * geometry or texture — when a pick sits a hair onto the floor and the model can't tell
+ * dark mat from dark shadowed wood, a background-coloured sliver survives all of it.
+ * This veto is colour-statistical and per-capture: the ring just *outside* the cut is
+ * ground-truth background and the ring just *inside* the picked quad is ground-truth
+ * sleeve border, so it adapts to any backdrop (wood today, white/grey paper after a
+ * reshoot) with nothing hardcoded.
+ *
+ * Deliberately conservative, so it can only remove background — never eat the sleeve:
+ *  - it only polices a band `depth` px inside the cut edge (the interior is untouched);
+ *  - it only fires when the two colour distributions are clearly separable (a white
+ *    sleeve on white paper is a silent no-op);
+ *  - a pixel is vetoed only when it is decisively closer to the background model
+ *    (< half the normalised distance) *and* plausibly background in absolute terms.
+ *
+ * Mutates `mask` (the cut alpha, same dimensions as `img`); returns the vetoed count.
+ */
+export function vetoBackgroundAlpha(
+	img: RgbaImage,
+	mask: Uint8ClampedArray,
+	/** The quad the mask was cut to — the veto polices a band inside its edges. */
+	cut: Corners,
+	/** The admin's picked quad — the sleeve-border colour is sampled just inside it. */
+	picked: Corners,
+	opts: {
+		depth: number;
+		ring: number;
+		gap?: number;
+		/**
+		 * Sample the background ring outside THIS quad instead of outside `cut`. A band
+		 * caller passes the outer quad: everything beyond it is certified background, so
+		 * the sample can't be contaminated by an undershot refine.
+		 */
+		bgQuad?: Corners;
+		/**
+		 * How far inside `picked` the sleeve-border ring starts (default `depth`). A band
+		 * caller passes something small: its inner quad is already certified sleeve, and
+		 * a deep inset would sample the artwork instead of the mat border.
+		 */
+		fgInset?: number;
+	},
+): number {
+	const { data, width, height } = img;
+	const gap = opts.gap ?? Math.round(opts.depth * 0.5);
+	// Ground-truth background: a ring outside the cut (past a small gap for edge blur),
+	// or outside the certified-background quad when the caller has one.
+	const bgRef = opts.bgQuad ?? cut;
+	const bg = quadRingStats(
+		img,
+		offsetQuad(bgRef, gap + opts.ring),
+		offsetQuad(bgRef, gap),
+	);
+	// Ground-truth sleeve border: a ring inside the pick, skipping the outer `fgInset`
+	// (which may itself be contaminated by the very sliver we're policing).
+	const fgInset = opts.fgInset ?? opts.depth;
+	const fg = quadRingStats(
+		img,
+		offsetQuad(picked, -fgInset),
+		offsetQuad(picked, -(fgInset + opts.ring)),
+	);
+	if (bg.n < 64 || fg.n < 64) return 0;
+	// If sleeve and background are colourimetrically inseparable (white-on-white),
+	// stand down rather than guess.
+	let sep = 0;
+	for (let c = 0; c < 3; c++) {
+		const pooled = Math.sqrt((fg.std[c] ** 2 + bg.std[c] ** 2) / 2);
+		sep += ((fg.mean[c] - bg.mean[c]) / pooled) ** 2;
+	}
+	if (Math.sqrt(sep) < 2) return 0;
+
+	const inner = offsetQuad(cut, -opts.depth);
+	const xs = cut.map((c) => c[0]);
+	const ys = cut.map((c) => c[1]);
+	const x0 = Math.max(0, Math.floor(Math.min(...xs)));
+	const x1 = Math.min(width - 1, Math.ceil(Math.max(...xs)));
+	const y0 = Math.max(0, Math.floor(Math.min(...ys)));
+	const y1 = Math.min(height - 1, Math.ceil(Math.max(...ys)));
+	let vetoed = 0;
+	for (let y = y0; y <= y1; y++) {
+		for (let x = x0; x <= x1; x++) {
+			const p = y * width + x;
+			if (!mask[p]) continue;
+			if (insideQuad(inner, x, y) || !insideQuad(cut, x, y)) continue;
+			const i = p * 4;
+			let dBg = 0;
+			let dFg = 0;
+			for (let c = 0; c < 3; c++) {
+				dBg += ((data[i + c] - bg.mean[c]) / bg.std[c]) ** 2;
+				dFg += ((data[i + c] - fg.mean[c]) / fg.std[c]) ** 2;
+			}
+			// Decisively background-like: much closer to the background model than the
+			// sleeve's, and within a plausible absolute range of it.
+			if (dBg * 4 < dFg && dBg < 25) {
+				mask[p] = 0;
+				vetoed++;
+			}
+		}
+	}
+	return vetoed;
+}
+
+// The square cover is warped edge-to-edge with **no** alpha, so it must never sample
+// background. It warps straight from the band's INNER quad — certified wholly on the
+// sleeve — which retired the old fixed `insetQuadForCover` hack (a 0.5% guess at the
+// same thing). Applied identically by the server and the live preview.
 
 export interface MatteOptions {
 	/** Output canvas (square) and the sleeve's longer-side size inside it (margin = the gap). */
@@ -1390,47 +1738,64 @@ export function composeMatteWarped(
 }
 
 // The deterministic matte deskews with this much surrounding capture (wood) around the
-// picked quad, so {@link refineQuadEdges} has a band to search outward into for the true
-// sleeve edge — since the admin picks corners *inside* the cover.
+// band's outer quad, so the refine and the veto's background ring have real context.
 const MATTE_DETERMINISTIC_PAD = 0.12;
 // Erode the cut quad inward by this small fraction of the deskewed frame before
-// rasterising, so the rectangle sits a hair inside the true edge — clearing wood / the
+// rasterising, so the rectangle sits a hair inside the found edge — clearing wood / the
 // bright paper edge without eating into the cover.
 const MATTE_EDGE_INSET = 0.006;
 
 /**
  * The deterministic (free) matte end-to-end: deskew the capture upright with a margin of
- * surrounding capture, refine the picked quad out to the sleeve's true edges, cut to
- * that clean rectangle, and run the shared {@link composeMatte} tail. Pure, so the editor
- * preview renders it client-side exactly like the server stores it.
+ * surrounding capture, find the sleeve's true edge inside the hand-drawn band (searching
+ * only between the certified-sleeve inner quad and the certified-background outer quad),
+ * cut to that clean rectangle, and run the shared {@link composeMatteWarped} tail. Pure,
+ * so the editor preview renders it client-side exactly like the server stores it.
  *
- * A record sleeve *is* a rectangle, and the picked corners already say where it is — so
- * we fit four straight edges to the real boundary ({@link refineQuadEdges}) rather than
- * tracing a noisy per-pixel outline or trusting a segmentation model to respect the
- * rectangle. Pass `refine: false` to fall back to the raw picked quad (no edge search).
+ * A record sleeve *is* a rectangle, and the band already brackets where its edge is — so
+ * we fit four straight edges to the real boundary ({@link refineQuadEdgesDetailed})
+ * rather than tracing a noisy per-pixel outline. An edge with no clear gradient in the
+ * band cuts straight along the band midline (the admin's best guess at the edge).
+ * Pass `refine: false` to cut at the midline without any edge search.
  */
-export function matteFromCorners(
+export function matteFromBand(
 	capture: RgbaImage,
-	corners: Corners,
+	band: PixelBand,
 	opts: MatteOptions & { refine?: boolean },
 ): MatteResult {
 	const outSize = Math.round(
 		opts.contentSize / (1 - 2 * MATTE_DETERMINISTIC_PAD),
 	);
-	const { content, corners: inset } = deskewContentPadded(
+	const { content, inner, outer } = deskewBandPadded(
 		capture,
-		corners,
+		band,
 		outSize,
 		MATTE_DETERMINISTIC_PAD,
 	);
+	const mid = midQuad(inner, outer);
 	const refined =
 		opts.refine === false
-			? inset
-			: refineQuadEdges(content, inset, {
-					search: Math.round(outSize * MATTE_DETERMINISTIC_PAD),
-				});
-	// Bias the cut a hair inside the refined edge so wood / the paper edge never shows.
+			? mid
+			: refineQuadEdgesDetailed(content, mid, {
+					// Search only within the band: the true edge is certified to be in there.
+					outward: edgeDistances(mid, outer),
+					inward: edgeDistances(mid, inner),
+					// Ambiguous edges (no clear gradient) revert to the midline rather
+					// than snapping to noise.
+					minConfidence: EDGE_CONFIDENCE_MIN,
+				}).corners;
+	// Bias the cut a hair inside the found edge so wood / the paper edge never shows.
 	const quad = offsetQuad(refined, -Math.round(outSize * MATTE_EDGE_INSET));
 	const mask = rasterizePolygon(quad, content.width, content.height);
+	// Colour-statistical backstop: strip any background-coloured sliver that survived,
+	// with both sample rings on certified ground truth — background outside the outer
+	// quad, sleeve border just inside the inner quad. No-op when the two colour
+	// distributions are inseparable.
+	vetoBackgroundAlpha(content, mask, quad, inner, {
+		depth: Math.round(outSize * 0.025),
+		ring: Math.round(outSize * 0.025),
+		bgQuad: outer,
+		fgInset: Math.round(outSize * 0.005),
+	});
 	return composeMatteWarped(content, mask, quad, opts);
 }
