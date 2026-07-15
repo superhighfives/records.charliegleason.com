@@ -362,6 +362,9 @@ function RecordDetail() {
 	// Which output the live editing preview shows — the matte (default, the primary
 	// render) or the square cover — toggled by the switch in the preview's top-right.
 	const [previewMode, setPreviewMode] = useState<"matte" | "cover">("matte");
+	// Which panel below the crop/preview shows — the tone knobs ("Edit") or the links to
+	// the stored renders ("Outputs"). Same little tab style as the matte/cover toggle.
+	const [toolTab, setToolTab] = useState<"edit" | "outputs">("edit");
 	// `/api/photos/…` srcs of saved renders that failed to load, so a stale/missing key
 	// hides that image instead of showing a broken-image glyph.
 	const [savedImgError, setSavedImgError] = useState<Set<string>>(
@@ -634,6 +637,15 @@ function RecordDetail() {
 	// (a second Apply while one is generating would just stack jobs).
 	const editorBusy = applyPro.isPending || proGenerating;
 
+	// Links to every stored render for this record, for the "Outputs" tab — the original
+	// capture, the square hero, and both matte variants. Only the keys that exist show.
+	const referenceImages = [
+		{ label: "Original capture", key: record.capturePhotoKey },
+		{ label: "Square cover", key: record.professionalImageKey },
+		{ label: "Matte (shadow)", key: record.professionalAlphaKey },
+		{ label: "Matte (cutout)", key: record.professionalAlphaCutoutKey },
+	].filter((r): r is { label: string; key: string } => r.key != null);
+
 	// Header photo: the approved professional crop, else the raw capture. Never the
 	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
 	const headerCoverKey = displayCoverKey(record, { includeCapture: true });
@@ -872,99 +884,112 @@ function RecordDetail() {
 							</div>
 						</div>
 
-						{/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
-						    the polish factors below map straight to the pixel encode pass.
-						    Every Apply re-warps + re-tones — all free. */}
-						<div className="space-y-3 rounded-md border bg-muted/30 p-3">
-							<label
-								htmlFor="pro-autotone"
-								className="flex items-center gap-2 text-xs text-muted-foreground"
-							>
-								<Checkbox
-									id="pro-autotone"
-									checked={!p.skipTone}
-									disabled={editorBusy}
-									onChange={(e) =>
-										setParams({
-											...params,
-											skipTone: !e.currentTarget.checked,
-										})
-									}
-								/>
-								Auto-tone (levels + white balance)
-							</label>
-							{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
-							<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-								<Knob
-									label="White balance"
-									display={`${Math.round(p.wbStrength * 100)}%`}
-									value={Math.round(p.wbStrength * 100)}
-									min={0}
-									max={100}
-									step={1}
-									disabled={p.skipTone || editorBusy}
-									onChange={(v) =>
-										setParams({ ...params, wbStrength: v / 100 })
-									}
-								/>
-								<Knob
-									label="Saturation"
-									display={`${Math.round(p.saturation * 100)}%`}
-									value={Math.round(p.saturation * 100)}
-									min={0}
-									max={200}
-									step={5}
-									disabled={editorBusy}
-									onChange={(v) =>
-										setParams({ ...params, saturation: v / 100 })
-									}
-								/>
-								<Knob
-									label="Contrast"
-									display={`${Math.round(p.contrast * 100)}%`}
-									value={Math.round(p.contrast * 100)}
-									min={50}
-									max={200}
-									step={5}
-									disabled={editorBusy}
-									onChange={(v) => setParams({ ...params, contrast: v / 100 })}
-								/>
-								<Knob
-									label="Gamma"
-									display={p.gamma.toFixed(2)}
-									value={Math.round(p.gamma * 100)}
-									min={50}
-									max={200}
-									step={5}
-									disabled={editorBusy}
-									onChange={(v) => setParams({ ...params, gamma: v / 100 })}
-								/>
+						{/* Edit / Outputs tabs — the tone knobs vs links to the stored renders,
+						    switched with the same little tab style as the matte/cover toggle. */}
+						<div className="space-y-3">
+							<div className="flex items-center gap-3 text-[10px]">
+								{(
+									[
+										["edit", "Edit"],
+										...(referenceImages.length > 0
+											? ([["outputs", "Outputs"]] as const)
+											: []),
+									] as const
+								).map(([id, label]) => (
+									<button
+										key={id}
+										type="button"
+										aria-pressed={toolTab === id}
+										onClick={() => setToolTab(id)}
+										className={cn(
+											"transition-colors",
+											toolTab === id
+												? "text-foreground underline underline-offset-4"
+												: "text-muted-foreground/70 hover:text-foreground",
+										)}
+									>
+										{label}
+									</button>
+								))}
 							</div>
-						</div>
 
-						{/* Direct links to every stored render for this record, for reference
-						    while editing — the original capture, the square hero, and both matte
-						    variants. Only the keys that exist are shown. */}
-						{(() => {
-							const refs = [
-								{ label: "Original capture", key: record.capturePhotoKey },
-								{ label: "Square cover", key: record.professionalImageKey },
-								{ label: "Matte (shadow)", key: record.professionalAlphaKey },
-								{
-									label: "Matte (cutout)",
-									key: record.professionalAlphaCutoutKey,
-								},
-							].filter(
-								(r): r is { label: string; key: string } => r.key != null,
-							);
-							if (refs.length === 0) return null;
-							return (
+							{toolTab === "edit" || referenceImages.length === 0 ? (
+								/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
+								   the polish factors below map straight to the pixel encode pass.
+								   Every Apply re-warps + re-tones — all free. */
+								<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+									<label
+										htmlFor="pro-autotone"
+										className="flex items-center gap-2 text-xs text-muted-foreground"
+									>
+										<Checkbox
+											id="pro-autotone"
+											checked={!p.skipTone}
+											disabled={editorBusy}
+											onChange={(e) =>
+												setParams({
+													...params,
+													skipTone: !e.currentTarget.checked,
+												})
+											}
+										/>
+										Auto-tone (levels + white balance)
+									</label>
+									{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
+									<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+										<Knob
+											label="White balance"
+											display={`${Math.round(p.wbStrength * 100)}%`}
+											value={Math.round(p.wbStrength * 100)}
+											min={0}
+											max={100}
+											step={1}
+											disabled={p.skipTone || editorBusy}
+											onChange={(v) =>
+												setParams({ ...params, wbStrength: v / 100 })
+											}
+										/>
+										<Knob
+											label="Saturation"
+											display={`${Math.round(p.saturation * 100)}%`}
+											value={Math.round(p.saturation * 100)}
+											min={0}
+											max={200}
+											step={5}
+											disabled={editorBusy}
+											onChange={(v) =>
+												setParams({ ...params, saturation: v / 100 })
+											}
+										/>
+										<Knob
+											label="Contrast"
+											display={`${Math.round(p.contrast * 100)}%`}
+											value={Math.round(p.contrast * 100)}
+											min={50}
+											max={200}
+											step={5}
+											disabled={editorBusy}
+											onChange={(v) =>
+												setParams({ ...params, contrast: v / 100 })
+											}
+										/>
+										<Knob
+											label="Gamma"
+											display={p.gamma.toFixed(2)}
+											value={Math.round(p.gamma * 100)}
+											min={50}
+											max={200}
+											step={5}
+											disabled={editorBusy}
+											onChange={(v) => setParams({ ...params, gamma: v / 100 })}
+										/>
+									</div>
+								</div>
+							) : (
+								/* Outputs tab: links to every stored render for this record. */
 								<div className="rounded-md border bg-muted/30 p-3">
-									<p className="mb-2 text-xs font-medium text-muted-foreground">
-										Reference images
-									</p>
 									<dl className="divide-y divide-border">
-										{refs.map(({ label, key }) => (
+										{referenceImages.map(({ label, key }) => (
 											<div
 												key={key}
 												className="flex items-baseline justify-between gap-4 py-1.5 text-xs"
@@ -987,8 +1012,8 @@ function RecordDetail() {
 										))}
 									</dl>
 								</div>
-							);
-						})()}
+							)}
+						</div>
 
 						{/* Destructive "Remove cover" on the left (only when there's an
 						    approved cover to take down); Reset + Apply on the right (Apply
@@ -1037,7 +1062,10 @@ function RecordDetail() {
 									type="button"
 									size="sm"
 									variant={proIsLive ? "outline" : "default"}
-									disabled={proIsLive ? false : editorBusy}
+									// Disabled while a job runs (editorBusy) — including the
+									// "Generating…" state — so a second Apply can't stack. When
+									// live + idle it's a plain Close, which is always allowed.
+									disabled={editorBusy}
 									onClick={() =>
 										proIsLive ? setEditorOpen(false) : applyPro.mutate()
 									}
