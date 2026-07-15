@@ -786,9 +786,10 @@ function RecordDetail() {
 									<p className="text-xs font-medium text-muted-foreground">
 										{proIsLive ? "Generated" : "Preview"}
 									</p>
-									{/* Matte / Cover toggle for the live editing preview (matte first —
-									    the primary render). Hidden once generated, since both show. */}
-									{!proIsLive && record.capturePhotoKey && (
+									{/* Matte / Cover toggle — matte first (the primary render). Shown
+									    in both states: it switches the live editing preview, and picks
+									    which saved render the generated view shows. */}
+									{record.capturePhotoKey && (
 										<div className="flex items-center gap-3 text-[10px]">
 											{(["matte", "cover"] as const).map((m) => (
 												<button
@@ -811,63 +812,55 @@ function RecordDetail() {
 								</div>
 								{record.capturePhotoKey &&
 									(proIsLive ? (
-										// Generated + unchanged: show the saved matte and cover in high
-										// res, both visible (no hover). Editing any corner/knob drops
-										// back to the live preview below until Apply/Reset.
-										<div className="space-y-2">
-											{(
-												[
-													{
-														key: record.professionalAlphaKey,
-														label: "Matte",
-														checker: true,
-													},
-													{
-														key: record.professionalImageKey,
-														label: "Cover",
-														checker: false,
-													},
-												] as const
-											).map(({ key, label, checker }) => {
-												if (!key) return null;
-												const src = `/api/photos/${key}`;
-												if (savedImgError.has(src)) return null;
+										(() => {
+											// Generated + unchanged: show the saved render for the selected
+											// tab in high res. Editing any corner/knob drops back to the
+											// live preview below until Apply/Reset.
+											const saved =
+												previewMode === "matte"
+													? { key: record.professionalAlphaKey, checker: true }
+													: {
+															key: record.professionalImageKey,
+															checker: false,
+														};
+											const src = saved.key ? `/api/photos/${saved.key}` : null;
+											if (!src || savedImgError.has(src)) {
 												return (
-													<figure key={label} className="space-y-1">
-														<div
-															className="overflow-hidden rounded-md border bg-background"
-															style={
-																checker
-																	? {
-																			backgroundImage:
-																				"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
-																			backgroundSize: "24px 24px",
-																		}
-																	: undefined
-															}
-														>
-															<img
-																src={src}
-																alt={`Saved ${label.toLowerCase()}`}
-																onError={() =>
-																	setSavedImgError((s) => new Set(s).add(src))
-																}
-																className={cn(
-																	"block aspect-square size-full",
-																	checker ? "object-contain" : "object-cover",
-																)}
-															/>
-														</div>
-														<figcaption className="text-[10px] text-muted-foreground">
-															{label}
-														</figcaption>
-													</figure>
+													<div className="flex aspect-square items-center justify-center rounded-md border bg-muted/30 text-xs text-muted-foreground">
+														No {previewMode} generated
+													</div>
 												);
-											})}
-										</div>
+											}
+											return (
+												<div
+													className="overflow-hidden rounded-md border bg-background"
+													style={
+														saved.checker
+															? {
+																	backgroundImage:
+																		"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
+																	backgroundSize: "24px 24px",
+																}
+															: undefined
+													}
+												>
+													<img
+														src={src}
+														alt={`Saved ${previewMode}`}
+														onError={() =>
+															setSavedImgError((s) => new Set(s).add(src))
+														}
+														className={cn(
+															"block aspect-square size-full",
+															saved.checker ? "object-contain" : "object-cover",
+														)}
+													/>
+												</div>
+											);
+										})()
 									) : (
-										// Editing (never applied, or dirty): the live client-side preview
-										// of the selected mode, updating as corners/knobs change.
+										// Editing (never applied, or dirty): the live client-side
+										// preview of the selected mode, updating as corners/knobs change.
 										<ProPreview
 											src={`/api/photos/${record.capturePhotoKey}`}
 											corners={corners}
