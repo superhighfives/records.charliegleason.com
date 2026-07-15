@@ -796,7 +796,7 @@ function RecordDetail() {
 						</DialogHeader>
 
 						<div className="grid gap-4 sm:grid-cols-2">
-							<div className="space-y-1">
+							<div className="space-y-2">
 								<p className="text-xs font-medium text-muted-foreground">
 									Crop
 								</p>
