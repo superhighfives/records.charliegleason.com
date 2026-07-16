@@ -211,7 +211,8 @@ export const Route = createFileRoute("/admin/records/$id")({
 	// of the pager is to blitz through setting mattes without re-opening it each time.
 	validateSearch: (
 		search: globalThis.Record<string, unknown>,
-	): { edit?: boolean } => (search.edit ? { edit: true } : {}),
+	): { edit?: boolean } =>
+		search.edit === true || search.edit === "true" ? { edit: true } : {},
 	loader: ({ context, params }) =>
 		Promise.all([
 			context.queryClient.ensureQueryData(
@@ -487,6 +488,23 @@ function RecordDetail() {
 	// Seeded from the `edit` search param so paging next/prev with the editor open
 	// re-opens it on the record we land on (see the pager below).
 	const [editorOpen, setEditorOpen] = useState(Boolean(editParam));
+
+	// Closing the editor drops `edit` from the URL (via `replace` so it doesn't add
+	// history), otherwise a refresh or back-nav to `?edit=true` would reopen it.
+	const handleEditorOpenChange = useCallback(
+		(open: boolean) => {
+			setEditorOpen(open);
+			if (!open && editParam) {
+				navigate({
+					to: "/admin/records/$id",
+					params: { id },
+					search: {},
+					replace: true,
+				});
+			}
+		},
+		[navigate, id, editParam],
+	);
 
 	// ← / → page through the collection, so you can blitz through setting mattes
 	// from the keyboard — including from inside the editor, where the crop handles
@@ -936,7 +954,7 @@ function RecordDetail() {
 			{/* The editor: crop on the left, live output on the right, knobs below.
 			    "Use as cover" (footer checkbox) controls whether Apply promotes it. */}
 			{!inFlight && record.capturePhotoKey && (
-				<Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+				<Dialog open={editorOpen} onOpenChange={handleEditorOpenChange}>
 					<DialogContent className="max-w-5xl">
 						<DialogHeader>
 							{/* Title + the same back/next pager as the page header. `pr-8`
