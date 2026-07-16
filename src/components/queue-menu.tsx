@@ -41,11 +41,29 @@ interface FinishedItem {
 const MAX_FINISHED = 20;
 const STORAGE_KEY = "queue-finished-v1";
 
+/** A finished entry needs at least an id + labels to render a usable row. */
+function isFinishedItem(value: unknown): value is FinishedItem {
+	if (typeof value !== "object" || value === null) return false;
+	const v = value as Record<string, unknown>;
+	return (
+		typeof v.id === "number" &&
+		typeof v.artist === "string" &&
+		typeof v.title === "string" &&
+		(typeof v.thumbKey === "string" || v.thumbKey === null)
+	);
+}
+
 function loadFinished(): FinishedItem[] {
 	if (typeof window === "undefined") return [];
 	try {
 		const raw = window.sessionStorage.getItem(STORAGE_KEY);
-		return raw ? (JSON.parse(raw) as FinishedItem[]) : [];
+		if (!raw) return [];
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		// Don't trust the stored blob — a legacy/tampered value could be malformed or
+		// oversized, and on a pure load (no live poll) it'd never get shape-checked or
+		// sliced. Drop bad entries and clamp before it reaches the menu.
+		return parsed.filter(isFinishedItem).slice(0, MAX_FINISHED);
 	} catch {
 		return [];
 	}
