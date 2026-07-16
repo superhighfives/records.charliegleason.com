@@ -6,6 +6,15 @@
 		"nodejs_compat"
 	],
 	"main": "src/server.ts",
+	// Workers Logs — capture invocation logs + outcomes (incl. uncatchable kills
+	// like exceededMemory / exceededCpu that never reach Sentry). Without this a
+	// queue consumer OOM'd mid-generation was completely invisible; with it, the
+	// next occurrence's `outcome` tells us the exact cause. head_sampling_rate:1
+	// keeps everything — volume here is tiny (a personal collection).
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	},
 	// Custom domain — provisions DNS + SSL for the records subdomain on deploy
 	// (apex MX/Gmail untouched). Requires charliegleason.com to be a Cloudflare zone.
 	"routes": [
