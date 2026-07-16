@@ -159,6 +159,19 @@ export const getRecord = createServerFn({ method: "GET" })
 		}),
 	);
 
+/**
+ * A background job untouched for longer than this is treated as dead. A queue
+ * consumer that's killed mid-run (OOM, wall-clock eviction) never reaches its
+ * catch block, so the row keeps its `processing`/`queued` status with no error
+ * and sits "in flight" forever. Jobs finish in ~a minute (Replicate calls cap at
+ * 120s each), so 5 minutes of no update is safely past the worst legitimate case.
+ */
+const STALE_JOB_MS = 5 * 60 * 1000;
+
+/** The error stamped on a reaped job, shown by the editor's retry affordance. */
+const STALE_JOB_NOTE =
+	"Generation was interrupted — the worker was terminated mid-job and it never finished. Open the editor and Apply again to retry.";
+
 /** One entry in the header "in flight" menu — a record with a running background job. */
 export interface InFlightItem {
 	id: number;
@@ -196,6 +209,7 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 				professionalStatus: records.professionalStatus,
 				professionalImageKey: records.professionalImageKey,
 				capturePhotoKey: records.capturePhotoKey,
+				updatedAt: records.updatedAt,
 			})
 			.from(records)
 			.where(
@@ -206,19 +220,69 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 			)
 			.orderBy(desc(records.updatedAt));
 
-		return rows.map((row): InFlightItem => {
+		// Reap dead jobs so they leave the menu and offer a retry instead of
+		// spinning forever. The status guard on each UPDATE makes it race-safe: a
+		// job that legitimately finished between this SELECT and the UPDATE no
+		// longer matches, so we never clobber a just-completed generation. This poll
+		// is the only frequent code path, so it doubles as the self-heal sweep — no
+		// extra cron needed. Reaped rows are dropped from the returned list below.
+		const now = Date.now();
+		const stale = new Set<number>();
+		const reaps: Promise<unknown>[] = [];
+		for (const row of rows) {
+			if (!row.updatedAt || now - row.updatedAt.getTime() <= STALE_JOB_MS) {
+				continue;
+			}
+			stale.add(row.id);
 			const analyzing = row.status === "pending" || row.status === "processing";
-			return {
-				id: row.id,
-				artist: row.artist,
-				title: row.title,
-				thumbKey: displayCoverKey(row, { includeCapture: true }),
-				kind: analyzing ? "analyze" : "professional",
-				state: analyzing
-					? (row.status as "pending" | "processing")
-					: (row.professionalJobStatus as "queued" | "processing"),
-			};
-		});
+			reaps.push(
+				db
+					.update(records)
+					.set(
+						analyzing
+							? {
+									status: "failed",
+									error: STALE_JOB_NOTE,
+									updatedAt: new Date(),
+								}
+							: {
+									professionalJobStatus: "failed",
+									professionalError: STALE_JOB_NOTE,
+									updatedAt: new Date(),
+								},
+					)
+					.where(
+						and(
+							eq(records.id, row.id),
+							analyzing
+								? inArray(records.status, ["pending", "processing"])
+								: inArray(records.professionalJobStatus, [
+										"queued",
+										"processing",
+									]),
+						),
+					)
+					.catch(() => {}),
+			);
+		}
+		if (reaps.length > 0) await Promise.all(reaps);
+
+		return rows
+			.filter((row) => !stale.has(row.id))
+			.map((row): InFlightItem => {
+				const analyzing =
+					row.status === "pending" || row.status === "processing";
+				return {
+					id: row.id,
+					artist: row.artist,
+					title: row.title,
+					thumbKey: displayCoverKey(row, { includeCapture: true }),
+					kind: analyzing ? "analyze" : "professional",
+					state: analyzing
+						? (row.status as "pending" | "processing")
+						: (row.professionalJobStatus as "queued" | "processing"),
+				};
+			});
 	}),
 );
 
