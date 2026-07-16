@@ -55,8 +55,8 @@ import { displayCoverKey } from "#/lib/cover";
 import {
 	deleteRecord,
 	deleteRecords,
-	refreshRecords,
-	retryRecords,
+	publishRecords,
+	unpublishRecords,
 } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 import { cn } from "#/lib/utils";
@@ -265,32 +265,29 @@ function toggleFacet(active: string[], token: string): string[] {
 }
 
 // Bulk row actions. Each hands the selected ids to a single batched server
-// endpoint (one round trip, not N parallel calls). `match` re-queues analysis
-// (for unmatched/failed/captured rows — re-reads the cover and re-searches
-// Discogs), `refresh` enqueues a Discogs re-pull for already-matched rows,
-// `delete` removes them. Each endpoint returns how many rows it acted on.
-type BulkAction = "match" | "refresh" | "delete";
+// endpoint (one round trip, not N parallel calls). `publish` flips rows to
+// `complete` (live on the homepage), `unpublish` drops them back to `review`
+// (off the homepage, still in the queue), `delete` removes them. Publish and
+// unpublish share one toolbar slot — see `bulkActions`. Each endpoint returns
+// how many rows it acted on.
+type BulkAction = "publish" | "unpublish" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
 		verb: string; // past tense, for the result toast: "3 records <verb>."
 		fn: (opts: { data: number[] }) => Promise<{ count: number }>;
 		destructive?: boolean;
-		// Only meaningful for already-matched rows (those with a Discogs release);
-		// the button disables when the selection contains none.
-		requiresMatch?: boolean;
 	};
 } = {
-	match: {
-		label: "Match",
-		verb: "queued for matching",
-		fn: retryRecords,
+	publish: {
+		label: "Publish",
+		verb: "published",
+		fn: publishRecords,
 	},
-	refresh: {
-		label: "Refresh",
-		verb: "queued for refresh",
-		fn: refreshRecords,
-		requiresMatch: true,
+	unpublish: {
+		label: "Unpublish",
+		verb: "unpublished",
+		fn: unpublishRecords,
 	},
 	delete: {
 		label: "Delete",
@@ -821,11 +818,18 @@ function AdminRecords() {
 	const selectedRows = table.getFilteredSelectedRowModel().rows;
 	const selectedIds = selectedRows.map((r) => r.original.id);
 	const hasSelection = selectedIds.length > 0;
-	// Refresh only re-pulls Discogs metadata for already-matched rows, so it's
-	// disabled unless the selection contains at least one record with a match.
-	const hasMatchedSelection = selectedRows.some(
-		(r) => r.original.discogsId != null,
-	);
+	// The publish toggle flips direction based on the selection: if every picked
+	// row is already live (`complete`) we offer "Unpublish", otherwise "Publish"
+	// the ones that aren't. Alongside "Delete" this is the whole bulk toolbar.
+	const allPublished =
+		hasSelection &&
+		selectedRows.every(
+			(r) => (r.original.status ?? "complete") === "complete",
+		);
+	const bulkActions: BulkAction[] = [
+		allPublished ? "unpublish" : "publish",
+		"delete",
+	];
 	// Rows visible under the current tab + search. Drives the empty state and
 	// whether the bulk toolbar is worth showing at all.
 	const visibleRowCount = table.getRowModel().rows.length;
@@ -1048,22 +1052,15 @@ function AdminRecords() {
 						<>
 							{/* Desktop: the actions inline. */}
 							<div className="hidden items-center gap-2 md:flex">
-								{(Object.keys(BULK_ACTIONS) as BulkAction[]).map((action) => {
-									const { label, destructive, requiresMatch } =
-										BULK_ACTIONS[action];
-									const needsMatch = requiresMatch && !hasMatchedSelection;
+								{bulkActions.map((action) => {
+									const { label, destructive } = BULK_ACTIONS[action];
 									return (
 										<Button
 											key={action}
 											type="button"
 											size="sm"
 											variant={destructive ? "destructive" : "outline"}
-											disabled={bulkMutation.isPending || needsMatch}
-											title={
-												needsMatch
-													? "Only matched records can be refreshed from Discogs."
-													: undefined
-											}
+											disabled={bulkMutation.isPending}
 											onClick={() => runBulkAction(action)}
 										>
 											{label}
@@ -1088,25 +1085,19 @@ function AdminRecords() {
 										</Button>
 									</DropdownMenuTrigger>
 									<DropdownMenuContent align="start">
-										{(Object.keys(BULK_ACTIONS) as BulkAction[]).map(
-											(action) => (
-												<DropdownMenuItem
-													key={action}
-													variant={
-														BULK_ACTIONS[action].destructive
-															? "destructive"
-															: "default"
-													}
-													disabled={
-														BULK_ACTIONS[action].requiresMatch &&
-														!hasMatchedSelection
-													}
-													onSelect={() => runBulkAction(action)}
-												>
-													{BULK_ACTIONS[action].label}
-												</DropdownMenuItem>
-											),
-										)}
+										{bulkActions.map((action) => (
+											<DropdownMenuItem
+												key={action}
+												variant={
+													BULK_ACTIONS[action].destructive
+														? "destructive"
+														: "default"
+												}
+												onSelect={() => runBulkAction(action)}
+											>
+												{BULK_ACTIONS[action].label}
+											</DropdownMenuItem>
+										))}
 									</DropdownMenuContent>
 								</DropdownMenu>
 							</div>
