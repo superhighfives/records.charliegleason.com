@@ -265,10 +265,11 @@ function toggleFacet(active: string[], token: string): string[] {
 }
 
 // Bulk row actions. Each hands the selected ids to a single batched server
-// endpoint (one round trip, not N parallel calls). `match` re-queues analysis
-// (for unmatched/failed/captured rows — re-reads the cover and re-searches
-// Discogs), `refresh` enqueues a Discogs re-pull for already-matched rows,
-// `delete` removes them. Each endpoint returns how many rows it acted on.
+// endpoint (one round trip, not N parallel calls). `publish` flips rows to
+// `complete` (live on the homepage), `unpublish` drops them back to `review`
+// (off the homepage, still in the queue), `delete` removes them. Publish and
+// unpublish share one toolbar slot — see `bulkActions`. Each endpoint returns
+// how many rows it acted on.
 type BulkAction = "publish" | "unpublish" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {

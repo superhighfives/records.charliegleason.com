@@ -998,7 +998,9 @@ export const publishRecords = createServerFn({ method: "POST" })
 			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
 				const rows = await db
 					.update(records)
-					.set({ status: "complete", updatedAt: now })
+					// Clear `error` too: it's only meaningful while `status === "failed"`,
+					// so publishing a previously-failed row must not leave it behind.
+					.set({ status: "complete", error: null, updatedAt: now })
 					.where(inArray(records.id, batch))
 					.returning({ id: records.id });
 				count += rows.length;
@@ -1024,7 +1026,8 @@ export const unpublishRecords = createServerFn({ method: "POST" })
 			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
 				const rows = await db
 					.update(records)
-					.set({ status: "review", updatedAt: now })
+					// Clear any stale failure error — the row is now a normal review item.
+					.set({ status: "review", error: null, updatedAt: now })
 					.where(inArray(records.id, batch))
 					.returning({ id: records.id });
 				count += rows.length;
