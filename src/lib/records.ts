@@ -982,6 +982,58 @@ export const retryRecords = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Bulk publish. Flips the selected rows to `complete` so they appear on the
+ * public homepage. Shares one timestamp across chunks. Returns how many rows
+ * were published.
+ */
+export const publishRecords = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "publishRecords" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const now = new Date();
+			let count = 0;
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.update(records)
+					.set({ status: "complete", updatedAt: now })
+					.where(inArray(records.id, batch))
+					.returning({ id: records.id });
+				count += rows.length;
+			}
+			return { count };
+		}),
+	);
+
+/**
+ * Bulk unpublish. Drops the selected rows back to `review` so they leave the
+ * public homepage but stay in the admin queue. Returns how many rows were
+ * unpublished.
+ */
+export const unpublishRecords = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "unpublishRecords" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const now = new Date();
+			let count = 0;
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.update(records)
+					.set({ status: "review", updatedAt: now })
+					.where(inArray(records.id, batch))
+					.returning({ id: records.id });
+				count += rows.length;
+			}
+			return { count };
+		}),
+	);
+
+/**
  * Bulk refresh. Enqueues a Discogs re-pull for each selected record that has a
  * stored Discogs id, through the queue so it respects Discogs' rate limit —
  * rather than firing N synchronous Discogs fetches in parallel from the request.
