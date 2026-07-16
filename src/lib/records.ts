@@ -168,8 +168,14 @@ export const getRecord = createServerFn({ method: "GET" })
  */
 const STALE_JOB_MS = 5 * 60 * 1000;
 
-/** The error stamped on a reaped job, shown by the editor's retry affordance. */
-const STALE_JOB_NOTE =
+/**
+ * The error stamped on a reaped job. Split by pipeline so the guidance matches the
+ * retry the UI actually offers — "Retry analysis" for a capture, "Apply again" in
+ * the editor for a professional generation.
+ */
+const STALE_ANALYZE_NOTE =
+	"Analysis was interrupted — the worker was terminated mid-job and it never finished. Retry analysis to try again.";
+const STALE_PRO_NOTE =
 	"Generation was interrupted — the worker was terminated mid-job and it never finished. Open the editor and Apply again to retry.";
 
 /** One entry in the header "in flight" menu — a record with a running background job. */
@@ -227,13 +233,11 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		// is the only frequent code path, so it doubles as the self-heal sweep — no
 		// extra cron needed. Reaped rows are dropped from the returned list below.
 		const now = Date.now();
-		const stale = new Set<number>();
-		const reaps: Promise<unknown>[] = [];
+		const reaps: Promise<number | null>[] = [];
 		for (const row of rows) {
 			if (!row.updatedAt || now - row.updatedAt.getTime() <= STALE_JOB_MS) {
 				continue;
 			}
-			stale.add(row.id);
 			const analyzing = row.status === "pending" || row.status === "processing";
 			reaps.push(
 				db
@@ -242,12 +246,12 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 						analyzing
 							? {
 									status: "failed",
-									error: STALE_JOB_NOTE,
+									error: STALE_ANALYZE_NOTE,
 									updatedAt: new Date(),
 								}
 							: {
 									professionalJobStatus: "failed",
-									professionalError: STALE_JOB_NOTE,
+									professionalError: STALE_PRO_NOTE,
 									updatedAt: new Date(),
 								},
 					)
@@ -262,10 +266,17 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 									]),
 						),
 					)
-					.catch(() => {}),
+					// Only treat a row as reaped once its UPDATE lands. A swallowed
+					// transient D1 error leaves the id out of `stale`, so the row stays
+					// in the response and the next poll retries the reap — rather than
+					// vanishing from the header while still in-flight in the DB.
+					.then(() => row.id)
+					.catch(() => null),
 			);
 		}
-		if (reaps.length > 0) await Promise.all(reaps);
+		const stale = new Set(
+			(await Promise.all(reaps)).filter((id): id is number => id != null),
+		);
 
 		return rows
 			.filter((row) => !stale.has(row.id))

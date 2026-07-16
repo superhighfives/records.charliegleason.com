@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Disc, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -121,12 +121,15 @@ function QueueRow({
 	title,
 	thumbKey,
 	label,
+	busy,
 }: {
 	id: number;
 	artist: string;
 	title: string;
 	thumbKey: string | null;
 	label: React.ReactNode;
+	/** In-flight rows get a spinner fallback; finished rows a static one so they don't read as still-running. */
+	busy: boolean;
 }) {
 	return (
 		<DropdownMenuItem asChild>
@@ -142,8 +145,10 @@ function QueueRow({
 							alt=""
 							className="size-full object-cover"
 						/>
-					) : (
+					) : busy ? (
 						<Loader2 className="size-4 animate-spin text-muted-foreground" />
+					) : (
+						<Disc className="size-4 text-muted-foreground" />
 					)}
 				</span>
 				<span className="flex min-w-0 flex-col">
@@ -200,6 +205,7 @@ export function QueueMenu() {
 						title={item.title}
 						thumbKey={item.thumbKey}
 						label={stepLabel(item)}
+						busy
 					/>
 				))}
 				{finished.length > 0 && (
@@ -213,6 +219,7 @@ export function QueueMenu() {
 								title={item.title}
 								thumbKey={item.thumbKey}
 								label="Finished — tap to view"
+								busy={false}
 							/>
 						))}
 						<DropdownMenuSeparator />
