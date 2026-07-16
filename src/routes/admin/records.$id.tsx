@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ExternalLink, Info, Loader2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+	ChevronLeft,
+	ChevronRight,
+	ExternalLink,
+	Info,
+	Loader2,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { CornerEditor } from "#/components/corner-editor";
@@ -36,6 +42,7 @@ import type {
 	DiscogsValue,
 	SearchParams,
 } from "#/lib/discogs";
+import { orderRecordsForReview } from "#/lib/record-order";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
 	clearProfessional,
@@ -147,10 +154,80 @@ function Knob({
 	);
 }
 
+/** Back/next paging control: two arrow buttons around an "index / total" counter. */
+function RecordPager({
+	index,
+	total,
+	hasPrev,
+	hasNext,
+	onPrev,
+	onNext,
+	className,
+}: {
+	index: number;
+	total: number;
+	hasPrev: boolean;
+	hasNext: boolean;
+	onPrev: () => void;
+	onNext: () => void;
+	className?: string;
+}) {
+	// Nothing to page through — a lone record, or the list hasn't loaded yet.
+	if (total <= 1 || index < 0) return null;
+	return (
+		<div className={cn("flex shrink-0 items-center gap-2", className)}>
+			<Button
+				type="button"
+				variant="outline"
+				size="icon-sm"
+				disabled={!hasPrev}
+				onClick={onPrev}
+				aria-label="Previous record"
+				title="Previous record (←)"
+			>
+				<ChevronLeft />
+			</Button>
+			<span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+				{index + 1} / {total}
+			</span>
+			<Button
+				type="button"
+				variant="outline"
+				size="icon-sm"
+				disabled={!hasNext}
+				onClick={onNext}
+				aria-label="Next record"
+				title="Next record (→)"
+			>
+				<ChevronRight />
+			</Button>
+		</div>
+	);
+}
+
 export const Route = createFileRoute("/admin/records/$id")({
+	// `edit` carries the editor-open state across back/next paging, so stepping to
+	// the next record lands straight back in the crop/tone editor — the whole point
+	// of the pager is to blitz through setting mattes without re-opening it each time.
+	validateSearch: (
+		search: globalThis.Record<string, unknown>,
+	): { edit?: boolean } => (search.edit ? { edit: true } : {}),
 	loader: ({ context, params }) =>
-		context.queryClient.ensureQueryData(recordQueryOptions(Number(params.id))),
-	component: RecordDetail,
+		Promise.all([
+			context.queryClient.ensureQueryData(
+				recordQueryOptions(Number(params.id)),
+			),
+			// The pager pages through the whole collection, so make sure the list is
+			// warm — otherwise the first back/next after a deep-link would no-op.
+			context.queryClient.ensureQueryData(recordsQueryOptions),
+		]),
+	// Key the detail view by id so paging to another record remounts it: every
+	// working-copy `useState` (crop band, tone, which tab, editor-open) re-seeds
+	// from the record it lands on rather than carrying the previous one's edits.
+	component: function RecordDetailRoute() {
+		const { id } = Route.useParams();
+		return <RecordDetail key={id} />;
+	},
 });
 
 function parseCandidates(json: string | null): Array<DiscogsCandidate> {
@@ -312,8 +389,37 @@ function CandidateRow({
 function RecordDetail() {
 	const { id } = Route.useParams();
 	const recordId = Number(id);
+	const { edit: editParam } = Route.useSearch();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+
+	// Back/next paging through the collection, in the same order the admin list
+	// shows (attention-needing first, then newest). Tracked by id so it never
+	// jumps to the wrong record if the list re-sorts under it.
+	const { data: allRecords } = useQuery(recordsQueryOptions);
+	const ordered = useMemo(
+		() => orderRecordsForReview(allRecords ?? []),
+		[allRecords],
+	);
+	const pagerIndex = ordered.findIndex((r) => r.id === recordId);
+	const prevRecord = pagerIndex > 0 ? ordered[pagerIndex - 1] : null;
+	const nextRecord =
+		pagerIndex >= 0 && pagerIndex < ordered.length - 1
+			? ordered[pagerIndex + 1]
+			: null;
+
+	// Page to another record, carrying the editor-open state so a next/prev press
+	// from inside the editor lands straight back in it (`keepEditor`), or drops the
+	// flag so plain paging leaves the editor closed.
+	const goToRecord = useCallback(
+		(targetId: number, keepEditor: boolean) =>
+			navigate({
+				to: "/admin/records/$id",
+				params: { id: String(targetId) },
+				search: keepEditor ? { edit: true } : {},
+			}),
+		[navigate],
+	);
 
 	const { data: record } = useQuery({
 		...recordQueryOptions(recordId),
@@ -378,7 +484,37 @@ function RecordDetail() {
 		parseCornerBand(record?.sleeveCornersJson),
 	);
 	// Whether the professional-photo editor modal is open (crop + live preview + knobs).
-	const [editorOpen, setEditorOpen] = useState(false);
+	// Seeded from the `edit` search param so paging next/prev with the editor open
+	// re-opens it on the record we land on (see the pager below).
+	const [editorOpen, setEditorOpen] = useState(Boolean(editParam));
+
+	// ← / → page through the collection, so you can blitz through setting mattes
+	// from the keyboard — including from inside the editor, where the crop handles
+	// and tone sliders own the arrows only while they're focused. A control that
+	// consumed the key (slider, crop handle) will have called preventDefault by the
+	// time this bubbles to the window; ignore those, and any key aimed at a text
+	// field, so we never hijack caret movement or a value nudge.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+			if (e.defaultPrevented) return;
+			const el = e.target as HTMLElement | null;
+			if (
+				el?.isContentEditable ||
+				el?.closest(
+					"input, textarea, select, [contenteditable='true'], [role='slider']",
+				)
+			) {
+				return;
+			}
+			const target = e.key === "ArrowLeft" ? prevRecord : nextRecord;
+			if (!target) return;
+			e.preventDefault();
+			goToRecord(target.id, editorOpen);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [prevRecord, nextRecord, editorOpen, goToRecord]);
 	// Which output the live editing preview shows — the matte (default, the primary
 	// render) or the square cover — toggled by the switch in the preview's top-right.
 	const [previewMode, setPreviewMode] = useState<"matte" | "cover">("matte");
@@ -680,12 +816,22 @@ function RecordDetail() {
 	return (
 		<div className="mx-auto max-w-2xl space-y-6">
 			<div>
-				<Link
-					to="/admin"
-					className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
-				>
-					← Collection
-				</Link>
+				<div className="flex items-center justify-between gap-2">
+					<Link
+						to="/admin"
+						className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
+					>
+						← Collection
+					</Link>
+					<RecordPager
+						index={pagerIndex}
+						total={ordered.length}
+						hasPrev={prevRecord != null}
+						hasNext={nextRecord != null}
+						onPrev={() => prevRecord && goToRecord(prevRecord.id, editorOpen)}
+						onNext={() => nextRecord && goToRecord(nextRecord.id, editorOpen)}
+					/>
+				</div>
 				{/* Photo + text take ~half the width on desktop, with the badges pushed
 				    to the far right; on mobile they stack into two rows (photo + text,
 				    then the badges). Everything shares one bottom baseline so the status
@@ -793,7 +939,21 @@ function RecordDetail() {
 				<Dialog open={editorOpen} onOpenChange={setEditorOpen}>
 					<DialogContent className="max-w-5xl">
 						<DialogHeader>
-							<DialogTitle>Edit image</DialogTitle>
+							{/* Title + the same back/next pager as the page header. `pr-8`
+							    keeps it clear of the dialog's absolute close button. Paging
+							    from here keeps the editor open so you can run straight down
+							    the collection setting mattes. */}
+							<div className="flex items-start justify-between gap-4 pr-8">
+								<DialogTitle>Edit image</DialogTitle>
+								<RecordPager
+									index={pagerIndex}
+									total={ordered.length}
+									hasPrev={prevRecord != null}
+									hasNext={nextRecord != null}
+									onPrev={() => prevRecord && goToRecord(prevRecord.id, true)}
+									onNext={() => nextRecord && goToRecord(nextRecord.id, true)}
+								/>
+							</div>
 							<DialogDescription>
 								Drag the outer frame onto the background and the inner one onto
 								the sleeve (or auto-detect), then tune the tone — the preview

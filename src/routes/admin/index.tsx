@@ -52,6 +52,7 @@ import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import { displayCoverKey } from "#/lib/cover";
+import { orderRecordsForReview } from "#/lib/record-order";
 import {
 	deleteRecord,
 	deleteRecords,
@@ -71,7 +72,6 @@ declare module "@tanstack/react-table" {
 	}
 }
 
-type RecordStatus = NonNullable<Record["status"]>;
 type FacetTest = (r: Record, liveIds: Set<number>) => boolean;
 interface FacetOption {
 	token: string;
@@ -295,16 +295,6 @@ const BULK_ACTIONS: {
 		fn: deleteRecords,
 		destructive: true,
 	},
-};
-
-// Float the records that still need attention to the top of the default view,
-// newest first, so a capture session lands ready to review without sorting.
-const STATUS_PRIORITY: globalThis.Record<RecordStatus, number> = {
-	review: 0,
-	failed: 1,
-	pending: 2,
-	processing: 3,
-	complete: 4,
 };
 
 /**
@@ -781,14 +771,9 @@ function AdminRecords() {
 	// (newest first). User-driven column sorting still overrides this default.
 	const rows = useMemo(
 		() =>
-			data
-				.filter((r) => matchesFacets(r, activeFacets, liveIds))
-				.sort((a, b) => {
-					const pa = STATUS_PRIORITY[a.status ?? "complete"];
-					const pb = STATUS_PRIORITY[b.status ?? "complete"];
-					if (pa !== pb) return pa - pb;
-					return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
-				}),
+			orderRecordsForReview(
+				data.filter((r) => matchesFacets(r, activeFacets, liveIds)),
+			),
 		[data, activeFacets, liveIds],
 	);
 
@@ -823,9 +808,7 @@ function AdminRecords() {
 	// the ones that aren't. Alongside "Delete" this is the whole bulk toolbar.
 	const allPublished =
 		hasSelection &&
-		selectedRows.every(
-			(r) => (r.original.status ?? "complete") === "complete",
-		);
+		selectedRows.every((r) => (r.original.status ?? "complete") === "complete");
 	const bulkActions: BulkAction[] = [
 		allPublished ? "unpublish" : "publish",
 		"delete",
