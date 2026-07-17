@@ -245,11 +245,19 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			// Identified the sleeve but couldn't attach a Discogs release — either a
 			// genuine gap in Discogs or a transient failure that outlived the fetch
 			// retries. Surface it so "Unmatched" records are observable rather than
-			// silently landing in review with no release linked.
-			Sentry.captureMessage(
-				`[analyze] no Discogs match for record ${recordId} (${result.artist} — ${result.title})`,
-				"warning",
-			);
+			// silently landing in review with no release linked. A stable fingerprint
+			// rolls every unmatched record into a single issue instead of spawning a
+			// fresh one per record; the specifics ride along as per-event context.
+			Sentry.withScope((scope) => {
+				scope.setLevel("warning");
+				scope.setFingerprint(["analyze-no-discogs-match"]);
+				scope.setContext("record", {
+					id: recordId,
+					artist: result.artist,
+					title: result.title,
+				});
+				Sentry.captureMessage("[analyze] no Discogs match for record");
+			});
 		}
 
 		// Flag the record if the collection already holds this release. Compared
