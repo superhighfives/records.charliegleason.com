@@ -1,5 +1,7 @@
 import { useForm } from "@tanstack/react-form";
+import { useState } from "react";
 
+import { NotesContent } from "#/components/notes-content";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -9,6 +11,7 @@ import {
 	type RecordFormValues,
 	recordFormSchema,
 } from "#/lib/record-schema";
+import { cn } from "#/lib/utils.ts";
 
 interface RecordFormProps {
 	defaultValues: RecordFormValues;
@@ -43,6 +46,8 @@ export function RecordForm({
 	submitLabel,
 	onSubmit,
 }: RecordFormProps) {
+	const [notesMode, setNotesMode] = useState<"edit" | "preview">("edit");
+
 	const form = useForm({
 		defaultValues,
 		validators: { onChange: recordFormSchema },
@@ -90,14 +95,51 @@ export function RecordForm({
 			<form.Field name="notes">
 				{(field) => (
 					<div className="space-y-1.5">
-						<Label htmlFor={field.name}>Notes</Label>
-						<Textarea
-							id={field.name}
-							name={field.name}
-							value={field.state.value}
-							onBlur={field.handleBlur}
-							onChange={(e) => field.handleChange(e.target.value)}
-						/>
+						<div className="flex items-center justify-between">
+							<Label htmlFor={field.name}>Notes</Label>
+							<div className="flex items-center gap-3 text-[10px]">
+								{(["edit", "preview"] as const).map((m) => (
+									<button
+										key={m}
+										type="button"
+										aria-pressed={notesMode === m}
+										onClick={() => setNotesMode(m)}
+										className={cn(
+											"capitalize transition-colors",
+											notesMode === m
+												? "text-foreground underline underline-offset-4"
+												: "text-muted-foreground/70 hover:text-foreground",
+										)}
+									>
+										{m}
+									</button>
+								))}
+							</div>
+						</div>
+						{notesMode === "preview" ? (
+							<div className="min-h-48 rounded-md border border-input bg-secondary px-3 py-2">
+								{field.state.value.trim() ? (
+									<NotesContent>{field.state.value}</NotesContent>
+								) : (
+									<p className="text-sm text-muted-foreground">
+										Nothing to preview yet.
+									</p>
+								)}
+							</div>
+						) : (
+							<Textarea
+								id={field.name}
+								name={field.name}
+								className="min-h-48"
+								value={field.state.value}
+								onBlur={field.handleBlur}
+								onChange={(e) => field.handleChange(e.target.value)}
+							/>
+						)}
+						<p className="text-xs text-muted-foreground">
+							Supports basic Markdown — **bold**, *italic*, [links](url) and
+							lists.
+						</p>
 					</div>
 				)}
 			</form.Field>
