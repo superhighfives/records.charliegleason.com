@@ -18,10 +18,9 @@ export const recordInputSchema = z.object({
 	genre: z.string().trim().min(1).nullable(),
 	pitchforkScore: z.number().min(0).max(10).nullable(),
 	notes: z.string().trim().min(1).nullable(),
-	// Admin valuation fields. `manualValue` is a hand-entered confirmed value that
-	// overrides the Discogs guess; `confirmedRelease` marks a vouched-for match.
+	// Admin valuation field: `manualValue` is a hand-entered confirmed value that
+	// overrides the Discogs guess.
 	manualValue: z.number().min(0).nullable(),
-	confirmedRelease: z.boolean(),
 });
 
 export type RecordInput = z.infer<typeof recordInputSchema>;
@@ -33,6 +32,10 @@ export type RecordInput = z.infer<typeof recordInputSchema>;
  * editable fields — can't null these out on update.
  */
 export const recordCreateSchema = recordInputSchema.extend({
+	// `masterId` is the album (primary Discogs identity); `discogsId` the optional
+	// pinned release (pressing).
+	masterId: z.string().nullish(),
+	masterUrl: z.string().nullish(),
 	discogsId: z.string().nullish(),
 	discogsUrl: z.string().nullish(),
 	pitchforkUrl: z.string().nullish(),
@@ -60,7 +63,6 @@ export type RecordFormValues = {
 	pitchforkScore: string;
 	notes: string;
 	manualValue: string;
-	confirmedRelease: boolean;
 };
 
 const numericString = z
@@ -84,7 +86,6 @@ export const recordFormSchema = z.object({
 	pitchforkScore: numericString,
 	notes: z.string(),
 	manualValue: numericString,
-	confirmedRelease: z.boolean(),
 });
 
 export const emptyRecordForm: RecordFormValues = {
@@ -100,7 +101,6 @@ export const emptyRecordForm: RecordFormValues = {
 	pitchforkScore: "",
 	notes: "",
 	manualValue: "",
-	confirmedRelease: false,
 };
 
 const optional = (s: string) => {
@@ -127,7 +127,6 @@ export function formValuesToInput(v: RecordFormValues): RecordInput {
 		pitchforkScore: optionalNumber(v.pitchforkScore),
 		notes: optional(v.notes),
 		manualValue: optionalNumber(v.manualValue),
-		confirmedRelease: v.confirmedRelease,
 	};
 }
 
@@ -145,6 +144,5 @@ export function recordToFormValues(r: Record): RecordFormValues {
 		pitchforkScore: r.pitchforkScore?.toString() ?? "",
 		notes: r.notes ?? "",
 		manualValue: r.manualValue?.toString() ?? "",
-		confirmedRelease: r.confirmedRelease ?? false,
 	};
 }

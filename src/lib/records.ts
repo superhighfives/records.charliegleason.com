@@ -9,11 +9,15 @@ import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
 import { displayCoverKey } from "#/lib/cover";
 import {
+	getMasterCandidate,
+	getMasterVersions,
 	getReleaseCandidate,
 	getReleaseDetail,
 	getReleaseValue,
 	MAX_PER_PAGE,
+	parseMasterId,
 	parseReleaseId,
+	searchMasters,
 	searchParamsSchema,
 	searchReleases,
 } from "#/lib/discogs";
@@ -62,7 +66,6 @@ import {
  */
 const ADMIN_ONLY_FIELDS = [
 	"capturePhotoKey",
-	"confirmedRelease",
 	"manualValue",
 	"discogsValue",
 	"discogsValueCurrency",
@@ -87,7 +90,6 @@ export type PublicRecord = Omit<RecordRow, (typeof ADMIN_ONLY_FIELDS)[number]>;
 export function toPublicRecord(row: RecordRow): PublicRecord {
 	const {
 		capturePhotoKey: _capture,
-		confirmedRelease: _confirmed,
 		manualValue: _manual,
 		discogsValue: _value,
 		discogsValueCurrency: _currency,
@@ -460,12 +462,16 @@ export const publishRecord = createServerFn({ method: "POST" })
 		(input: {
 			id: number;
 			data: unknown;
+			masterId?: string | null;
+			masterUrl?: string | null;
 			discogsId?: string | null;
 			discogsUrl?: string | null;
 			coverImageKey?: string | null;
 		}) => ({
 			id: input.id,
 			data: recordInputSchema.parse(input.data),
+			masterId: input.masterId ?? null,
+			masterUrl: input.masterUrl ?? null,
 			discogsId: input.discogsId ?? null,
 			discogsUrl: input.discogsUrl ?? null,
 			// Only accept keys minted by the cover pipeline. Without this an override
@@ -479,7 +485,17 @@ export const publishRecord = createServerFn({ method: "POST" })
 		}),
 	)
 	.handler(
-		({ data: { id, data, discogsId, discogsUrl, coverImageKey: uploaded } }) =>
+		({
+			data: {
+				id,
+				data,
+				masterId,
+				masterUrl,
+				discogsId,
+				discogsUrl,
+				coverImageKey: uploaded,
+			},
+		}) =>
 			Sentry.startSpan({ name: "publishRecord" }, async () => {
 				const db = getDb(env.DB);
 				const [current] = await db
@@ -510,17 +526,23 @@ export const publishRecord = createServerFn({ method: "POST" })
 					.update(records)
 					.set({
 						...data,
+						masterId,
+						masterUrl,
 						discogsId,
 						discogsUrl,
 						coverImageKey,
 						coverIsUpload,
-						status: "complete",
+						// A record is only publishable once it has an album (master). Without
+						// one, save it back to `review` rather than pushing it live.
+						status: masterId ? "complete" : "review",
 						error: null,
 						updatedAt: new Date(),
 					})
 					.where(eq(records.id, id))
 					.returning();
-				return row ? { record: row, coverFetchFailed } : null;
+				return row
+					? { record: row, coverFetchFailed, needsMaster: !masterId }
+					: null;
 			}),
 	);
 
@@ -542,10 +564,11 @@ export const reprocessRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Re-pull a single record from its stored Discogs release id and update the
- * enrichment fields (year, label, genre, format, size, catno, country). Runs
- * synchronously so the detail page gets the updated row straight back. Returns
- * null if the record is gone or has no Discogs id to refresh from.
+ * Re-pull a single record from Discogs, synchronously so the detail page gets the
+ * updated row straight back. Re-pulls the pinned release (enrichment + value),
+ * refreshes the album from its master, or — when neither is set — guesses a master
+ * from the record's artist/title. Returns null if the record is gone or there's
+ * nothing to refresh/guess from.
  */
 export const refreshRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -936,6 +959,55 @@ export const lookupDiscogsRelease = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Manual Discogs *master* (album) search — the editor's primary "pick an album"
+ * flow. Mirrors `searchDiscogs` but over masters; failures propagate so the UI can
+ * show why a search came back empty.
+ */
+export const searchDiscogsMasters = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => searchParamsSchema.parse(data))
+	.handler(({ data }) =>
+		Sentry.startSpan({ name: "searchDiscogsMasters" }, () =>
+			searchMasters(data, MAX_PER_PAGE),
+		),
+	);
+
+/**
+ * List a master's vinyl pressings for the editor's "pick a specific release"
+ * flow — the album's releases to choose from once it's linked. Returns [] on
+ * failure so the picker just shows nothing rather than erroring.
+ */
+export const getDiscogsMasterVersions = createServerFn({ method: "GET" })
+	.middleware([authMiddleware])
+	.validator((id: string) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "getDiscogsMasterVersions" }, () =>
+			getMasterVersions(id).catch(() => []),
+		),
+	);
+
+/**
+ * Resolve a pasted Discogs master URL (or bare id) into a single master candidate,
+ * so an album can be pinned without searching. Returns null for anything that
+ * isn't a resolvable master.
+ */
+export const lookupDiscogsMaster = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => {
+		if (typeof data !== "string") {
+			throw new Error("Expected a Discogs master URL or id");
+		}
+		return data;
+	})
+	.handler(({ data: input }) =>
+		Sentry.startSpan({ name: "lookupDiscogsMaster" }, () => {
+			const id = parseMasterId(input);
+			if (!id) return null;
+			return getMasterCandidate(id).catch(() => null);
+		}),
+	);
+
+/**
  * Store a user-uploaded cover image (base64 data URL) in R2 and return its key,
  * so the review page can override the auto-sourced Discogs artwork on publish.
  */
@@ -1058,8 +1130,9 @@ export const retryRecords = createServerFn({ method: "POST" })
 
 /**
  * Bulk publish. Flips the selected rows to `complete` so they appear on the
- * public homepage. Shares one timestamp across chunks. Returns how many rows
- * were published.
+ * public homepage. Shares one timestamp across chunks. Returns how many rows were
+ * published — rows without a `masterId` are silently skipped (a record needs an
+ * album to be publishable), so the count can be lower than the selection.
  */
 export const publishRecords = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -1076,7 +1149,8 @@ export const publishRecords = createServerFn({ method: "POST" })
 					// Clear `error` too: it's only meaningful while `status === "failed"`,
 					// so publishing a previously-failed row must not leave it behind.
 					.set({ status: "complete", error: null, updatedAt: now })
-					.where(inArray(records.id, batch))
+					// A record is only publishable once it has an album (master).
+					.where(and(inArray(records.id, batch), isNotNull(records.masterId)))
 					.returning({ id: records.id });
 				count += rows.length;
 			}
@@ -1112,11 +1186,13 @@ export const unpublishRecords = createServerFn({ method: "POST" })
 	);
 
 /**
- * Bulk refresh. Enqueues a Discogs re-pull for each selected record that has a
- * stored Discogs id, through the queue so it respects Discogs' rate limit —
- * rather than firing N synchronous Discogs fetches in parallel from the request.
- * Returns how many refreshes were queued (records without a Discogs id are
- * silently skipped).
+ * Bulk refresh. Enqueues a Discogs re-pull for each selected record through the
+ * queue (so it respects Discogs' rate limit rather than firing N synchronous
+ * fetches). Per record, the consumer re-pulls the pinned release, refreshes the
+ * album from its master, or — when neither is set — guesses a master from the
+ * record's artist/title. Every real record has an artist/title, so all selected
+ * rows are enqueued; only rows with neither Discogs link nor artist/title no-op.
+ * Returns how many refreshes were queued.
  */
 export const refreshRecords = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -1130,7 +1206,19 @@ export const refreshRecords = createServerFn({ method: "POST" })
 				const rows = await db
 					.select({ id: records.id })
 					.from(records)
-					.where(and(inArray(records.id, batch), isNotNull(records.discogsId)));
+					// Enqueue anything with a Discogs link (re-pull) or an artist/title to
+					// guess a master from. `artist` is NOT NULL, so this matches every row;
+					// the guard documents intent and future-proofs against blank imports.
+					.where(
+						and(
+							inArray(records.id, batch),
+							or(
+								isNotNull(records.discogsId),
+								isNotNull(records.masterId),
+								isNotNull(records.artist),
+							),
+						),
+					);
 				matched.push(...rows.map(({ id }) => id));
 			}
 			await enqueueRefreshBatch(matched);

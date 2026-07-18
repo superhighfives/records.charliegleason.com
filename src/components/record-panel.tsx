@@ -31,7 +31,6 @@ export type PanelRecord = PublicRecord &
 	Partial<
 		Pick<
 			Record,
-			| "confirmedRelease"
 			| "manualValue"
 			| "discogsValue"
 			| "discogsValueCurrency"
@@ -148,7 +147,7 @@ export function RecordPanel({
 	total: number;
 	onPrev: () => void;
 	onNext: () => void;
-	/** Admin drawer: surface the private valuation + confirmed-release status. */
+	/** Admin drawer: surface the private valuation + pinned-release status. */
 	admin?: boolean;
 }) {
 	// `copied` resets on its own: the panel is keyed by record id at the call site,
@@ -233,10 +232,10 @@ export function RecordPanel({
 						{record.artist}
 						{record.year ? ` · ${record.year}` : ""}
 					</SheetDescription>
-					{admin && record.confirmedRelease && (
+					{admin && record.discogsId && (
 						<span className="mt-1 inline-flex items-center gap-1 rounded-full bg-brand/15 px-2 py-0.5 text-xs font-medium text-brand-strong">
 							<BadgeCheck className="size-3.5" />
-							Confirmed release
+							Release pinned
 						</span>
 					)}
 					{record.catno && (

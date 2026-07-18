@@ -39,6 +39,7 @@ import { describeAnalysisError } from "#/lib/analysis-error";
 import { displayCoverKey } from "#/lib/cover";
 import type {
 	DiscogsCandidate,
+	DiscogsMasterCandidate,
 	DiscogsValue,
 	SearchParams,
 } from "#/lib/discogs";
@@ -49,7 +50,9 @@ import {
 	deleteRecord,
 	detectCorners,
 	fetchRecordValue,
+	getDiscogsMasterVersions,
 	getDiscogsRelease,
+	lookupDiscogsMaster,
 	lookupDiscogsRelease,
 	previewReleaseValue,
 	publishRecord,
@@ -57,6 +60,7 @@ import {
 	replaceCapture,
 	reprocessRecord,
 	searchDiscogs,
+	searchDiscogsMasters,
 } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 import {
@@ -77,6 +81,12 @@ import { effectiveValue, formatMoney } from "#/lib/value";
 function looksLikeReleaseId(input: string): boolean {
 	const s = input.trim();
 	return /^\d+$/.test(s) || /\/releases?\/\d+/.test(s);
+}
+
+/** Does the pasted text look like it contains a Discogs master id? */
+function looksLikeMasterId(input: string): boolean {
+	const s = input.trim();
+	return /^\d+$/.test(s) || /\/masters?\/\d+/.test(s);
 }
 
 /** Read a file to a data URL — used to ship a replacement capture to the server. */
@@ -240,25 +250,31 @@ function parseCandidates(json: string | null): Array<DiscogsCandidate> {
 	}
 }
 
-/** Build form defaults from the record, overlaying a freshly picked Discogs release. */
+/**
+ * Build form defaults from the record, overlaying a freshly picked Discogs
+ * release (most specific — it carries pressing fields) or, failing that, a picked
+ * master (album-level fields only). A release pick wins over a master pick.
+ */
 function toForm(
 	record: Record,
 	picked: DiscogsCandidate | null,
+	pickedMaster: DiscogsMasterCandidate | null,
 ): RecordFormValues {
+	// Album-level fields fall back release → master → record; pressing-specific
+	// fields (label, format, size, catno, country) only come from a release.
 	return {
-		artist: picked?.artist || record.artist,
-		title: picked?.title || record.title,
-		year: (picked?.year ?? record.year)?.toString() ?? "",
+		artist: picked?.artist || pickedMaster?.artist || record.artist,
+		title: picked?.title || pickedMaster?.title || record.title,
+		year: (picked?.year ?? pickedMaster?.year ?? record.year)?.toString() ?? "",
 		label: picked?.label ?? record.label ?? "",
 		format: picked?.type ?? record.format ?? "LP",
 		size: picked?.size ?? record.size ?? "",
 		catno: picked?.catno ?? record.catno ?? "",
 		country: picked?.country ?? record.country ?? "",
-		genre: picked?.genre ?? record.genre ?? "",
+		genre: picked?.genre ?? pickedMaster?.genre ?? record.genre ?? "",
 		pitchforkScore: record.pitchforkScore?.toString() ?? "",
 		notes: record.notes ?? "",
 		manualValue: record.manualValue?.toString() ?? "",
-		confirmedRelease: record.confirmedRelease ?? false,
 	};
 }
 
@@ -387,6 +403,226 @@ function CandidateRow({
 	);
 }
 
+/**
+ * The album (master) picker — the primary "what record is this?" control. A record
+ * needs a master to be publishable; the specific release (pressing) is an optional
+ * pin handled by the separate candidate list below. Self-contained: owns its own
+ * search / paste-URL flows and reports the chosen master (or a clear) to the parent.
+ */
+function MasterPicker({
+	seedArtist,
+	seedTitle,
+	currentMasterId,
+	currentLabel,
+	currentUrl,
+	pickedId,
+	onPick,
+	onClear,
+}: {
+	seedArtist: string;
+	seedTitle: string;
+	currentMasterId: string | null;
+	currentLabel: string | null;
+	currentUrl: string | null;
+	pickedId: string | null;
+	onPick: (c: DiscogsMasterCandidate) => void;
+	onClear: () => void;
+}) {
+	const [q, setQ] = useState({ artist: seedArtist, title: seedTitle });
+	const [urlInput, setUrlInput] = useState("");
+	const [results, setResults] = useState<Array<DiscogsMasterCandidate> | null>(
+		null,
+	);
+
+	const search = useMutation({
+		mutationFn: (params: SearchParams) =>
+			searchDiscogsMasters({ data: params }),
+		onSuccess: setResults,
+	});
+	const lookup = useMutation({
+		mutationFn: async (url: string) => {
+			const c = await lookupDiscogsMaster({ data: url });
+			if (!c) throw new Error("Couldn’t find a Discogs master at that URL.");
+			return c;
+		},
+		onSuccess: (c) => {
+			setResults([c]);
+			onPick(c);
+		},
+	});
+
+	return (
+		<div className="space-y-3 rounded-lg border p-3">
+			<div>
+				<h2 className="text-sm font-semibold">
+					Album{" "}
+					<span className="font-normal text-muted-foreground">(master)</span>
+				</h2>
+				<p className="text-xs text-muted-foreground">
+					The album is the record’s identity — it needs one to be published. A
+					specific pressing is optional (below).
+				</p>
+			</div>
+
+			{currentMasterId ? (
+				<div className="flex items-center justify-between gap-3 rounded-md border bg-accent/30 px-3 py-2 text-sm">
+					<span className="min-w-0 truncate">
+						{currentUrl ? (
+							<a
+								href={currentUrl}
+								target="_blank"
+								rel="noreferrer"
+								className="inline-flex items-center gap-1 hover:underline"
+							>
+								<span className="truncate">{currentLabel}</span>
+								<ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+							</a>
+						) : (
+							currentLabel
+						)}
+					</span>
+					<Button type="button" size="xs" variant="ghost" onClick={onClear}>
+						Remove
+					</Button>
+				</div>
+			) : (
+				<p className="text-xs text-amber-600 dark:text-amber-400">
+					No album linked — search or paste a master URL to make this
+					publishable.
+				</p>
+			)}
+
+			<form
+				className="space-y-2"
+				onSubmit={(e) => {
+					e.preventDefault();
+					if (!search.isPending) {
+						search.mutate({
+							artist: q.artist,
+							title: q.title,
+							country: "",
+							year: "",
+							q: "",
+						});
+					}
+				}}
+			>
+				<div className="grid grid-cols-2 gap-2">
+					<Input
+						value={q.artist}
+						placeholder="Artist"
+						onChange={(e) => setQ((s) => ({ ...s, artist: e.target.value }))}
+					/>
+					<Input
+						value={q.title}
+						placeholder="Album title"
+						onChange={(e) => setQ((s) => ({ ...s, title: e.target.value }))}
+					/>
+				</div>
+				{search.isError && (
+					<p className="text-xs text-red-600" role="alert">
+						{search.error instanceof Error
+							? search.error.message
+							: "Search failed. Try again."}
+					</p>
+				)}
+				<div className="flex justify-end">
+					<Button
+						type="submit"
+						variant="outline"
+						size="sm"
+						disabled={search.isPending}
+					>
+						{search.isPending ? "Searching…" : "Search albums"}
+					</Button>
+				</div>
+			</form>
+
+			{results && results.length > 0 && (
+				<ul className="max-h-64 divide-y overflow-y-auto rounded-md border">
+					{results.map((m) => {
+						const active =
+							pickedId === m.masterId ||
+							(pickedId == null && currentMasterId === m.masterId);
+						return (
+							<li key={m.masterId}>
+								<button
+									type="button"
+									onClick={() => onPick(m)}
+									className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
+										active ? "bg-accent" : "hover:bg-accent/50"
+									}`}
+								>
+									{m.thumb ? (
+										<img
+											src={m.thumb}
+											alt=""
+											className="size-10 shrink-0 rounded object-cover"
+										/>
+									) : (
+										<div className="size-10 shrink-0 rounded bg-muted" />
+									)}
+									<span className="min-w-0 flex-1 truncate">
+										<span className="block truncate">
+											<span className="font-medium">{m.artist}</span> —{" "}
+											{m.title}
+											{m.year ? ` (${m.year})` : ""}
+										</span>
+										{m.genre && (
+											<span className="block truncate text-xs text-muted-foreground">
+												{m.genre}
+											</span>
+										)}
+									</span>
+									{active && <span className="shrink-0 text-xs">✓</span>}
+								</button>
+							</li>
+						);
+					})}
+				</ul>
+			)}
+			{search.isSuccess && results?.length === 0 && (
+				<p className="text-xs text-muted-foreground" aria-live="polite">
+					No albums found. Try a different spelling or paste the master URL.
+				</p>
+			)}
+
+			<form
+				className="space-y-1"
+				onSubmit={(e) => {
+					e.preventDefault();
+					if (looksLikeMasterId(urlInput) && !lookup.isPending) {
+						lookup.mutate(urlInput);
+					}
+				}}
+			>
+				<label htmlFor="master-url" className="text-xs text-muted-foreground">
+					Or paste a Discogs master URL
+				</label>
+				<div className="flex gap-2">
+					<Input
+						id="master-url"
+						value={urlInput}
+						placeholder="https://www.discogs.com/master/…"
+						onChange={(e) => setUrlInput(e.target.value)}
+					/>
+					<Button
+						type="submit"
+						variant="outline"
+						size="sm"
+						disabled={lookup.isPending || !looksLikeMasterId(urlInput)}
+					>
+						{lookup.isPending ? "…" : "Link"}
+					</Button>
+				</div>
+				{lookup.isError && (
+					<p className="text-xs text-red-600">{lookup.error.message}</p>
+				)}
+			</form>
+		</div>
+	);
+}
+
 function RecordDetail() {
 	const { id } = Route.useParams();
 	const recordId = Number(id);
@@ -451,7 +687,20 @@ function RecordDetail() {
 		wasGeneratingRef.current = generating;
 	}, [record?.professionalJobStatus]);
 
+	// The album (master) is the record's identity. `pickedMaster` is an explicit
+	// choice from the master picker; `unmatchMaster` explicitly clears the album
+	// (making the record unpublishable) — distinct from "no pick yet", which falls
+	// back to the record's existing master (or a picked release's master).
+	const [pickedMaster, setPickedMaster] =
+		useState<DiscogsMasterCandidate | null>(null);
+	const [unmatchMaster, setUnmatchMaster] = useState(false);
+
 	const [picked, setPicked] = useState<DiscogsCandidate | null>(null);
+	// "Album only": explicitly drop the pinned release on save while keeping the
+	// master (the album). Distinct from "no pick yet" — which falls back to the
+	// record's existing release — so the admin can un-pin a pressing on purpose.
+	// Picking a candidate re-pins, so it clears this.
+	const [albumOnly, setAlbumOnly] = useState(false);
 	const [results, setResults] = useState<Array<DiscogsCandidate> | null>(null);
 	// A non-persisted Discogs value estimate for a picked-but-unpublished edition,
 	// so the admin can compare pricing across editions before committing. Cleared
@@ -759,6 +1008,19 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn’t fetch a value from Discogs."),
 	});
 
+	// Once an album (master) is linked, its vinyl pressings are the release
+	// pick-list — pick the album first, then optionally a specific pressing.
+	// Computed here (before the early return) to satisfy the rules of hooks.
+	const versionsMasterId = unmatchMaster
+		? null
+		: (pickedMaster?.masterId ?? picked?.masterId ?? record?.masterId ?? null);
+	const masterVersionsQuery = useQuery({
+		queryKey: ["master-versions", versionsMasterId] as const,
+		queryFn: () => getDiscogsMasterVersions({ data: versionsMasterId ?? "" }),
+		enabled: versionsMasterId != null,
+		staleTime: 5 * 60 * 1000,
+	});
+
 	if (!record) {
 		return <p className="text-muted-foreground">Record not found.</p>;
 	}
@@ -767,11 +1029,35 @@ function RecordDetail() {
 	// has chosen one, otherwise the record's saved release. Previewing (rather than
 	// persisting) applies when the pick differs from what's saved — we can't write a
 	// value to an unpublished edition, so we show it inline until they publish.
-	const activeDiscogsId = picked?.discogsId ?? record.discogsId;
+	// Album-only drops the pin, so there's no release to value against.
+	const activeDiscogsId = albumOnly
+		? null
+		: (picked?.discogsId ?? record.discogsId);
 	const isPreviewing = picked != null && picked.discogsId !== record.discogsId;
 	const valuePending = fetchValue.isPending || previewValue.isPending;
 
-	const candidates = results ?? parseCandidates(record.candidatesJson);
+	// The album (master) that would be saved: an explicit master pick wins, then a
+	// picked release's master, then the record's own — unless explicitly unmatched.
+	// A record needs this to be publishable.
+	const effectiveMasterId = unmatchMaster
+		? null
+		: (pickedMaster?.masterId ?? picked?.masterId ?? record.masterId ?? null);
+	const effectiveMasterUrl = unmatchMaster
+		? null
+		: (pickedMaster?.masterUrl ??
+			picked?.masterUrl ??
+			record.masterUrl ??
+			null);
+	const effectiveMasterLabel = pickedMaster
+		? `${pickedMaster.artist} — ${pickedMaster.title}${pickedMaster.year ? ` (${pickedMaster.year})` : ""}`
+		: `${record.artist} — ${record.title}${record.year ? ` (${record.year})` : ""}`;
+
+	// Release pick-list: a manual search/URL result wins; otherwise the linked
+	// album's vinyl pressings; falling back to whatever analysis stored on the row.
+	const candidates =
+		results ??
+		masterVersionsQuery.data ??
+		parseCandidates(record.candidatesJson);
 	const inFlight =
 		record.status === "pending" || record.status === "processing";
 	const failure =
@@ -884,11 +1170,13 @@ function RecordDetail() {
 								<span />
 							)}
 							<div className="flex flex-wrap items-center gap-1">
-								{record.status === "review" && !record.discogsId && (
-									<UnmatchedBadge />
-								)}
 								{record.duplicateOf != null && <DuplicateBadge />}
-								<StatusBadge status={record.status} />
+								{/* Unmatched (no album) supersedes the plain "Unpublished" status. */}
+								{record.status === "review" && !record.masterId ? (
+									<UnmatchedBadge />
+								) : (
+									<StatusBadge status={record.status} />
+								)}
 							</div>
 						</div>
 					</div>
@@ -1341,357 +1629,471 @@ function RecordDetail() {
 			{/* Review / failed / complete: confirm, edit, re-pick, publish. */}
 			{!inFlight && (
 				<div className="space-y-4">
-					{/* Discogs match: a confidence banner, the search / paste-a-URL
-					    controls, and the candidate pick-list — one panel, divided. */}
-					<div className="overflow-hidden rounded-lg border">
-						{record.confidence != null && (
-							<div className="border-b bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-								Identified with {Math.round(record.confidence * 100)}%
-								confidence.
-								{record.status === "review"
-									? " Confirm the details and pick the right Discogs release before publishing."
-									: ""}
+					{/* Album (master) — the record's identity and publish gate. Sits above
+					    the release picker: pick the album first, pin a pressing second. */}
+					<MasterPicker
+						seedArtist={record.artist}
+						seedTitle={record.title}
+						currentMasterId={effectiveMasterId}
+						currentLabel={effectiveMasterLabel}
+						currentUrl={effectiveMasterUrl}
+						pickedId={pickedMaster?.masterId ?? null}
+						onPick={(m) => {
+							setPickedMaster(m);
+							setUnmatchMaster(false);
+						}}
+						onClear={() => {
+							setPickedMaster(null);
+							setUnmatchMaster(true);
+						}}
+					/>
+
+					{/* Release (pressing) — only shown once an album is linked, since a
+					    release is one of that album's pressings. A confidence banner, the
+					    search / paste-a-URL controls, and the pick-list — one panel, divided. */}
+					{effectiveMasterId != null && (
+						<div className="overflow-hidden rounded-lg border">
+							<div className="p-3 pb-0">
+								<h2 className="text-sm font-semibold">
+									Release{" "}
+									<span className="font-normal text-muted-foreground">
+										(optional)
+									</span>
+								</h2>
+								<p className="text-xs text-muted-foreground">
+									Pin a specific pressing for its catalog number, country and
+									value — or leave it album-only.
+								</p>
 							</div>
-						)}
-
-						{/* Wrong match? Search or paste a Discogs URL. The sourced cover isn't
-						    previewed here — it's visible in the candidate thumbnails below. */}
-						<div className="p-3">
-							<div className="min-w-0 space-y-3">
-								{/* Tabs on the left; the cover-download status (progress →
-								    size/type, or a failure) sits opposite, on the same row. */}
-								<div className="flex items-center justify-between gap-2 border-b">
-									<div
-										role="tablist"
-										aria-label="Discogs lookup method"
-										className="flex gap-1"
-									>
-										<TabButton
-											active={tab === "url"}
-											onClick={() => setTab("url")}
-										>
-											Discogs URL
-										</TabButton>
-										<TabButton
-											active={tab === "search"}
-											onClick={() => setTab("search")}
-										>
-											Search
-										</TabButton>
-									</div>
-									{picked && coverProbe.status !== "idle" && (
-										<span
-											className={cn(
-												"shrink-0 text-xs text-muted-foreground",
-												coverProbe.status === "error" &&
-													"text-red-600 dark:text-red-400",
-											)}
-											aria-live="polite"
-										>
-											{coverProbe.status === "loading" && "Downloading…"}
-											{coverProbe.status === "ready" &&
-												`${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}`}
-											{coverProbe.status === "error" && "Download failed"}
-										</span>
-									)}
+							{record.confidence != null && (
+								<div className="mt-3 border-y bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+									Identified with {Math.round(record.confidence * 100)}%
+									confidence.
+									{record.status === "review"
+										? " Confirm the details before publishing."
+										: ""}
 								</div>
+							)}
 
-								{tab === "search" ? (
-									<form
-										className="space-y-2"
-										onSubmit={(e) => {
-											e.preventDefault();
-											if (!search.isPending) search.mutate(query);
-										}}
-									>
-										<div className="flex items-end gap-2">
-											<div className="flex-1 space-y-1">
-												<label
-													htmlFor="q-artist"
-													className="text-xs text-muted-foreground"
-												>
-													Artist
-												</label>
-												<Input
-													id="q-artist"
-													value={query.artist}
-													onChange={(e) =>
-														setQuery((q) => ({ ...q, artist: e.target.value }))
-													}
-												/>
-											</div>
-											<div className="flex-1 space-y-1">
-												<label
-													htmlFor="q-title"
-													className="text-xs text-muted-foreground"
-												>
-													Title
-												</label>
-												<Input
-													id="q-title"
-													value={query.title}
-													onChange={(e) =>
-														setQuery((q) => ({ ...q, title: e.target.value }))
-													}
-												/>
-											</div>
-										</div>
-
-										{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
-										<button
-											type="button"
-											aria-expanded={showAdvanced}
-											onClick={() => setShowAdvanced((v) => !v)}
-											className="text-xs text-muted-foreground underline underline-offset-4"
+							{/* Wrong match? Search or paste a Discogs URL. The sourced cover isn't
+						    previewed here — it's visible in the candidate thumbnails below. */}
+							<div className="p-3">
+								<div className="min-w-0 space-y-3">
+									{/* Tabs on the left; the cover-download status (progress →
+								    size/type, or a failure) sits opposite, on the same row. */}
+									<div className="flex items-center justify-between gap-2 border-b">
+										<div
+											role="tablist"
+											aria-label="Discogs lookup method"
+											className="flex gap-1"
 										>
-											{showAdvanced
-												? "Hide advanced options"
-												: "Advanced options"}
-										</button>
+											<TabButton
+												active={tab === "url"}
+												onClick={() => setTab("url")}
+											>
+												Discogs URL
+											</TabButton>
+											<TabButton
+												active={tab === "search"}
+												onClick={() => setTab("search")}
+											>
+												Search
+											</TabButton>
+										</div>
+										{picked && coverProbe.status !== "idle" && (
+											<span
+												className={cn(
+													"shrink-0 text-xs text-muted-foreground",
+													coverProbe.status === "error" &&
+														"text-red-600 dark:text-red-400",
+												)}
+												aria-live="polite"
+											>
+												{coverProbe.status === "loading" && "Downloading…"}
+												{coverProbe.status === "ready" &&
+													`${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}`}
+												{coverProbe.status === "error" && "Download failed"}
+											</span>
+										)}
+									</div>
 
-										{showAdvanced && (
+									{tab === "search" ? (
+										<form
+											className="space-y-2"
+											onSubmit={(e) => {
+												e.preventDefault();
+												if (!search.isPending) search.mutate(query);
+											}}
+										>
 											<div className="flex items-end gap-2">
 												<div className="flex-1 space-y-1">
 													<label
-														htmlFor="q-country"
+														htmlFor="q-artist"
 														className="text-xs text-muted-foreground"
 													>
-														Country
+														Artist
 													</label>
 													<Input
-														id="q-country"
-														value={query.country}
-														placeholder="e.g. UK"
+														id="q-artist"
+														value={query.artist}
 														onChange={(e) =>
 															setQuery((q) => ({
 																...q,
-																country: e.target.value,
+																artist: e.target.value,
 															}))
 														}
 													/>
 												</div>
 												<div className="flex-1 space-y-1">
 													<label
-														htmlFor="q-year"
+														htmlFor="q-title"
 														className="text-xs text-muted-foreground"
 													>
-														Year
+														Title
 													</label>
 													<Input
-														id="q-year"
-														inputMode="numeric"
-														value={query.year}
-														placeholder="e.g. 1971"
+														id="q-title"
+														value={query.title}
 														onChange={(e) =>
-															setQuery((q) => ({ ...q, year: e.target.value }))
+															setQuery((q) => ({ ...q, title: e.target.value }))
 														}
 													/>
 												</div>
 											</div>
-										)}
 
-										{/* Free-text catch-all — passed to Discogs' general search for
+											{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
+											<button
+												type="button"
+												aria-expanded={showAdvanced}
+												onClick={() => setShowAdvanced((v) => !v)}
+												className="text-xs text-muted-foreground underline underline-offset-4"
+											>
+												{showAdvanced
+													? "Hide advanced options"
+													: "Advanced options"}
+											</button>
+
+											{showAdvanced && (
+												<div className="flex items-end gap-2">
+													<div className="flex-1 space-y-1">
+														<label
+															htmlFor="q-country"
+															className="text-xs text-muted-foreground"
+														>
+															Country
+														</label>
+														<Input
+															id="q-country"
+															value={query.country}
+															placeholder="e.g. UK"
+															onChange={(e) =>
+																setQuery((q) => ({
+																	...q,
+																	country: e.target.value,
+																}))
+															}
+														/>
+													</div>
+													<div className="flex-1 space-y-1">
+														<label
+															htmlFor="q-year"
+															className="text-xs text-muted-foreground"
+														>
+															Year
+														</label>
+														<Input
+															id="q-year"
+															inputMode="numeric"
+															value={query.year}
+															placeholder="e.g. 1971"
+															onChange={(e) =>
+																setQuery((q) => ({
+																	...q,
+																	year: e.target.value,
+																}))
+															}
+														/>
+													</div>
+												</div>
+											)}
+
+											{/* Free-text catch-all — passed to Discogs' general search for
 								    anything the structured fields miss (label, catalog number). */}
-										{showAdvanced && (
+											{showAdvanced && (
+												<div className="space-y-1">
+													<label
+														htmlFor="q-keywords"
+														className="text-xs text-muted-foreground"
+													>
+														Discogs search
+													</label>
+													<Input
+														id="q-keywords"
+														value={query.q}
+														placeholder="e.g. label, catalog number, or any keywords"
+														onChange={(e) =>
+															setQuery((q) => ({ ...q, q: e.target.value }))
+														}
+													/>
+												</div>
+											)}
+
+											{search.isError && (
+												<p className="text-xs text-red-600" role="alert">
+													{search.error instanceof Error
+														? search.error.message
+														: "Search failed. Try again."}
+												</p>
+											)}
+											{search.isSuccess && (search.data?.length ?? 0) === 0 && (
+												<p
+													className="text-xs text-muted-foreground"
+													aria-live="polite"
+												>
+													No matches on Discogs. Try a different spelling, drop
+													the title, or paste the release URL.
+												</p>
+											)}
+											<div className="flex justify-end">
+												<Button
+													type="submit"
+													variant="outline"
+													disabled={search.isPending}
+												>
+													{search.isPending ? "Searching…" : "Search"}
+												</Button>
+											</div>
+										</form>
+									) : (
+										<form
+											className="space-y-2"
+											onSubmit={(e) => {
+												e.preventDefault();
+												if (
+													looksLikeReleaseId(discogsUrl) &&
+													!lookup.isPending
+												) {
+													lookup.mutate(discogsUrl);
+												}
+											}}
+										>
 											<div className="space-y-1">
 												<label
-													htmlFor="q-keywords"
+													htmlFor="q-url"
 													className="text-xs text-muted-foreground"
 												>
-													Discogs search
+													Discogs release URL
 												</label>
 												<Input
-													id="q-keywords"
-													value={query.q}
-													placeholder="e.g. label, catalog number, or any keywords"
-													onChange={(e) =>
-														setQuery((q) => ({ ...q, q: e.target.value }))
-													}
+													id="q-url"
+													value={discogsUrl}
+													placeholder="https://www.discogs.com/release/…"
+													onChange={(e) => setDiscogsUrl(e.target.value)}
 												/>
 											</div>
-										)}
-
-										{search.isError && (
-											<p className="text-xs text-red-600" role="alert">
-												{search.error instanceof Error
-													? search.error.message
-													: "Search failed. Try again."}
-											</p>
-										)}
-										{search.isSuccess && (search.data?.length ?? 0) === 0 && (
-											<p
-												className="text-xs text-muted-foreground"
-												aria-live="polite"
-											>
-												No matches on Discogs. Try a different spelling, drop
-												the title, or paste the release URL.
-											</p>
-										)}
-										<div className="flex justify-end">
-											<Button
-												type="submit"
-												variant="outline"
-												disabled={search.isPending}
-											>
-												{search.isPending ? "Searching…" : "Search"}
-											</Button>
-										</div>
-									</form>
-								) : (
-									<form
-										className="space-y-2"
-										onSubmit={(e) => {
-											e.preventDefault();
-											if (looksLikeReleaseId(discogsUrl) && !lookup.isPending) {
-												lookup.mutate(discogsUrl);
-											}
-										}}
-									>
-										<div className="space-y-1">
-											<label
-												htmlFor="q-url"
-												className="text-xs text-muted-foreground"
-											>
-												Discogs release URL
-											</label>
-											<Input
-												id="q-url"
-												value={discogsUrl}
-												placeholder="https://www.discogs.com/release/…"
-												onChange={(e) => setDiscogsUrl(e.target.value)}
-											/>
-										</div>
-										{lookup.isError && (
-											<p className="text-xs text-red-600">
-												{lookup.error.message}
-											</p>
-										)}
-										<div className="flex justify-end">
-											<Button
-												type="submit"
-												variant="outline"
-												disabled={
-													lookup.isPending || !looksLikeReleaseId(discogsUrl)
-												}
-											>
-												{lookup.isPending ? "Fetching…" : "Fetch release"}
-											</Button>
-										</div>
-									</form>
-								)}
+											{lookup.isError && (
+												<p className="text-xs text-red-600">
+													{lookup.error.message}
+												</p>
+											)}
+											<div className="flex justify-end">
+												<Button
+													type="submit"
+													variant="outline"
+													disabled={
+														lookup.isPending || !looksLikeReleaseId(discogsUrl)
+													}
+												>
+													{lookup.isPending ? "Fetching…" : "Fetch release"}
+												</Button>
+											</div>
+										</form>
+									)}
+								</div>
 							</div>
-						</div>
 
-						{/* Candidate pick-list — the lower half of the panel, divided from
+							{/* Loading the linked album's pressings (two Discogs calls). */}
+							{masterVersionsQuery.isFetching && results == null && (
+								<p className="border-t px-3 py-2 text-xs text-muted-foreground">
+									Loading pressings for this album…
+								</p>
+							)}
+
+							{/* Candidate pick-list — the lower half of the panel, divided from
 						    the controls above. A manual search can return every pressing,
 						    so cap the height and let it scroll rather than pushing the form
 						    off-screen. */}
-						{candidates.length > 0 && (
-							<ul className="max-h-[345px] divide-y overflow-y-auto border-t">
-								{candidates.map((c) => {
-									const active =
-										picked?.discogsId === c.discogsId ||
-										(!picked && record.discogsId === c.discogsId);
-									return (
-										<CandidateRow
-											key={c.discogsId}
-											candidate={c}
-											active={active}
-											onToggle={() => setPicked(active ? null : c)}
-										/>
-									);
-								})}
-							</ul>
-						)}
-					</div>
+							{candidates.length > 0 && (
+								<ul className="max-h-[345px] divide-y overflow-y-auto border-t">
+									{candidates.map((c) => {
+										const active = picked
+											? picked.discogsId === c.discogsId
+											: !albumOnly && record.discogsId === c.discogsId;
+										return (
+											<CandidateRow
+												key={c.discogsId}
+												candidate={c}
+												active={active}
+												onToggle={() => {
+													// Picking a release re-pins, so it clears album-only.
+													setAlbumOnly(false);
+													// A release implies its album, so a fresh pick also
+													// re-establishes the master (undoes an explicit unmatch).
+													if (!active) setUnmatchMaster(false);
+													setPicked(active ? null : c);
+												}}
+											/>
+										);
+									})}
+								</ul>
+							)}
 
-					{/* Valuation. The headline is the manual (confirmed) value if set,
-					    else the Discogs guess; both are entered/edited in the form below.
-					    "Fetch value" pulls a fresh estimate from Discogs. */}
-					<div className="space-y-3 rounded-lg border p-3">
-						<div>
-							<h2 className="text-sm font-semibold">Value</h2>
-							<p className="text-xs text-muted-foreground">
-								The confirmed price if you’ve set one, otherwise Discogs’
-								estimate. Edit it in the form below.
-							</p>
-						</div>
-						<div className="flex items-start justify-between gap-3">
-							<div>
-								<p className="text-xl font-semibold tabular-nums">
-									{formatMoney(
-										effectiveValue(record),
-										record.discogsValueCurrency ?? "USD",
+							{/* Pressing un-pin control. Only meaningful when there's an album to
+						    keep — un-pinning drops the specific pressing but holds the album
+						    identity, and value/catno/country come from a pinned release, so
+						    they go quiet until one is picked again. */}
+							{effectiveMasterId != null && (
+								<div className="flex items-center justify-between gap-3 border-t px-3 py-2 text-xs">
+									<p className="text-muted-foreground">
+										{activeDiscogsId
+											? "Pinned to a specific pressing — its details and value apply."
+											: "No specific pressing pinned — album only. Pick a release above to pin one."}
+									</p>
+									{activeDiscogsId ? (
+										<Button
+											type="button"
+											size="xs"
+											variant="ghost"
+											onClick={() => {
+												setPicked(null);
+												setAlbumOnly(true);
+											}}
+										>
+											Remove pressing
+										</Button>
+									) : (
+										record.discogsId != null && (
+											<Button
+												type="button"
+												size="xs"
+												variant="ghost"
+												onClick={() => setAlbumOnly(false)}
+											>
+												Undo
+											</Button>
+										)
 									)}
-									<span className="ml-2 align-middle text-xs font-normal text-muted-foreground">
-										{record.manualValue != null ? "confirmed" : "estimated"}
-									</span>
+								</div>
+							)}
+						</div>
+					)}
+
+					{/* Value is per-pressing, so it only appears once an album is linked AND
+					    a specific release is pinned (a release without a master is a stale
+					    leftover — don't surface its value). The headline is the manual
+					    (confirmed) value if set, else the Discogs guess. */}
+					{effectiveMasterId != null && activeDiscogsId != null && (
+						<div className="space-y-3 rounded-lg border p-3">
+							<div>
+								<h2 className="text-sm font-semibold">Value</h2>
+								<p className="text-xs text-muted-foreground">
+									The pinned pressing’s Discogs price — or a confirmed price you
+									set. Edit it in the form below.
 								</p>
-								<p className="mt-1 text-xs text-muted-foreground">
-									Manual{" "}
-									{record.manualValue != null
-										? formatMoney(
-												record.manualValue,
-												record.discogsValueCurrency ?? "USD",
-											)
-										: "—"}{" "}
-									· Discogs guess{" "}
-									{record.discogsValue != null
-										? formatMoney(
-												record.discogsValue,
-												record.discogsValueCurrency ?? "USD",
-											)
-										: "—"}
-								</p>
-								{isPreviewing && preview?.value != null && (
-									<p className="mt-1 text-xs font-medium text-foreground">
-										Picked edition{" "}
-										{formatMoney(preview.value, preview.currency)}
-										<span className="ml-1 font-normal text-muted-foreground">
-											— preview, save to keep
+							</div>
+							<div className="flex items-start justify-between gap-3">
+								<div>
+									<p className="text-xl font-semibold tabular-nums">
+										{formatMoney(
+											effectiveValue(record),
+											record.discogsValueCurrency ?? "USD",
+										)}
+										<span className="ml-2 align-middle text-xs font-normal text-muted-foreground">
+											{record.manualValue != null ? "confirmed" : "estimated"}
 										</span>
 									</p>
-								)}
+									<p className="mt-1 text-xs text-muted-foreground">
+										Manual{" "}
+										{record.manualValue != null
+											? formatMoney(
+													record.manualValue,
+													record.discogsValueCurrency ?? "USD",
+												)
+											: "—"}{" "}
+										· Discogs guess{" "}
+										{record.discogsValue != null
+											? formatMoney(
+													record.discogsValue,
+													record.discogsValueCurrency ?? "USD",
+												)
+											: "—"}
+									</p>
+									{isPreviewing && preview?.value != null && (
+										<p className="mt-1 text-xs font-medium text-foreground">
+											Picked edition{" "}
+											{formatMoney(preview.value, preview.currency)}
+											<span className="ml-1 font-normal text-muted-foreground">
+												— preview, save to keep
+											</span>
+										</p>
+									)}
+								</div>
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									disabled={valuePending}
+									onClick={() =>
+										isPreviewing && activeDiscogsId
+											? previewValue.mutate(activeDiscogsId)
+											: fetchValue.mutate()
+									}
+								>
+									{valuePending
+										? "Fetching…"
+										: isPreviewing
+											? "Preview value"
+											: "Fetch value"}
+								</Button>
 							</div>
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={!activeDiscogsId || valuePending}
-								title={
-									activeDiscogsId
-										? undefined
-										: "Match a Discogs release first to fetch a value."
-								}
-								onClick={() =>
-									isPreviewing && activeDiscogsId
-										? previewValue.mutate(activeDiscogsId)
-										: fetchValue.mutate()
-								}
-							>
-								{valuePending
-									? "Fetching…"
-									: isPreviewing
-										? "Preview value"
-										: "Fetch value"}
-							</Button>
 						</div>
-					</div>
+					)}
 
 					<div className="border-t pt-4">
 						<RecordForm
-							key={picked?.discogsId ?? record.discogsId ?? "record"}
-							defaultValues={toForm(record, picked)}
+							key={
+								picked?.discogsId ??
+								pickedMaster?.masterId ??
+								record.discogsId ??
+								record.masterId ??
+								"record"
+							}
+							defaultValues={toForm(record, picked, pickedMaster)}
 							submitLabel={
-								record.status === "complete" ? "Save changes" : "Save & publish"
+								// Publishing needs an album (master). Without one, the save can
+								// only keep the record as a draft.
+								!effectiveMasterId
+									? "Save draft"
+									: record.status === "complete"
+										? "Save changes"
+										: "Save & publish"
 							}
 							onSubmit={async (input) => {
 								const result = await publishRecord({
 									data: {
 										id: recordId,
 										data: input,
-										discogsId: picked?.discogsId ?? record.discogsId ?? null,
-										discogsUrl: picked?.discogsUrl ?? record.discogsUrl ?? null,
+										// The album (master) is the identity: an explicit master pick
+										// wins, else a picked release's master, else the record's own —
+										// unless it's been explicitly unmatched. Publishing requires it.
+										masterId: effectiveMasterId,
+										masterUrl: effectiveMasterUrl,
+										discogsId: albumOnly
+											? null
+											: (picked?.discogsId ?? record.discogsId ?? null),
+										discogsUrl: albumOnly
+											? null
+											: (picked?.discogsUrl ?? record.discogsUrl ?? null),
 										coverImageKey: null,
 									},
 								});
@@ -1708,6 +2110,11 @@ function RecordDetail() {
 									// the admin at the manual upload as a fallback.
 									toast.error(
 										"Saved, but couldn't fetch the cover from Discogs. Upload one manually or try again.",
+									);
+								} else if (result.needsMaster) {
+									// Saved as a draft — no album linked, so it can't go live yet.
+									toast.warning(
+										"Saved as a draft. Link an album (master) to publish it.",
 									);
 								} else {
 									toast.success("Record saved.");

@@ -4,8 +4,8 @@ import type { Record } from "#/db/schema";
 import { runClaude } from "#/lib/ai";
 import {
 	type DiscogsCandidate,
-	getReleaseDetail,
-	searchReleases,
+	getMasterDetail,
+	searchMasters,
 } from "#/lib/discogs";
 import { bytesToBase64 } from "#/lib/image-data";
 import { sourceCoverFromDiscogs } from "#/lib/images";
@@ -35,7 +35,9 @@ export interface AnalysisResult {
 	genre: string | null;
 	pitchforkScore: number | null;
 	pitchforkUrl: string | null;
-	discogsId: string | null;
+	masterId: string | null; // the album (master) — primary Discogs identity
+	masterUrl: string | null;
+	discogsId: string | null; // the pinned release (pressing), if any
 	discogsUrl: string | null;
 	coverImageKey: string | null;
 	confidence: number;
@@ -65,31 +67,44 @@ function normalizeName(value: string | null | undefined): string {
 
 /**
  * Decide whether an identified record already exists in the collection. Matches
- * on Discogs id first (the most reliable signal — same release), then falls back
- * to a normalized artist + title comparison so a re-photographed sleeve still
+ * on Discogs master (same album) first, then a specific release (same pressing),
+ * then a normalized artist + title comparison so a re-photographed sleeve still
  * gets flagged even when Discogs didn't resolve. Returns the id of the existing
  * record it duplicates, or null. Pure: the caller supplies the rows to check
  * against (the record being analyzed must be excluded by the caller).
  */
 export function findDuplicateOf(
-	target: { artist: string; title: string; discogsId: string | null },
-	existing: Array<Pick<Record, "id" | "artist" | "title" | "discogsId">>,
+	target: {
+		artist: string;
+		title: string;
+		masterId: string | null;
+		discogsId: string | null;
+	},
+	existing: Array<
+		Pick<Record, "id" | "artist" | "title" | "masterId" | "discogsId">
+	>,
 ): number | null {
 	const artist = normalizeName(target.artist);
 	const title = normalizeName(target.title);
+	const masterId = target.masterId?.trim() || null;
 	const discogsId = target.discogsId?.trim() || null;
 
 	// A blank identification can't meaningfully match anything.
-	if (!discogsId && (!artist || !title)) return null;
+	if (!masterId && !discogsId && (!artist || !title)) return null;
 
 	// The caller's rows are unordered, so track the smallest id in each bucket to
-	// keep the result deterministic and point at the earliest record. A Discogs id
-	// match (same release) outranks a name-only match regardless of id.
-	let discogsMatch: number | null = null;
+	// keep the result deterministic and point at the earliest record. Match strength:
+	// same album (master) > same pressing (release) > name-only.
+	let masterMatch: number | null = null;
+	let releaseMatch: number | null = null;
 	let nameMatch: number | null = null;
 	for (const row of existing) {
+		if (masterId && row.masterId?.trim() === masterId) {
+			if (masterMatch === null || row.id < masterMatch) masterMatch = row.id;
+			continue;
+		}
 		if (discogsId && row.discogsId?.trim() === discogsId) {
-			if (discogsMatch === null || row.id < discogsMatch) discogsMatch = row.id;
+			if (releaseMatch === null || row.id < releaseMatch) releaseMatch = row.id;
 			continue;
 		}
 		if (
@@ -101,7 +116,7 @@ export function findDuplicateOf(
 			if (nameMatch === null || row.id < nameMatch) nameMatch = row.id;
 		}
 	}
-	return discogsMatch ?? nameMatch;
+	return masterMatch ?? releaseMatch ?? nameMatch;
 }
 
 const EXTRACT_TOOL = {
@@ -294,9 +309,10 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 	// 1. Vision read.
 	let extraction = await extractFromImage(data, mediaType, context);
 
-	// 2. Discogs lookup.
-	let candidates = extraction.artist
-		? await searchReleases({
+	// 2. Discogs lookup — identify the ALBUM (master), not a specific pressing. The
+	// collector pins a release later; the cover only needs to name the album.
+	let masters = extraction.artist
+		? await searchMasters({
 				artist: extraction.artist,
 				title: extraction.title,
 				country: "",
@@ -306,9 +322,9 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		: [];
 
 	// 3. Escalate to web search when unsure or unmatched.
-	if (extraction.confidence < 0.3 || candidates.length === 0) {
+	if (extraction.confidence < 0.3 || masters.length === 0) {
 		console.info(
-			`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs matches=${candidates.length})`,
+			`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs masters=${masters.length})`,
 		);
 		const refined = await identifyWithWebSearch(
 			extraction,
@@ -317,7 +333,7 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		);
 		if (refined) {
 			extraction = refined;
-			candidates = await searchReleases({
+			masters = await searchMasters({
 				artist: refined.artist,
 				title: refined.title,
 				country: "",
@@ -327,14 +343,13 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		}
 	}
 
-	const best = candidates[0] ?? null;
+	const best = masters[0] ?? null;
 
-	// Search hits carry unreliable enrichment fields — Discogs' search `format`
-	// array often omits the size and the size-less 12" LP case can't be inferred
-	// from it. Pull the full release so the enrichment matches the refresh path
-	// (getReleaseDetail), falling back to the search hit if the fetch fails.
-	const detail = best?.discogsId
-		? await getReleaseDetail(best.discogsId).catch(() => null)
+	// Pull the master for album-level enrichment (canonical year/genre) and its
+	// `mainReleaseId` — the album's canonical pressing, which we source the cover
+	// from without pinning it to the record.
+	const detail = best?.masterId
+		? await getMasterDetail(best.masterId).catch(() => null)
 		: null;
 
 	// 4. Pitchfork score (best-effort).
@@ -343,27 +358,32 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		extraction.title,
 	);
 
-	// 5. Source + resize the displayed cover from the best Discogs match.
-	const coverImageKey = best?.discogsId
-		? await sourceCoverFromDiscogs(best.discogsId)
+	// 5. Source + resize the cover from the album's canonical (main) release.
+	const coverReleaseId = detail?.mainReleaseId ?? null;
+	const coverImageKey = coverReleaseId
+		? await sourceCoverFromDiscogs(coverReleaseId)
 		: null;
 
 	return {
 		artist: detail?.artist || best?.artist || extraction.artist,
 		title: detail?.title || best?.title || extraction.title,
 		year: detail?.year ?? best?.year ?? extraction.year,
-		label: detail?.label ?? best?.label ?? null,
-		format: detail?.type ?? best?.type ?? null,
-		size: detail?.size ?? best?.size ?? null,
-		catno: detail?.catno ?? best?.catno ?? null,
-		country: detail?.country ?? best?.country ?? null,
+		// Pressing-specific fields stay empty until the collector pins a release.
+		label: null,
+		format: null,
+		size: null,
+		catno: null,
+		country: null,
 		genre: detail?.genre ?? best?.genre ?? null,
 		pitchforkScore: pitchfork?.score ?? null,
 		pitchforkUrl: pitchfork?.url ?? null,
-		discogsId: best?.discogsId ?? null,
-		discogsUrl: best?.discogsUrl ?? null,
+		masterId: best?.masterId ?? null,
+		masterUrl: detail?.masterUrl ?? best?.masterUrl ?? null,
+		// No pressing auto-pinned — the editor lists the master's versions to pick from.
+		discogsId: null,
+		discogsUrl: null,
 		coverImageKey,
 		confidence: extraction.confidence,
-		candidates,
+		candidates: [],
 	};
 }

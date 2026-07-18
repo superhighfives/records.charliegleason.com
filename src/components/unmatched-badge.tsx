@@ -1,10 +1,10 @@
 import { cn } from "#/lib/utils";
 
 /**
- * Shown when a record was identified from its cover but the background analysis
- * couldn't attach a Discogs release (no `discogsId`) — Discogs either had no
- * match or transiently failed. Sits alongside the StatusBadge so an unmatched
- * capture announces that it still needs a release picked, without opening it.
+ * Shown when a record has no album (master) linked yet (no `masterId`) — the
+ * album is the identity that makes a record publishable, so an unmatched record
+ * still needs one picked. Sits alongside the StatusBadge so it announces that
+ * without opening the record.
  */
 export function UnmatchedBadge({ className }: { className?: string }) {
 	return (
@@ -13,7 +13,7 @@ export function UnmatchedBadge({ className }: { className?: string }) {
 				"inline-flex items-center whitespace-nowrap rounded-full border border-amber-500/40 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400",
 				className,
 			)}
-			title="Couldn’t find a matching Discogs release — search or paste a URL to link one"
+			title="No album linked yet — search or paste a Discogs master to make this publishable"
 		>
 			Unmatched
 		</span>

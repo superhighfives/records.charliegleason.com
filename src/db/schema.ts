@@ -25,20 +25,23 @@ export const records = sqliteTable("records", {
 	// Enrichment
 	pitchforkScore: real("pitchfork_score"), // via the-fork.vercel.app
 	pitchforkUrl: text("pitchfork_url"),
+	// Discogs identity. `masterId` is the *master* (the album as a work) — the primary
+	// Discogs identity, and the grain a record is grouped by. `discogsId` is an *optional*
+	// specific release (pressing): when set, the record is "pinned" to that exact pressing
+	// (which is what enables per-pressing valuation and the catno/country/size caches below);
+	// when null, the record is album-level only. Both are nullable — a manual/unmatched
+	// record may have neither.
+	masterId: text("master_id"),
+	masterUrl: text("master_url"),
 	discogsId: text("discogs_id"),
 	discogsUrl: text("discogs_url"),
-	catno: text("catno"), // Discogs catalog number, e.g. "WIGLP450"
-	country: text("country"), // pressing country
+	catno: text("catno"), // Discogs catalog number, e.g. "WIGLP450" — release-specific
+	country: text("country"), // pressing country — release-specific
 
 	// Valuation (admin only — never exposed on the public homepage / API).
-	// `confirmedRelease` marks a Discogs match the collector has vouched for (the
-	// automated match isn't always right); the admin can sort/filter by it. The
-	// "guessed" value comes from Discogs' seller price suggestions (VG+ grade,
+	// The "guessed" value comes from Discogs' seller price suggestions (VG+ grade,
 	// stored in `discogsValue`, full per-condition breakdown in `discogsValueJson`);
 	// `manualValue` is a hand-entered "confirmed" value that overrides the guess.
-	confirmedRelease: integer("confirmed_release", { mode: "boolean" }).default(
-		false,
-	),
 	manualValue: real("manual_value"), // hand-entered confirmed value, USD
 	discogsValue: real("discogs_value"), // guessed value from Discogs, USD
 	discogsValueCurrency: text("discogs_value_currency"), // currency of the guess, e.g. "USD"
