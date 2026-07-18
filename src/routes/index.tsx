@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RecordPanel } from "#/components/record-panel";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
@@ -16,6 +16,20 @@ import { cn } from "#/lib/utils";
 const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
 
 export const Route = createFileRoute("/")({
+	// `?record=<id>` deep-links straight to a record's drawer, so a modal can be
+	// shared or bookmarked and survives a reload / the back button.
+	validateSearch: (
+		search: globalThis.Record<string, unknown>,
+	): { record?: number } => {
+		const raw = search.record;
+		const n =
+			typeof raw === "number"
+				? raw
+				: typeof raw === "string"
+					? Number(raw)
+					: Number.NaN;
+		return Number.isInteger(n) && n > 0 ? { record: n } : {};
+	},
 	loader: ({ context }) =>
 		context.queryClient.ensureQueryData(publicRecordsQueryOptions),
 	component: Home,
@@ -23,8 +37,22 @@ export const Route = createFileRoute("/")({
 
 function Home() {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
+	const navigate = Route.useNavigate();
+	const { record: selectedId } = Route.useSearch();
 	const [search, setSearch] = useState("");
-	const [selectedId, setSelectedId] = useState<number | null>(null);
+
+	// The open record lives in the URL (`?record=<id>`). Paging replaces the entry
+	// so arrow-keying through the collection doesn't flood the history stack;
+	// opening/closing pushes so the back button steps in and out of a record.
+	const openRecord = useCallback(
+		(id: number | null, replace = false) =>
+			navigate({
+				search: (prev) => ({ ...prev, record: id ?? undefined }),
+				replace,
+				resetScroll: false,
+			}),
+		[navigate],
+	);
 
 	const filtered = useMemo(() => {
 		const q = search.trim().toLowerCase();
@@ -58,8 +86,8 @@ function Home() {
 	// forget it entirely — clearing the id, not just deriving it away, so it can't
 	// silently re-open when a later search brings the record back into view.
 	useEffect(() => {
-		if (selectedId != null && selectedIndex === -1) setSelectedId(null);
-	}, [selectedId, selectedIndex]);
+		if (selectedId != null && selectedIndex === -1) openRecord(null, true);
+	}, [selectedId, selectedIndex, openRecord]);
 
 	return (
 		<div className="w-full mx-auto max-w-5xl px-4 py-10 sm:px-6">
@@ -117,7 +145,7 @@ function Home() {
 						<li key={r.id} className="group cv-auto">
 							<button
 								type="button"
-								onClick={() => setSelectedId(r.id)}
+								onClick={() => openRecord(r.id)}
 								className="w-full cursor-pointer space-y-2 text-left"
 							>
 								<div className="cover-lift">
@@ -173,7 +201,9 @@ function Home() {
 			<Sheet
 				open={selected != null}
 				onOpenChange={(open) => {
-					if (!open) setSelectedId(null);
+					// Replace, not push: opening pushed one entry, so closing collapses it
+					// away rather than leaving a stale "back reopens the drawer" entry.
+					if (!open) openRecord(null, true);
 				}}
 			>
 				<SheetContent className="p-0">
@@ -185,11 +215,11 @@ function Home() {
 							total={filtered.length}
 							onPrev={() => {
 								const prev = filtered[shown.index - 1];
-								if (prev) setSelectedId(prev.id);
+								if (prev) openRecord(prev.id, true);
 							}}
 							onNext={() => {
 								const next = filtered[shown.index + 1];
-								if (next) setSelectedId(next.id);
+								if (next) openRecord(next.id, true);
 							}}
 						/>
 					)}

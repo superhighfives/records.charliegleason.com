@@ -5,9 +5,11 @@ import {
 	ChevronRight,
 	Copy,
 	ExternalLink,
+	Link2,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
+import { NotesContent } from "#/components/notes-content";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Button } from "#/components/ui/button";
 import {
@@ -150,29 +152,46 @@ export function RecordPanel({
 	/** Admin drawer: surface the private valuation + pinned-release status. */
 	admin?: boolean;
 }) {
-	// `copied` resets on its own: the panel is keyed by record id at the call site,
-	// so paging to another record remounts this component with a fresh state.
-	const [copied, setCopied] = useState(false);
+	// Which value was last copied, so the right button shows its confirmation tick.
+	// Resets on its own; the panel is keyed by record id at the call site, so paging
+	// to another record remounts this component with a fresh state.
+	const [copied, setCopied] = useState<"catno" | "link" | null>(null);
 
-	// The catalog number is shown, but copying grabs the Discogs release URL (the
-	// more useful thing to paste), falling back to the catno when there's no link.
-	const copyCatno = async () => {
-		const toCopy = record.discogsUrl ?? record.catno;
-		if (!toCopy) return;
+	const copy = async (
+		text: string | null | undefined,
+		key: "catno" | "link",
+	) => {
+		if (!text) return;
 		try {
-			await navigator.clipboard.writeText(toCopy);
-			setCopied(true);
+			await navigator.clipboard.writeText(text);
+			setCopied(key);
 		} catch {
 			// Clipboard denied (insecure context / permissions) — nothing to do.
 		}
 	};
+
+	// A shareable, absolute deep link to this record's drawer (see the `?record=`
+	// search param on the home route). Built at click time so it works off any host.
+	const copyLink = () =>
+		copy(`${window.location.origin}/?record=${record.id}`, "link");
+
+	// Prefer the specific release when we have one, otherwise fall back to the
+	// master (the album as a work). Public records always carry a master, so there
+	// is normally a target either way.
+	const discogsId = record.discogsId ?? record.masterId;
+	const discogsHref = record.discogsId
+		? (record.discogsUrl ??
+			`https://www.discogs.com/release/${record.discogsId}`)
+		: record.masterId
+			? `https://www.discogs.com/master/${record.masterId}`
+			: (record.discogsUrl ?? null);
 
 	// Clear the "copied" tick after a moment. Driven by an effect so the timer is
 	// cancelled on unmount (paging remounts the panel), avoiding a state update on
 	// an unmounted component.
 	useEffect(() => {
 		if (!copied) return;
-		const t = setTimeout(() => setCopied(false), 1500);
+		const t = setTimeout(() => setCopied(null), 1500);
 		return () => clearTimeout(t);
 	}, [copied]);
 
@@ -213,21 +232,23 @@ export function RecordPanel({
 		<>
 			<SheetHeader className="flex-row flex-wrap items-start gap-4 pb-6 pr-10 min-[400px]:flex-nowrap mt-auto border-b border-border">
 				<div className="min-w-0 flex-1">
-					<SheetTitle className="font-serif text-lg leading-tight">
-						{record.discogsUrl ? (
-							<a
-								href={record.discogsUrl}
-								target="_blank"
-								rel="noreferrer"
-								className="inline-flex items-baseline gap-1.5 hover:text-brand"
-							>
-								{record.title}
-								<ExternalLink className="size-3.5 shrink-0 translate-y-0.5 text-muted-foreground" />
-							</a>
-						) : (
-							record.title
-						)}
-					</SheetTitle>
+					<div className="flex items-start gap-2">
+						<SheetTitle className="min-w-0 font-serif text-lg leading-tight">
+							{record.title}
+						</SheetTitle>
+						<button
+							type="button"
+							onClick={copyLink}
+							aria-label="Copy link to this record"
+							className="mt-1 shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+						>
+							{copied === "link" ? (
+								<Check className="size-3.5" />
+							) : (
+								<Link2 className="size-3.5" />
+							)}
+						</button>
+					</div>
 					<SheetDescription className="font-serif">
 						{record.artist}
 						{record.year ? ` · ${record.year}` : ""}
@@ -238,19 +259,44 @@ export function RecordPanel({
 							Release pinned
 						</span>
 					)}
-					{record.catno && (
-						<button
-							type="button"
-							onClick={copyCatno}
-							className="mt-1 inline-flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground"
-						>
-							{record.catno}
-							{copied ? (
-								<Check className="size-3" />
-							) : (
-								<Copy className="size-3" />
+					{(discogsHref || record.catno) && (
+						<div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+							{discogsHref && (
+								<div className="space-y-0.5">
+									<p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+										Discogs
+									</p>
+									<a
+										href={discogsHref}
+										target="_blank"
+										rel="noreferrer"
+										className="inline-flex items-center gap-1.5 text-sm font-medium tabular-nums hover:text-brand"
+									>
+										{discogsId ? `#${discogsId}` : "View on Discogs"}
+										<ExternalLink className="size-3 text-muted-foreground" />
+									</a>
+								</div>
 							)}
-						</button>
+							{record.catno && (
+								<div className="space-y-0.5">
+									<p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+										Catalog
+									</p>
+									<button
+										type="button"
+										onClick={() => copy(record.catno, "catno")}
+										className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-foreground"
+									>
+										{record.catno}
+										{copied === "catno" ? (
+											<Check className="size-3" />
+										) : (
+											<Copy className="size-3 text-muted-foreground" />
+										)}
+									</button>
+								</div>
+							)}
+						</div>
 					)}
 				</div>
 			</SheetHeader>
@@ -280,22 +326,6 @@ export function RecordPanel({
 						<h3 className="mb-1 text-sm font-semibold">Specifications</h3>
 						<dl className="divide-y divide-border">
 							<Spec label="Label">{dash(record.label)}</Spec>
-							<Spec label="Catalog number">{dash(record.catno)}</Spec>
-							<Spec label="Discogs">
-								{record.discogsUrl ? (
-									<a
-										href={record.discogsUrl}
-										target="_blank"
-										rel="noreferrer"
-										className="inline-flex items-center gap-1 text-brand hover:text-brand-strong"
-									>
-										View release
-										<ExternalLink className="size-3" />
-									</a>
-								) : (
-									"—"
-								)}
-							</Spec>
 							<Spec label="Added">{dash(added)}</Spec>
 						</dl>
 					</div>
@@ -328,7 +358,7 @@ export function RecordPanel({
 					{record.notes && (
 						<div>
 							<h3 className="mb-1 text-sm font-semibold">Notes</h3>
-							<p className="text-sm text-muted-foreground">{record.notes}</p>
+							<NotesContent>{record.notes}</NotesContent>
 						</div>
 					)}
 				</div>
