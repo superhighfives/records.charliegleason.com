@@ -232,12 +232,20 @@ export const Route = createFileRoute("/admin/records/$id")({
 			// warm — otherwise the first back/next after a deep-link would no-op.
 			context.queryClient.ensureQueryData(recordsQueryOptions),
 		]),
-	// Key the detail view by id so paging to another record remounts it: every
-	// working-copy `useState` (crop band, tone, which tab, editor-open) re-seeds
-	// from the record it lands on rather than carrying the previous one's edits.
+	// The background detail page stays keyed by id so paging to another record
+	// remounts it: every working-copy `useState` (Discogs picks, search, which tab)
+	// re-seeds from the record it lands on rather than carrying the previous one's.
+	// The crop/tone editor, though, is lifted into a persistent host (deliberately
+	// NOT keyed) so its Dialog doesn't remount — and therefore doesn't replay its
+	// open/scale animation — as you page left/right between records.
 	component: function RecordDetailRoute() {
 		const { id } = Route.useParams();
-		return <RecordDetail key={id} />;
+		return (
+			<>
+				<RecordEditorHost />
+				<RecordDetail key={id} />
+			</>
+		);
 	},
 });
 
@@ -626,7 +634,6 @@ function MasterPicker({
 function RecordDetail() {
 	const { id } = Route.useParams();
 	const recordId = Number(id);
-	const { edit: editParam } = Route.useSearch();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 
@@ -675,18 +682,6 @@ function RecordDetail() {
 		},
 	});
 
-	// When an Apply photo job finishes, flip the Edit/Outputs tabs to Outputs so the
-	// freshly generated renders are what's shown. The editor stays open through Apply,
-	// so if it's still open this lands live; otherwise it's ready the next time it opens.
-	const wasGeneratingRef = useRef(false);
-	useEffect(() => {
-		const generating =
-			record?.professionalJobStatus === "queued" ||
-			record?.professionalJobStatus === "processing";
-		if (wasGeneratingRef.current && !generating) setToolTab("outputs");
-		wasGeneratingRef.current = generating;
-	}, [record?.professionalJobStatus]);
-
 	// The album (master) is the record's identity. `pickedMaster` is an explicit
 	// choice from the master picker; `unmatchMaster` explicitly clears the album
 	// (making the record unpublishable) — distinct from "no pick yet", which falls
@@ -722,77 +717,6 @@ function RecordDetail() {
 	const [tab, setTab] = useState<"search" | "url">("url");
 	const [showAdvanced, setShowAdvanced] = useState(false);
 	const [discogsUrl, setDiscogsUrl] = useState("");
-	// Editable reframe knobs, seeded from whatever's stored on the record. This is the
-	// working copy the sliders drive; "Apply" sends it to the (free) reframe step.
-	const [params, setParams] = useState<ReframeParams>(() =>
-		parseReframeParams(record?.professionalParamsJson),
-	);
-	// Working copy of the corner band the crop editor drives, seeded from the row
-	// (full-frame default if it's never been cropped; legacy single-quad rows are
-	// synthesised into a band). "Apply" warps the capture to this.
-	const [band, setBand] = useState<CornerBand>(() =>
-		parseCornerBand(record?.sleeveCornersJson),
-	);
-	// Whether the professional-photo editor modal is open (crop + live preview + knobs).
-	// Seeded from the `edit` search param so paging next/prev with the editor open
-	// re-opens it on the record we land on (see the pager below).
-	const [editorOpen, setEditorOpen] = useState(Boolean(editParam));
-
-	// Closing the editor drops `edit` from the URL (via `replace` so it doesn't add
-	// history), otherwise a refresh or back-nav to `?edit=true` would reopen it.
-	const handleEditorOpenChange = useCallback(
-		(open: boolean) => {
-			setEditorOpen(open);
-			if (!open && editParam) {
-				navigate({
-					to: "/admin/records/$id",
-					params: { id },
-					search: {},
-					replace: true,
-				});
-			}
-		},
-		[navigate, id, editParam],
-	);
-
-	// ← / → page through the collection, so you can blitz through setting mattes
-	// from the keyboard — including from inside the editor, where the crop handles
-	// and tone sliders own the arrows only while they're focused. A control that
-	// consumed the key (slider, crop handle) will have called preventDefault by the
-	// time this bubbles to the window; ignore those, and any key aimed at a text
-	// field, so we never hijack caret movement or a value nudge.
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-			if (e.defaultPrevented) return;
-			const el = e.target as HTMLElement | null;
-			if (
-				el?.isContentEditable ||
-				el?.closest(
-					"input, textarea, select, [contenteditable='true'], [role='slider']",
-				)
-			) {
-				return;
-			}
-			const target = e.key === "ArrowLeft" ? prevRecord : nextRecord;
-			if (!target) return;
-			e.preventDefault();
-			goToRecord(target.id, editorOpen);
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [prevRecord, nextRecord, editorOpen, goToRecord]);
-	// Which output the live editing preview shows — the matte (default, the primary
-	// render) or the square cover — toggled by the switch in the preview's top-right.
-	const [previewMode, setPreviewMode] = useState<"matte" | "cover">("matte");
-	// Which panel below the crop/preview shows — the tone knobs ("Edit") or the links to
-	// the stored renders ("Outputs"). Same little tab style as the matte/cover toggle.
-	const [toolTab, setToolTab] = useState<"edit" | "outputs">("edit");
-	// `/api/photos/…` srcs of saved renders that failed to load, so a stale/missing key
-	// hides that image instead of showing a broken-image glyph.
-	const [savedImgError, setSavedImgError] = useState<Set<string>>(
-		() => new Set(),
-	);
 	const [replacingCapture, setReplacingCapture] = useState(false);
 	const captureInputRef = useRef<HTMLInputElement>(null);
 
@@ -886,9 +810,14 @@ function RecordDetail() {
 		onSuccess: (row) => {
 			if (!row) return;
 			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-			setBand(parseCornerBand(row.sleeveCornersJson));
-			setParams(parseReframeParams(row.professionalParamsJson));
-			setEditorOpen(true);
+			// Open the editor on the new capture. The editor body re-seeds its crop/
+			// tone from the record on mount — and its key includes the capture key,
+			// which just changed — so there's nothing to seed here.
+			navigate({
+				to: "/admin/records/$id",
+				params: { id },
+				search: { edit: true },
+			});
 			toast.success("Capture replaced — review the crop, then Apply.");
 		},
 		onError: (err) =>
@@ -927,53 +856,6 @@ function RecordDetail() {
 		},
 		onError: () => toast.error("Couldn't delete this record."),
 	});
-
-	// Apply the edit: persist the current corner band + tone and enqueue the paid pipeline
-	// (reframe + Real-ESRGAN enhance + AI matte), which runs in the background. Returns
-	// immediately; the editor stays open showing the regenerating state, and the record
-	// view polls and swaps in the generated cover + matte in place when it lands.
-	const applyPro = useMutation({
-		mutationFn: () => reframeRecord({ data: { id: recordId, band, params } }),
-		onSuccess: async (row) => {
-			if (row)
-				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-			await invalidate();
-			// Keep the editor open so the Generated panel shows the regenerating state
-			// (gray + spinner) and swaps in the new render in place when the job lands.
-			toast.success("Generating photo...");
-		},
-		onError: (err) =>
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't apply the changes.",
-			),
-	});
-
-	// Remove the professional photo altogether: delete it from R2 and clear the record
-	// back to a zero-state (no image, default crop + tone), then close the editor and
-	// return to the detail view. A later edit regenerates from scratch.
-	const removeCover = useMutation({
-		mutationFn: () => clearProfessional({ data: recordId }),
-		onSuccess: async (row) => {
-			if (row)
-				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-			await invalidate();
-			setEditorOpen(false);
-			toast.success("Cover removed.");
-		},
-		onError: (err) =>
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't remove the cover.",
-			),
-	});
-
-	// Open the editor, syncing the working copies to the saved crop/tone. Non-destructive:
-	// nothing is generated or stored until Apply — the live preview renders client-side
-	// from the capture, so it's never empty even when there's no saved professional photo.
-	const openEditor = () => {
-		setBand(parseCornerBand(record?.sleeveCornersJson));
-		setParams(parseReframeParams(record?.professionalParamsJson));
-		setEditorOpen(true);
-	};
 
 	// Pull a fresh Discogs value estimate (seller price suggestions, falling back
 	// to the lowest listing) for this record, leaving all other metadata alone.
@@ -1063,52 +945,12 @@ function RecordDetail() {
 	const failure =
 		record.status === "failed" ? describeAnalysisError(record.error) : null;
 
-	// Professional-photo derived state. Generation is synchronous, so there's no "busy"
-	// queue state to poll — the editor's own mutations report their progress. `p` merges
-	// the working-copy params over the defaults so the sliders always have a concrete value.
-	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
-
-	// Does the working copy (band + tone) differ from what's saved on the row? Both
-	// signatures normalise (round corners / merge tone defaults + sort keys) so a
-	// reopened-but-untouched editor reads clean.
-	const paramSig = (v: ReframeParams) =>
-		JSON.stringify(
-			Object.entries({ ...DEFAULT_REFRAME_PARAMS, ...v }).sort(([a], [b]) =>
-				a < b ? -1 : a > b ? 1 : 0,
-			),
-		);
-	const isDirty =
-		serializeCornerBand(band) !==
-			serializeCornerBand(parseCornerBand(record.sleeveCornersJson)) ||
-		paramSig(params) !==
-			paramSig(parseReframeParams(record.professionalParamsJson));
-	// The photo's relationship to the shown cover drives the button states:
-	//  - approved  → it's the live cover;
-	//  - "live"    → approved *and* unchanged, so the primary button is a plain Close;
-	//  - "Re-apply" only makes sense against a live cover; anything else is a first Apply.
-	const isApproved = record.professionalStatus === "approved";
-	// The last background job ended in an error (e.g. a transient matte failure that
-	// preserved the old cover/matte). The primary button offers a retry even when the
-	// cover is live and unchanged, so a hiccup isn't a dead end behind a plain "Close".
-	const jobFailed = record.professionalJobStatus === "failed";
-	const proIsLive = isApproved && !isDirty;
 	// A background Apply job (reframe + enhance + matte) is queued or running for this
-	// record — the record view polls, so this flips true/false on its own.
+	// record — the record view polls, so this flips true/false on its own. Drives the
+	// "Generating photo…" hint next to the capture actions below.
 	const proGenerating =
 		record.professionalJobStatus === "queued" ||
 		record.professionalJobStatus === "processing";
-	// Any editor mutation in flight, or a background job running — disables the controls
-	// (a second Apply while one is generating would just stack jobs).
-	const editorBusy = applyPro.isPending || proGenerating;
-
-	// Links to every stored render for this record, for the "Outputs" tab — the original
-	// capture, the square hero, and both matte variants. Only the keys that exist show.
-	const referenceImages = [
-		{ label: "Original capture", key: record.capturePhotoKey },
-		{ label: "Square cover", key: record.professionalImageKey },
-		{ label: "Matte (shadow)", key: record.professionalAlphaKey },
-		{ label: "Matte (cutout)", key: record.professionalAlphaCutoutKey },
-	].filter((r): r is { label: string; key: string } => r.key != null);
 
 	// Header photo: the approved professional crop, else the raw capture. Never the
 	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
@@ -1132,8 +974,8 @@ function RecordDetail() {
 						total={ordered.length}
 						hasPrev={prevRecord != null}
 						hasNext={nextRecord != null}
-						onPrev={() => prevRecord && goToRecord(prevRecord.id, editorOpen)}
-						onNext={() => nextRecord && goToRecord(nextRecord.id, editorOpen)}
+						onPrev={() => prevRecord && goToRecord(prevRecord.id, false)}
+						onNext={() => nextRecord && goToRecord(nextRecord.id, false)}
 					/>
 				</div>
 				{/* Photo + text take ~half the width on desktop, with the badges pushed
@@ -1212,7 +1054,17 @@ function RecordDetail() {
 							e.target.value = "";
 						}}
 					/>
-					<Button type="button" size="sm" onClick={openEditor}>
+					<Button
+						type="button"
+						size="sm"
+						onClick={() =>
+							navigate({
+								to: "/admin/records/$id",
+								params: { id },
+								search: { edit: true },
+							})
+						}
+					>
 						Edit image
 					</Button>
 					<Button
@@ -1237,358 +1089,6 @@ function RecordDetail() {
 							</span>
 						)}
 				</div>
-			)}
-
-			{/* The editor: crop on the left, live output on the right, knobs below.
-			    "Use as cover" (footer checkbox) controls whether Apply promotes it. */}
-			{!inFlight && record.capturePhotoKey && (
-				<Dialog open={editorOpen} onOpenChange={handleEditorOpenChange}>
-					<DialogContent className="max-w-5xl">
-						<DialogHeader>
-							{/* Title + the same back/next pager as the page header. `pr-8`
-							    keeps it clear of the dialog's absolute close button. Paging
-							    from here keeps the editor open so you can run straight down
-							    the collection setting mattes. */}
-							<div className="flex items-start justify-between gap-4 pr-8">
-								<DialogTitle>Edit image</DialogTitle>
-								<RecordPager
-									index={pagerIndex}
-									total={ordered.length}
-									hasPrev={prevRecord != null}
-									hasNext={nextRecord != null}
-									onPrev={() => prevRecord && goToRecord(prevRecord.id, true)}
-									onNext={() => nextRecord && goToRecord(nextRecord.id, true)}
-								/>
-							</div>
-							<DialogDescription>
-								Drag the outer frame onto the background and the inner one onto
-								the sleeve (or auto-detect), then tune the tone — the preview
-								updates live. Apply runs the whole pipeline (enhance + AI matte)
-								and can take a minute.
-							</DialogDescription>
-						</DialogHeader>
-
-						<div className="grid gap-4 sm:grid-cols-2">
-							<div className="space-y-2">
-								<p className="text-xs font-medium text-muted-foreground">
-									Crop
-								</p>
-								<CornerEditor
-									src={`/api/photos/${record.capturePhotoKey}`}
-									value={band}
-									onChange={setBand}
-									onDetect={async () => {
-										const res = await detectCorners({ data: recordId });
-										return res.corners;
-									}}
-									disabled={editorBusy}
-								/>
-							</div>
-							<div className="space-y-2">
-								<div className="flex items-baseline justify-between">
-									<p className="text-xs font-medium text-muted-foreground">
-										{proIsLive ? "Generated" : "Preview"}
-									</p>
-									{/* Matte / Cover toggle — picks which saved render the generated
-									    view shows. Only shown once generated: both saved renders are
-									    high-res, whereas the live editing preview's client-side matte
-									    is too low-res to be useful, so editing just shows the cover. */}
-									{proIsLive && record.capturePhotoKey && (
-										<div className="flex items-center gap-3 text-[10px]">
-											{(["matte", "cover"] as const).map((m) => (
-												<button
-													key={m}
-													type="button"
-													aria-pressed={previewMode === m}
-													onClick={() => setPreviewMode(m)}
-													className={cn(
-														"capitalize transition-colors",
-														previewMode === m
-															? "text-foreground underline underline-offset-4"
-															: "text-muted-foreground/70 hover:text-foreground",
-													)}
-												>
-													{m}
-												</button>
-											))}
-										</div>
-									)}
-								</div>
-								{record.capturePhotoKey &&
-									(proGenerating ? (
-										// A job is running: don't keep showing the stale saved render
-										// (it "flicks" the old matte back in until the swap). Show a
-										// neutral placeholder + spinner so it reads as regenerating.
-										<div className="flex aspect-square items-center justify-center rounded-md border bg-muted">
-											<Loader2 className="size-6 animate-spin text-muted-foreground" />
-										</div>
-									) : proIsLive ? (
-										(() => {
-											// Generated + unchanged: show the saved render for the selected
-											// tab in high res. Editing any corner/knob drops back to the
-											// live preview below until Apply/Reset.
-											const saved =
-												previewMode === "matte"
-													? { key: record.professionalAlphaKey, checker: true }
-													: {
-															key: record.professionalImageKey,
-															checker: false,
-														};
-											const src = saved.key ? `/api/photos/${saved.key}` : null;
-											if (!src || savedImgError.has(src)) {
-												return (
-													<div className="flex aspect-square items-center justify-center rounded-md border bg-muted/30 text-xs text-muted-foreground">
-														No {previewMode} generated
-													</div>
-												);
-											}
-											return (
-												<div
-													className="overflow-hidden rounded-md border bg-background"
-													style={
-														saved.checker
-															? {
-																	backgroundImage:
-																		"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
-																	backgroundSize: "24px 24px",
-																}
-															: undefined
-													}
-												>
-													<img
-														src={src}
-														alt={`Saved ${previewMode}`}
-														onError={() =>
-															setSavedImgError((s) => new Set(s).add(src))
-														}
-														className={cn(
-															"block aspect-square size-full",
-															saved.checker ? "object-contain" : "object-cover",
-														)}
-													/>
-												</div>
-											);
-										})()
-									) : (
-										// Editing (never applied, or dirty): the live client-side cover
-										// preview, updating as band/knobs change. No matte here — the
-										// client-side matte is too low-res; the real one comes on Apply.
-										<ProPreview
-											src={`/api/photos/${record.capturePhotoKey}`}
-											band={band}
-											params={params}
-										/>
-									))}
-							</div>
-						</div>
-
-						{/* Edit / Outputs tabs — the tone knobs vs links to the stored renders,
-						    switched with the same little tab style as the matte/cover toggle. */}
-						<div className="space-y-3">
-							<div className="flex items-center gap-3 text-[10px]">
-								{(
-									[
-										["edit", "Edit"],
-										...(referenceImages.length > 0
-											? ([["outputs", "Outputs"]] as const)
-											: []),
-									] as const
-								).map(([id, label]) => (
-									<button
-										key={id}
-										type="button"
-										aria-pressed={toolTab === id}
-										onClick={() => setToolTab(id)}
-										className={cn(
-											"transition-colors",
-											toolTab === id
-												? "text-foreground underline underline-offset-4"
-												: "text-muted-foreground/70 hover:text-foreground",
-										)}
-									>
-										{label}
-									</button>
-								))}
-							</div>
-
-							{toolTab === "edit" || referenceImages.length === 0 ? (
-								/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
-								   the polish factors below map straight to the pixel encode pass.
-								   Every Apply re-warps + re-tones — all free. */
-								<div className="space-y-3 rounded-md border bg-muted/30 p-3">
-									<label
-										htmlFor="pro-autotone"
-										className="flex items-center gap-2 text-xs text-muted-foreground"
-									>
-										<Checkbox
-											id="pro-autotone"
-											checked={!p.skipTone}
-											disabled={editorBusy}
-											onChange={(e) =>
-												setParams({
-													...params,
-													skipTone: !e.currentTarget.checked,
-												})
-											}
-										/>
-										Auto-tone (levels + white balance)
-									</label>
-									{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
-									<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-										<Knob
-											label="White balance"
-											display={`${Math.round(p.wbStrength * 100)}%`}
-											value={Math.round(p.wbStrength * 100)}
-											min={0}
-											max={100}
-											step={1}
-											disabled={p.skipTone || editorBusy}
-											onChange={(v) =>
-												setParams({ ...params, wbStrength: v / 100 })
-											}
-										/>
-										<Knob
-											label="Saturation"
-											display={`${Math.round(p.saturation * 100)}%`}
-											value={Math.round(p.saturation * 100)}
-											min={0}
-											max={200}
-											step={5}
-											disabled={editorBusy}
-											onChange={(v) =>
-												setParams({ ...params, saturation: v / 100 })
-											}
-										/>
-										<Knob
-											label="Contrast"
-											display={`${Math.round(p.contrast * 100)}%`}
-											value={Math.round(p.contrast * 100)}
-											min={50}
-											max={200}
-											step={5}
-											disabled={editorBusy}
-											onChange={(v) =>
-												setParams({ ...params, contrast: v / 100 })
-											}
-										/>
-										<Knob
-											label="Gamma"
-											display={p.gamma.toFixed(2)}
-											value={Math.round(p.gamma * 100)}
-											min={50}
-											max={200}
-											step={5}
-											disabled={editorBusy}
-											onChange={(v) => setParams({ ...params, gamma: v / 100 })}
-										/>
-									</div>
-								</div>
-							) : (
-								/* Outputs tab: links to every stored render for this record. */
-								<div className="rounded-md border bg-muted/30 p-3">
-									<dl className="divide-y divide-border">
-										{referenceImages.map(({ label, key }) => (
-											<div
-												key={key}
-												className="flex items-baseline justify-between gap-4 py-1.5 text-xs"
-											>
-												<dt className="shrink-0 text-muted-foreground">
-													{label}
-												</dt>
-												<dd className="min-w-0 text-right">
-													<a
-														href={`/api/photos/${key}`}
-														target="_blank"
-														rel="noreferrer"
-														className="inline-flex items-center gap-1 text-foreground hover:text-brand"
-													>
-														Open
-														<ExternalLink className="size-3" />
-													</a>
-												</dd>
-											</div>
-										))}
-									</dl>
-								</div>
-							)}
-						</div>
-
-						{/* Destructive "Remove cover" on the left (only when there's an
-						    approved cover to take down); Reset + Apply on the right (Apply
-						    last). Apply saves the crop/tone and promotes it to the cover;
-						    Remove cover unapproves it and returns to the detail view. */}
-						<DialogFooter className="items-center justify-between sm:justify-between">
-							{record.professionalStatus === "approved" ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="destructive"
-									disabled={
-										removeCover.isPending || applyPro.isPending || editorBusy
-									}
-									onClick={() => removeCover.mutate()}
-								>
-									{removeCover.isPending ? "Removing…" : "Remove cover"}
-								</Button>
-							) : (
-								<span />
-							)}
-							<div className="flex items-center gap-2">
-								{/* Discard unsaved edits: snap the working copy back to what's
-								    saved on the row. Purely client-side — no re-warp, no write —
-								    so it can't leave a half-applied state. Disabled when there's
-								    nothing to discard. */}
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									disabled={!isDirty || editorBusy}
-									onClick={() => {
-										setBand(parseCornerBand(record.sleeveCornersJson));
-										setParams(
-											parseReframeParams(record.professionalParamsJson),
-										);
-									}}
-								>
-									Reset
-								</Button>
-								{/* One primary action, three states: Apply (nothing live yet),
-								    Re-apply (live, but the crop/tone has been nudged), or a
-								    plain Close (live and unchanged — nothing left to do). Only
-								    the first two mutate; Close just dismisses. */}
-								<Button
-									type="button"
-									size="sm"
-									variant={proIsLive && !jobFailed ? "outline" : "default"}
-									// Disabled while a job runs (editorBusy) — including the
-									// "Generating…" state — so a second Apply can't stack, and
-									// while the band is invalid (inner corners outside the outer
-									// frame) so a self-contradictory trimap can't be applied. When
-									// live + idle it's a plain Close, which is always allowed.
-									disabled={
-										editorBusy ||
-										(!(proIsLive && !jobFailed) && !isBandValid(band))
-									}
-									onClick={() =>
-										proIsLive && !jobFailed
-											? setEditorOpen(false)
-											: applyPro.mutate()
-									}
-								>
-									{applyPro.isPending || proGenerating
-										? "Generating…"
-										: jobFailed
-											? "Retry"
-											: proIsLive
-												? "Close"
-												: isApproved && isDirty
-													? "Re-apply"
-													: "Apply"}
-								</Button>
-							</div>
-						</DialogFooter>
-					</DialogContent>
-				</Dialog>
 			)}
 
 			{/* In-flight: just wait and poll. */}
@@ -2155,5 +1655,594 @@ function RecordDetail() {
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+// Persistent host for the crop/tone editor Dialog. It reads the current record from
+// the URL (id + `edit` search param) and is deliberately NOT keyed by id, so paging
+// next/prev doesn't remount the Dialog — the Radix content stays mounted, so it never
+// replays its open/scale animation between records. Only the body inside (keyed) re-
+// seeds its working copy per record.
+function RecordEditorHost() {
+	const { id } = Route.useParams();
+	const recordId = Number(id);
+	const { edit: editParam } = Route.useSearch();
+	const navigate = useNavigate();
+
+	// Back/next paging through the collection, in the same order the admin list shows —
+	// used by the pager in the editor header and the ← / → keyboard nav below.
+	const { data: allRecords } = useQuery(recordsQueryOptions);
+	const ordered = useMemo(
+		() => orderRecordsForReview(allRecords ?? []),
+		[allRecords],
+	);
+	const pagerIndex = ordered.findIndex((r) => r.id === recordId);
+	const prevRecord = pagerIndex > 0 ? ordered[pagerIndex - 1] : null;
+	const nextRecord =
+		pagerIndex >= 0 && pagerIndex < ordered.length - 1
+			? ordered[pagerIndex + 1]
+			: null;
+
+	const goToRecord = useCallback(
+		(targetId: number, keepEditor: boolean) =>
+			navigate({
+				to: "/admin/records/$id",
+				params: { id: String(targetId) },
+				search: keepEditor ? { edit: true } : {},
+			}),
+		[navigate],
+	);
+
+	const { data: record } = useQuery({
+		...recordQueryOptions(recordId),
+		// Poll while anything's in flight so the editor's "Generating…" state stays live
+		// (mirrors the detail page's own poll).
+		refetchInterval: (query) => {
+			const r = query.state.data;
+			const active =
+				r?.status === "pending" ||
+				r?.status === "processing" ||
+				r?.professionalJobStatus === "queued" ||
+				r?.professionalJobStatus === "processing";
+			return active ? 2000 : false;
+		},
+	});
+
+	// Closing the editor drops `edit` from the URL (via `replace` so it doesn't add
+	// history), otherwise a refresh or back-nav to `?edit=true` would reopen it.
+	const handleOpenChange = useCallback(
+		(open: boolean) => {
+			if (!open && editParam) {
+				navigate({
+					to: "/admin/records/$id",
+					params: { id },
+					search: {},
+					replace: true,
+				});
+			}
+		},
+		[navigate, id, editParam],
+	);
+
+	// ← / → page through the collection, so you can blitz through setting mattes from
+	// the keyboard — including from inside the editor, where the crop handles and tone
+	// sliders own the arrows only while they're focused. A control that consumed the key
+	// (slider, crop handle) will have called preventDefault by the time this bubbles to
+	// the window; ignore those, and any key aimed at a text field, so we never hijack
+	// caret movement or a value nudge.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+			if (e.defaultPrevented) return;
+			const el = e.target as HTMLElement | null;
+			if (
+				el?.isContentEditable ||
+				el?.closest(
+					"input, textarea, select, [contenteditable='true'], [role='slider']",
+				)
+			) {
+				return;
+			}
+			const target = e.key === "ArrowLeft" ? prevRecord : nextRecord;
+			if (!target) return;
+			e.preventDefault();
+			goToRecord(target.id, Boolean(editParam));
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [prevRecord, nextRecord, editParam, goToRecord]);
+
+	const inFlight =
+		record?.status === "pending" || record?.status === "processing";
+	// Open only once the record's loaded, has a capture to edit, and analysis isn't
+	// still in flight — mirrors the old inline guard the Dialog used to sit behind.
+	const editorOpen =
+		Boolean(editParam) && !inFlight && !!record?.capturePhotoKey;
+
+	return (
+		<Dialog open={editorOpen} onOpenChange={handleOpenChange}>
+			<DialogContent className="max-w-5xl">
+				<DialogHeader>
+					{/* Title + the same back/next pager as the page header. `pr-8` keeps it
+					    clear of the dialog's absolute close button. Paging from here keeps the
+					    editor open so you can run straight down the collection setting mattes. */}
+					<div className="flex items-start justify-between gap-4 pr-8">
+						<DialogTitle>Edit image</DialogTitle>
+						<RecordPager
+							index={pagerIndex}
+							total={ordered.length}
+							hasPrev={prevRecord != null}
+							hasNext={nextRecord != null}
+							onPrev={() => prevRecord && goToRecord(prevRecord.id, true)}
+							onNext={() => nextRecord && goToRecord(nextRecord.id, true)}
+						/>
+					</div>
+					<DialogDescription>
+						Drag the outer frame onto the background and the inner one onto the
+						sleeve (or auto-detect), then tune the tone — the preview updates
+						live. Apply runs the whole pipeline (enhance + AI matte) and can
+						take a minute.
+					</DialogDescription>
+				</DialogHeader>
+				{record?.capturePhotoKey && (
+					<RecordEditorBody
+						key={`${id}:${record.capturePhotoKey}`}
+						record={record}
+						recordId={recordId}
+						onClose={() => handleOpenChange(false)}
+					/>
+				)}
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+// The crop/tone editor body — everything inside the Dialog below the header. Keyed by
+// id + capture key in the host, so it remounts (re-seeding band/tone from the record)
+// when you page to another record or replace the capture, but NOT on an ordinary poll
+// while a job runs — so an open editor keeps its unsaved edits.
+function RecordEditorBody({
+	record,
+	recordId,
+	onClose,
+}: {
+	record: Record;
+	recordId: number;
+	onClose: () => void;
+}) {
+	const queryClient = useQueryClient();
+
+	const invalidate = () =>
+		Promise.all([
+			queryClient.invalidateQueries({ queryKey: recordsQueryOptions.queryKey }),
+			queryClient.invalidateQueries({
+				queryKey: recordQueryOptions(recordId).queryKey,
+			}),
+		]);
+
+	// Editable reframe knobs, seeded from whatever's stored on the record. This is the
+	// working copy the sliders drive; "Apply" sends it to the (free) reframe step.
+	const [params, setParams] = useState<ReframeParams>(() =>
+		parseReframeParams(record.professionalParamsJson),
+	);
+	// Working copy of the corner band the crop editor drives, seeded from the row
+	// (full-frame default if it's never been cropped; legacy single-quad rows are
+	// synthesised into a band). "Apply" warps the capture to this.
+	const [band, setBand] = useState<CornerBand>(() =>
+		parseCornerBand(record.sleeveCornersJson),
+	);
+	// Which output the live editing preview shows — the matte (default, the primary
+	// render) or the square cover — toggled by the switch in the preview's top-right.
+	const [previewMode, setPreviewMode] = useState<"matte" | "cover">("matte");
+	// Which panel below the crop/preview shows — the tone knobs ("Edit") or the links to
+	// the stored renders ("Outputs"). Same little tab style as the matte/cover toggle.
+	const [toolTab, setToolTab] = useState<"edit" | "outputs">("edit");
+	// `/api/photos/…` srcs of saved renders that failed to load, so a stale/missing key
+	// hides that image instead of showing a broken-image glyph.
+	const [savedImgError, setSavedImgError] = useState<Set<string>>(
+		() => new Set(),
+	);
+
+	// When an Apply photo job finishes, flip the Edit/Outputs tabs to Outputs so the
+	// freshly generated renders are what's shown. The editor stays open through Apply,
+	// so this lands live while it's on screen.
+	const wasGeneratingRef = useRef(false);
+	useEffect(() => {
+		const generating =
+			record.professionalJobStatus === "queued" ||
+			record.professionalJobStatus === "processing";
+		if (wasGeneratingRef.current && !generating) setToolTab("outputs");
+		wasGeneratingRef.current = generating;
+	}, [record.professionalJobStatus]);
+
+	// Apply the edit: persist the current corner band + tone and enqueue the paid pipeline
+	// (reframe + Real-ESRGAN enhance + AI matte), which runs in the background. Returns
+	// immediately; the editor stays open showing the regenerating state, and the record
+	// view polls and swaps in the generated cover + matte in place when it lands.
+	const applyPro = useMutation({
+		mutationFn: () => reframeRecord({ data: { id: recordId, band, params } }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			// Keep the editor open so the Generated panel shows the regenerating state
+			// (gray + spinner) and swaps in the new render in place when the job lands.
+			toast.success("Generating photo...");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't apply the changes.",
+			),
+	});
+
+	// Remove the professional photo altogether: delete it from R2 and clear the record
+	// back to a zero-state (no image, default crop + tone), then close the editor and
+	// return to the detail view. A later edit regenerates from scratch.
+	const removeCover = useMutation({
+		mutationFn: () => clearProfessional({ data: recordId }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			onClose();
+			toast.success("Cover removed.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't remove the cover.",
+			),
+	});
+
+	// Professional-photo derived state. `p` merges the working-copy params over the
+	// defaults so the sliders always have a concrete value.
+	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
+
+	// Does the working copy (band + tone) differ from what's saved on the row? Both
+	// signatures normalise (round corners / merge tone defaults + sort keys) so a
+	// reopened-but-untouched editor reads clean.
+	const paramSig = (v: ReframeParams) =>
+		JSON.stringify(
+			Object.entries({ ...DEFAULT_REFRAME_PARAMS, ...v }).sort(([a], [b]) =>
+				a < b ? -1 : a > b ? 1 : 0,
+			),
+		);
+	const isDirty =
+		serializeCornerBand(band) !==
+			serializeCornerBand(parseCornerBand(record.sleeveCornersJson)) ||
+		paramSig(params) !==
+			paramSig(parseReframeParams(record.professionalParamsJson));
+	// The photo's relationship to the shown cover drives the button states:
+	//  - approved  → it's the live cover;
+	//  - "live"    → approved *and* unchanged, so the primary button is a plain Close;
+	//  - "Re-apply" only makes sense against a live cover; anything else is a first Apply.
+	const isApproved = record.professionalStatus === "approved";
+	// The last background job ended in an error (e.g. a transient matte failure that
+	// preserved the old cover/matte). The primary button offers a retry even when the
+	// cover is live and unchanged, so a hiccup isn't a dead end behind a plain "Close".
+	const jobFailed = record.professionalJobStatus === "failed";
+	const proIsLive = isApproved && !isDirty;
+	// A background Apply job (reframe + enhance + matte) is queued or running for this
+	// record — the record view polls, so this flips true/false on its own.
+	const proGenerating =
+		record.professionalJobStatus === "queued" ||
+		record.professionalJobStatus === "processing";
+	// Any editor mutation in flight, or a background job running — disables the controls
+	// (a second Apply while one is generating would just stack jobs).
+	const editorBusy = applyPro.isPending || proGenerating;
+
+	// Links to every stored render for this record, for the "Outputs" tab — the original
+	// capture, the square hero, and both matte variants. Only the keys that exist show.
+	const referenceImages = [
+		{ label: "Original capture", key: record.capturePhotoKey },
+		{ label: "Square cover", key: record.professionalImageKey },
+		{ label: "Matte (shadow)", key: record.professionalAlphaKey },
+		{ label: "Matte (cutout)", key: record.professionalAlphaCutoutKey },
+	].filter((r): r is { label: string; key: string } => r.key != null);
+
+	return (
+		<>
+			<div className="grid gap-4 sm:grid-cols-2">
+				<div className="space-y-2">
+					<p className="text-xs font-medium text-muted-foreground">Crop</p>
+					<CornerEditor
+						src={`/api/photos/${record.capturePhotoKey}`}
+						value={band}
+						onChange={setBand}
+						onDetect={async () => {
+							const res = await detectCorners({ data: recordId });
+							return res.corners;
+						}}
+						disabled={editorBusy}
+					/>
+				</div>
+				<div className="space-y-2">
+					<div className="flex items-baseline justify-between">
+						<p className="text-xs font-medium text-muted-foreground">
+							{proIsLive ? "Generated" : "Preview"}
+						</p>
+						{/* Matte / Cover toggle — picks which saved render the generated
+						    view shows. Only shown once generated: both saved renders are
+						    high-res, whereas the live editing preview's client-side matte
+						    is too low-res to be useful, so editing just shows the cover. */}
+						{proIsLive && record.capturePhotoKey && (
+							<div className="flex items-center gap-3 text-[10px]">
+								{(["matte", "cover"] as const).map((m) => (
+									<button
+										key={m}
+										type="button"
+										aria-pressed={previewMode === m}
+										onClick={() => setPreviewMode(m)}
+										className={cn(
+											"capitalize transition-colors",
+											previewMode === m
+												? "text-foreground underline underline-offset-4"
+												: "text-muted-foreground/70 hover:text-foreground",
+										)}
+									>
+										{m}
+									</button>
+								))}
+							</div>
+						)}
+					</div>
+					{record.capturePhotoKey &&
+						(proGenerating ? (
+							// A job is running: don't keep showing the stale saved render
+							// (it "flicks" the old matte back in until the swap). Show a
+							// neutral placeholder + spinner so it reads as regenerating.
+							<div className="flex aspect-square items-center justify-center rounded-md border bg-muted">
+								<Loader2 className="size-6 animate-spin text-muted-foreground" />
+							</div>
+						) : proIsLive ? (
+							(() => {
+								// Generated + unchanged: show the saved render for the selected
+								// tab in high res. Editing any corner/knob drops back to the
+								// live preview below until Apply/Reset.
+								const saved =
+									previewMode === "matte"
+										? { key: record.professionalAlphaKey, checker: true }
+										: {
+												key: record.professionalImageKey,
+												checker: false,
+											};
+								const src = saved.key ? `/api/photos/${saved.key}` : null;
+								if (!src || savedImgError.has(src)) {
+									return (
+										<div className="flex aspect-square items-center justify-center rounded-md border bg-muted/30 text-xs text-muted-foreground">
+											No {previewMode} generated
+										</div>
+									);
+								}
+								return (
+									<div
+										className="overflow-hidden rounded-md border bg-background"
+										style={
+											saved.checker
+												? {
+														backgroundImage:
+															"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
+														backgroundSize: "24px 24px",
+													}
+												: undefined
+										}
+									>
+										<img
+											src={src}
+											alt={`Saved ${previewMode}`}
+											onError={() =>
+												setSavedImgError((s) => new Set(s).add(src))
+											}
+											className={cn(
+												"block aspect-square size-full",
+												saved.checker ? "object-contain" : "object-cover",
+											)}
+										/>
+									</div>
+								);
+							})()
+						) : (
+							// Editing (never applied, or dirty): the live client-side cover
+							// preview, updating as band/knobs change. No matte here — the
+							// client-side matte is too low-res; the real one comes on Apply.
+							<ProPreview
+								src={`/api/photos/${record.capturePhotoKey}`}
+								band={band}
+								params={params}
+							/>
+						))}
+				</div>
+			</div>
+
+			{/* Edit / Outputs tabs — the tone knobs vs links to the stored renders,
+			    switched with the same little tab style as the matte/cover toggle. */}
+			<div className="space-y-3">
+				<div className="flex items-center gap-3 text-[10px]">
+					{(
+						[
+							["edit", "Edit"],
+							...(referenceImages.length > 0
+								? ([["outputs", "Outputs"]] as const)
+								: []),
+						] as const
+					).map(([id, label]) => (
+						<button
+							key={id}
+							type="button"
+							aria-pressed={toolTab === id}
+							onClick={() => setToolTab(id)}
+							className={cn(
+								"transition-colors",
+								toolTab === id
+									? "text-foreground underline underline-offset-4"
+									: "text-muted-foreground/70 hover:text-foreground",
+							)}
+						>
+							{label}
+						</button>
+					))}
+				</div>
+
+				{toolTab === "edit" || referenceImages.length === 0 ? (
+					/* Tone knobs. Auto-tone is the smart, foreground-aware baseline;
+					   the polish factors below map straight to the pixel encode pass.
+					   Every Apply re-warps + re-tones — all free. */
+					<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+						<label
+							htmlFor="pro-autotone"
+							className="flex items-center gap-2 text-xs text-muted-foreground"
+						>
+							<Checkbox
+								id="pro-autotone"
+								checked={!p.skipTone}
+								disabled={editorBusy}
+								onChange={(e) =>
+									setParams({
+										...params,
+										skipTone: !e.currentTarget.checked,
+									})
+								}
+							/>
+							Auto-tone (levels + white balance)
+						</label>
+						{/* 4×1 on wide screens, 2×2 as it narrows, 1×4 on mobile. */}
+						<div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+							<Knob
+								label="White balance"
+								display={`${Math.round(p.wbStrength * 100)}%`}
+								value={Math.round(p.wbStrength * 100)}
+								min={0}
+								max={100}
+								step={1}
+								disabled={p.skipTone || editorBusy}
+								onChange={(v) => setParams({ ...params, wbStrength: v / 100 })}
+							/>
+							<Knob
+								label="Saturation"
+								display={`${Math.round(p.saturation * 100)}%`}
+								value={Math.round(p.saturation * 100)}
+								min={0}
+								max={200}
+								step={5}
+								disabled={editorBusy}
+								onChange={(v) => setParams({ ...params, saturation: v / 100 })}
+							/>
+							<Knob
+								label="Contrast"
+								display={`${Math.round(p.contrast * 100)}%`}
+								value={Math.round(p.contrast * 100)}
+								min={50}
+								max={200}
+								step={5}
+								disabled={editorBusy}
+								onChange={(v) => setParams({ ...params, contrast: v / 100 })}
+							/>
+							<Knob
+								label="Gamma"
+								display={p.gamma.toFixed(2)}
+								value={Math.round(p.gamma * 100)}
+								min={50}
+								max={200}
+								step={5}
+								disabled={editorBusy}
+								onChange={(v) => setParams({ ...params, gamma: v / 100 })}
+							/>
+						</div>
+					</div>
+				) : (
+					/* Outputs tab: links to every stored render for this record. */
+					<div className="rounded-md border bg-muted/30 p-3">
+						<dl className="divide-y divide-border">
+							{referenceImages.map(({ label, key }) => (
+								<div
+									key={key}
+									className="flex items-baseline justify-between gap-4 py-1.5 text-xs"
+								>
+									<dt className="shrink-0 text-muted-foreground">{label}</dt>
+									<dd className="min-w-0 text-right">
+										<a
+											href={`/api/photos/${key}`}
+											target="_blank"
+											rel="noreferrer"
+											className="inline-flex items-center gap-1 text-foreground hover:text-brand"
+										>
+											Open
+											<ExternalLink className="size-3" />
+										</a>
+									</dd>
+								</div>
+							))}
+						</dl>
+					</div>
+				)}
+			</div>
+
+			{/* Destructive "Remove cover" on the left (only when there's an
+			    approved cover to take down); Reset + Apply on the right (Apply
+			    last). Apply saves the crop/tone and promotes it to the cover;
+			    Remove cover unapproves it and returns to the detail view. */}
+			<DialogFooter className="items-center justify-between sm:justify-between">
+				{record.professionalStatus === "approved" ? (
+					<Button
+						type="button"
+						size="sm"
+						variant="destructive"
+						disabled={removeCover.isPending || applyPro.isPending || editorBusy}
+						onClick={() => removeCover.mutate()}
+					>
+						{removeCover.isPending ? "Removing…" : "Remove cover"}
+					</Button>
+				) : (
+					<span />
+				)}
+				<div className="flex items-center gap-2">
+					{/* Discard unsaved edits: snap the working copy back to what's
+					    saved on the row. Purely client-side — no re-warp, no write —
+					    so it can't leave a half-applied state. Disabled when there's
+					    nothing to discard. */}
+					<Button
+						type="button"
+						size="sm"
+						variant="ghost"
+						disabled={!isDirty || editorBusy}
+						onClick={() => {
+							setBand(parseCornerBand(record.sleeveCornersJson));
+							setParams(parseReframeParams(record.professionalParamsJson));
+						}}
+					>
+						Reset
+					</Button>
+					{/* One primary action, three states: Apply (nothing live yet),
+					    Re-apply (live, but the crop/tone has been nudged), or a
+					    plain Close (live and unchanged — nothing left to do). Only
+					    the first two mutate; Close just dismisses. */}
+					<Button
+						type="button"
+						size="sm"
+						variant={proIsLive && !jobFailed ? "outline" : "default"}
+						// Disabled while a job runs (editorBusy) — including the
+						// "Generating…" state — so a second Apply can't stack, and
+						// while the band is invalid (inner corners outside the outer
+						// frame) so a self-contradictory trimap can't be applied. When
+						// live + idle it's a plain Close, which is always allowed.
+						disabled={
+							editorBusy || (!(proIsLive && !jobFailed) && !isBandValid(band))
+						}
+						onClick={() =>
+							proIsLive && !jobFailed ? onClose() : applyPro.mutate()
+						}
+					>
+						{applyPro.isPending || proGenerating
+							? "Generating…"
+							: jobFailed
+								? "Retry"
+								: proIsLive
+									? "Close"
+									: isApproved && isDirty
+										? "Re-apply"
+										: "Apply"}
+					</Button>
+				</div>
+			</DialogFooter>
+		</>
 	);
 }
