@@ -45,7 +45,7 @@ function Home() {
 	// so arrow-keying through the collection doesn't flood the history stack;
 	// opening/closing pushes so the back button steps in and out of a record.
 	const openRecord = useCallback(
-		(id: number | null, replace = false) =>
+		(id: number | null, { replace = false }: { replace?: boolean } = {}) =>
 			navigate({
 				search: (prev) => ({ ...prev, record: id ?? undefined }),
 				replace,
@@ -86,7 +86,8 @@ function Home() {
 	// forget it entirely — clearing the id, not just deriving it away, so it can't
 	// silently re-open when a later search brings the record back into view.
 	useEffect(() => {
-		if (selectedId != null && selectedIndex === -1) openRecord(null, true);
+		if (selectedId != null && selectedIndex === -1)
+			openRecord(null, { replace: true });
 	}, [selectedId, selectedIndex, openRecord]);
 
 	return (
@@ -203,7 +204,7 @@ function Home() {
 				onOpenChange={(open) => {
 					// Replace, not push: opening pushed one entry, so closing collapses it
 					// away rather than leaving a stale "back reopens the drawer" entry.
-					if (!open) openRecord(null, true);
+					if (!open) openRecord(null, { replace: true });
 				}}
 			>
 				<SheetContent className="p-0">
@@ -215,11 +216,11 @@ function Home() {
 							total={filtered.length}
 							onPrev={() => {
 								const prev = filtered[shown.index - 1];
-								if (prev) openRecord(prev.id, true);
+								if (prev) openRecord(prev.id, { replace: true });
 							}}
 							onNext={() => {
 								const next = filtered[shown.index + 1];
-								if (next) openRecord(next.id, true);
+								if (next) openRecord(next.id, { replace: true });
 							}}
 						/>
 					)}
