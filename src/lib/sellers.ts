@@ -2,8 +2,9 @@ import { env } from "cloudflare:workers";
 
 /**
  * "Where to buy" lookup for digest suggestions. For each record we make up to
- * three SerpApi calls, each independently failure-tolerant (any returns the
- * graceful fallback so a flaky pricing call can never break the email):
+ * three SerpApi calls plus one keyless store lookup, each independently
+ * failure-tolerant (any returns the graceful fallback so a flaky pricing call
+ * can never break the email):
  *
  *  1. Google Shopping (`engine=google_shopping`) — cheapest offer across sellers
  *     (Amazon, eBay, Discogs, indie shops, …), filtered to *vinyl pressings of
@@ -14,14 +15,18 @@ import { env } from "cloudflare:workers";
  *  3. Amazon (`engine=amazon`) — the cheapest Prime-eligible vinyl offer
  *     (Prime detected from the delivery wording; see isPrimeEligible), surfaced
  *     as an always-shown option even when it's pricier than the cheapest seller.
+ *  4. Plaid Room Records (plaidroomrecords.com) — a preferred indie shop. It's a
+ *     Shopify store, so we hit its keyless predictive-search JSON directly (no
+ *     SerpApi, no key) for the cheapest in-stock vinyl match. See findPlaidRoom.
  *
- * https://serpapi.com/ — single `SERPAPI_KEY` secret. The key is optional: with
- * no key (e.g. preview/local) the lookup is a no-op and the digest omits the
- * price line.
+ * The SerpApi lookups (1–3) share a single `SERPAPI_KEY` secret, via
+ * https://serpapi.com/. The key is optional: with no key (e.g. preview/local)
+ * the whole lookup is a no-op and the digest omits the price lines.
  *
- * Free tier is 250 searches/mo; the weekly digest (≤10 records) costs at most
- * ~3 calls/record, and responses are cached (see CACHE_TTL) so a record
- * recurring across re-runs within the week reuses its lookups.
+ * SerpApi's free tier is 250 searches/mo; the weekly digest (≤10 records) costs
+ * at most ~3 SerpApi calls/record. The Plaid Room call is free (not SerpApi).
+ * Responses are cached (see CACHE_TTL) so a record recurring across re-runs
+ * within the week reuses its lookups.
  */
 
 const ENDPOINT = "https://serpapi.com/search.json";
@@ -47,6 +52,7 @@ export interface SellerSummary {
 	cheapest: SellerOffer; // cheapest qualifying vinyl offer, all-in where known
 	offerCount: number; // count of qualifying vinyl offers (what the badge shows)
 	prime: SellerOffer | null; // verified Amazon Prime vinyl offer, if any
+	plaidRoom: SellerOffer | null; // cheapest vinyl match at Plaid Room Records, if any
 }
 
 /** Lowercase, strip accents and punctuation → space-separated tokens. */
@@ -398,11 +404,120 @@ async function findAmazonPrime(
 	return offers[0] ?? null;
 }
 
+// Plaid Room Records (plaidroomrecords.com) — a preferred independent shop. It
+// runs on Shopify, which exposes a keyless predictive-search JSON endpoint, so
+// this lookup hits the store directly rather than going through SerpApi.
+const PLAID_ROOM_ORIGIN = "https://www.plaidroomrecords.com";
+
+export interface PlaidRoomProduct {
+	title?: string;
+	url?: string; // store-relative, e.g. "/products/handle?..." (sometimes absolute)
+	price?: string | number;
+	available?: boolean;
+}
+
+/** Build the Shopify predictive-search request for the album (product results only). */
+function buildPlaidRoomUrl(artist: string, title: string): string {
+	const url = new URL(`${PLAID_ROOM_ORIGIN}/search/suggest.json`);
+	url.searchParams.set("q", `${artist} ${title}`);
+	url.searchParams.set("resources[type]", "product");
+	url.searchParams.set("resources[limit]", "10");
+	return url.toString();
+}
+
+/**
+ * Coerce a Shopify predictive-search price into USD. The field comes back as
+ * either a formatted string ("$25.00") or a number that may be dollars (25) or
+ * cents (2500). Cents values are always whole numbers, and a vinyl LP costing
+ * four figures is implausible, so a *whole* value ≥ 1000 is read as cents and
+ * folded back to dollars (a fractional total like 1234.50 is left alone).
+ * Returns null for a missing/zero/unparseable price. Pure + exported for testing.
+ */
+export function parsePlaidRoomPrice(
+	raw: string | number | undefined,
+): number | null {
+	let value: number | null = null;
+	if (typeof raw === "number") value = raw;
+	else if (typeof raw === "string") {
+		const digits = raw.replace(/[^0-9.]/g, "");
+		if (digits) value = Number.parseFloat(digits);
+	}
+	if (value === null || !Number.isFinite(value) || value <= 0) return null;
+	return Number.isInteger(value) && value >= 1000 ? value / 100 : value;
+}
+
+/**
+ * Normalize Plaid Room predictive-search products into vinyl offers for the album,
+ * cheapest first. Store-relative urls are resolved against the store origin, and
+ * the same vinyl/relevance filter as the cross-seller search keeps us on the right
+ * release — matched on artist + title, since a store-wide search is fuzzier than a
+ * per-album Google query. Shipping isn't returned, so offers carry an unknown
+ * shipping cost (priced at item price). Pure + exported for testing.
+ */
+export function toPlaidRoomOffers(
+	products: Array<PlaidRoomProduct>,
+	artist: string,
+	title: string,
+): Array<SellerOffer> {
+	const tokens = albumTokens(`${artist} ${title}`);
+	return products
+		.filter((p) => p.available !== false)
+		.map((p) => {
+			const path = (p.url ?? "").trim();
+			const url = path
+				? isSafeHttpUrl(path)
+					? path
+					: `${PLAID_ROOM_ORIGIN}${path}`
+				: "";
+			return {
+				title: p.title ?? "",
+				itemPrice: parsePlaidRoomPrice(p.price),
+				url,
+			};
+		})
+		.filter(
+			(o): o is { title: string; itemPrice: number; url: string } =>
+				o.itemPrice !== null && isSafeHttpUrl(o.url),
+		)
+		.filter((o) => isVinylTitle(o.title) && matchesAlbum(o.title, tokens))
+		.map(
+			(o) =>
+				({
+					seller: "Plaid Room Records",
+					url: o.url,
+					itemPrice: o.itemPrice,
+					shippingPrice: null, // predictive search doesn't state shipping
+					totalPrice: o.itemPrice,
+					freeShipping: false,
+				}) satisfies SellerOffer,
+		)
+		.sort((a, b) => a.totalPrice - b.totalPrice);
+}
+
+/** Cheapest in-stock vinyl match for the album at Plaid Room Records, or null. */
+async function findPlaidRoom(
+	artist: string,
+	title: string,
+): Promise<SellerOffer | null> {
+	const products = await cachedRows<PlaidRoomProduct>(
+		`https://plaidroom-search/${encodeURIComponent(`${artist}|${title}`)}`,
+		buildPlaidRoomUrl(artist, title),
+		(data) =>
+			(
+				data as {
+					resources?: { results?: { products?: Array<PlaidRoomProduct> } };
+				}
+			).resources?.results?.products ?? [],
+	);
+	return toPlaidRoomOffers(products, artist, title)[0] ?? null;
+}
+
 /**
  * Find the cheapest place to buy a record on vinyl, by total cost incl. shipping,
- * plus an Amazon Prime option when one exists. Returns null when pricing
- * is unavailable (no key, no qualifying vinyl offer, or any error on the primary
- * lookup). The shipping-refine and Prime lookups are independently best-effort.
+ * plus an Amazon Prime option and a Plaid Room Records option when they exist.
+ * Returns null when pricing is unavailable (no key, no qualifying vinyl offer, or
+ * any error on the primary lookup). The shipping-refine, Prime and Plaid Room
+ * lookups are independently best-effort.
  */
 export async function findCheapestVinyl(
 	artist: string,
@@ -422,14 +537,19 @@ export async function findCheapestVinyl(
 		if (offers.length === 0) return null;
 		const cheapest = offers[0];
 
-		// Exact shipping for the chosen offer + the Prime option are both
-		// best-effort enrichments — a failure in either must not drop the line.
+		// Exact shipping for the chosen offer is a best-effort enrichment; the
+		// Prime and Plaid Room options are independent best-effort lookups. A
+		// failure in any of them must not drop the line (or the other lookups).
 		await refineShipping(cheapest).catch(() => {});
-		let prime = await findAmazonPrime(artist, title).catch(() => null);
-		// Don't echo the exact same listing as both the cheapest and the Prime line.
+		let [prime, plaidRoom] = await Promise.all([
+			findAmazonPrime(artist, title).catch(() => null),
+			findPlaidRoom(artist, title).catch(() => null),
+		]);
+		// Don't echo the exact same listing as both the cheapest and a named line.
 		if (prime && prime.url === cheapest.url) prime = null;
+		if (plaidRoom && plaidRoom.url === cheapest.url) plaidRoom = null;
 
-		return { cheapest, offerCount: offers.length, prime };
+		return { cheapest, offerCount: offers.length, prime, plaidRoom };
 	} catch {
 		return null;
 	}

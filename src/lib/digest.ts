@@ -81,26 +81,39 @@ function renderBadge(count: number): string {
 }
 
 /**
- * The "where to buy" block under a suggestion: the Amazon Prime option first
- * when one's available (in the title text color), followed by the cheapest
- * vinyl seller line (with a sellers badge). Returns "" when no pricing is
- * available.
+ * The "where to buy" block under a suggestion: preferred shops first, each in the
+ * prominent title text color — Amazon Prime, then Plaid Room Records — followed by
+ * the cheapest vinyl seller line in muted grey (with a sellers badge). Returns ""
+ * when no pricing is available.
  */
 function renderOffer(offer: SellerSummary | null): string {
 	if (!offer) return "";
-	const { cheapest, offerCount, prime } = offer;
+	const { cheapest, offerCount, prime, plaidRoom } = offer;
 
 	let html = "";
 
+	// Preferred shops, rendered in the dark title colour so they stand out.
+	const preferred: Array<{ label: string; url: string }> = [];
 	if (prime) {
-		const label = `Amazon Prime · ${formatCost(prime)}`;
-		html += `
-  <a href="${escapeHtml(prime.url)}" style="display:block;margin-top:2px;color:#111;text-decoration:none;font-size:13px">${label}</a>`;
+		preferred.push({
+			label: `Amazon Prime · ${formatCost(prime)}`,
+			url: prime.url,
+		});
 	}
+	if (plaidRoom) {
+		preferred.push({
+			label: `Plaid Room Records · ${formatCost(plaidRoom)}`,
+			url: plaidRoom.url,
+		});
+	}
+	preferred.forEach((line, i) => {
+		html += `
+  <a href="${escapeHtml(line.url)}" style="display:block;margin-top:${i === 0 ? "2px" : "1px"};color:#111;text-decoration:none;font-size:13px">${line.label}</a>`;
+	});
 
 	const main = `From ${formatCost(cheapest)} at ${escapeHtml(cheapest.seller)}`;
 	html += `
-  <a href="${escapeHtml(cheapest.url)}" style="display:block;margin-top:${prime ? "1px" : "2px"};color:#aaa;text-decoration:none;font-size:13px">${main}${renderBadge(offerCount)}</a>`;
+  <a href="${escapeHtml(cheapest.url)}" style="display:block;margin-top:${preferred.length ? "1px" : "2px"};color:#aaa;text-decoration:none;font-size:13px">${main}${renderBadge(offerCount)}</a>`;
 
 	return html;
 }
