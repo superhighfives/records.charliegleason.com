@@ -1693,20 +1693,10 @@ function RecordEditorHost() {
 		[navigate],
 	);
 
-	const { data: record } = useQuery({
-		...recordQueryOptions(recordId),
-		// Poll while anything's in flight so the editor's "Generating…" state stays live
-		// (mirrors the detail page's own poll).
-		refetchInterval: (query) => {
-			const r = query.state.data;
-			const active =
-				r?.status === "pending" ||
-				r?.status === "processing" ||
-				r?.professionalJobStatus === "queued" ||
-				r?.professionalJobStatus === "processing";
-			return active ? 2000 : false;
-		},
-	});
+	// No polling here — `RecordDetail` (always mounted alongside this host) already
+	// drives the `refetchInterval` for this key, and both share one query cache, so
+	// the editor's "Generating…" state stays live off the detail page's poll.
+	const { data: record } = useQuery(recordQueryOptions(recordId));
 
 	// Closing the editor drops `edit` from the URL (via `replace` so it doesn't add
 	// history), otherwise a refresh or back-nav to `?edit=true` would reopen it.
