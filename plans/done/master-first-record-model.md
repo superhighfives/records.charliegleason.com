@@ -1,11 +1,73 @@
 ---
 title: Master-first record model (release optional)
-status: In Progress
+status: Complete
 created: 2026-07-17
-updated: 2026-07-17
+updated: 2026-07-18
 ---
 
 # Master-first record model (release optional)
+
+## Overview
+**Shipped.** The Discogs **master** (the album as a work) is now the primary identity of a
+record; the specific **release** (pressing) is an optional per-record pin. In the editor you
+**search and pick a master first**, and a record is **publishable only when it has a
+`masterId`** — the old `confirmedRelease` checkbox is gone entirely, and "unmatched / needs
+review" now keys on a missing master rather than a missing release. Pinning a release is a
+later, optional step that sets the exact pressing and unlocks per-pressing Discogs valuation.
+
+For a future reader: "a record" means "an album" here. Everything album-level (artist, title,
+year, label, genre, cover, Pitchfork score) is sourced from the master; everything
+pressing-specific (catno, country, size, format, marketplace value) only exists once a release
+is pinned. Master-only records intentionally show **no** Discogs value ("pick a release to
+value").
+
+The operational rollout is complete: deployed, migrations `0013`/`0014` applied, the
+one-time identity reset run, and the collection re-curated (a master picked per record to
+republish). This unblocks **[[records-i-want-wishlist]]**, which reuses the master client
+helpers, the search-picks-a-master UX, and the master metadata handling established here.
+
+## Architecture
+How the pieces fit:
+
+- **Schema (`src/db/schema.ts`)** — added nullable `masterId` / `masterUrl` (the new primary
+  Discogs identity). `discogsId` / `discogsUrl` were **kept by name** but re-interpreted as
+  the *optional pinned release* (`discogsId != null` ⇒ a pressing is pinned — the state
+  `confirmedRelease` used to imply). `confirmedRelease` was dropped column-and-all. Keeping
+  the `discogsId` name (vs. renaming to `releaseId`) was deliberate to minimise churn across
+  `records.ts`, the public API, and the admin UI.
+- **Discogs client (`src/lib/discogs.ts`)** — candidate/detail types carry `masterId` /
+  `masterUrl`; added `getMasterDetail()`, `searchMasters()` + `getMasterCandidate()` /
+  `parseMasterId()` (paste path), and `getMasterVersions()` (a master's vinyl pressings).
+  `getReleaseValue()` stays release-scoped by design.
+- **Data flow** — capture (`analyzeCapture`) searches **masters**, sets album + cover from the
+  master's main release, and pins **no** pressing. Refresh (`refreshRecordById`) has three
+  branches: pinned release → release detail + value; master-only → album fields, no value;
+  neither → best-guess a master by cover-derived artist/title (gap-fill, never publish). The
+  editor sources its release pick-list from the linked master's versions.
+- **Publish gate** — `publishRecord` and bulk `publishRecords` require `masterId`; the
+  "unmatched" facet/badges re-key to a missing master.
+- **Admin UI** — the Confirmed/Unconfirmed facet, table badge, and detail-panel line became
+  Release-pinned/Album-only; the `confirmedRelease` checkbox was replaced by the
+  `MasterPicker` (primary) + optional release picker.
+- **Validation & public API** — `confirmedRelease` removed from the schemas and
+  `ADMIN_ONLY_FIELDS`; `masterId` is exposed publicly (harmless, enables album grouping
+  later), pinned-release value stays admin-only.
+
+**Honest deviations from the original approach:**
+- The plan started as "master *derived from* a release," then **pivoted (2026-07-17)** to
+  "master-first with a hard publish gate" — you curate the master directly and it gates
+  publishing. That pulled `searchMasters()` back into scope (it had been dropped as dead code
+  when the only reachable album-only state was un-pinning a release that already carried its
+  master) because the editor now needs to search masters from scratch.
+- **D1 (existing data on migration): non-destructive.** The considered "unpin never-vouched
+  rows + clear caches to preserve the review signal" path was rejected. Instead all existing
+  pins were kept and `confirmedRelease` simply retired. Note this differs from the separate
+  **one-time reset SQL** (`scripts/reset-discogs-identity.sql`) that *was* run to give the
+  collection a clean master-first slate — the reset is a deliberate curation restart, not the
+  migration's automatic behaviour.
+- The masterId backfill ended up needing **no bespoke script** — the existing throttled,
+  queue-backed refresh path fans a Discogs re-pull over the collection, so "select all →
+  Refresh" does it, rate-limit-respecting and resumable.
 
 ## Goal
 Make the Discogs **master** (the album as a work) the primary identity of a record, with
@@ -233,8 +295,8 @@ Increment 3 — album identifies, releases follow (shipped):
       candidates. Existing rows are untouched (their vision isn't re-run) — future captures
       only, per Charlie. Duplicate detection now matches master → release → name.
 
-Remaining (operational, not code):
-- [ ] **Deploy**, then run migrations `0013`/`0014`, then run the reset SQL `--remote`.
-- [ ] Re-curate: pick a master per record to republish. (No auto-backfill — masters are
+Operational rollout (complete):
+- [x] **Deploy**, then run migrations `0013`/`0014`, then run the reset SQL `--remote`.
+- [x] Re-curate: pick a master per record to republish. (No auto-backfill — masters are
       chosen by hand now, per the pivot.)
-- [ ] Verify in-app: master search/pick, publish gate, capture flow still pins+publishes.
+- [x] Verify in-app: master search/pick, publish gate, capture flow still pins+publishes.
