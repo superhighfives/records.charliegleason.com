@@ -62,7 +62,7 @@ function Home() {
 	}, [selectedId, selectedIndex]);
 
 	return (
-		<div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
+		<div className="w-full mx-auto max-w-5xl px-4 py-10 sm:px-6">
 			<header className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
 				<div className="flex items-center gap-4">
 					<a href="https://charliegleason.com" className="block shrink-0">
