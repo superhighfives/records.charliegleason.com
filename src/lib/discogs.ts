@@ -14,6 +14,8 @@ const USER_AGENT =
 
 export interface DiscogsCandidate {
 	discogsId: string;
+	masterId: string | null; // the master (album) this release belongs to, if any
+	masterUrl: string | null;
 	artist: string;
 	title: string;
 	year: number | null;
@@ -141,6 +143,8 @@ function splitTitle(combined: string): { artist: string; title: string } {
 /** Full release details, fetched on demand when a candidate is expanded. */
 export interface DiscogsReleaseDetail {
 	// Canonical metadata — used to refresh a stored record from its Discogs id.
+	masterId: string | null; // the master (album) this release belongs to, if any
+	masterUrl: string | null;
 	artist: string | null;
 	title: string | null;
 	year: number | null;
@@ -160,6 +164,25 @@ export interface DiscogsReleaseDetail {
 /** Strip Discogs' disambiguation suffix ("Wire (2)" → "Wire"). */
 function cleanArtistName(name: string): string {
 	return name.replace(/\s*\(\d+\)\s*$/, "").trim();
+}
+
+/**
+ * Pull the master (album) id + url out of a release payload (either a full
+ * `/releases/{id}` object or a `/database/search` result). Discogs uses
+ * `master_id: 0` (and an empty/absent `master_url`) to mean "this release has no
+ * master", so normalise those to null — a standalone release is album-less.
+ */
+function masterFields(source: { master_id?: unknown; master_url?: unknown }): {
+	masterId: string | null;
+	masterUrl: string | null;
+} {
+	const id = Number(source?.master_id);
+	const masterId = Number.isFinite(id) && id > 0 ? String(id) : null;
+	const url =
+		masterId && typeof source?.master_url === "string" && source.master_url
+			? source.master_url
+			: null;
+	return { masterId, masterUrl: url };
 }
 
 /**
@@ -205,6 +228,7 @@ export async function getReleaseDetail(
 	const yearNum = d.year ? Number.parseInt(String(d.year), 10) : null;
 
 	return {
+		...masterFields(d),
 		artist: d.artists_sort
 			? cleanArtistName(String(d.artists_sort))
 			: Array.isArray(d.artists) && d.artists[0]?.name
@@ -237,6 +261,83 @@ export async function getReleaseDetail(
 }
 
 /**
+ * A master (album) search hit — the album-level analogue of `DiscogsCandidate`,
+ * for the editor's "pick an album" flow. No pressing-specific fields (catno,
+ * country, size, format) — those only exist on a release.
+ */
+export interface DiscogsMasterCandidate {
+	masterId: string;
+	masterUrl: string | null;
+	artist: string;
+	title: string;
+	year: number | null;
+	genre: string | null;
+	thumb: string | null;
+}
+
+/**
+ * Album-level details for a Discogs master. Mirrors the album-level subset of a
+ * release (a master has no pressing-specific catno/country/size), plus the
+ * `mainReleaseId` — Discogs' canonical release for the album — and a cover image
+ * so a master-only record can still show artwork without pinning a pressing.
+ */
+export interface DiscogsMasterDetail {
+	masterId: string;
+	masterUrl: string | null;
+	mainReleaseId: string | null;
+	artist: string | null;
+	title: string | null;
+	year: number | null; // the album's original year
+	genre: string | null;
+	styles: Array<string>;
+	imageUrl: string | null; // primary image, full size
+}
+
+/**
+ * Fetch a Discogs master (the album as a work). Used to refresh / populate the
+ * album-level fields of a record that isn't pinned to a specific release. Returns
+ * null on any non-2xx (missing master, token trouble) so callers can fall back to
+ * whatever they already have.
+ */
+export async function getMasterDetail(
+	id: string,
+): Promise<DiscogsMasterDetail | null> {
+	const res = await discogsFetch(`${BASE}/masters/${id}`);
+	if (!res.ok) {
+		await res.body?.cancel().catch(() => {});
+		return null;
+	}
+	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs master JSON
+	const d = (await res.json()) as any;
+	const yearNum = d.year ? Number.parseInt(String(d.year), 10) : null;
+	const mainRelease = d.main_release != null ? String(d.main_release) : null;
+	const images: Array<{ type?: string; uri?: string }> = Array.isArray(d.images)
+		? d.images
+		: [];
+	const primary = images.find((i) => i.type === "primary") ?? images[0];
+	const uri = d.uri ? String(d.uri) : "";
+
+	return {
+		masterId: String(d.id ?? id),
+		masterUrl: uri
+			? uri.startsWith("http")
+				? uri
+				: `https://www.discogs.com${uri}`
+			: `https://www.discogs.com/master/${id}`,
+		mainReleaseId: mainRelease,
+		artist:
+			Array.isArray(d.artists) && d.artists[0]?.name
+				? cleanArtistName(String(d.artists[0].name))
+				: null,
+		title: d.title ? String(d.title) : null,
+		year: Number.isFinite(yearNum) ? yearNum : null,
+		genre: Array.isArray(d.genres) && d.genres[0] ? String(d.genres[0]) : null,
+		styles: Array.isArray(d.styles) ? d.styles.map(String) : [],
+		imageUrl: primary?.uri ?? null,
+	};
+}
+
+/**
  * Extract a Discogs release id from whatever the user pasted — a full release
  * URL (`https://www.discogs.com/release/30268103-Private-Life-Private-Life`),
  * a bare `/release/30268103` path, or just the numeric id. Returns null when
@@ -249,6 +350,107 @@ export function parseReleaseId(input: string): string | null {
 	// Match /release/<id> or /releases/<id>, ignoring the trailing slug.
 	const m = s.match(/\/releases?\/(\d+)/);
 	return m ? m[1] : null;
+}
+
+/**
+ * Extract a Discogs master id from a pasted master URL
+ * (`https://www.discogs.com/master/12345-Some-Album`), a bare `/master/12345`
+ * path, or just the numeric id. Returns null for anything that isn't a master
+ * reference (a release URL won't match — use `parseReleaseId` for those).
+ */
+export function parseMasterId(input: string): string | null {
+	const s = input.trim();
+	if (!s) return null;
+	if (/^\d+$/.test(s)) return s;
+	const m = s.match(/\/masters?\/(\d+)/);
+	return m ? m[1] : null;
+}
+
+/**
+ * Fetch a master and shape it into a `DiscogsMasterCandidate` so a pasted master
+ * URL drops into the same pick-list as a search hit.
+ */
+export async function getMasterCandidate(
+	id: string,
+): Promise<DiscogsMasterCandidate | null> {
+	const master = await getMasterDetail(id);
+	if (!master) return null;
+	return {
+		masterId: master.masterId,
+		masterUrl: master.masterUrl,
+		artist: master.artist ?? "",
+		title: master.title ?? "",
+		year: master.year,
+		genre: master.genre,
+		thumb: master.imageUrl,
+	};
+}
+
+/** Is a Discogs versions row a vinyl pressing? Checks `major_formats` first. */
+// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs versions JSON
+function isVinylVersion(v: any): boolean {
+	const majors = Array.isArray(v?.major_formats)
+		? v.major_formats.map((s: unknown) => String(s))
+		: [];
+	if (majors.length) return majors.some((f: string) => /vinyl/i.test(f));
+	// Fall back to the free-text format line when major_formats is absent.
+	return /vinyl|LP\b/i.test(String(v?.format ?? ""));
+}
+
+/**
+ * List a master's releases (pressings) as `DiscogsCandidate`s so the editor can
+ * offer "pick a specific pressing" once an album is chosen — vinyl only, since
+ * that's the collection. The versions endpoint carries per-pressing fields but not
+ * the artist/genre, so those come from the master (one extra fetch, cached). Each
+ * candidate's `masterId` is the parent master. Returns [] on any failure.
+ */
+export async function getMasterVersions(
+	masterId: string,
+	limit: number = MAX_PER_PAGE,
+): Promise<Array<DiscogsCandidate>> {
+	const perPage = Math.min(Math.max(limit, DEFAULT_PER_PAGE), MAX_PER_PAGE);
+	// Album-level fields (artist/genre/url) live on the master, not the versions.
+	const master = await getMasterDetail(masterId).catch(() => null);
+	const res = await discogsFetch(
+		`${BASE}/masters/${masterId}/versions?per_page=${perPage}`,
+	);
+	if (!res.ok) {
+		await res.body?.cancel().catch(() => {});
+		return [];
+	}
+	const data = (await res.json()) as {
+		versions?: Array<Record<string, unknown>>;
+	};
+	return (data.versions ?? [])
+		.filter(isVinylVersion)
+		.map((v) => {
+			const formatLine = v.format ? String(v.format) : "";
+			const { size, type } = parseSizeAndType(formatLine);
+			// Versions carry `released` (a year or full date) and sometimes `year`.
+			const rawYear = v.released ?? v.year;
+			const yearNum = rawYear
+				? Number.parseInt(String(rawYear).slice(0, 4), 10)
+				: null;
+			return {
+				discogsId: String(v.id ?? ""),
+				masterId,
+				masterUrl: master?.masterUrl ?? null,
+				artist: master?.artist ?? "",
+				title: v.title ? String(v.title) : (master?.title ?? ""),
+				year: Number.isFinite(yearNum) ? yearNum : null,
+				label: v.label ? String(v.label) : null,
+				genre: master?.genre ?? null,
+				format: formatLine || (isVinylVersion(v) ? "Vinyl" : null),
+				size,
+				type,
+				country: v.country ? String(v.country) : null,
+				catno: cleanCatno(v.catno),
+				discogsUrl: `https://www.discogs.com/release/${v.id}`,
+				thumb: v.thumb ? String(v.thumb) : null,
+			} satisfies DiscogsCandidate;
+		})
+		.filter((c) => c.discogsId !== "")
+		.slice(0, limit);
 }
 
 /**
@@ -280,6 +482,7 @@ export async function getReleaseCandidate(
 
 	return {
 		discogsId: String(d.id ?? id),
+		...masterFields(d),
 		artist: d.artists_sort
 			? cleanArtistName(String(d.artists_sort))
 			: Array.isArray(d.artists) && d.artists[0]?.name
@@ -583,6 +786,7 @@ export async function searchReleases(
 		const { size, type } = parseSizeAndType(formatArr);
 		return {
 			discogsId: String(r.id ?? ""),
+			...masterFields(r),
 			artist: parts.artist,
 			title: parts.title,
 			year: Number.isFinite(yearNum) ? yearNum : null,
@@ -603,4 +807,65 @@ export async function searchReleases(
 	const vinyl = candidates.filter(isVinyl);
 	const rest = candidates.filter((c) => !isVinyl(c));
 	return [...vinyl, ...rest].slice(0, limit);
+}
+
+/**
+ * Build the Discogs `/database/search` URL for *masters* (albums). Unlike the
+ * release search there's no country/format/vinyl axis — a master is the album as a
+ * work — so only artist / title / year / free-text `q` apply. Pure + exported for
+ * testing.
+ */
+export function buildMasterSearchUrl(
+	{ artist, title, year, q }: SearchParams,
+	perPage: number = DEFAULT_PER_PAGE,
+): URL {
+	const url = new URL(`${BASE}/database/search`);
+	url.searchParams.set("type", "master");
+	const [a, t, y, query] = [artist, title, year, q ?? ""].map((s) => s.trim());
+	if (a) url.searchParams.set("artist", a);
+	if (t) url.searchParams.set("title", t);
+	if (/^\d{4}$/.test(y)) url.searchParams.set("year", y);
+	if (query) url.searchParams.set("q", query);
+	url.searchParams.set("per_page", String(perPage));
+	return url;
+}
+
+/**
+ * Search Discogs for master (album) candidates — the editor's "pick an album"
+ * flow. Relevance-ordered; a single page is fetched, so at most `MAX_PER_PAGE`
+ * come back. Throws on a non-2xx (bad token / rate limit / 5xx) like
+ * `searchReleases`, so the caller can surface *why* rather than showing an empty
+ * list.
+ */
+export async function searchMasters(
+	params: SearchParams,
+	limit: number = MAX_CANDIDATES,
+): Promise<Array<DiscogsMasterCandidate>> {
+	const perPage = Math.min(Math.max(limit, DEFAULT_PER_PAGE), MAX_PER_PAGE);
+	const res = await discogsFetch(buildMasterSearchUrl(params, perPage));
+	if (!res.ok) throw await discogsError(res, "master search");
+
+	const data = (await res.json()) as {
+		results?: Array<Record<string, unknown>>;
+	};
+	return (data.results ?? [])
+		.map((r) => {
+			const parts = splitTitle(String(r.title ?? ""));
+			const yearNum = r.year ? Number.parseInt(String(r.year), 10) : null;
+			// A master result's own id is the master id; `master_id`/`master_url` may
+			// also be present and equal, so prefer the explicit field then fall back.
+			const { masterId, masterUrl } = masterFields(r);
+			return {
+				masterId: masterId ?? String(r.id ?? ""),
+				masterUrl:
+					masterUrl ?? (r.uri ? `https://www.discogs.com${r.uri}` : null),
+				artist: parts.artist,
+				title: parts.title,
+				year: Number.isFinite(yearNum) ? yearNum : null,
+				genre: Array.isArray(r.genre) ? String(r.genre[0]) : null,
+				thumb: r.thumb ? String(r.thumb) : null,
+			} satisfies DiscogsMasterCandidate;
+		})
+		.filter((c) => c.masterId !== "")
+		.slice(0, limit);
 }

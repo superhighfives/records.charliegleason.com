@@ -1,7 +1,6 @@
 import { useForm } from "@tanstack/react-form";
 
 import { Button } from "#/components/ui/button";
-import { Checkbox } from "#/components/ui/checkbox";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
@@ -87,32 +86,6 @@ export function RecordForm({
 					)}
 				</form.Field>
 			))}
-
-			<form.Field name="confirmedRelease">
-				{(field) => (
-					// `items-start` + the checkbox's top nudge keep the box aligned with the
-					// first line when the label wraps on narrow screens. The Label is forced
-					// back to `block` (its base is `flex`, which would split the heading and
-					// the description into two columns that each wrap awkwardly on mobile) so
-					// the text flows and wraps as one natural run instead.
-					<div className="flex items-start gap-2">
-						<Checkbox
-							id={field.name}
-							name={field.name}
-							checked={field.state.value}
-							onBlur={field.handleBlur}
-							onChange={(e) => field.handleChange(e.target.checked)}
-							className="mt-0.5"
-						/>
-						<Label htmlFor={field.name} className="block leading-snug">
-							Confirmed release
-							<span className="ml-1 font-normal text-muted-foreground">
-								— this is the correct Discogs match
-							</span>
-						</Label>
-					</div>
-				)}
-			</form.Field>
 
 			<form.Field name="notes">
 				{(field) => (

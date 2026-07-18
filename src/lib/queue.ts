@@ -6,7 +6,12 @@ import { getDb } from "#/db";
 import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
-import { getReleaseDetail, getReleaseValue } from "#/lib/discogs";
+import {
+	getMasterDetail,
+	getReleaseDetail,
+	getReleaseValue,
+	searchMasters,
+} from "#/lib/discogs";
 import { generateProfessionalPhoto } from "#/lib/professional-pipeline";
 
 /**
@@ -63,12 +68,15 @@ export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
 }
 
 /**
- * Re-pull an already-identified record from its stored Discogs release id and
- * update the enrichment fields (year, label, genre, format, size, catno,
- * country) plus a fresh value estimate. Only overwrites a field when Discogs
- * returns a value, so it never nulls out good data. Leaves artist/title/status
- * alone — identity was confirmed at publish. Returns the updated row, or null if
- * the record is gone or has no Discogs id. Shared by the sync `refreshRecord`
+ * Re-pull a record from Discogs. Three paths by what's set:
+ *  - pinned release → refresh enrichment (year, label, genre, format, size, catno,
+ *    country) + a fresh value, and backfill the master link;
+ *  - album-only (master, no release) → refresh album-level fields from the master;
+ *  - neither → guess a master from the record's artist/title (the cover metadata).
+ * Only overwrites a field when Discogs returns a value, so it never nulls good
+ * data; a guess only sets the album identity and never publishes. Leaves
+ * artist/title/status alone. Returns the updated row, or null if the record is
+ * gone or there's nothing to refresh/guess from. Shared by the sync `refreshRecord`
  * server fn and the bulk queue.
  */
 export async function refreshRecordById(id: number): Promise<Record | null> {
@@ -78,31 +86,92 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 		.from(records)
 		.where(eq(records.id, id))
 		.limit(1);
-	if (!record?.discogsId) return null;
+	if (!record) return null;
 
-	const detail = await getReleaseDetail(record.discogsId);
-	if (!detail) return record;
+	// Pinned to a specific release → refresh the full release detail + value, and
+	// backfill the master link while we're here (helps older rows gain their master).
+	if (record.discogsId) {
+		const detail = await getReleaseDetail(record.discogsId);
+		if (!detail) return record;
 
-	// Value is best-effort — a missing/failed price lookup shouldn't block the
-	// metadata refresh, so fetch it separately and keep the previous figure on miss.
-	const value = await getReleaseValue(record.discogsId).catch(() => null);
+		// Value is best-effort — a missing/failed price lookup shouldn't block the
+		// metadata refresh, so fetch it separately and keep the previous figure on miss.
+		const value = await getReleaseValue(record.discogsId).catch(() => null);
 
-	const [row] = await db
-		.update(records)
-		.set({
-			year: detail.year ?? record.year,
-			label: detail.label ?? record.label,
-			genre: detail.genre ?? record.genre,
-			format: detail.type ?? record.format,
-			size: detail.size ?? record.size,
-			catno: detail.catno ?? record.catno,
-			country: detail.country ?? record.country,
-			...valueColumns(value),
-			updatedAt: new Date(),
-		})
-		.where(eq(records.id, id))
-		.returning();
-	return row ?? record;
+		const [row] = await db
+			.update(records)
+			.set({
+				masterId: detail.masterId ?? record.masterId,
+				masterUrl: detail.masterUrl ?? record.masterUrl,
+				year: detail.year ?? record.year,
+				label: detail.label ?? record.label,
+				genre: detail.genre ?? record.genre,
+				format: detail.type ?? record.format,
+				size: detail.size ?? record.size,
+				catno: detail.catno ?? record.catno,
+				country: detail.country ?? record.country,
+				...valueColumns(value),
+				updatedAt: new Date(),
+			})
+			.where(eq(records.id, id))
+			.returning();
+		return row ?? record;
+	}
+
+	// Album-only → refresh the album-level fields from the master. No pressing-specific
+	// fields (catno/country/size/format) and no value — those need a pinned release.
+	if (record.masterId) {
+		const master = await getMasterDetail(record.masterId);
+		if (!master) return record;
+
+		const [row] = await db
+			.update(records)
+			.set({
+				year: master.year ?? record.year,
+				genre: master.genre ?? record.genre,
+				updatedAt: new Date(),
+			})
+			.where(eq(records.id, id))
+			.returning();
+		return row ?? record;
+	}
+
+	// Neither a release nor a master yet → guess the album (master) from the
+	// artist/title read off the cover, so a bulk Refresh seeds best-guess masters
+	// for the collector to confirm. A guess only sets the album identity (and fills
+	// empty year/genre) — it never publishes; the record stays in review until the
+	// collector vouches for it. Needs at least an artist or title to search on.
+	if (record.artist || record.title) {
+		const hits = await searchMasters(
+			{
+				artist: record.artist,
+				title: record.title,
+				country: "",
+				year: "",
+				q: "",
+			},
+			5,
+		).catch(() => []);
+		const best = hits[0];
+		if (!best) return record;
+
+		const [row] = await db
+			.update(records)
+			.set({
+				masterId: best.masterId,
+				masterUrl: best.masterUrl,
+				// Gap-fill only — never overwrite curated values with a guess.
+				year: record.year ?? best.year,
+				genre: record.genre ?? best.genre,
+				updatedAt: new Date(),
+			})
+			.where(eq(records.id, id))
+			.returning();
+		return row ?? record;
+	}
+
+	// Nothing to refresh or guess from (no Discogs link and no artist/title).
+	return null;
 }
 
 /**
@@ -241,11 +310,11 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 
 		const result = await analyzeCapture(record);
 
-		if (!result.discogsId) {
-			// Identified the sleeve but couldn't attach a Discogs release — either a
-			// genuine gap in Discogs or a transient failure that outlived the fetch
+		if (!result.masterId) {
+			// Identified the sleeve but couldn't attach a Discogs album (master) —
+			// either a genuine gap in Discogs or a transient failure that outlived the
 			// retries. Surface it so "Unmatched" records are observable rather than
-			// silently landing in review with no release linked. A stable fingerprint
+			// silently landing in review with no album linked. A stable fingerprint
 			// rolls every unmatched record into a single issue instead of spawning a
 			// fresh one per record; the specifics ride along as per-event context.
 			Sentry.withScope((scope) => {
@@ -256,18 +325,19 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 					artist: result.artist,
 					title: result.title,
 				});
-				Sentry.captureMessage("[analyze] no Discogs match for record");
+				Sentry.captureMessage("[analyze] no Discogs album match for record");
 			});
 		}
 
-		// Flag the record if the collection already holds this release. Compared
+		// Flag the record if the collection already holds this album. Compared
 		// against every other row (the capture itself is excluded by id), matching
-		// on Discogs id first, then on normalized artist + title.
+		// on Discogs master first, then release, then normalized artist + title.
 		const others = await db
 			.select({
 				id: records.id,
 				artist: records.artist,
 				title: records.title,
+				masterId: records.masterId,
 				discogsId: records.discogsId,
 			})
 			.from(records)
@@ -276,6 +346,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			{
 				artist: result.artist,
 				title: result.title,
+				masterId: result.masterId,
 				discogsId: result.discogsId,
 			},
 			others,
@@ -295,6 +366,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				genre: result.genre,
 				pitchforkScore: result.pitchforkScore,
 				pitchforkUrl: result.pitchforkUrl,
+				masterId: result.masterId,
+				masterUrl: result.masterUrl,
 				discogsId: result.discogsId,
 				discogsUrl: result.discogsUrl,
 				coverImageKey: result.coverImageKey,

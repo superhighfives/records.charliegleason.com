@@ -92,6 +92,20 @@
       "when": 1784086595953,
       "tag": "0012_professional_job_status",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1784325566695,
+      "tag": "0013_robust_hellcat",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1784328691949,
+      "tag": "0014_quick_sunspot",
+      "breakpoints": true
     }
   ]
 }

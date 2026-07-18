@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+	buildMasterSearchUrl,
 	buildSearchUrl,
+	parseMasterId,
 	parseReleaseId,
 	parseSizeAndType,
 	pickSuggestedValue,
+	searchMasters,
 	searchReleases,
 } from "./discogs";
 
@@ -296,5 +299,126 @@ describe("parseSizeAndType", () => {
 		expect(parseSizeAndType(null)).toEqual({ size: null, type: null });
 		expect(parseSizeAndType("")).toEqual({ size: null, type: null });
 		expect(parseSizeAndType("Vinyl")).toEqual({ size: null, type: null });
+	});
+});
+
+describe("parseMasterId", () => {
+	it("pulls the id from a full master URL with a slug", () => {
+		expect(
+			parseMasterId("https://www.discogs.com/master/98765-Some-Album"),
+		).toBe("98765");
+	});
+
+	it("accepts bare /master/<id> and plural /masters/<id> paths", () => {
+		expect(parseMasterId("/master/98765")).toBe("98765");
+		expect(parseMasterId("/masters/98765")).toBe("98765");
+	});
+
+	it("accepts a bare numeric id, trimming whitespace", () => {
+		expect(parseMasterId("  98765  ")).toBe("98765");
+	});
+
+	it("returns null for non-master URLs and empty input", () => {
+		expect(parseMasterId("https://www.discogs.com/release/30268103")).toBe(
+			null,
+		);
+		expect(parseMasterId("https://www.discogs.com/artist/12345-Wire")).toBe(
+			null,
+		);
+		expect(parseMasterId("")).toBe(null);
+	});
+});
+
+describe("buildMasterSearchUrl", () => {
+	const params = (over: Partial<typeof noParams> = {}) => ({
+		...noParams,
+		...over,
+	});
+
+	it("sets type=master and maps artist/title to Discogs params", () => {
+		const url = buildMasterSearchUrl(params({ artist: "Wire", title: "154" }));
+		expect(url.searchParams.get("type")).toBe("master");
+		expect(url.searchParams.get("artist")).toBe("Wire");
+		expect(url.searchParams.get("title")).toBe("154");
+	});
+
+	it("includes a valid 4-digit year but drops junk, and trims", () => {
+		expect(
+			buildMasterSearchUrl(params({ year: "1979" })).searchParams.get("year"),
+		).toBe("1979");
+		expect(
+			buildMasterSearchUrl(params({ year: "79" })).searchParams.has("year"),
+		).toBe(false);
+		expect(
+			buildMasterSearchUrl(params({ artist: "  Wire  " })).searchParams.get(
+				"artist",
+			),
+		).toBe("Wire");
+	});
+
+	it("omits empty fields and requests a page size", () => {
+		const url = buildMasterSearchUrl(params({ artist: "Wire" }));
+		expect(url.searchParams.has("title")).toBe(false);
+		expect(url.searchParams.get("per_page")).toBe("25");
+	});
+});
+
+describe("searchMasters", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const respond = (init: ResponseInit, body: unknown = {}) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify(body), init)),
+		);
+	};
+
+	it("returns [] for a genuine zero-match", async () => {
+		respond({ status: 200 }, { results: [] });
+		await expect(searchMasters(noParams)).resolves.toEqual([]);
+	});
+
+	it("shapes results, deriving masterId/masterUrl and splitting the title", async () => {
+		respond(
+			{ status: 200 },
+			{
+				results: [
+					{
+						id: 98765,
+						master_id: 98765,
+						master_url: "https://api.discogs.com/masters/98765",
+						title: "Wire - 154",
+						year: 1979,
+						genre: ["Electronic", "Rock"],
+						thumb: "https://img/thumb.jpg",
+						uri: "/master/98765-Wire-154",
+					},
+				],
+			},
+		);
+		const [m] = await searchMasters(noParams);
+		expect(m.masterId).toBe("98765");
+		expect(m.masterUrl).toBe("https://api.discogs.com/masters/98765");
+		expect(m.artist).toBe("Wire");
+		expect(m.title).toBe("154");
+		expect(m.year).toBe(1979);
+		expect(m.genre).toBe("Electronic");
+	});
+
+	it("falls back to the result id / uri when master_id is absent", async () => {
+		respond(
+			{ status: 200 },
+			{ results: [{ id: 42, title: "A - B", uri: "/master/42-A-B" }] },
+		);
+		const [m] = await searchMasters(noParams);
+		expect(m.masterId).toBe("42");
+		expect(m.masterUrl).toBe("https://www.discogs.com/master/42-A-B");
+	});
+
+	it("throws — not [] — on a 401 so a bad token surfaces", async () => {
+		respond({ status: 401 }, { message: "You must authenticate…" });
+		await expect(searchMasters(noParams)).rejects.toThrow(/DISCOGS_TOKEN/);
 	});
 });

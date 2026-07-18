@@ -15,7 +15,7 @@ const STYLES: Record2<Status, { label: string; className: string }> = {
 		className: "border-blue-500/40 text-blue-600 dark:text-blue-400",
 	},
 	review: {
-		label: "Needs review",
+		label: "Unpublished",
 		className: "border-purple-500/40 text-purple-600 dark:text-purple-400",
 	},
 	failed: {

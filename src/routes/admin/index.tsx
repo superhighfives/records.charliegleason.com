@@ -104,11 +104,13 @@ const FACET_GROUPS: Array<{
 	{
 		key: "match",
 		options: [
-			{ token: "matched", label: "Matched", test: (r) => r.discogsId != null },
+			// "Matched" now means the record has an album (master) — the identity that
+			// makes it publishable. A pinned release is a separate axis (below).
+			{ token: "matched", label: "Matched", test: (r) => r.masterId != null },
 			{
 				token: "unmatched",
 				label: "Unmatched",
-				test: (r) => r.discogsId == null,
+				test: (r) => r.masterId == null,
 			},
 		],
 	},
@@ -128,17 +130,17 @@ const FACET_GROUPS: Array<{
 		],
 	},
 	{
-		key: "confirm",
+		key: "release",
 		options: [
 			{
-				token: "confirmed",
-				label: "Confirmed",
-				test: (r) => r.confirmedRelease === true,
+				token: "pinned",
+				label: "Release pinned",
+				test: (r) => r.discogsId != null,
 			},
 			{
-				token: "unconfirmed",
-				label: "Unconfirmed",
-				test: (r) => r.confirmedRelease !== true,
+				token: "albumOnly",
+				label: "Album only",
+				test: (r) => r.discogsId == null,
 			},
 		],
 	},
@@ -174,13 +176,10 @@ const FACET_GROUPS: Array<{
 	},
 ];
 
-// Attention states that aren't clean opposites — simple on/off toggles.
+// Attention states that aren't clean opposites — simple on/off toggles. (There's
+// no "review" flag: the `review` status just means "unpublished" now, which the
+// Published/Unpublished filter already covers, and Unmatched flags the no-album case.)
 const FLAG_FACETS: FacetOption[] = [
-	{
-		token: "review",
-		label: "Needs review",
-		test: (r) => (r.status ?? "complete") === "review",
-	},
 	{ token: "failed", label: "Failed", test: (r) => r.status === "failed" },
 	{
 		token: "duplicate",
@@ -189,14 +188,10 @@ const FLAG_FACETS: FacetOption[] = [
 	},
 ];
 
-// Per-flag accent colours (needs review = purple, failed = red, duplicate = orange),
-// for both the active (filled) and idle (outlined) states.
+// Per-flag accent colours (failed = red, duplicate = orange), for both the active
+// (filled) and idle (outlined) states.
 const FLAG_COLORS: globalThis.Record<string, { active: string; idle: string }> =
 	{
-		review: {
-			active: "border-purple-600 bg-purple-600 text-white",
-			idle: "border-purple-500/40 text-purple-600 hover:bg-purple-500/10 dark:text-purple-400",
-		},
 		failed: {
 			active: "border-red-600 bg-red-600 text-white",
 			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
@@ -688,18 +683,23 @@ function AdminRecords() {
 				},
 			},
 			{
-				id: "confirmed",
-				header: "Confirmed",
+				id: "release",
+				header: "Release",
 				meta: { className: "hidden lg:table-cell" },
-				accessorFn: (row) => (row.confirmedRelease ? 1 : 0),
+				accessorFn: (row) => (row.discogsId ? 1 : 0),
 				cell: ({ row }) =>
-					row.original.confirmedRelease ? (
+					row.original.discogsId ? (
 						<BadgeCheck
 							className="size-4 text-brand-strong"
-							aria-label="Confirmed release"
+							aria-label="Pinned to a specific release"
 						/>
 					) : (
-						<span className="text-muted-foreground">—</span>
+						<span
+							className="text-muted-foreground"
+							title="Album only — no specific release pinned"
+						>
+							—
+						</span>
 					),
 			},
 			{
@@ -711,9 +711,12 @@ function AdminRecords() {
 						params={{ id: String(row.original.id) }}
 						className="inline-flex flex-wrap items-center gap-1"
 					>
-						<StatusBadge status={row.original.status} />
-						{row.original.status === "review" && !row.original.discogsId && (
+						{/* Unmatched (no album) supersedes the plain "Unpublished" status —
+						    show one or the other, not both. */}
+						{row.original.status === "review" && !row.original.masterId ? (
 							<UnmatchedBadge />
+						) : (
+							<StatusBadge status={row.original.status} />
 						)}
 						{row.original.duplicateOf != null &&
 							liveIds.has(row.original.duplicateOf) && <DuplicateBadge />}
@@ -1171,9 +1174,10 @@ function AdminRecords() {
 											{r.year ? ` · ${r.year}` : ""}
 										</p>
 										<div className="mt-1.5 flex flex-wrap items-center gap-1">
-											<StatusBadge status={r.status} />
-											{r.status === "review" && !r.discogsId && (
+											{r.status === "review" && !r.masterId ? (
 												<UnmatchedBadge />
+											) : (
+												<StatusBadge status={r.status} />
 											)}
 											{r.duplicateOf != null && <DuplicateBadge />}
 											{r.pitchforkScore != null && (
@@ -1264,7 +1268,7 @@ function AdminRecords() {
 			)}
 
 			{/* Quick-view drawer — the same panel the public site uses, in admin mode
-			    so it surfaces the private valuation + confirmed-release status. */}
+			    so it surfaces the private valuation + pinned-release status. */}
 			<Sheet
 				open={previewRecord != null}
 				onOpenChange={(open) => {
