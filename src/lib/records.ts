@@ -60,6 +60,16 @@ import {
  */
 
 /**
+ * Coerce a maybe-blank string to null. A `""` Discogs id is non-null in SQLite —
+ * it would slip past `IS NOT NULL` publish gating while reading as "missing" in
+ * JS — so trim and null blanks before they persist.
+ */
+function blankToNull(v: string | null | undefined): string | null {
+	const t = v?.trim();
+	return t ? t : null;
+}
+
+/**
  * Fields never sent to the public homepage / API. The iPhone capture is
  * admin-only, and so is everything to do with valuation — the collector's
  * manual/confirmed value and the Discogs price guess are private.
@@ -131,10 +141,13 @@ export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
 	Sentry.startSpan({ name: "listPublicRecords" }, async () => {
 		const db = getDb(env.DB);
+		// Public = published AND has an album (master). The master requirement is
+		// defence-in-depth for the publish gate: even if a row slipped to `complete`
+		// without one, it never surfaces publicly without an album identity.
 		const rows = await db
 			.select()
 			.from(records)
-			.where(eq(records.status, "complete"))
+			.where(and(eq(records.status, "complete"), isNotNull(records.masterId)))
 			.orderBy(desc(records.createdAt));
 		return rows.map(toPublicRecord);
 	}),
@@ -322,8 +335,10 @@ export const createRecord = createServerFn({ method: "POST" })
 					coverImageKey,
 					coverIsUpload,
 					source: source ?? "manual",
-					// Manually entered / imported records are ready to show immediately.
-					status: "complete",
+					// A record is only publishable once it has an album (master) — mirror
+					// the publishRecord gate so a manual entry without one lands as a draft
+					// rather than straight onto the public homepage.
+					status: rest.masterId ? "complete" : "review",
 				})
 				.returning();
 			return row;
@@ -470,10 +485,12 @@ export const publishRecord = createServerFn({ method: "POST" })
 		}) => ({
 			id: input.id,
 			data: recordInputSchema.parse(input.data),
-			masterId: input.masterId ?? null,
-			masterUrl: input.masterUrl ?? null,
-			discogsId: input.discogsId ?? null,
-			discogsUrl: input.discogsUrl ?? null,
+			// Coerce blanks to null: a `""` masterId is non-null in SQLite and would
+			// slip past the `IS NOT NULL` publish gate while reading as "missing" in JS.
+			masterId: blankToNull(input.masterId),
+			masterUrl: blankToNull(input.masterUrl),
+			discogsId: blankToNull(input.discogsId),
+			discogsUrl: blankToNull(input.discogsUrl),
 			// Only accept keys minted by the cover pipeline. Without this an override
 			// could point the public cover at an admin-only `captures/...` object (or
 			// any other R2 key) and leak it.
@@ -1201,27 +1218,19 @@ export const refreshRecords = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "refreshRecords" }, async () => {
 			if (ids.length === 0) return { count: 0 };
 			const db = getDb(env.DB);
-			const matched: number[] = [];
+			// Every record has something to refresh or guess a master from (artist is
+			// NOT NULL), so enqueue all selected rows that still exist. The select just
+			// drops ids deleted between selection and now; the consumer no-ops on any
+			// row it can't act on.
+			const existing: number[] = [];
 			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
 				const rows = await db
 					.select({ id: records.id })
 					.from(records)
-					// Enqueue anything with a Discogs link (re-pull) or an artist/title to
-					// guess a master from. `artist` is NOT NULL, so this matches every row;
-					// the guard documents intent and future-proofs against blank imports.
-					.where(
-						and(
-							inArray(records.id, batch),
-							or(
-								isNotNull(records.discogsId),
-								isNotNull(records.masterId),
-								isNotNull(records.artist),
-							),
-						),
-					);
-				matched.push(...rows.map(({ id }) => id));
+					.where(inArray(records.id, batch));
+				existing.push(...rows.map(({ id }) => id));
 			}
-			await enqueueRefreshBatch(matched);
-			return { count: matched.length };
+			await enqueueRefreshBatch(existing);
+			return { count: existing.length };
 		}),
 	);

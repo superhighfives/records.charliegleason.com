@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { createFileRoute } from "@tanstack/react-router";
 import { json } from "@tanstack/react-start";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
@@ -18,10 +18,14 @@ export const Route = createFileRoute("/api/records")({
 		handlers: {
 			GET: async () => {
 				const db = getDb(env.DB);
+				// Public = published AND has an album (master) — mirrors listPublicRecords
+				// so the JSON API never surfaces a record without an album identity.
 				const rows = await db
 					.select()
 					.from(records)
-					.where(eq(records.status, "complete"))
+					.where(
+						and(eq(records.status, "complete"), isNotNull(records.masterId)),
+					)
 					.orderBy(desc(records.createdAt));
 
 				// The iPhone capture, valuation fields, and the internal professional-

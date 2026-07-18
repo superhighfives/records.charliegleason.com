@@ -26,6 +26,20 @@ export const recordInputSchema = z.object({
 export type RecordInput = z.infer<typeof recordInputSchema>;
 
 /**
+ * A nullable identifier that coerces blanks to null. Empty/whitespace strings are
+ * dangerous for the Discogs ids: `""` is *non-null* in SQLite, so it would slip
+ * past `IS NOT NULL` publish gating while reading as "missing" in JS. Trim and null
+ * blanks so DB state stays consistent.
+ */
+export const nullableId = z
+	.string()
+	.nullish()
+	.transform((v) => {
+		const t = v?.trim();
+		return t ? t : null;
+	});
+
+/**
  * Create-time schema: the editable fields plus AI/enrichment fields the photo
  * flow carries through (Discogs ids, Pitchfork url, R2 key, provenance). Kept
  * separate from `recordInputSchema` so the edit form — which only knows the
@@ -33,11 +47,11 @@ export type RecordInput = z.infer<typeof recordInputSchema>;
  */
 export const recordCreateSchema = recordInputSchema.extend({
 	// `masterId` is the album (primary Discogs identity); `discogsId` the optional
-	// pinned release (pressing).
-	masterId: z.string().nullish(),
-	masterUrl: z.string().nullish(),
-	discogsId: z.string().nullish(),
-	discogsUrl: z.string().nullish(),
+	// pinned release (pressing). Coerced so a blank never persists as `""`.
+	masterId: nullableId,
+	masterUrl: nullableId,
+	discogsId: nullableId,
+	discogsUrl: nullableId,
 	pitchforkUrl: z.string().nullish(),
 	coverImageKey: z.string().nullish(),
 	capturePhotoKey: z.string().nullish(),
