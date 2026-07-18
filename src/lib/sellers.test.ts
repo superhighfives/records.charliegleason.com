@@ -4,8 +4,10 @@ import {
 	findCheapestVinyl,
 	isVinylTitle,
 	matchesAlbum,
+	parsePlaidRoomPrice,
 	parseShipping,
 	toOffers,
+	toPlaidRoomOffers,
 } from "./sellers";
 
 describe("parseShipping", () => {
@@ -209,6 +211,111 @@ describe("toOffers", () => {
 		);
 		expect(offer.url).toBe("https://shop.example/item");
 		expect(offer.seller).toBe("Unknown seller");
+	});
+});
+
+describe("parsePlaidRoomPrice", () => {
+	it("parses a formatted money string", () => {
+		expect(parsePlaidRoomPrice("$25.00")).toBe(25);
+		expect(parsePlaidRoomPrice("$1,234.50")).toBe(1234.5);
+		expect(parsePlaidRoomPrice("27.99")).toBe(27.99);
+	});
+
+	it("passes a plausible dollar number through unchanged", () => {
+		expect(parsePlaidRoomPrice(25)).toBe(25);
+		expect(parsePlaidRoomPrice(27.99)).toBe(27.99);
+	});
+
+	it("reads a four-figure integer as cents (Shopify sometimes reports cents)", () => {
+		expect(parsePlaidRoomPrice(2500)).toBe(25);
+		expect(parsePlaidRoomPrice(3499)).toBe(34.99);
+	});
+
+	it("returns null for a missing, zero, or unparseable price", () => {
+		expect(parsePlaidRoomPrice(undefined)).toBeNull();
+		expect(parsePlaidRoomPrice(0)).toBeNull();
+		expect(parsePlaidRoomPrice("")).toBeNull();
+		expect(parsePlaidRoomPrice("Sold out")).toBeNull();
+	});
+});
+
+describe("toPlaidRoomOffers", () => {
+	it("keeps in-stock vinyl pressings of the searched album, cheapest first", () => {
+		const offers = toPlaidRoomOffers(
+			[
+				{
+					title: "The Tallest Man on Earth - Colors",
+					url: "/products/colors?_pos=1",
+					price: "$28.00",
+					available: true,
+				},
+				{
+					title: "The Tallest Man on Earth - Colors (Indie Exclusive)",
+					url: "/products/colors-indie",
+					price: 2500,
+					available: true,
+				},
+			],
+			"The Tallest Man on Earth",
+			"Colors",
+		);
+		expect(offers.map((o) => o.itemPrice)).toEqual([25, 28]);
+		expect(offers[0].seller).toBe("Plaid Room Records");
+		expect(offers[0].url).toBe(
+			"https://www.plaidroomrecords.com/products/colors-indie",
+		);
+		// Shipping is never stated by predictive search.
+		expect(offers[0].shippingPrice).toBeNull();
+		expect(offers[0].freeShipping).toBe(false);
+	});
+
+	it("leaves an already-absolute url untouched", () => {
+		const [offer] = toPlaidRoomOffers(
+			[
+				{
+					title: "Someone - Zed",
+					url: "https://www.plaidroomrecords.com/products/zed",
+					price: 20,
+				},
+			],
+			"Someone",
+			"Zed",
+		);
+		expect(offer.url).toBe("https://www.plaidroomrecords.com/products/zed");
+	});
+
+	it("drops the wrong album, wrong format, sold-out, and priceless rows", () => {
+		const offers = toPlaidRoomOffers(
+			[
+				{
+					title: "Someone - Other Record",
+					url: "/products/other",
+					price: 20,
+				},
+				{ title: "Someone - Zed (CD)", url: "/products/zed-cd", price: 12 },
+				{
+					title: "Someone - Zed",
+					url: "/products/zed-oos",
+					price: 20,
+					available: false,
+				},
+				{ title: "Someone - Zed", url: "/products/zed-noprice" },
+				{ title: "Someone - Zed", url: "/products/zed", price: "$20.00" },
+			],
+			"Someone",
+			"Zed",
+		);
+		expect(offers).toHaveLength(1);
+		expect(offers[0].url).toBe("https://www.plaidroomrecords.com/products/zed");
+	});
+
+	it("requires the artist to match, not just the album word", () => {
+		const offers = toPlaidRoomOffers(
+			[{ title: "Another Band - Colors", url: "/products/x", price: 20 }],
+			"The Tallest Man on Earth",
+			"Colors",
+		);
+		expect(offers).toHaveLength(0);
 	});
 });
 
