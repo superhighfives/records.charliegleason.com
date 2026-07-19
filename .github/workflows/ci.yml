@@ -30,6 +30,5 @@ jobs:
       - name: Test
         run: bun run test
 
-      # NOTE: `bunx biome check .` is intentionally omitted for now — the repo has
-      # pre-existing lint/format debt (mostly in src/components/storybook) that would
-      # make this gate red on day one. Add it here once that's cleared.
+      - name: Lint (Biome)
+        run: bunx biome ci .

@@ -31,7 +31,6 @@
     "shadcn",
     "table",
     "store",
-    "storybook",
     "tanstack-query"
   ]
 }
