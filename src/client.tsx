@@ -16,7 +16,11 @@ const isPreview = host.includes("records-preview");
 Sentry.init({
 	dsn: import.meta.env.VITE_SENTRY_DSN,
 	enabled: isProduction,
-	environment: isProduction ? "production" : isPreview ? "preview" : "development",
+	environment: isProduction
+		? "production"
+		: isPreview
+			? "preview"
+			: "development",
 	sendDefaultPii: true,
 	tracesSampleRate: 1.0,
 });

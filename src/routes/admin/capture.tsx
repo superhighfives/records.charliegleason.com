@@ -300,9 +300,7 @@ function Capture() {
 										type="button"
 										size="xs"
 										variant="outline"
-										className={cn(
-											active && "bg-accent text-accent-foreground",
-										)}
+										className={cn(active && "bg-accent text-accent-foreground")}
 										onClick={() => setContext((c) => togglePreset(c, preset))}
 									>
 										{preset}
