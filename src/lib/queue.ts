@@ -12,7 +12,10 @@ import {
 	getReleaseValue,
 	searchMasters,
 } from "#/lib/discogs";
-import { generateProfessionalPhoto } from "#/lib/professional-pipeline";
+import {
+	commitProfessionalMatte,
+	generateProfessionalCover,
+} from "#/lib/professional-pipeline";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -26,6 +29,36 @@ export type { AnalyzeMessage } from "#/lib/batching";
 /** `max_retries` from wrangler.jsonc — used only to label the row once retries run out. */
 const MAX_RETRIES = 3;
 
+/**
+ * Exponential backoff (15s, 30s, 60s) so a transient rate-limit / exhausted-AI-credit
+ * blip has room to clear before we retry, instead of burning all attempts in one window.
+ */
+function backoffSeconds(attempts: number): number {
+	return Math.min(60, 15 * 2 ** (attempts - 1));
+}
+
+/**
+ * Flag a professional (Apply) job failed on the row. Only `professionalJobStatus` flips —
+ * the display `professionalStatus` is preserved so an already-approved cover survives a
+ * failed regeneration. Shared by both Apply stages (cover + matte). Best-effort.
+ */
+async function markProfessionalFailed(
+	db: ReturnType<typeof getDb>,
+	recordId: number,
+	willRetry: boolean,
+	detail: string,
+): Promise<void> {
+	await db
+		.update(records)
+		.set({
+			professionalJobStatus: willRetry ? "queued" : "failed",
+			professionalError: detail,
+			updatedAt: new Date(),
+		})
+		.where(eq(records.id, recordId))
+		.catch(() => {});
+}
+
 /** Queue producer binding (typed loosely; the binding name lives in wrangler.jsonc). */
 function analyzeQueue(): Queue<AnalyzeMessage> {
 	return (env as unknown as { ANALYZE_QUEUE: Queue<AnalyzeMessage> })
@@ -37,9 +70,31 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId });
 }
 
-/** Enqueue a record for the paid Apply pipeline (reframe + enhance + AI matte). */
+/**
+ * Enqueue a record for the paid Apply pipeline. Kicks off stage 1 (reframe + enhance);
+ * that stage enqueues stage 2 (the AI matte) itself via {@link enqueueProfessionalMatte},
+ * so each memory-heavy step runs in its own isolate.
+ */
 export async function enqueueProfessional(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId, mode: "professional" });
+}
+
+/**
+ * Enqueue stage 2 of the Apply pipeline — the AI matte + final commit — carrying the
+ * cover key stage 1 produced so both swap in atomically. Called by the stage-1 consumer,
+ * not the UI.
+ */
+export async function enqueueProfessionalMatte(
+	recordId: number,
+	coverKey: string,
+	enhanced: boolean,
+): Promise<void> {
+	await analyzeQueue().send({
+		recordId,
+		mode: "professional-matte",
+		coverKey,
+		enhanced,
+	});
 }
 
 /**
@@ -241,10 +296,13 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
-	// The paid Apply pipeline — reframe + Real-ESRGAN enhance + AI matte. The
-	// display `professionalStatus` is left untouched while this runs (an already
-	// live cover stays live); only `professionalJobStatus` tracks the job so the
-	// header "in flight" menu and the editor can show progress.
+	// The paid Apply pipeline, stage 1 — reframe + Real-ESRGAN enhance (the cover).
+	// Runs the cover in its own isolate, then hands the cover key to stage 2 (the AI
+	// matte) via `enqueueProfessionalMatte` so the two memory-heavy Replicate steps
+	// never share a 128 MB isolate. The display `professionalStatus` is left untouched
+	// throughout (an already-live cover stays live); `professionalJobStatus` stays
+	// `processing` across both stages so the header "in flight" menu and the editor keep
+	// showing progress until stage 2 commits.
 	if (mode === "professional") {
 		try {
 			const [record] = await db
@@ -263,31 +321,60 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				return;
 			}
 
-			await generateProfessionalPhoto(record);
+			const { coverKey, enhanced } = await generateProfessionalCover(record);
+			await enqueueProfessionalMatte(recordId, coverKey, enhanced);
 			message.ack();
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
 			const willRetry = message.attempts <= MAX_RETRIES;
 			console.error(
-				`[queue] professional failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
+				`[queue] professional (cover) failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
 			);
 			Sentry.captureException(err);
-
-			// Only the job status flips to failed — the display `professionalStatus`
-			// is preserved so an approved cover survives a failed regeneration.
-			await db
-				.update(records)
-				.set({
-					professionalJobStatus: willRetry ? "queued" : "failed",
-					professionalError: detail,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, recordId))
-				.catch(() => {});
-
+			await markProfessionalFailed(db, recordId, willRetry, detail);
 			if (willRetry) {
-				const delaySeconds = Math.min(60, 15 * 2 ** (message.attempts - 1));
-				message.retry({ delaySeconds });
+				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
+			} else {
+				message.ack();
+			}
+		}
+		return;
+	}
+
+	// Stage 2 — the AI matte + the final atomic commit. Fresh isolate: the matte's
+	// full-resolution RGBA buffers start from a clean heap with none of stage 1's
+	// reframe/enhance residue. The cover key from stage 1 rides on the message so the
+	// new cover + matte swap in together (no public gap).
+	if (mode === "professional-matte") {
+		const { coverKey, enhanced } = message.body;
+		try {
+			const [record] = await db
+				.update(records)
+				.set({ professionalJobStatus: "processing", updatedAt: new Date() })
+				.where(eq(records.id, recordId))
+				.returning();
+
+			// Deleted between stages — bin the orphaned (never-committed) cover key.
+			if (!record) {
+				if (coverKey) await env.PHOTOS.delete(coverKey).catch(() => {});
+				message.ack();
+				return;
+			}
+			if (!coverKey)
+				throw new Error("professional-matte message missing coverKey");
+
+			await commitProfessionalMatte(record, coverKey, enhanced ?? false);
+			message.ack();
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			const willRetry = message.attempts <= MAX_RETRIES;
+			console.error(
+				`[queue] professional (matte) failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
+			);
+			Sentry.captureException(err);
+			await markProfessionalFailed(db, recordId, willRetry, detail);
+			if (willRetry) {
+				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
 			} else {
 				message.ack();
 			}

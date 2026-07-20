@@ -12,9 +12,18 @@
 export interface AnalyzeMessage {
 	recordId: number;
 	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls the
-	// Discogs release for an already-identified record; "professional" runs the paid
-	// photo pipeline (reframe + Real-ESRGAN enhance + AI matte) for an Apply.
-	mode?: "analyze" | "refresh" | "professional";
+	// Discogs release for an already-identified record. The paid Apply pipeline is
+	// split across two messages so each memory-heavy step gets its own fresh isolate
+	// (a single invocation running reframe+enhance+matte brushed the 128 MB ceiling
+	// and OOM'd): "professional" does the reframe + Real-ESRGAN enhance (the cover),
+	// then enqueues "professional-matte" for the AI matte + the final atomic commit.
+	mode?: "analyze" | "refresh" | "professional" | "professional-matte";
+	// Only set on "professional-matte": the cover key the "professional" stage
+	// produced, carried forward so the matte stage can swap in the new cover + matte
+	// together in one atomic DB write (no public gap during regeneration), and
+	// whether that cover came from the (enhanced) Real-ESRGAN pass.
+	coverKey?: string;
+	enhanced?: boolean;
 }
 
 /**

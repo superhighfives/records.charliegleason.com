@@ -9,29 +9,38 @@ import { parseReframeParams } from "#/lib/reframe-params";
 import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
 
 /**
- * The paid "Apply" pipeline, run in the queue consumer ({@link handleAnalyzeBatch}) so a
- * ~minute of GPU work doesn't block the request. From the record's stored corners + tone
- * (persisted by `reframeRecord` at enqueue time): reframe the square, then — sequentially —
- * Real-ESRGAN enhance it and generate the AI matte. On success it atomically swaps in the
- * new keys and sets `professionalStatus: "approved"` (so an already-live cover only changes
- * at the very end — no public gap during regeneration).
+ * The paid "Apply" pipeline, split across two queue messages so each memory-heavy step
+ * runs in its own invocation — {@link generateProfessionalCover} (reframe + Real-ESRGAN
+ * enhance), then {@link commitProfessionalMatte} (AI matte + the final commit). A single
+ * invocation doing all three stacked a reframe buffer, the enhance, and the matte's
+ * full-resolution RGBA buffers (~2000² warp + ESRGAN + 2400² matte warp) on one 128 MB
+ * isolate — enough to tip a marginal run into an uncatchable OOM that left the record
+ * stuck `processing` with no error (the runtime even shed the in-flight Replicate
+ * connections as it died — "Network connection lost."). Splitting means the matte, the
+ * real hog, starts from a clean heap with none of the reframe/enhance residue.
  *
- * The two steps run one after another (not `Promise.all`) on purpose: the matte path builds
- * a stack of full-resolution RGBA buffers (see `matte.ts` — the enhance + 2400² warp) that
- * alone brushes the Worker's 128 MB isolate ceiling, and it fires its own Real-ESRGAN +
- * ViTMatte calls. Running the enhance concurrently piled another paid job's buffers and a
- * third in-flight Replicate prediction on top — enough to tip a marginal run into an
- * uncatchable OOM that left the record stuck `processing` with no error. Serial trades a
- * little wall-clock (it's a background job) for a lower memory peak and at most one
- * Replicate call in flight. The matte buffers were further shrunk + freed early (and a
- * runaway raw-original capture is capped in `loadCapture`) to widen that margin.
+ * Atomicity is preserved across the split: the cover stage writes nothing to the
+ * record's display fields — it hands its new cover key to the matte stage via the queue
+ * message, and the matte stage swaps in the new cover *and* matte in one DB write. So an
+ * already-live cover only changes at the very end, exactly as before — no public gap
+ * during regeneration, even though two isolates are now involved.
  *
- * Throws only if the record has no capture or the (free) reframe itself fails; the enhance
- * and matte are best-effort, so a Replicate hiccup degrades to a plain reframe / no matte
- * rather than failing the whole job. Kept out of `records.ts` to avoid an import cycle with
- * the queue (records → queue → this module).
+ * Both Replicate steps stay best-effort: an enhance hiccup degrades to a plain reframe,
+ * and a matte hiccup falls back (AI → deterministic, and a total matte failure preserves
+ * the existing matte and flags the job `failed` rather than binning a good one). Kept out
+ * of `records.ts` to avoid an import cycle with the queue (records → queue → this module).
  */
-export async function generateProfessionalPhoto(record: Record): Promise<void> {
+
+/**
+ * Stage 1 — the cover. Reframe the square from the record's stored corners + tone, then
+ * (best-effort) Real-ESRGAN enhance it. Returns the winning cover key and whether it was
+ * enhanced; writes nothing to the DB (the matte stage commits). The reframe is cheap and
+ * the enhance streams through the Images binding (no big in-JS RGBA), so this stage's
+ * memory footprint is modest — the heavy work is deferred to {@link commitProfessionalMatte}.
+ */
+export async function generateProfessionalCover(
+	record: Record,
+): Promise<{ coverKey: string; enhanced: boolean }> {
 	if (!record.capturePhotoKey) {
 		throw new Error("This record has no capture photo to generate from.");
 	}
@@ -44,14 +53,36 @@ export async function generateProfessionalPhoto(record: Record): Promise<void> {
 		band,
 		params,
 	);
-	// Enhance first, then matte — never both at once (see the note above). Each stays
-	// best-effort: a Replicate hiccup degrades to a plain reframe / preserved matte.
+	// Enhance is best-effort: a Replicate hiccup degrades to the plain reframe.
 	const enhancedKey = await upscaleProfessional(baseKey)
 		.then((r) => r.key)
 		.catch((err) => {
 			console.error(`[pro] enhance failed for record ${record.id}`, err);
 			return null;
 		});
+	// When the enhance succeeds, the base reframe was only a staging step — bin it.
+	if (enhancedKey) await env.PHOTOS.delete(baseKey).catch(() => {});
+	return { coverKey: enhancedKey ?? baseKey, enhanced: enhancedKey != null };
+}
+
+/**
+ * Stage 2 — the AI matte and the final atomic commit. Generates the matte from the
+ * record's capture + corners + tone, then swaps in the (stage-1) `coverKey` alongside the
+ * new matte keys in a single DB write, promoting the professional photo to live. Bins the
+ * superseded cover + matte from R2. `enhanced` records whether `coverKey` came from the
+ * Real-ESRGAN pass (persisted as `professionalEnhanced`).
+ */
+export async function commitProfessionalMatte(
+	record: Record,
+	coverKey: string,
+	enhanced: boolean,
+): Promise<void> {
+	if (!record.capturePhotoKey) {
+		throw new Error("This record has no capture photo to generate from.");
+	}
+	const band = parseCornerBand(record.sleeveCornersJson);
+	const params = parseReframeParams(record.professionalParamsJson);
+
 	let matteError: unknown = null;
 	const matte = await generateMatteFromCapture(
 		record.capturePhotoKey,
@@ -63,9 +94,6 @@ export async function generateProfessionalPhoto(record: Record): Promise<void> {
 		matteError = err;
 		return null;
 	});
-	// When the enhance succeeds, the base reframe was only a staging step — bin it.
-	const professionalImageKey = enhancedKey ?? baseKey;
-	if (enhancedKey) await env.PHOTOS.delete(baseKey).catch(() => {});
 
 	// A matte failure must NOT wipe a matte we already had. `generateMatte` already
 	// falls back from the AI path to the deterministic one internally, so reaching
@@ -91,12 +119,12 @@ export async function generateProfessionalPhoto(record: Record): Promise<void> {
 			// Re-persist the band so a normalised form is stored even on a first crop
 			// (and legacy single-quad rows upgrade to the band shape on their next Apply).
 			sleeveCornersJson: serializeCornerBand(band),
-			professionalImageKey,
+			professionalImageKey: coverKey,
 			professionalParamsJson: JSON.stringify(params),
 			professionalAlphaKey: shadowKey,
 			professionalAlphaCutoutKey: cutoutKey,
 			professionalAlphaSource: alphaSource,
-			professionalEnhanced: enhancedKey != null,
+			professionalEnhanced: enhanced,
 			// Apply promotes the (new) cover to live regardless — the matte is best-effort.
 			professionalStatus: "approved",
 			professionalJobStatus: matteFailed ? "failed" : "idle",
@@ -109,12 +137,9 @@ export async function generateProfessionalPhoto(record: Record): Promise<void> {
 
 	// Bin the superseded professional image + matte so re-applies don't accumulate
 	// orphaned R2 objects — but never delete a key we're still pointing at (the
-	// preserved matte on a matte failure). Best-effort: the row already points at
-	// the committed keys.
+	// preserved matte on a matte failure, or the just-committed cover). Best-effort.
 	const keptKeys = new Set(
-		[professionalImageKey, shadowKey, cutoutKey].filter(
-			(k): k is string => k != null,
-		),
+		[coverKey, shadowKey, cutoutKey].filter((k): k is string => k != null),
 	);
 	for (const staleKey of [
 		record.professionalImageKey,
