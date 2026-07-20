@@ -11,7 +11,11 @@ const CollectionSearchContext = createContext<
 	[string, (value: string) => void] | null
 >(null);
 
-export function CollectionSearchProvider({ children }: { children: ReactNode }) {
+export function CollectionSearchProvider({
+	children,
+}: {
+	children: ReactNode;
+}) {
 	const state = useState("");
 	return (
 		<CollectionSearchContext.Provider value={state}>

@@ -27,7 +27,10 @@ export const Route = createFileRoute("/")({
 			);
 			const record = data.find((r) => r.id === search.record);
 			throw record
-				? redirect({ to: "/records/$id", params: { id: recordIdParam(record) } })
+				? redirect({
+						to: "/records/$id",
+						params: { id: recordIdParam(record) },
+					})
 				: redirect({ to: "/" }); // unknown id → drop the stale param
 		}
 	},

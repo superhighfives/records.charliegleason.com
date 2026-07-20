@@ -37,13 +37,13 @@ import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import { displayCoverKey, displayMatteKey } from "#/lib/cover";
-import { searchMastersFromBrowser } from "#/lib/discogs-browser";
 import type {
 	DiscogsCandidate,
 	DiscogsMasterCandidate,
 	DiscogsValue,
 	SearchParams,
 } from "#/lib/discogs";
+import { searchMastersFromBrowser } from "#/lib/discogs-browser";
 import { orderRecordsForReview } from "#/lib/record-order";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {

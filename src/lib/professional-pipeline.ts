@@ -17,12 +17,14 @@ import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
  * at the very end — no public gap during regeneration).
  *
  * The two steps run one after another (not `Promise.all`) on purpose: the matte path builds
- * a stack of full-resolution RGBA buffers (~2800² enhance + 2400² warp) that alone brushes
- * the Worker's 128 MB isolate ceiling, and it fires its own Real-ESRGAN + ViTMatte calls.
- * Running the enhance concurrently piled another paid job's buffers and a third in-flight
- * Replicate prediction on top — enough to tip a marginal run into an uncatchable OOM that
- * left the record stuck `processing` with no error. Serial trades a little wall-clock (it's
- * a background job) for a lower memory peak and at most one Replicate call in flight.
+ * a stack of full-resolution RGBA buffers (see `matte.ts` — the enhance + 2400² warp) that
+ * alone brushes the Worker's 128 MB isolate ceiling, and it fires its own Real-ESRGAN +
+ * ViTMatte calls. Running the enhance concurrently piled another paid job's buffers and a
+ * third in-flight Replicate prediction on top — enough to tip a marginal run into an
+ * uncatchable OOM that left the record stuck `processing` with no error. Serial trades a
+ * little wall-clock (it's a background job) for a lower memory peak and at most one
+ * Replicate call in flight. The matte buffers were further shrunk + freed early (and a
+ * runaway raw-original capture is capped in `loadCapture`) to widen that margin.
  *
  * Throws only if the record has no capture or the (free) reframe itself fails; the enhance
  * and matte are best-effort, so a Replicate hiccup degrades to a plain reframe / no matte

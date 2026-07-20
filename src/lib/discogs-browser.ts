@@ -17,9 +17,9 @@
 import {
 	buildMasterSearchUrl,
 	type DiscogsMasterCandidate,
+	MAX_PER_PAGE,
 	type MasterSearchParams,
 	mapMasterSearchResult,
-	MAX_PER_PAGE,
 } from "#/lib/discogs-shared";
 
 export async function searchMastersFromBrowser(

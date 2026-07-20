@@ -5,9 +5,9 @@ import {
 	DEFAULT_PER_PAGE,
 	DISCOGS_API_BASE,
 	type DiscogsMasterCandidate,
+	MAX_PER_PAGE,
 	mapMasterSearchResult,
 	masterFields,
-	MAX_PER_PAGE,
 	splitTitle,
 } from "#/lib/discogs-shared";
 

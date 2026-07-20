@@ -83,9 +83,14 @@ const SHADOW: ShadowOptions = {
 
 // The deskewed square (sleeve + a margin of surrounding capture) we send the matting
 // model. The wood padding gives the model real background context beyond the band's
-// outer quad. Sized large so the sleeve (~60% of it) keeps plenty of real pixels after
-// we crop + rescale to the content size.
-const MODEL_SIZE = 2048;
+// outer quad. Sized so the sleeve (~60% of it) keeps plenty of real pixels after we
+// crop + rescale to the content size, but kept at 1600 (not 2048) to hold the peak
+// memory down: this `content` buffer (1600² RGBA ≈ 10 MB, was 16 MB at 2048) stays live
+// alongside the hi-res enhance + warp buffers below, and at 2048 the stack was tipping a
+// marginal AI run over the Worker's 128 MB isolate ceiling into an uncatchable OOM. The
+// alpha is computed at this resolution then upsampled over the super-resolved sleeve, so
+// the small drop is smoothed out by the ESRGAN detail + feather.
+const MODEL_SIZE = 1600;
 const MODEL_PAD = 0.2;
 
 // The trimap comes straight from the hand-drawn corner band (inner quad = locked
@@ -119,9 +124,12 @@ const MATTE_STRAIGHTEN = 0.5;
 const MATTE_MODEL_MAX_SIZE = 2048;
 
 // Cap for the ESRGAN super-resolve of the (opaque) sleeve+wood content on the AI path.
-// Keeps the hi-res RGBA buffers the pure-JS re-cut allocates under the Worker's memory
-// budget (2800² RGBA ≈ 31 MB) while still giving the 2400 canvas real detail to sample.
-const MATTE_ESRGAN_MAX = 2800;
+// This is the single largest buffer in the matte tail, so it's the biggest lever on the
+// peak: 2200² RGBA ≈ 19 MB (was 2800² ≈ 31 MB), which — with MODEL_SIZE dropped and the
+// intermediates freed below — keeps a marginal run comfortably under the Worker's 128 MB
+// isolate ceiling instead of OOMing. Still gives the 2400 canvas near-native detail to
+// sample (the warp upsamples it a hair); a bigger buffer bought no visible edge quality.
+const MATTE_ESRGAN_MAX = 2200;
 
 // The pinned matting model version (Replicate): our own ViTMatte cog (see
 // `cog/vitmatte-trimap/`), which takes `image` + `trimap` and returns a grayscale alpha
@@ -344,6 +352,9 @@ async function matteAI(
 	);
 	const clamp = rasterizePolygon(clampQuad, content.width, content.height);
 	const raw = maskFromModelOutput(model, content.width, content.height);
+	// The model output is fully consumed into `raw` — release its RGBA buffer (up to
+	// ~2048² ≈ 16 MB) now so it isn't pinned through the hi-res enhance + warp tail below.
+	model.data = new Uint8ClampedArray(0);
 	for (let i = 0; i < raw.length; i++) if (!clamp[i]) raw[i] = 0;
 	// Colour-statistical backstop: strip any background-coloured sliver that survived
 	// the band + model + clamp (dark wood the model mistook for a dark mat, say).
@@ -368,11 +379,13 @@ async function matteAI(
 	// scaled up to match — real-pixel RGB at ESRGAN resolution over a model-quality edge.
 	// ESRGAN drops alpha, so we re-attach our own.
 	const hi = await upscaleImage(content, { maxSize: MATTE_ESRGAN_MAX });
-	const scale = hi.width / content.width;
-	applyMask(
-		hi,
-		resizeMask(feathered, content.width, content.height, hi.width, hi.height),
-	);
+	// `content`'s pixels are done — everything below needs only its dimensions. Release the
+	// buffer (≈10 MB) before the warp allocates the full-canvas output, to shave the peak.
+	const cw = content.width;
+	const ch = content.height;
+	content.data = new Uint8ClampedArray(0);
+	const scale = hi.width / cw;
+	applyMask(hi, resizeMask(feathered, cw, ch, hi.width, hi.height));
 	// Perspective-warp the hi-res cutout upright by the refined quad so it fills the frame
 	// as a card, keeping the ragged edge/corners (the colour bleed keeps wood out), then
 	// tone + tight shadow.

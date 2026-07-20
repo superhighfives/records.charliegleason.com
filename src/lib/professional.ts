@@ -125,11 +125,31 @@ export function toPixelCorners(
 	return corners.map(([x, y]) => [x * (w - 1), y * (h - 1)]) as Corners;
 }
 
+// A normalised capture is a ~2048² webp, comfortably under ~2 MB. Anything materially
+// larger is the raw-original storage fallback (`storeCapturePhoto`, when Image
+// Transformations are unavailable) — a straight-off-the-phone HEIC/JPEG that would decode
+// to a 40+ MB RGBA buffer and, stacked with the matte pipeline's other buffers, OOM the
+// generation isolate outright. Route only those through the Images binding first (it
+// decodes off the JS heap) to bound the decode to CAPTURE_DECODE_MAX; the normal path
+// decodes the stored bytes directly with zero added latency.
+const CAPTURE_DECODE_MAX = 2048;
+const CAPTURE_RAW_BYTES_MAX = 2_500_000;
+
 /** Load + decode a capture from R2 to an {@link RgbaImage} (throws if it's missing). */
 export async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
 	const object = await env.PHOTOS.get(capturePhotoKey);
 	if (!object)
 		throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);
+	if (object.size > CAPTURE_RAW_BYTES_MAX) {
+		const out = await env.IMAGES.input(object.body)
+			.transform({
+				width: CAPTURE_DECODE_MAX,
+				height: CAPTURE_DECODE_MAX,
+				fit: "scale-down",
+			})
+			.output({ format: "image/webp", quality: 92 });
+		return decodeRgba(new Uint8Array(await out.response().arrayBuffer()));
+	}
 	return decodeRgba(new Uint8Array(await object.arrayBuffer()));
 }
 
