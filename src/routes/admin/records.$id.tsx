@@ -558,9 +558,7 @@ function MasterPicker({
 									browserSearch.mutate({ artist: q.artist, title: q.title })
 								}
 							>
-								{browserSearch.isPending
-									? "Searching…"
-									: "Search from browser"}
+								{browserSearch.isPending ? "Searching…" : "Search from browser"}
 							</Button>
 						</div>
 						{browserSearch.isError && (

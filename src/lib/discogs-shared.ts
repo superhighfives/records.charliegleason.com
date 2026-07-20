@@ -31,7 +31,10 @@ export interface MasterSearchParams {
 }
 
 /** Split a Discogs "Artist - Title" search result title into parts. */
-export function splitTitle(combined: string): { artist: string; title: string } {
+export function splitTitle(combined: string): {
+	artist: string;
+	title: string;
+} {
 	const idx = combined.indexOf(" - ");
 	if (idx === -1) return { artist: "", title: combined };
 	return {
