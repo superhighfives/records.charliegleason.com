@@ -129,6 +129,13 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 
 export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 	Sentry.startSpan({ name: "listRecords" }, async () => {
+		// Admin-only: returns full rows (capture keys, valuation, bookkeeping), so it
+		// must not be callable unauthenticated. Fail soft — it runs inside the /admin
+		// SSR loader, where a thrown 401 would break the render rather than fall through
+		// to the client-side signed-out redirect (mirrors getRecord / listInFlight).
+		// Failing closed also surfaces an auth outage as an empty list instead of a
+		// silent data leak.
+		if (!(await getAdminSession())) return [];
 		const db = getDb(env.DB);
 		return db.select().from(records).orderBy(desc(records.createdAt));
 	}),
