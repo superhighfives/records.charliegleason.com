@@ -129,6 +129,13 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 
 export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 	Sentry.startSpan({ name: "listRecords" }, async () => {
+		// Admin-only: returns full rows (capture keys, valuation, bookkeeping), so it
+		// must not be callable unauthenticated. Fail soft — it runs inside the /admin
+		// SSR loader, where a thrown 401 would break the render rather than fall through
+		// to the client-side signed-out redirect (mirrors getRecord / listInFlight).
+		// Failing closed also surfaces an auth outage as an empty list instead of a
+		// silent data leak.
+		if (!(await getAdminSession())) return [];
 		const db = getDb(env.DB);
 		return db.select().from(records).orderBy(desc(records.createdAt));
 	}),
@@ -654,10 +661,11 @@ export const detectCorners = createServerFn({ method: "POST" })
 
 /**
  * Kick off the paid "Apply" pipeline for a record — reframe + Real-ESRGAN enhance + AI
- * matte. The actual GPU work (~a minute) runs in the queue consumer
- * ({@link generateProfessionalPhoto}); this only persists the edited corners + tone knobs,
- * flags `professionalJobStatus: "queued"`, and enqueues the job, returning immediately so
- * the editor can close and the admin can move on. Crucially it does NOT touch the display
+ * matte. The actual GPU work (~a minute) runs in the queue consumer, split across two
+ * isolates ({@link generateProfessionalCover} then {@link commitProfessionalMatte}). This
+ * server fn only persists the edited corners + tone knobs, flags
+ * `professionalJobStatus: "queued"`, and enqueues the job — returning immediately so the
+ * editor can close and the admin can move on. Crucially it does NOT touch the display
  * `professionalStatus`, so an already-approved cover stays live until the consumer swaps in
  * the new keys. Requires a capture to warp — throws if there's none. Returns the updated
  * row (now `queued`), or null if the record's gone.
