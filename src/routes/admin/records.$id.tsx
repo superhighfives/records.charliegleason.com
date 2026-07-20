@@ -1256,12 +1256,11 @@ function RecordDetail() {
 					{record.professionalJobStatus === "failed" &&
 						record.professionalError && (
 							<span className="text-xs text-red-600 dark:text-red-400">
-								Last generation failed: {record.professionalError}
-								{/* The reaper's note already ends with the retry guidance; only
-								    append it for the other failures (e.g. a matte failure) so
-								    it's never doubled. */}
-								{!record.professionalError.includes("Apply again") &&
-									" Open the editor and Apply again to retry."}
+								{/* The recovery guidance lives here (not in the error strings)
+								    so every professional failure — reaper note or matte failure
+								    — surfaces it exactly once. */}
+								Last generation failed: {record.professionalError} Open the
+								editor and Apply again to retry.
 							</span>
 						)}
 				</div>

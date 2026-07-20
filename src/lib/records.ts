@@ -184,14 +184,16 @@ export const getRecord = createServerFn({ method: "GET" })
 const STALE_JOB_MS = 5 * 60 * 1000;
 
 /**
- * The error stamped on a reaped job. Split by pipeline so the guidance matches the
- * retry the UI actually offers — "Retry analysis" for a capture, "Apply again" in
- * the editor for a professional generation.
+ * The error stamped on a reaped job. The analyze note carries its own retry guidance
+ * (its failure display shows the note verbatim). The pro note deliberately does NOT: the
+ * editor appends the "Apply again" guidance to *every* professional failure — reaper note
+ * or matte failure — uniformly (see records.$id.tsx), so embedding it here too would
+ * double it on the reaper case.
  */
 const STALE_ANALYZE_NOTE =
 	"Analysis was interrupted — the worker was terminated mid-job and it never finished. Retry analysis to try again.";
 const STALE_PRO_NOTE =
-	"Generation was interrupted — the worker was terminated mid-job and it never finished. Open the editor and Apply again to retry.";
+	"Generation was interrupted — the worker was terminated mid-job and it never finished.";
 
 /** One entry in the header "in flight" menu — a record with a running background job. */
 export interface InFlightItem {
