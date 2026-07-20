@@ -1,0 +1,17 @@
+#!/bin/sh
+# Auto-format and lint-fix staged files with Biome before every commit, so a
+# stray formatting difference never makes it to CI (`bun run check`) and fails
+# there. Only staged files are touched (`--staged`); safe fixes are applied in
+# place (`--write`) and re-staged. If Biome still reports an error it can't fix
+# (e.g. a real lint violation), the commit is blocked with the diagnostics.
+#
+# Activated by the `prepare` script in package.json, which points
+# core.hooksPath at this directory on `bun install`.
+
+bunx biome check --write --staged --no-errors-on-unmatched --files-ignore-unknown=true
+status=$?
+
+# Re-stage any fixes Biome just wrote to already-staged files.
+git update-index --again
+
+exit $status
