@@ -16,6 +16,9 @@ import {
 	type CoverStageResult,
 	commitProfessionalMatte,
 	generateProfessionalCover,
+	type MatteKeys,
+	renderAiMatte,
+	renderDeterministicMatte,
 } from "#/lib/professional-pipeline";
 
 /**
@@ -91,6 +94,23 @@ export async function enqueueProfessionalMatte(
 	stage: CoverStageResult,
 ): Promise<void> {
 	await analyzeQueue().send({ recordId, mode: "professional-matte", ...stage });
+}
+
+/**
+ * Enqueue the deterministic-matte fallback — stage 2b — after the AI matte failed. Runs
+ * the (larger, ~3000² deskew) deterministic render in its OWN fresh isolate rather than
+ * inline in the AI stage, then commits the same stage-1 cover with it. Carries the same
+ * snapshot so the committed cover + matte stay cut from one set of inputs.
+ */
+export async function enqueueProfessionalMatteFallback(
+	recordId: number,
+	stage: CoverStageResult,
+): Promise<void> {
+	await analyzeQueue().send({
+		recordId,
+		mode: "professional-matte-fallback",
+		...stage,
+	});
 }
 
 /**
@@ -343,11 +363,21 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
-	// Stage 2 — the AI matte + the final atomic commit. Fresh isolate: the matte's
-	// full-resolution RGBA buffers start from a clean heap with none of stage 1's
-	// reframe/enhance residue. The cover key from stage 1 rides on the message so the
-	// new cover + matte swap in together (no public gap).
-	if (mode === "professional-matte") {
+	// Stage 2 — the matte + the final atomic commit, in a fresh isolate (none of stage 1's
+	// reframe/enhance residue). Two modes, so the AI attempt and its (larger) deterministic
+	// fallback each get their OWN isolate — stacking a failed AI attempt's buffers with the
+	// ~3000² deterministic deskew on one 128 MB isolate is what OOM'd:
+	//   - "professional-matte": try the AI matte only (`renderAiMatte`, no inline fallback).
+	//     On success, commit cover + AI matte. On failure, log the real error to Sentry and
+	//     retry the AI stage until the queue's retries run out — only THEN re-enqueue the
+	//     deterministic fallback to a clean isolate (we prefer AI; deterministic is a last
+	//     resort, not the response to a transient blip).
+	//   - "professional-matte-fallback": render the deterministic matte here and commit it
+	//     (or, if it too fails, preserve the existing matte + flag `failed`).
+	// The cover key + input snapshot from stage 1 rides on the message in both, so whichever
+	// matte wins swaps in with the same cover atomically (no public gap).
+	if (mode === "professional-matte" || mode === "professional-matte-fallback") {
+		const isFallback = mode === "professional-matte-fallback";
 		const { coverKey, enhanced, captureKey, bandJson, paramsJson } =
 			message.body;
 		try {
@@ -373,20 +403,70 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 					"professional-matte message missing the stage-1 snapshot",
 				);
 			}
-
-			await commitProfessionalMatte(record, {
+			const stage: CoverStageResult = {
 				coverKey,
 				enhanced: enhanced ?? false,
 				captureKey,
 				bandJson,
 				paramsJson,
-			});
+			};
+
+			if (isFallback) {
+				// The AI matte already failed for good (its retries were exhausted upstream)
+				// — render the deterministic matte here on a clean heap. If it too dies,
+				// commit the cover with the existing matte preserved and flag `failed` (both
+				// paths gone → keep the good matte).
+				let matteError: unknown = null;
+				const matte = await renderDeterministicMatte(stage).catch((err) => {
+					console.error(
+						`[pro] deterministic matte failed for ${recordId}`,
+						err,
+					);
+					Sentry.captureException(err);
+					matteError = err;
+					return null;
+				});
+				await commitProfessionalMatte(record, stage, matte, matteError);
+				message.ack();
+				return;
+			}
+
+			// AI matte only — no inline deterministic fallback (that would stack the two big
+			// renders on one isolate). We PREFER the AI matte, so a failure isn't an
+			// immediate downgrade: log the real error to Sentry and retry the AI stage
+			// (backoff) until the queue's retries run out — the deterministic fallback is a
+			// LAST resort, not the response to a transient Replicate/network blip.
+			let aiMatte: MatteKeys;
+			try {
+				aiMatte = await renderAiMatte(stage);
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				const willRetry = message.attempts <= MAX_RETRIES;
+				console.warn(
+					`[queue] AI matte failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
+				);
+				// Capture the ACTUAL AI failure (Replicate error, fetch status, OOM, …) —
+				// otherwise the deterministic fallback silently masks why AI never ran.
+				Sentry.captureException(err);
+				if (willRetry) {
+					// Keep trying AI — don't drop to deterministic yet.
+					await markProfessionalFailed(db, recordId, true, detail);
+					message.retry({ delaySeconds: backoffSeconds(message.attempts) });
+					return;
+				}
+				// AI genuinely exhausted → last-resort deterministic fallback, fresh isolate.
+				await enqueueProfessionalMatteFallback(recordId, stage);
+				message.ack();
+				return;
+			}
+			await commitProfessionalMatte(record, stage, aiMatte, null);
 			message.ack();
+			return;
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
 			const willRetry = message.attempts <= MAX_RETRIES;
 			console.error(
-				`[queue] professional (matte) failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
+				`[queue] professional (matte${isFallback ? " fallback" : ""}) failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
 			);
 			Sentry.captureException(err);
 			await markProfessionalFailed(db, recordId, willRetry, detail);

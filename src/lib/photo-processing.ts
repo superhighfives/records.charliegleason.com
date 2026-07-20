@@ -1715,6 +1715,12 @@ export function warpMatteToSquare(
  * Cut `content` to `mask`, feather it, and perspective-warp the result onto an upright
  * rectangle via {@link warpMatteToSquare} — the squared-up floating-sleeve tail shared by
  * the deterministic and AI matte paths, both of which have a clean refined `quad`.
+ *
+ * CONSUMES `content`: the mask is applied to its buffer in place (no defensive copy) and
+ * `bleedEdgeColor`/the warp mutate it further, so the caller must not read `content` after
+ * this returns. Its sole caller ({@link matteFromBand}) passes a fresh {@link deskewBandPadded}
+ * buffer it discards immediately — dropping the copy keeps a second ~3000² RGBA (~37 MB)
+ * off the heap so the deterministic matte fits a 128 MB isolate on its own.
  */
 export function composeMatteWarped(
 	content: RgbaImage,
@@ -1728,13 +1734,8 @@ export function composeMatteWarped(
 		content.height,
 		opts.feather ?? 2,
 	);
-	const masked: RgbaImage = {
-		data: content.data.slice(),
-		width: content.width,
-		height: content.height,
-	};
-	applyMask(masked, feathered);
-	return warpMatteToSquare(masked, quad, opts);
+	applyMask(content, feathered);
+	return warpMatteToSquare(content, quad, opts);
 }
 
 // The deterministic matte deskews with this much surrounding capture (wood) around the

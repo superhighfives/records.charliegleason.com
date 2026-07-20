@@ -13,11 +13,20 @@ export interface AnalyzeMessage {
 	recordId: number;
 	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls the
 	// Discogs release for an already-identified record. The paid Apply pipeline is
-	// split across two messages so each memory-heavy step gets its own fresh isolate
-	// (a single invocation running reframe+enhance+matte brushed the 128 MB ceiling
-	// and OOM'd): "professional" does the reframe + Real-ESRGAN enhance (the cover),
-	// then enqueues "professional-matte" for the AI matte + the final atomic commit.
-	mode?: "analyze" | "refresh" | "professional" | "professional-matte";
+	// split across messages so each memory-heavy step gets its own fresh isolate (a
+	// single invocation running reframe+enhance+matte brushed the 128 MB ceiling and
+	// OOM'd): "professional" does the reframe + Real-ESRGAN enhance (the cover), then
+	// enqueues "professional-matte" for the AI matte + the final atomic commit. If that
+	// AI matte fails, its (larger) deterministic fallback is deferred to yet another
+	// isolate — "professional-matte-fallback" — rather than run inline, since stacking
+	// the failed AI attempt's buffers with the ~3000² deterministic deskew on one isolate
+	// is itself what OOM'd.
+	mode?:
+		| "analyze"
+		| "refresh"
+		| "professional"
+		| "professional-matte"
+		| "professional-matte-fallback";
 	// Only set on "professional-matte": the stage-1 result — the cover key + the exact
 	// (serialized) capture/band/params the cover was built from. Carried forward so the
 	// matte stage (a) renders the matte from and re-persists the SAME inputs, keeping
