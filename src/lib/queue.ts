@@ -13,8 +13,8 @@ import {
 	searchMasters,
 } from "#/lib/discogs";
 import {
-	commitProfessionalMatte,
 	type CoverStageResult,
+	commitProfessionalMatte,
 	generateProfessionalCover,
 } from "#/lib/professional-pipeline";
 
@@ -318,15 +318,13 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			}
 
 			const stage = await generateProfessionalCover(record);
-			try {
-				await enqueueProfessionalMatte(recordId, stage);
-			} catch (enqueueErr) {
-				// The cover is written to R2 but the matte stage was never queued — bin
-				// the now-orphaned cover (nothing references it) before the retry re-runs
-				// stage 1 with a fresh key, then rethrow into the failure handling below.
-				await env.PHOTOS.delete(stage.coverKey).catch(() => {});
-				throw enqueueErr;
-			}
+			// Do NOT delete stage.coverKey if this throws: a queue `send` can fail on the
+			// client (timed-out ack) after the message was actually accepted server-side.
+			// Deleting the key then would leave that in-flight matte message committing
+			// `professionalImageKey` = a *deleted* R2 object (a broken cover). So on a
+			// throw we just retry stage 1, which mints a fresh cover key; the worst case
+			// is a rare orphaned cover object (storage only), never a dangling reference.
+			await enqueueProfessionalMatte(recordId, stage);
 			message.ack();
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
