@@ -620,7 +620,10 @@ function MasterPicker({
 						retryPendingLabel="Searching…"
 						browserError={
 							browserSearch.isError
-								? errText(browserSearch.error, "Browser search failed. Try again.")
+								? errText(
+										browserSearch.error,
+										"Browser search failed. Try again.",
+									)
 								: undefined
 						}
 					/>
@@ -727,7 +730,10 @@ function MasterPicker({
 						retryPendingLabel="Linking…"
 						browserError={
 							browserLookup.isError
-								? errText(browserLookup.error, "Browser lookup failed. Try again.")
+								? errText(
+										browserLookup.error,
+										"Browser lookup failed. Try again.",
+									)
 								: undefined
 						}
 					/>
@@ -1258,9 +1264,11 @@ function RecordDetail() {
 							<span className="text-xs text-red-600 dark:text-red-400">
 								{/* The recovery guidance lives here (not in the error strings)
 								    so every professional failure — reaper note or matte failure
-								    — surfaces it exactly once. */}
-								Last generation failed: {record.professionalError} Open the
-								editor and Apply again to retry.
+								    — surfaces it exactly once. A line break separates it from the
+								    error, which may or may not end in punctuation. */}
+								Last generation failed: {record.professionalError}
+								<br />
+								Open the editor and Apply again to retry.
 							</span>
 						)}
 				</div>

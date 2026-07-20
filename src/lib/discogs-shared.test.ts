@@ -30,17 +30,22 @@ describe("mapReleaseSearchResult", () => {
 		});
 	});
 
-	it("nulls empty label/genre arrays instead of the string \"undefined\"", () => {
+	it('nulls empty label/genre arrays instead of the string "undefined"', () => {
 		// The bug this guards: `String([][0])` is `"undefined"`, so an empty array
 		// would otherwise persist + display the literal word "undefined".
-		const c = mapReleaseSearchResult({ id: 1, title: "A - B", label: [], genre: [] });
+		const c = mapReleaseSearchResult({
+			id: 1,
+			title: "A - B",
+			label: [],
+			genre: [],
+		});
 		expect(c.label).toBeNull();
 		expect(c.genre).toBeNull();
 	});
 });
 
 describe("mapMasterSearchResult", () => {
-	it("nulls an empty genre array instead of the string \"undefined\"", () => {
+	it('nulls an empty genre array instead of the string "undefined"', () => {
 		const c = mapMasterSearchResult({ id: 9, title: "A - B", genre: [] });
 		expect(c.genre).toBeNull();
 	});
