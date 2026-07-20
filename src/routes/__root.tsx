@@ -6,6 +6,7 @@ import {
 	Scripts,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+import { CollectionSearchProvider } from "../components/collection-search";
 import { Toaster } from "../components/ui/sonner";
 import ClerkProvider from "../integrations/clerk/provider";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
@@ -106,8 +107,12 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				<ClerkProvider>
 					{/* A flex-1 column so a route's content (or a full-height ErrorScreen,
 					    which fills with `flex-1`) grows to the available space — the same
-					    shell the admin layout provides via its own <main>. */}
-					<div className="flex min-h-0 flex-1 flex-col">{children}</div>
+					    shell the admin layout provides via its own <main>. The collection
+					    filter lives in a provider here, above the router outlet, so it
+					    survives the `/` ↔ `/records/$id` route swap when a record opens. */}
+					<CollectionSearchProvider>
+						<div className="flex min-h-0 flex-1 flex-col">{children}</div>
+					</CollectionSearchProvider>
 					<Toaster />
 					{/* Dev-only: keep the router/query devtools out of the production bundle. */}
 					{import.meta.env.DEV && (

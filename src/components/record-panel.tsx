@@ -24,6 +24,7 @@ import {
 import type { Record } from "#/db/schema";
 import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
+import { recordPath } from "#/lib/records-path";
 import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
 
 /**
@@ -173,10 +174,10 @@ export function RecordPanel({
 		}
 	};
 
-	// A shareable, absolute deep link to this record's drawer (see the `?record=`
-	// search param on the home route). Built at click time so it works off any host.
+	// A shareable, absolute deep link to this record's page (the canonical
+	// `/records/<id>-<slug>` path). Built at click time so it works off any host.
 	const copyLink = () =>
-		copy(`${window.location.origin}/?record=${record.id}`, "link");
+		copy(`${window.location.origin}${recordPath(record)}`, "link");
 
 	// Prefer the specific release when we have one, otherwise fall back to the
 	// master (the album as a work). Public records always carry a master, so there

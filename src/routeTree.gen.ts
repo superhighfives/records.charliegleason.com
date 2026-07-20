@@ -14,6 +14,7 @@ import { Route as R404RouteImport } from './routes/404'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as RecordsIdRouteImport } from './routes/records.$id'
 import { Route as ApiRecordsRouteImport } from './routes/api/records'
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
@@ -46,6 +47,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminRouteRoute,
+} as any)
+const RecordsIdRoute = RecordsIdRouteImport.update({
+  id: '/records/$id',
+  path: '/records/$id',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiRecordsRoute = ApiRecordsRouteImport.update({
   id: '/api/records',
@@ -90,6 +96,7 @@ export interface FileRoutesByFullPath {
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
+  '/records/$id': typeof RecordsIdRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
@@ -103,6 +110,7 @@ export interface FileRoutesByTo {
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
+  '/records/$id': typeof RecordsIdRoute
   '/admin': typeof AdminIndexRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
@@ -118,6 +126,7 @@ export interface FileRoutesById {
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/api/records': typeof ApiRecordsRoute
+  '/records/$id': typeof RecordsIdRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
@@ -134,6 +143,7 @@ export interface FileRouteTypes {
     | '/500'
     | '/admin/capture'
     | '/api/records'
+    | '/records/$id'
     | '/admin/'
     | '/admin/records/$id'
     | '/admin/records/new'
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | '/500'
     | '/admin/capture'
     | '/api/records'
+    | '/records/$id'
     | '/admin'
     | '/admin/records/$id'
     | '/admin/records/new'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '/500'
     | '/admin/capture'
     | '/api/records'
+    | '/records/$id'
     | '/admin/'
     | '/admin/records/$id'
     | '/admin/records/new'
@@ -175,6 +187,7 @@ export interface RootRouteChildren {
   R404Route: typeof R404Route
   R500Route: typeof R500Route
   ApiRecordsRoute: typeof ApiRecordsRoute
+  RecordsIdRoute: typeof RecordsIdRoute
   ApiCronDigestRoute: typeof ApiCronDigestRoute
   ApiDiscogsCoverIdRoute: typeof ApiDiscogsCoverIdRoute
   ApiPhotosSplatRoute: typeof ApiPhotosSplatRoute
@@ -216,6 +229,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRouteRoute
+    }
+    '/records/$id': {
+      id: '/records/$id'
+      path: '/records/$id'
+      fullPath: '/records/$id'
+      preLoaderRoute: typeof RecordsIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/records': {
       id: '/api/records'
@@ -293,6 +313,7 @@ const rootRouteChildren: RootRouteChildren = {
   R404Route: R404Route,
   R500Route: R500Route,
   ApiRecordsRoute: ApiRecordsRoute,
+  RecordsIdRoute: RecordsIdRoute,
   ApiCronDigestRoute: ApiCronDigestRoute,
   ApiDiscogsCoverIdRoute: ApiDiscogsCoverIdRoute,
   ApiPhotosSplatRoute: ApiPhotosSplatRoute,
