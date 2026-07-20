@@ -113,11 +113,16 @@ function albumTokens(title: string): Array<string> {
 // very often DON'T carry "vinyl"/"LP" in the title, even though they are vinyl.
 // So we can't *require* a positive vinyl signal (that would hide most real
 // pressings). The query is already vinyl-biased ("…vinyl record"); here we only
-// reject titles that explicitly name a *competing* format or merch.
+// reject titles that explicitly name a *competing* format or merch — including
+// books/songbooks/sheet music, which a vinyl-biased query still surfaces when an
+// album (or a track masquerading as one) has no actual pressing to sell.
 const NON_VINYL_SIGNAL =
-	/\b(?:cd|compact disc|cassette|tape|digital|mp3|flac|dvd|blu[- ]?ray|t[- ]?shirt|hoodie|poster|sticker|tote|mug)\b/i;
+	/\b(?:cd|compact disc|cassette|tape|digital|mp3|flac|dvd|blu[- ]?ray|t[- ]?shirt|hoodie|poster|sticker|tote|mug|books?|songbook|paperback|hardcover|hardback|biography|sheet music|magazine|calendar|funko|figurine)\b/i;
 
-/** True unless the title explicitly names a non-vinyl format (CD/cassette/digital/merch). */
+/**
+ * True unless the title explicitly names a non-vinyl format (CD/cassette/digital),
+ * merch, or a book/songbook/sheet-music listing.
+ */
 export function isVinylTitle(title: string): boolean {
 	return !NON_VINYL_SIGNAL.test(title);
 }
