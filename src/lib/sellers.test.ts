@@ -61,7 +61,9 @@ describe("isVinylTitle", () => {
 
 	it("rejects books, songbooks, and sheet music", () => {
 		// A vinyl-biased query still surfaces these when there's no pressing to sell.
-		expect(isVinylTitle("Olivia Rodrigo: The Unofficial Biography")).toBe(false);
+		expect(isVinylTitle("Olivia Rodrigo: The Unofficial Biography")).toBe(
+			false,
+		);
 		expect(isVinylTitle("Fleetwood Mac Rumours (Piano/Vocal Songbook)")).toBe(
 			false,
 		);
