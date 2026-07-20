@@ -68,6 +68,7 @@ import {
 	reprocessRecord,
 	searchDiscogs,
 	searchDiscogsMasters,
+	unpublishRecord,
 } from "#/lib/records";
 import { recordPath } from "#/lib/records-path";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
@@ -958,6 +959,22 @@ function RecordDetail() {
 		onError: () => toast.error("Couldn't delete this record."),
 	});
 
+	// Take a published record back to drafts (status → review), hiding it from the
+	// public collection without changing its data. Stays on the page so the status
+	// updates in place and it can be re-published.
+	const unpublish = useMutation({
+		mutationFn: () => unpublishRecord({ data: recordId }),
+		onSuccess: async (row) => {
+			if (!row) {
+				toast.error("Couldn't unpublish — this record no longer exists.");
+				return;
+			}
+			await invalidate();
+			toast.success("Record unpublished — it’s back in drafts.");
+		},
+		onError: () => toast.error("Couldn't unpublish this record."),
+	});
+
 	// Pull a fresh Discogs value estimate (seller price suggestions, falling back
 	// to the lowest listing) for this record, leaving all other metadata alone.
 	const fetchValue = useMutation({
@@ -1815,6 +1832,30 @@ function RecordDetail() {
 							}}
 						/>
 					</div>
+				</div>
+			)}
+
+			{/* Unpublish — only for a live record. Reversible (back to drafts), so it
+			    sits above the destructive delete rather than inside the danger zone. */}
+			{record.status === "complete" && (
+				<div className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+					<div>
+						<h2 className="text-sm font-semibold">Unpublish record</h2>
+						<p className="text-xs text-muted-foreground">
+							Hides this record from the public collection and returns it to
+							drafts. You can publish it again anytime.
+						</p>
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="shrink-0"
+						disabled={unpublish.isPending}
+						onClick={() => unpublish.mutate()}
+					>
+						{unpublish.isPending ? "Unpublishing…" : "Unpublish"}
+					</Button>
 				</div>
 			)}
 

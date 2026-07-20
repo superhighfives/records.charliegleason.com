@@ -576,6 +576,27 @@ export const publishRecord = createServerFn({ method: "POST" })
 			}),
 	);
 
+/**
+ * Take a published record back to `review` (drafts) — the inverse of publishing.
+ * Removes it from the public collection without touching any of its data, so it
+ * can be published again unchanged. Returns the updated row, or null when the
+ * record no longer exists.
+ */
+export const unpublishRecord = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "unpublishRecord" }, async () => {
+			const db = getDb(env.DB);
+			const [row] = await db
+				.update(records)
+				.set({ status: "review", updatedAt: new Date() })
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
+		}),
+	);
+
 /** Re-run the background analysis for a failed (or any) captured record. */
 export const reprocessRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
