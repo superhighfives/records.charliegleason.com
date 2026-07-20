@@ -6,7 +6,7 @@ import {
 	Scripts,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-import { CollectionSearchProvider } from "../components/collection-search";
+import { CollectionUIProvider } from "../components/collection-ui";
 import { Toaster } from "../components/ui/sonner";
 import ClerkProvider from "../integrations/clerk/provider";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
@@ -110,9 +110,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 					    shell the admin layout provides via its own <main>. The collection
 					    filter lives in a provider here, above the router outlet, so it
 					    survives the `/` ↔ `/records/$id` route swap when a record opens. */}
-					<CollectionSearchProvider>
+					<CollectionUIProvider>
 						<div className="flex min-h-0 flex-1 flex-col">{children}</div>
-					</CollectionSearchProvider>
+					</CollectionUIProvider>
 					<Toaster />
 					{/* Dev-only: keep the router/query devtools out of the production bundle. */}
 					{import.meta.env.DEV && (

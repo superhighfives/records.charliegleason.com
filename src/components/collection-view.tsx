@@ -1,8 +1,8 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useCollectionSearch } from "#/components/collection-search";
+import { useCollectionUI } from "#/components/collection-ui";
 import { RecordPanel } from "#/components/record-panel";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { ThemeToggle } from "#/components/theme-toggle";
@@ -27,26 +27,39 @@ const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
 export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
 	const navigate = useNavigate();
-	const [search, setSearch] = useCollectionSearch();
+	const { search, setSearch, animateOpenRef } = useCollectionUI();
+
+	// Whether the open drawer should slide in. True only when this open was an
+	// in-app action — `openRecord` sets the flag before navigating. Direct
+	// navigation / SSR leaves it false, so the drawer appears in place instead of
+	// looking like a spurious transition on load. Captured once per mount (the
+	// route swap that opens a record remounts this view) and cleared after.
+	const [animateOpen] = useState(() => animateOpenRef.current);
+	useEffect(() => {
+		animateOpenRef.current = false;
+	}, [animateOpenRef]);
 
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
 	// paging + closing replace so arrow-keying through the collection (and the
-	// close) don't flood the stack.
+	// close) don't flood the stack. Setting the animate flag before navigating
+	// makes an in-app open slide in (a direct-nav open never runs this).
 	const openRecord = useCallback(
 		(
 			r: { id: number; title: string | null } | null,
 			{ replace = false }: { replace?: boolean } = {},
-		) =>
-			r
+		) => {
+			animateOpenRef.current = r != null;
+			return r
 				? navigate({
 						to: "/records/$id",
 						params: { id: recordIdParam(r) },
 						replace,
 						resetScroll: false,
 					})
-				: navigate({ to: "/", replace, resetScroll: false }),
-		[navigate],
+				: navigate({ to: "/", replace, resetScroll: false });
+		},
+		[navigate, animateOpenRef],
 	);
 
 	const filtered = useMemo(() => {
@@ -201,7 +214,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 					if (!open) openRecord(null, { replace: true });
 				}}
 			>
-				<SheetContent className="p-0">
+				<SheetContent className="p-0" enterAnimation={animateOpen}>
 					{shown && (
 						<RecordPanel
 							key={shown.record.id}

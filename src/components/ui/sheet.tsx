@@ -27,13 +27,17 @@ function SheetClose({
 
 function SheetOverlay({
 	className,
+	enterAnimation = true,
 	...props
-}: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+}: React.ComponentProps<typeof SheetPrimitive.Overlay> & {
+	enterAnimation?: boolean;
+}) {
 	return (
 		<SheetPrimitive.Overlay
 			data-slot="sheet-overlay"
 			className={cn(
-				"fixed inset-0 z-50 bg-white/50 dark:bg-black/50 backdrop-blur-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+				"fixed inset-0 z-50 bg-white/50 dark:bg-black/50 backdrop-blur-md data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+				enterAnimation && "data-[state=open]:animate-in data-[state=open]:fade-in-0",
 				className,
 			)}
 			{...props}
@@ -41,29 +45,48 @@ function SheetOverlay({
 	);
 }
 
+// Per-side enter (slide-in) animation, applied only when `enterAnimation` is on.
+const SIDE_ENTER = {
+	right: "data-[state=open]:slide-in-from-right",
+	left: "data-[state=open]:slide-in-from-left",
+	top: "data-[state=open]:slide-in-from-top",
+	bottom: "data-[state=open]:slide-in-from-bottom",
+} as const;
+
 function SheetContent({
 	className,
 	children,
 	side = "right",
+	enterAnimation = true,
 	...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
 	side?: "top" | "right" | "bottom" | "left";
+	/**
+	 * Slide the panel in when it opens (default). Set false to have it appear in
+	 * place with no enter animation — e.g. a record opened by direct navigation,
+	 * where a slide-in would look like a spurious transition on page load. The
+	 * exit animation is unaffected.
+	 */
+	enterAnimation?: boolean;
 }) {
 	return (
 		<SheetPrimitive.Portal data-slot="sheet-portal">
-			<SheetOverlay />
+			<SheetOverlay enterAnimation={enterAnimation} />
 			<SheetPrimitive.Content
 				data-slot="sheet-content"
 				className={cn(
-					"fixed z-50 flex flex-col bg-background shadow-lg transition ease-in-out outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
+					"fixed z-50 flex flex-col bg-background shadow-lg transition ease-in-out outline-none data-[state=closed]:animate-out data-[state=closed]:duration-300",
+					enterAnimation &&
+						"data-[state=open]:animate-in data-[state=open]:duration-500",
 					side === "right" &&
-						"inset-y-0 right-0 h-full w-full border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-md",
+						"inset-y-0 right-0 h-full w-full border-l data-[state=closed]:slide-out-to-right sm:max-w-md",
 					side === "left" &&
-						"inset-y-0 left-0 h-full w-full border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-md",
+						"inset-y-0 left-0 h-full w-full border-r data-[state=closed]:slide-out-to-left sm:max-w-md",
 					side === "top" &&
-						"inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
+						"inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top",
 					side === "bottom" &&
-						"inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
+						"inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom",
+					enterAnimation && SIDE_ENTER[side],
 					className,
 				)}
 				{...props}
