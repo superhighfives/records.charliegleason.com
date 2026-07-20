@@ -36,7 +36,7 @@ import {
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
-import { displayCoverKey } from "#/lib/cover";
+import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import type {
 	DiscogsCandidate,
 	DiscogsMasterCandidate,
@@ -965,6 +965,13 @@ function RecordDetail() {
 		? `/api/photos/${headerCoverKey}`
 		: null;
 
+	// When an approved professional matte exists, float it over the bottom-right
+	// corner of the header cover as a small preview of the public grid treatment.
+	const headerMatteKey = displayMatteKey(record);
+	const headerMatteSrc = headerMatteKey
+		? `/api/photos/${headerMatteKey}`
+		: null;
+
 	return (
 		<div className="mx-auto max-w-2xl space-y-6">
 			<div>
@@ -990,11 +997,21 @@ function RecordDetail() {
 				    badge sits opposite the Context line. */}
 				<div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-end">
 					{headerPhotoSrc && (
-						<ImageZoom
-							src={headerPhotoSrc}
-							alt="Record photo"
-							className="aspect-square w-full shrink-0 sm:w-1/2"
-						/>
+						<div className="relative w-full shrink-0 sm:w-1/2">
+							<ImageZoom
+								src={headerPhotoSrc}
+								alt="Record photo"
+								className="aspect-square w-full"
+							/>
+							{headerMatteSrc && (
+								<img
+									src={headerMatteSrc}
+									alt=""
+									aria-hidden
+									className="pointer-events-none absolute -bottom-[10px] right-[10px] w-1/4"
+								/>
+							)}
+						</div>
 					)}
 					<div className="min-w-0 flex-1">
 						{record.artist && (
