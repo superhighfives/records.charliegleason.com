@@ -14,6 +14,7 @@ import {
 } from "#/lib/discogs";
 import {
 	commitProfessionalMatte,
+	type CoverStageResult,
 	generateProfessionalCover,
 } from "#/lib/professional-pipeline";
 
@@ -81,20 +82,15 @@ export async function enqueueProfessional(recordId: number): Promise<void> {
 
 /**
  * Enqueue stage 2 of the Apply pipeline — the AI matte + final commit — carrying the
- * cover key stage 1 produced so both swap in atomically. Called by the stage-1 consumer,
+ * stage-1 result (cover key + the exact inputs it was built from) so the matte is cut
+ * from the same snapshot and both swap in atomically. Called by the stage-1 consumer,
  * not the UI.
  */
 export async function enqueueProfessionalMatte(
 	recordId: number,
-	coverKey: string,
-	enhanced: boolean,
+	stage: CoverStageResult,
 ): Promise<void> {
-	await analyzeQueue().send({
-		recordId,
-		mode: "professional-matte",
-		coverKey,
-		enhanced,
-	});
+	await analyzeQueue().send({ recordId, mode: "professional-matte", ...stage });
 }
 
 /**
@@ -321,8 +317,16 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				return;
 			}
 
-			const { coverKey, enhanced } = await generateProfessionalCover(record);
-			await enqueueProfessionalMatte(recordId, coverKey, enhanced);
+			const stage = await generateProfessionalCover(record);
+			try {
+				await enqueueProfessionalMatte(recordId, stage);
+			} catch (enqueueErr) {
+				// The cover is written to R2 but the matte stage was never queued — bin
+				// the now-orphaned cover (nothing references it) before the retry re-runs
+				// stage 1 with a fresh key, then rethrow into the failure handling below.
+				await env.PHOTOS.delete(stage.coverKey).catch(() => {});
+				throw enqueueErr;
+			}
 			message.ack();
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
@@ -346,7 +350,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	// reframe/enhance residue. The cover key from stage 1 rides on the message so the
 	// new cover + matte swap in together (no public gap).
 	if (mode === "professional-matte") {
-		const { coverKey, enhanced } = message.body;
+		const { coverKey, enhanced, captureKey, bandJson, paramsJson } =
+			message.body;
 		try {
 			const [record] = await db
 				.update(records)
@@ -360,10 +365,24 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				message.ack();
 				return;
 			}
-			if (!coverKey)
-				throw new Error("professional-matte message missing coverKey");
+			if (
+				!coverKey ||
+				captureKey == null ||
+				bandJson == null ||
+				paramsJson == null
+			) {
+				throw new Error(
+					"professional-matte message missing the stage-1 snapshot",
+				);
+			}
 
-			await commitProfessionalMatte(record, coverKey, enhanced ?? false);
+			await commitProfessionalMatte(record, {
+				coverKey,
+				enhanced: enhanced ?? false,
+				captureKey,
+				bandJson,
+				paramsJson,
+			});
 			message.ack();
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);

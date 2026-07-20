@@ -662,10 +662,10 @@ export const detectCorners = createServerFn({ method: "POST" })
 /**
  * Kick off the paid "Apply" pipeline for a record — reframe + Real-ESRGAN enhance + AI
  * matte. The actual GPU work (~a minute) runs in the queue consumer, split across two
- * isolates ({@link generateProfessionalCover} then {@link commitProfessionalMatte}); this
- * only persists the edited corners + tone knobs,
- * flags `professionalJobStatus: "queued"`, and enqueues the job, returning immediately so
- * the editor can close and the admin can move on. Crucially it does NOT touch the display
+ * isolates ({@link generateProfessionalCover} then {@link commitProfessionalMatte}). This
+ * server fn only persists the edited corners + tone knobs, flags
+ * `professionalJobStatus: "queued"`, and enqueues the job — returning immediately so the
+ * editor can close and the admin can move on. Crucially it does NOT touch the display
  * `professionalStatus`, so an already-approved cover stays live until the consumer swaps in
  * the new keys. Requires a capture to warp — throws if there's none. Returns the updated
  * row (now `queued`), or null if the record's gone.

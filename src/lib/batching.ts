@@ -18,12 +18,16 @@ export interface AnalyzeMessage {
 	// and OOM'd): "professional" does the reframe + Real-ESRGAN enhance (the cover),
 	// then enqueues "professional-matte" for the AI matte + the final atomic commit.
 	mode?: "analyze" | "refresh" | "professional" | "professional-matte";
-	// Only set on "professional-matte": the cover key the "professional" stage
-	// produced, carried forward so the matte stage can swap in the new cover + matte
-	// together in one atomic DB write (no public gap during regeneration), and
-	// whether that cover came from the (enhanced) Real-ESRGAN pass.
+	// Only set on "professional-matte": the stage-1 result — the cover key + the exact
+	// (serialized) capture/band/params the cover was built from. Carried forward so the
+	// matte stage (a) renders the matte from and re-persists the SAME inputs, keeping
+	// cover and matte mutually consistent even if the record changed after stage 1, and
+	// (b) swaps the new cover + matte in together in one atomic DB write (no public gap).
 	coverKey?: string;
 	enhanced?: boolean;
+	captureKey?: string;
+	bandJson?: string;
+	paramsJson?: string;
 }
 
 /**
