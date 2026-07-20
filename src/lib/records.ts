@@ -540,11 +540,11 @@ export const publishRecord = createServerFn({ method: "POST" })
 				}
 
 				// The public site shows the approved professional photo (and its matte),
-				// never the Discogs cover — see displayCoverKey. So a record with no
-				// approved photo would publish to a placeholder. Gate on it too.
-				const hasCover =
-					current.professionalStatus === "approved" &&
-					!!current.professionalImageKey;
+				// never the Discogs cover — so a record with no approved photo would
+				// publish to a placeholder. Gate on the SAME rule the UI displays by
+				// (displayCoverKey), so the publish gate can't drift from what goes live.
+				// (The bulk publishRecords mirrors this as a SQL predicate.)
+				const hasCover = displayCoverKey(current) != null;
 
 				const [row] = await db
 					.update(records)
