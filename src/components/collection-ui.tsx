@@ -46,7 +46,9 @@ export function CollectionUIProvider({ children }: { children: ReactNode }) {
 export function useCollectionUI(): CollectionUI {
 	const ctx = useContext(CollectionUIContext);
 	if (!ctx) {
-		throw new Error("useCollectionUI must be used within a CollectionUIProvider");
+		throw new Error(
+			"useCollectionUI must be used within a CollectionUIProvider",
+		);
 	}
 	return ctx;
 }
