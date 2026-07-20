@@ -145,12 +145,18 @@ export function runWeeklyDigest(): Promise<{ sent: boolean; count: number }> {
 		// Enrich each suggestion with its cheapest vinyl offer. Lookups are
 		// independent and individually failure-tolerant (null on any problem), so
 		// run them together — a slow or missing price never blocks the others.
-		const suggestions: Array<Suggestion> = await Promise.all(
+		const enriched: Array<Suggestion> = await Promise.all(
 			albums.map(async (a) => ({
 				...a,
 				offer: await findCheapestVinyl(a.artist, a.title),
 			})),
 		);
+
+		// Only email records we can actually point at a vinyl to buy. An album with
+		// no qualifying offer (no pressing for sale, or the lookup came back empty)
+		// would otherwise render as a bare title with no "where to buy" line.
+		const suggestions = enriched.filter((s) => s.offer !== null);
+		if (suggestions.length === 0) return { sent: false, count: 0 };
 
 		// `send_email` isn't bound in the preview env, so the binding is optional.
 		// The digest only runs via cron/route in production, where it's present —

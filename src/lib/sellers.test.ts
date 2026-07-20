@@ -58,6 +58,19 @@ describe("isVinylTitle", () => {
 		expect(isVinylTitle("Rumours Tour T-Shirt")).toBe(false);
 		expect(isVinylTitle("Rumours Vinyl + CD bundle")).toBe(false);
 	});
+
+	it("rejects books, songbooks, and sheet music", () => {
+		// A vinyl-biased query still surfaces these when there's no pressing to sell.
+		expect(isVinylTitle("Olivia Rodrigo: The Unofficial Biography")).toBe(
+			false,
+		);
+		expect(isVinylTitle("Fleetwood Mac Rumours (Piano/Vocal Songbook)")).toBe(
+			false,
+		);
+		expect(isVinylTitle("Under The Iron Sea - Sheet Music")).toBe(false);
+		expect(isVinylTitle("The Beatles Anthology (Paperback)")).toBe(false);
+		expect(isVinylTitle("Keane Songbook Hardcover")).toBe(false);
+	});
 });
 
 describe("matchesAlbum", () => {
