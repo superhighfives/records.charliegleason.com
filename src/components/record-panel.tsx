@@ -1,3 +1,5 @@
+import { SignedIn } from "@clerk/clerk-react";
+import { Link } from "@tanstack/react-router";
 import {
 	BadgeCheck,
 	Check,
@@ -6,6 +8,7 @@ import {
 	Copy,
 	ExternalLink,
 	Link2,
+	SquarePen,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
@@ -230,6 +233,24 @@ export function RecordPanel({
 
 	return (
 		<>
+			{/* Admin-only jump to the full editor. Clerk's `SignedIn` renders nothing
+			    for signed-out visitors, so this never shows on the public site. `pr-12`
+			    keeps the row clear of the Sheet's top-right close button. */}
+			<SignedIn>
+				<div className="flex items-center gap-2 border-b border-border bg-brand/5 px-6 py-2 pr-12">
+					<span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
+						Admin
+					</span>
+					<Link
+						to="/admin/records/$id"
+						params={{ id: String(record.id) }}
+						className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-strong hover:text-foreground"
+					>
+						<SquarePen className="size-3.5" />
+						Edit record
+					</Link>
+				</div>
+			</SignedIn>
 			<SheetHeader className="flex-row flex-wrap items-start gap-4 pb-6 pr-10 min-[400px]:flex-nowrap mt-auto border-b border-border">
 				<div className="min-w-0 flex-1">
 					<div className="flex items-start gap-2">
