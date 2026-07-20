@@ -539,6 +539,13 @@ export const publishRecord = createServerFn({ method: "POST" })
 					coverIsUpload = false;
 				}
 
+				// The public site shows the approved professional photo (and its matte),
+				// never the Discogs cover — see displayCoverKey. So a record with no
+				// approved photo would publish to a placeholder. Gate on it too.
+				const hasCover =
+					current.professionalStatus === "approved" &&
+					!!current.professionalImageKey;
+
 				const [row] = await db
 					.update(records)
 					.set({
@@ -549,16 +556,22 @@ export const publishRecord = createServerFn({ method: "POST" })
 						discogsUrl,
 						coverImageKey,
 						coverIsUpload,
-						// A record is only publishable once it has an album (master). Without
-						// one, save it back to `review` rather than pushing it live.
-						status: masterId ? "complete" : "review",
+						// A record is only publishable once it has an album (master) *and* an
+						// approved cover/matte to display. Missing either, save it back to
+						// `review` rather than pushing it live.
+						status: masterId && hasCover ? "complete" : "review",
 						error: null,
 						updatedAt: new Date(),
 					})
 					.where(eq(records.id, id))
 					.returning();
 				return row
-					? { record: row, coverFetchFailed, needsMaster: !masterId }
+					? {
+							record: row,
+							coverFetchFailed,
+							needsMaster: !masterId,
+							needsCover: masterId ? !hasCover : false,
+						}
 					: null;
 			}),
 	);
@@ -1148,8 +1161,9 @@ export const retryRecords = createServerFn({ method: "POST" })
 /**
  * Bulk publish. Flips the selected rows to `complete` so they appear on the
  * public homepage. Shares one timestamp across chunks. Returns how many rows were
- * published — rows without a `masterId` are silently skipped (a record needs an
- * album to be publishable), so the count can be lower than the selection.
+ * published — rows without a `masterId` or an approved cover/matte are silently
+ * skipped (a record needs both to be publishable), so the count can be lower than
+ * the selection.
  */
 export const publishRecords = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -1166,8 +1180,16 @@ export const publishRecords = createServerFn({ method: "POST" })
 					// Clear `error` too: it's only meaningful while `status === "failed"`,
 					// so publishing a previously-failed row must not leave it behind.
 					.set({ status: "complete", error: null, updatedAt: now })
-					// A record is only publishable once it has an album (master).
-					.where(and(inArray(records.id, batch), isNotNull(records.masterId)))
+					// A record is only publishable once it has an album (master) and an
+					// approved cover/matte to display (see displayCoverKey).
+					.where(
+						and(
+							inArray(records.id, batch),
+							isNotNull(records.masterId),
+							eq(records.professionalStatus, "approved"),
+							isNotNull(records.professionalImageKey),
+						),
+					)
 					.returning({ id: records.id });
 				count += rows.length;
 			}

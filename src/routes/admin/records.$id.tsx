@@ -952,6 +952,12 @@ function RecordDetail() {
 		record.professionalJobStatus === "queued" ||
 		record.professionalJobStatus === "processing";
 
+	// Whether the record has a cover/matte that would actually show publicly — the
+	// approved professional photo (displayCoverKey without the capture fallback).
+	// Publishing needs this as well as an album; without it the record would go live
+	// as a placeholder.
+	const hasPublicCover = displayCoverKey(record) != null;
+
 	// Header photo: the approved professional crop, else the raw capture. Never the
 	// Discogs cover (see displayCoverKey) — that stays in the Discogs section only.
 	const headerCoverKey = displayCoverKey(record, { includeCapture: true });
@@ -1570,9 +1576,9 @@ function RecordDetail() {
 							}
 							defaultValues={toForm(record, picked, pickedMaster)}
 							submitLabel={
-								// Publishing needs an album (master). Without one, the save can
-								// only keep the record as a draft.
-								!effectiveMasterId
+								// Publishing needs an album (master) *and* an approved cover/matte.
+								// Without either, the save can only keep the record as a draft.
+								!effectiveMasterId || !hasPublicCover
 									? "Save draft"
 									: record.status === "complete"
 										? "Save changes"
@@ -1615,6 +1621,12 @@ function RecordDetail() {
 									// Saved as a draft — no album linked, so it can't go live yet.
 									toast.warning(
 										"Saved as a draft. Link an album (master) to publish it.",
+									);
+								} else if (result.needsCover) {
+									// Saved as a draft — album linked, but no approved cover/matte to
+									// display, so it can't go live yet.
+									toast.warning(
+										"Saved as a draft. Approve a cover photo to publish it.",
 									);
 								} else {
 									toast.success("Record saved.");
