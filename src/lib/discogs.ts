@@ -2,19 +2,40 @@ import { env } from "cloudflare:workers";
 import { z } from "zod";
 import {
 	buildMasterSearchUrl,
+	buildSearchUrl,
+	cleanArtistName,
+	cleanCatno,
 	DEFAULT_PER_PAGE,
 	DISCOGS_API_BASE,
+	type DiscogsCandidate,
 	type DiscogsMasterCandidate,
+	type DiscogsMasterDetail,
+	formatLine,
 	MAX_PER_PAGE,
+	mapMasterDetail,
 	mapMasterSearchResult,
+	mapReleaseCandidate,
+	mapReleaseSearchResult,
+	masterDetailToCandidate,
 	masterFields,
-	splitTitle,
+	parseMasterId,
+	parseReleaseId,
+	parseSizeAndType,
 } from "#/lib/discogs-shared";
 
-// These moved to the browser-safe shared module; re-export so existing
-// `#/lib/discogs` importers (records.ts, the editor UI, tests) stay unchanged.
-export { buildMasterSearchUrl, MAX_PER_PAGE };
-export type { DiscogsMasterCandidate };
+// The pure helpers/mappers + result shapes live in the browser-safe shared module
+// (so the browser fallback in discogs-browser.ts can reuse them). Re-export the ones
+// with existing `#/lib/discogs` importers (records.ts, analyze.ts, the editor UI,
+// tests) so their imports stay unchanged.
+export {
+	buildMasterSearchUrl,
+	buildSearchUrl,
+	MAX_PER_PAGE,
+	parseMasterId,
+	parseReleaseId,
+	parseSizeAndType,
+};
+export type { DiscogsCandidate, DiscogsMasterCandidate, DiscogsMasterDetail };
 
 /**
  * Discogs client. Uses a personal access token (no OAuth dance):
@@ -26,59 +47,6 @@ export type { DiscogsMasterCandidate };
 const BASE = DISCOGS_API_BASE;
 const USER_AGENT =
 	"RecordsCharlieGleasonCom/1.0 +https://records.charliegleason.com";
-
-export interface DiscogsCandidate {
-	discogsId: string;
-	masterId: string | null; // the master (album) this release belongs to, if any
-	masterUrl: string | null;
-	artist: string;
-	title: string;
-	year: number | null;
-	label: string | null;
-	genre: string | null;
-	format: string | null; // e.g. "Vinyl, 2×LP, Album, Reissue" — disambiguates pressings
-	size: string | null; // physical size parsed from format, e.g. '12"'
-	type: string | null; // release type parsed from format — LP / EP / Single
-	country: string | null;
-	catno: string | null; // catalog number
-	discogsUrl: string;
-	thumb: string | null;
-}
-
-const SIZE_RE = /(\d{1,2})"/;
-
-/**
- * Pull the physical size (e.g. `12"`) and release type (LP / EP / Single) out of
- * Discogs format descriptions. Accepts the raw descriptions array or a joined
- * string. Discogs tags vinyl inconsistently — a 12" album may be described as
- * "Album" with no "LP" — so `Album` folds to `LP` when nothing more specific hits.
- *
- * Discogs also omits an explicit size for standard 12" LPs (their descriptions
- * are just "LP"/"Album" — the size is implied), only spelling it out for odd
- * sizes and singles/EPs. So when no explicit size matched on a vinyl/LP release,
- * default to 12"; explicit tokens (7" singles, 10" EPs) still win. The vinyl
- * guard matters because `type` folds "Album" to "LP" even for CDs — without it a
- * CD album ("CD", "Album") would be mislabelled 12".
- */
-export function parseSizeAndType(
-	source: string | Array<string> | null | undefined,
-): { size: string | null; type: string | null } {
-	const text = Array.isArray(source) ? source.join(", ") : (source ?? "");
-	if (!text) return { size: null, type: null };
-
-	const sizeMatch = text.match(SIZE_RE);
-	let size = sizeMatch ? `${sizeMatch[1]}"` : null;
-
-	let type: string | null = null;
-	if (/\bEP\b/i.test(text)) type = "EP";
-	else if (/\bmaxi-single\b/i.test(text) || /\bsingle\b/i.test(text))
-		type = "Single";
-	else if (/\bLP\b/i.test(text) || /\balbum\b/i.test(text)) type = "LP";
-
-	if (!size && type === "LP" && /\bLP\b|\bvinyl\b/i.test(text)) size = '12"';
-
-	return { size, type };
-}
 
 function headers() {
 	return {
@@ -166,32 +134,6 @@ export interface DiscogsReleaseDetail {
 	tracklist: Array<{ position: string; title: string; duration: string }>;
 }
 
-/** Strip Discogs' disambiguation suffix ("Wire (2)" → "Wire"). */
-function cleanArtistName(name: string): string {
-	return name.replace(/\s*\(\d+\)\s*$/, "").trim();
-}
-
-/**
- * Discogs sometimes stores placeholder catalog numbers ("none", "N/A", etc.)
- * instead of leaving the field blank. Normalise those to null so the UI shows
- * an empty field rather than a meaningless value.
- */
-function cleanCatno(catno: unknown): string | null {
-	if (catno == null) return null;
-	const trimmed = String(catno).trim();
-	if (!trimmed) return null;
-	if (/^(none|undefined|n\/?a|not applicable|n)$/i.test(trimmed)) return null;
-	return trimmed;
-}
-
-// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
-function formatLine(f: any): string {
-	const head = f?.qty && String(f.qty) !== "1" ? `${f.qty}×${f.name}` : f?.name;
-	return [head, ...(Array.isArray(f?.descriptions) ? f.descriptions : [])]
-		.filter(Boolean)
-		.join(", ");
-}
-
 /** Fetch a single release's full details (tracklist, formats, styles, notes). */
 export async function getReleaseDetail(
 	id: string,
@@ -247,33 +189,11 @@ export async function getReleaseDetail(
 }
 
 /**
- * `DiscogsMasterCandidate` (a master/album search hit — the album-level analogue
- * of `DiscogsCandidate`, no pressing-specific catno/country/size/format) now
- * lives in the browser-safe shared module and is re-exported at the top of this
- * file.
- *
- * Album-level details for a Discogs master. Mirrors the album-level subset of a
- * release (a master has no pressing-specific catno/country/size), plus the
- * `mainReleaseId` — Discogs' canonical release for the album — and a cover image
- * so a master-only record can still show artwork without pinning a pressing.
- */
-export interface DiscogsMasterDetail {
-	masterId: string;
-	masterUrl: string | null;
-	mainReleaseId: string | null;
-	artist: string | null;
-	title: string | null;
-	year: number | null; // the album's original year
-	genre: string | null;
-	styles: Array<string>;
-	imageUrl: string | null; // primary image, full size
-}
-
-/**
  * Fetch a Discogs master (the album as a work). Used to refresh / populate the
  * album-level fields of a record that isn't pinned to a specific release. Returns
  * null on any non-2xx (missing master, token trouble) so callers can fall back to
- * whatever they already have.
+ * whatever they already have. The raw JSON → {@link DiscogsMasterDetail} shaping
+ * lives in `mapMasterDetail` (shared with the browser fallback).
  */
 export async function getMasterDetail(
 	id: string,
@@ -283,63 +203,7 @@ export async function getMasterDetail(
 		await res.body?.cancel().catch(() => {});
 		return null;
 	}
-	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs master JSON
-	const d = (await res.json()) as any;
-	const yearNum = d.year ? Number.parseInt(String(d.year), 10) : null;
-	const mainRelease = d.main_release != null ? String(d.main_release) : null;
-	const images: Array<{ type?: string; uri?: string }> = Array.isArray(d.images)
-		? d.images
-		: [];
-	const primary = images.find((i) => i.type === "primary") ?? images[0];
-	const uri = d.uri ? String(d.uri) : "";
-
-	return {
-		masterId: String(d.id ?? id),
-		masterUrl: uri
-			? uri.startsWith("http")
-				? uri
-				: `https://www.discogs.com${uri}`
-			: `https://www.discogs.com/master/${id}`,
-		mainReleaseId: mainRelease,
-		artist:
-			Array.isArray(d.artists) && d.artists[0]?.name
-				? cleanArtistName(String(d.artists[0].name))
-				: null,
-		title: d.title ? String(d.title) : null,
-		year: Number.isFinite(yearNum) ? yearNum : null,
-		genre: Array.isArray(d.genres) && d.genres[0] ? String(d.genres[0]) : null,
-		styles: Array.isArray(d.styles) ? d.styles.map(String) : [],
-		imageUrl: primary?.uri ?? null,
-	};
-}
-
-/**
- * Extract a Discogs release id from whatever the user pasted — a full release
- * URL (`https://www.discogs.com/release/30268103-Private-Life-Private-Life`),
- * a bare `/release/30268103` path, or just the numeric id. Returns null when
- * nothing looks like a release id (e.g. an artist/label/master URL).
- */
-export function parseReleaseId(input: string): string | null {
-	const s = input.trim();
-	if (!s) return null;
-	if (/^\d+$/.test(s)) return s;
-	// Match /release/<id> or /releases/<id>, ignoring the trailing slug.
-	const m = s.match(/\/releases?\/(\d+)/);
-	return m ? m[1] : null;
-}
-
-/**
- * Extract a Discogs master id from a pasted master URL
- * (`https://www.discogs.com/master/12345-Some-Album`), a bare `/master/12345`
- * path, or just the numeric id. Returns null for anything that isn't a master
- * reference (a release URL won't match — use `parseReleaseId` for those).
- */
-export function parseMasterId(input: string): string | null {
-	const s = input.trim();
-	if (!s) return null;
-	if (/^\d+$/.test(s)) return s;
-	const m = s.match(/\/masters?\/(\d+)/);
-	return m ? m[1] : null;
+	return mapMasterDetail(await res.json(), id);
 }
 
 /**
@@ -350,16 +214,7 @@ export async function getMasterCandidate(
 	id: string,
 ): Promise<DiscogsMasterCandidate | null> {
 	const master = await getMasterDetail(id);
-	if (!master) return null;
-	return {
-		masterId: master.masterId,
-		masterUrl: master.masterUrl,
-		artist: master.artist ?? "",
-		title: master.title ?? "",
-		year: master.year,
-		genre: master.genre,
-		thumb: master.imageUrl,
-	};
+	return master ? masterDetailToCandidate(master) : null;
 }
 
 /** Is a Discogs versions row a vinyl pressing? Checks `major_formats` first. */
@@ -438,50 +293,7 @@ export async function getReleaseCandidate(
 ): Promise<DiscogsCandidate | null> {
 	const res = await discogsFetch(`${BASE}/releases/${id}`);
 	if (!res.ok) return null;
-	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs release JSON
-	const d = (await res.json()) as any;
-
-	const descriptions: Array<string> = Array.isArray(d.formats)
-		? // biome-ignore lint/suspicious/noExplicitAny: untyped Discogs format JSON
-			d.formats.flatMap((f: any) =>
-				Array.isArray(f?.descriptions) ? f.descriptions.map(String) : [],
-			)
-		: [];
-	const { size, type } = parseSizeAndType(descriptions);
-	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs label JSON
-	const firstLabel = Array.isArray(d.labels) ? (d.labels[0] as any) : null;
-	const yearNum = d.year ? Number.parseInt(String(d.year), 10) : null;
-	const images: Array<{ type?: string; uri?: string; uri150?: string }> =
-		Array.isArray(d.images) ? d.images : [];
-	const primary = images.find((i) => i.type === "primary") ?? images[0];
-	const uri = d.uri ? String(d.uri) : "";
-
-	return {
-		discogsId: String(d.id ?? id),
-		...masterFields(d),
-		artist: d.artists_sort
-			? cleanArtistName(String(d.artists_sort))
-			: Array.isArray(d.artists) && d.artists[0]?.name
-				? cleanArtistName(String(d.artists[0].name))
-				: "",
-		title: d.title ? String(d.title) : "",
-		year: Number.isFinite(yearNum) ? yearNum : null,
-		label: firstLabel?.name ? String(firstLabel.name) : null,
-		genre: Array.isArray(d.genres) && d.genres[0] ? String(d.genres[0]) : null,
-		format: Array.isArray(d.formats)
-			? d.formats.map(formatLine).filter(Boolean).join(", ") || null
-			: null,
-		size,
-		type,
-		country: d.country ? String(d.country) : null,
-		catno: cleanCatno(firstLabel?.catno),
-		discogsUrl: uri
-			? uri.startsWith("http")
-				? uri
-				: `https://www.discogs.com${uri}`
-			: `https://www.discogs.com/release/${id}`,
-		thumb: primary?.uri150 ?? primary?.uri ?? null,
-	} satisfies DiscogsCandidate;
+	return mapReleaseCandidate(await res.json(), id);
 }
 
 /**
@@ -678,33 +490,6 @@ export const searchParamsSchema = z.object({
 export type SearchParams = z.infer<typeof searchParamsSchema>;
 
 /**
- * Build the Discogs `/database/search` URL, normalising inputs so both the
- * manual admin search and the automated `analyze` path avoid whitespace misses
- * and never send an obviously-invalid `year`. Pure + exported for testing.
- */
-export function buildSearchUrl(
-	{ artist, title, country, year, q }: SearchParams,
-	perPage: number = DEFAULT_PER_PAGE,
-): URL {
-	const url = new URL(`${BASE}/database/search`);
-	url.searchParams.set("type", "release");
-	const [a, t, c, y, query] = [artist, title, country, year, q ?? ""].map((s) =>
-		s.trim(),
-	);
-	if (a) url.searchParams.set("artist", a);
-	if (t) url.searchParams.set("release_title", t);
-	if (c) url.searchParams.set("country", c);
-	// Discogs expects a bare 4-digit year; ignore anything else rather than
-	// sending junk that just returns zero matches.
-	if (/^\d{4}$/.test(y)) url.searchParams.set("year", y);
-	// General keyword search — AND-ed with the structured filters above.
-	if (query) url.searchParams.set("q", query);
-	// Pull a wider net so we can prefer vinyl below without losing other pressings.
-	url.searchParams.set("per_page", String(perPage));
-	return url;
-}
-
-/**
  * Turn an unsuccessful Discogs response (any non-2xx) into a human-readable
  * error. Discogs puts a
  * useful reason in a JSON `message` field (e.g. "You must authenticate to access
@@ -754,28 +539,7 @@ export async function searchReleases(
 	const data = (await res.json()) as {
 		results?: Array<Record<string, unknown>>;
 	};
-	const candidates = (data.results ?? []).map((r) => {
-		const parts = splitTitle(String(r.title ?? ""));
-		const yearNum = r.year ? Number.parseInt(String(r.year), 10) : null;
-		const formatArr = Array.isArray(r.format) ? r.format.map(String) : [];
-		const { size, type } = parseSizeAndType(formatArr);
-		return {
-			discogsId: String(r.id ?? ""),
-			...masterFields(r),
-			artist: parts.artist,
-			title: parts.title,
-			year: Number.isFinite(yearNum) ? yearNum : null,
-			label: Array.isArray(r.label) ? String(r.label[0]) : null,
-			genre: Array.isArray(r.genre) ? String(r.genre[0]) : null,
-			format: formatArr.length ? formatArr.join(", ") : null,
-			size,
-			type,
-			country: r.country ? String(r.country) : null,
-			catno: cleanCatno(r.catno),
-			discogsUrl: r.uri ? `https://www.discogs.com${r.uri}` : "",
-			thumb: r.thumb ? String(r.thumb) : null,
-		} satisfies DiscogsCandidate;
-	});
+	const candidates = (data.results ?? []).map(mapReleaseSearchResult);
 
 	// Prefer vinyl pressings, but fall back to other formats so a CD/digital-only
 	// title still returns matches. Discogs' relevance order is preserved per group.

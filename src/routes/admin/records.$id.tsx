@@ -43,7 +43,13 @@ import type {
 	DiscogsValue,
 	SearchParams,
 } from "#/lib/discogs";
-import { searchMastersFromBrowser } from "#/lib/discogs-browser";
+import {
+	lookupMasterFromBrowser,
+	lookupReleaseFromBrowser,
+	searchMastersFromBrowser,
+	searchReleasesFromBrowser,
+} from "#/lib/discogs-browser";
+import { parseMasterId, parseReleaseId } from "#/lib/discogs-shared";
 import { orderRecordsForReview } from "#/lib/record-order";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
@@ -469,6 +475,19 @@ function MasterPicker({
 			onPick(c);
 		},
 	});
+	// Same clean-IP fallback as the search, for the paste-a-URL path: resolve the
+	// master straight from the admin's browser when the server hits the rate limit.
+	const browserLookup = useMutation({
+		mutationFn: async (url: string) => {
+			const id = parseMasterId(url);
+			if (!id) throw new Error("Couldn’t find a Discogs master at that URL.");
+			return lookupMasterFromBrowser(id);
+		},
+		onSuccess: (c) => {
+			setResults([c]);
+			onPick(c);
+		},
+	});
 
 	return (
 		<div className="space-y-3 rounded-lg border p-3">
@@ -661,7 +680,33 @@ function MasterPicker({
 					</Button>
 				</div>
 				{lookup.isError && (
-					<p className="text-xs text-red-600">{lookup.error.message}</p>
+					<div className="space-y-1" role="alert">
+						<p className="text-xs text-red-600">{lookup.error.message}</p>
+						<div className="flex items-center justify-between gap-2">
+							<p className="text-xs text-muted-foreground">
+								The server shares a rate-limited IP. Retry from your browser
+								instead.
+							</p>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={
+									browserLookup.isPending || !looksLikeMasterId(urlInput)
+								}
+								onClick={() => browserLookup.mutate(urlInput)}
+							>
+								{browserLookup.isPending ? "Linking…" : "Link from browser"}
+							</Button>
+						</div>
+						{browserLookup.isError && (
+							<p className="text-xs text-red-600">
+								{browserLookup.error instanceof Error
+									? browserLookup.error.message
+									: "Browser lookup failed. Try again."}
+							</p>
+						)}
+					</div>
 				)}
 			</form>
 		</div>
@@ -816,6 +861,13 @@ function RecordDetail() {
 		mutationFn: (q: SearchParams) => searchDiscogs({ data: q }),
 		onSuccess: setResults,
 	});
+	// Clean-IP fallback when the server search hits Discogs' per-IP rate limit:
+	// re-run the same release search (all filters, not just artist/title) from the
+	// admin's own browser, unauthenticated. See src/lib/discogs-browser.ts.
+	const browserSearch = useMutation({
+		mutationFn: (q: SearchParams) => searchReleasesFromBrowser(q),
+		onSuccess: setResults,
+	});
 
 	// Resolve a pasted Discogs release URL into a single candidate, then select it
 	// so the form populates and it publishes just like a search hit.
@@ -826,6 +878,18 @@ function RecordDetail() {
 				throw new Error("Couldn’t find a Discogs release at that URL.");
 			}
 			return candidate;
+		},
+		onSuccess: (candidate) => {
+			setResults([candidate]);
+			setPicked(candidate);
+		},
+	});
+	// Browser fallback for the paste-a-URL path, same rationale as the search.
+	const browserLookup = useMutation({
+		mutationFn: async (url: string) => {
+			const id = parseReleaseId(url);
+			if (!id) throw new Error("Couldn’t find a Discogs release at that URL.");
+			return lookupReleaseFromBrowser(id);
 		},
 		onSuccess: (candidate) => {
 			setResults([candidate]);
@@ -1406,11 +1470,37 @@ function RecordDetail() {
 											)}
 
 											{search.isError && (
-												<p className="text-xs text-red-600" role="alert">
-													{search.error instanceof Error
-														? search.error.message
-														: "Search failed. Try again."}
-												</p>
+												<div className="space-y-2" role="alert">
+													<p className="text-xs text-red-600">
+														{search.error instanceof Error
+															? search.error.message
+															: "Search failed. Try again."}
+													</p>
+													<div className="flex items-center justify-between gap-2">
+														<p className="text-xs text-muted-foreground">
+															The server shares a rate-limited IP. Retry from
+															your browser instead.
+														</p>
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															disabled={browserSearch.isPending}
+															onClick={() => browserSearch.mutate(query)}
+														>
+															{browserSearch.isPending
+																? "Searching…"
+																: "Search from browser"}
+														</Button>
+													</div>
+													{browserSearch.isError && (
+														<p className="text-xs text-red-600">
+															{browserSearch.error instanceof Error
+																? browserSearch.error.message
+																: "Browser search failed. Try again."}
+														</p>
+													)}
+												</div>
 											)}
 											{search.isSuccess && (search.data?.length ?? 0) === 0 && (
 												<p
@@ -1459,9 +1549,38 @@ function RecordDetail() {
 												/>
 											</div>
 											{lookup.isError && (
-												<p className="text-xs text-red-600">
-													{lookup.error.message}
-												</p>
+												<div className="space-y-2" role="alert">
+													<p className="text-xs text-red-600">
+														{lookup.error.message}
+													</p>
+													<div className="flex items-center justify-between gap-2">
+														<p className="text-xs text-muted-foreground">
+															The server shares a rate-limited IP. Retry from
+															your browser instead.
+														</p>
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															disabled={
+																browserLookup.isPending ||
+																!looksLikeReleaseId(discogsUrl)
+															}
+															onClick={() => browserLookup.mutate(discogsUrl)}
+														>
+															{browserLookup.isPending
+																? "Fetching…"
+																: "Fetch from browser"}
+														</Button>
+													</div>
+													{browserLookup.isError && (
+														<p className="text-xs text-red-600">
+															{browserLookup.error instanceof Error
+																? browserLookup.error.message
+																: "Browser lookup failed. Try again."}
+														</p>
+													)}
+												</div>
 											)}
 											<div className="flex justify-end">
 												<Button
