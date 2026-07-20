@@ -1,5 +1,20 @@
 import { env } from "cloudflare:workers";
 import { z } from "zod";
+import {
+	buildMasterSearchUrl,
+	DEFAULT_PER_PAGE,
+	DISCOGS_API_BASE,
+	type DiscogsMasterCandidate,
+	mapMasterSearchResult,
+	masterFields,
+	MAX_PER_PAGE,
+	splitTitle,
+} from "#/lib/discogs-shared";
+
+// These moved to the browser-safe shared module; re-export so existing
+// `#/lib/discogs` importers (records.ts, the editor UI, tests) stay unchanged.
+export { buildMasterSearchUrl, MAX_PER_PAGE };
+export type { DiscogsMasterCandidate };
 
 /**
  * Discogs client. Uses a personal access token (no OAuth dance):
@@ -8,7 +23,7 @@ import { z } from "zod";
  * https://www.discogs.com/developers
  */
 
-const BASE = "https://api.discogs.com";
+const BASE = DISCOGS_API_BASE;
 const USER_AGENT =
 	"RecordsCharlieGleasonCom/1.0 +https://records.charliegleason.com";
 
@@ -130,16 +145,6 @@ async function discogsFetch(url: string | URL): Promise<Response> {
 	throw new Error("discogsFetch: exhausted retries");
 }
 
-/** Split a Discogs "Artist - Title" search result title into parts. */
-function splitTitle(combined: string): { artist: string; title: string } {
-	const idx = combined.indexOf(" - ");
-	if (idx === -1) return { artist: "", title: combined };
-	return {
-		artist: combined.slice(0, idx).trim(),
-		title: combined.slice(idx + 3).trim(),
-	};
-}
-
 /** Full release details, fetched on demand when a candidate is expanded. */
 export interface DiscogsReleaseDetail {
 	// Canonical metadata — used to refresh a stored record from its Discogs id.
@@ -164,25 +169,6 @@ export interface DiscogsReleaseDetail {
 /** Strip Discogs' disambiguation suffix ("Wire (2)" → "Wire"). */
 function cleanArtistName(name: string): string {
 	return name.replace(/\s*\(\d+\)\s*$/, "").trim();
-}
-
-/**
- * Pull the master (album) id + url out of a release payload (either a full
- * `/releases/{id}` object or a `/database/search` result). Discogs uses
- * `master_id: 0` (and an empty/absent `master_url`) to mean "this release has no
- * master", so normalise those to null — a standalone release is album-less.
- */
-function masterFields(source: { master_id?: unknown; master_url?: unknown }): {
-	masterId: string | null;
-	masterUrl: string | null;
-} {
-	const id = Number(source?.master_id);
-	const masterId = Number.isFinite(id) && id > 0 ? String(id) : null;
-	const url =
-		masterId && typeof source?.master_url === "string" && source.master_url
-			? source.master_url
-			: null;
-	return { masterId, masterUrl: url };
 }
 
 /**
@@ -261,21 +247,11 @@ export async function getReleaseDetail(
 }
 
 /**
- * A master (album) search hit — the album-level analogue of `DiscogsCandidate`,
- * for the editor's "pick an album" flow. No pressing-specific fields (catno,
- * country, size, format) — those only exist on a release.
- */
-export interface DiscogsMasterCandidate {
-	masterId: string;
-	masterUrl: string | null;
-	artist: string;
-	title: string;
-	year: number | null;
-	genre: string | null;
-	thumb: string | null;
-}
-
-/**
+ * `DiscogsMasterCandidate` (a master/album search hit — the album-level analogue
+ * of `DiscogsCandidate`, no pressing-specific catno/country/size/format) now
+ * lives in the browser-safe shared module and is re-exported at the top of this
+ * file.
+ *
  * Album-level details for a Discogs master. Mirrors the album-level subset of a
  * release (a master has no pressing-specific catno/country/size), plus the
  * `mainReleaseId` — Discogs' canonical release for the album — and a cover image
@@ -677,11 +653,10 @@ export async function getReleaseImageUrl(id: string): Promise<string | null> {
 // hold the alternate pressings worth picking from without bloating every row's
 // stored JSON. A manual search opts into the full result set — see `searchReleases`.
 const MAX_CANDIDATES = 15;
-// Discogs allows up to 100 results per page. The automated path pulls a modest
-// page (enough to prefer vinyl without losing other pressings); a manual search
-// asks for a full page so it can list as many pressings as one request returns.
-const DEFAULT_PER_PAGE = 25;
-export const MAX_PER_PAGE = 100;
+// DEFAULT_PER_PAGE (25) / MAX_PER_PAGE (100 — Discogs' page cap) are imported from
+// the shared module. The automated path pulls a modest page (enough to prefer
+// vinyl without losing other pressings); a manual search asks for a full page so
+// it can list as many pressings as one request returns.
 const isVinyl = (c: DiscogsCandidate) => /vinyl/i.test(c.format ?? "");
 
 /**
@@ -810,32 +785,12 @@ export async function searchReleases(
 }
 
 /**
- * Build the Discogs `/database/search` URL for *masters* (albums). Unlike the
- * release search there's no country/format/vinyl axis — a master is the album as a
- * work — so only artist / title / year / free-text `q` apply. Pure + exported for
- * testing.
- */
-export function buildMasterSearchUrl(
-	{ artist, title, year, q }: SearchParams,
-	perPage: number = DEFAULT_PER_PAGE,
-): URL {
-	const url = new URL(`${BASE}/database/search`);
-	url.searchParams.set("type", "master");
-	const [a, t, y, query] = [artist, title, year, q ?? ""].map((s) => s.trim());
-	if (a) url.searchParams.set("artist", a);
-	if (t) url.searchParams.set("title", t);
-	if (/^\d{4}$/.test(y)) url.searchParams.set("year", y);
-	if (query) url.searchParams.set("q", query);
-	url.searchParams.set("per_page", String(perPage));
-	return url;
-}
-
-/**
  * Search Discogs for master (album) candidates — the editor's "pick an album"
  * flow. Relevance-ordered; a single page is fetched, so at most `MAX_PER_PAGE`
  * come back. Throws on a non-2xx (bad token / rate limit / 5xx) like
  * `searchReleases`, so the caller can surface *why* rather than showing an empty
- * list.
+ * list. URL building + result shaping are shared with the browser fallback
+ * (src/lib/discogs-browser.ts) via `#/lib/discogs-shared`.
  */
 export async function searchMasters(
 	params: SearchParams,
@@ -849,23 +804,7 @@ export async function searchMasters(
 		results?: Array<Record<string, unknown>>;
 	};
 	return (data.results ?? [])
-		.map((r) => {
-			const parts = splitTitle(String(r.title ?? ""));
-			const yearNum = r.year ? Number.parseInt(String(r.year), 10) : null;
-			// A master result's own id is the master id; `master_id`/`master_url` may
-			// also be present and equal, so prefer the explicit field then fall back.
-			const { masterId, masterUrl } = masterFields(r);
-			return {
-				masterId: masterId ?? String(r.id ?? ""),
-				masterUrl:
-					masterUrl ?? (r.uri ? `https://www.discogs.com${r.uri}` : null),
-				artist: parts.artist,
-				title: parts.title,
-				year: Number.isFinite(yearNum) ? yearNum : null,
-				genre: Array.isArray(r.genre) ? String(r.genre[0]) : null,
-				thumb: r.thumb ? String(r.thumb) : null,
-			} satisfies DiscogsMasterCandidate;
-		})
+		.map(mapMasterSearchResult)
 		.filter((c) => c.masterId !== "")
 		.slice(0, limit);
 }

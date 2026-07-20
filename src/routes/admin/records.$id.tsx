@@ -37,6 +37,7 @@ import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import { displayCoverKey, displayMatteKey } from "#/lib/cover";
+import { searchMastersFromBrowser } from "#/lib/discogs-browser";
 import type {
 	DiscogsCandidate,
 	DiscogsMasterCandidate,
@@ -447,6 +448,15 @@ function MasterPicker({
 			searchDiscogsMasters({ data: params }),
 		onSuccess: setResults,
 	});
+	// Fallback when the server-side search is rate-limited: the Worker shares a
+	// Cloudflare egress IP that Discogs throttles per-IP, so run the same search
+	// from the admin's own (clean) browser IP instead. Unauthenticated — see
+	// src/lib/discogs-browser.ts.
+	const browserSearch = useMutation({
+		mutationFn: (params: { artist: string; title: string }) =>
+			searchMastersFromBrowser(params),
+		onSuccess: setResults,
+	});
 	const lookup = useMutation({
 		mutationFn: async (url: string) => {
 			const c = await lookupDiscogsMaster({ data: url });
@@ -528,11 +538,39 @@ function MasterPicker({
 					/>
 				</div>
 				{search.isError && (
-					<p className="text-xs text-red-600" role="alert">
-						{search.error instanceof Error
-							? search.error.message
-							: "Search failed. Try again."}
-					</p>
+					<div className="space-y-2" role="alert">
+						<p className="text-xs text-red-600">
+							{search.error instanceof Error
+								? search.error.message
+								: "Search failed. Try again."}
+						</p>
+						<div className="flex items-center justify-between gap-2">
+							<p className="text-xs text-muted-foreground">
+								The server shares a rate-limited IP. Retry from your browser
+								instead.
+							</p>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={browserSearch.isPending}
+								onClick={() =>
+									browserSearch.mutate({ artist: q.artist, title: q.title })
+								}
+							>
+								{browserSearch.isPending
+									? "Searching…"
+									: "Search from browser"}
+							</Button>
+						</div>
+						{browserSearch.isError && (
+							<p className="text-xs text-red-600">
+								{browserSearch.error instanceof Error
+									? browserSearch.error.message
+									: "Browser search failed. Try again."}
+							</p>
+						)}
+					</div>
 				)}
 				<div className="flex justify-end">
 					<Button
@@ -1107,8 +1145,7 @@ function RecordDetail() {
 					{record.professionalJobStatus === "failed" &&
 						record.professionalError && (
 							<span className="text-xs text-red-600 dark:text-red-400">
-								Last generation failed: {record.professionalError}. Open the
-								editor and Apply again to retry.
+								Last generation failed: {record.professionalError}
 							</span>
 						)}
 				</div>
