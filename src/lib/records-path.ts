@@ -5,12 +5,22 @@
  * stale slug just canonicalises via redirect (see src/routes/records.$id.tsx).
  */
 
+/**
+ * Fold a string to a diacritic-free lowercase form (ö → o, so "Björk" reads as
+ * "bjork"). The shared core of the record slug and the loose-match `normalizeName`
+ * in analyze.ts — kept here (a browser-safe module) so both can call it. Callers
+ * add their own separator/allowed-char handling on top.
+ */
+export function foldDiacritics(value: string | null | undefined): string {
+	return (value ?? "")
+		.normalize("NFKD")
+		.replace(/[̀-ͯ]/g, "") // drop combining marks left by NFKD
+		.toLowerCase();
+}
+
 /** Slugify a record title: lowercase, `&`→"and", diacritics stripped, dash-joined. */
 export function slugifyTitle(title: string | null | undefined): string {
-	return (title ?? "")
-		.normalize("NFKD")
-		.replace(/[̀-ͯ]/g, "") // strip combining diacritics
-		.toLowerCase()
+	return foldDiacritics(title)
 		.replace(/&/g, " and ")
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "");

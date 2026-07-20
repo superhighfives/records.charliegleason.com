@@ -9,6 +9,7 @@ import {
 } from "#/lib/discogs";
 import { bytesToBase64 } from "#/lib/image-data";
 import { sourceCoverFromDiscogs } from "#/lib/images";
+import { foldDiacritics } from "#/lib/records-path";
 import { getPitchforkScore } from "#/lib/the-fork";
 
 /**
@@ -57,10 +58,7 @@ interface Extraction {
  * punctuation/whitespace to single spaces.
  */
 function normalizeName(value: string | null | undefined): string {
-	return (value ?? "")
-		.normalize("NFKD")
-		.replace(/[\u0300-\u036f]/g, "") // drop combining marks left by NFKD
-		.toLowerCase()
+	return foldDiacritics(value)
 		.replace(/[^a-z0-9]+/g, " ")
 		.trim();
 }

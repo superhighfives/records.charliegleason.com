@@ -210,8 +210,8 @@ export function mapReleaseSearchResult(
 		artist: parts.artist,
 		title: parts.title,
 		year: Number.isFinite(yearNum) ? yearNum : null,
-		label: Array.isArray(r.label) ? String(r.label[0]) : null,
-		genre: Array.isArray(r.genre) ? String(r.genre[0]) : null,
+		label: firstArrayString(r.label),
+		genre: firstArrayString(r.genre),
 		format: formatArr.length ? formatArr.join(", ") : null,
 		size,
 		type,
@@ -329,6 +329,16 @@ export function masterDetailToCandidate(
 	};
 }
 
+/**
+ * First element of a Discogs array field (`label`, `genre`, …) as a string, or
+ * null when the array is empty/absent. Guards the `String(arr[0])` footgun: an
+ * empty `[]` makes `arr[0]` `undefined`, and `String(undefined)` is the literal
+ * `"undefined"` — which would then display + persist as the label/genre.
+ */
+export function firstArrayString(v: unknown): string | null {
+	return Array.isArray(v) && v[0] != null ? String(v[0]) : null;
+}
+
 /** Split a Discogs "Artist - Title" search result title into parts. */
 export function splitTitle(combined: string): {
 	artist: string;
@@ -405,7 +415,7 @@ export function mapMasterSearchResult(
 		artist: parts.artist,
 		title: parts.title,
 		year: yearNum != null && Number.isFinite(yearNum) ? yearNum : null,
-		genre: Array.isArray(r.genre) ? String(r.genre[0]) : null,
+		genre: firstArrayString(r.genre),
 		thumb: r.thumb ? String(r.thumb) : null,
 	};
 }

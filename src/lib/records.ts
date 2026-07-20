@@ -191,14 +191,16 @@ export const getRecord = createServerFn({ method: "GET" })
 const STALE_JOB_MS = 5 * 60 * 1000;
 
 /**
- * The error stamped on a reaped job. Split by pipeline so the guidance matches the
- * retry the UI actually offers — "Retry analysis" for a capture, "Apply again" in
- * the editor for a professional generation.
+ * The error stamped on a reaped job. The analyze note carries its own retry guidance
+ * (its failure display shows the note verbatim). The pro note deliberately does NOT: the
+ * editor appends the "Apply again" guidance to *every* professional failure — reaper note
+ * or matte failure — uniformly (see records.$id.tsx), so embedding it here too would
+ * double it on the reaper case.
  */
 const STALE_ANALYZE_NOTE =
 	"Analysis was interrupted — the worker was terminated mid-job and it never finished. Retry analysis to try again.";
 const STALE_PRO_NOTE =
-	"Generation was interrupted — the worker was terminated mid-job and it never finished. Open the editor and Apply again to retry.";
+	"Generation was interrupted — the worker was terminated mid-job and it never finished.";
 
 /** One entry in the header "in flight" menu — a record with a running background job. */
 export interface InFlightItem {
@@ -547,11 +549,11 @@ export const publishRecord = createServerFn({ method: "POST" })
 				}
 
 				// The public site shows the approved professional photo (and its matte),
-				// never the Discogs cover — see displayCoverKey. So a record with no
-				// approved photo would publish to a placeholder. Gate on it too.
-				const hasCover =
-					current.professionalStatus === "approved" &&
-					!!current.professionalImageKey;
+				// never the Discogs cover — so a record with no approved photo would
+				// publish to a placeholder. Gate on the SAME rule the UI displays by
+				// (displayCoverKey), so the publish gate can't drift from what goes live.
+				// (The bulk publishRecords mirrors this as a SQL predicate.)
+				const hasCover = displayCoverKey(current) != null;
 
 				const [row] = await db
 					.update(records)

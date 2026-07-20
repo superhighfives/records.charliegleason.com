@@ -2,9 +2,54 @@ import { describe, expect, it } from "vitest";
 
 import {
 	mapMasterDetail,
+	mapMasterSearchResult,
 	mapReleaseCandidate,
+	mapReleaseSearchResult,
 	masterDetailToCandidate,
 } from "./discogs-shared";
+
+describe("mapReleaseSearchResult", () => {
+	it("maps a populated release search row", () => {
+		const c = mapReleaseSearchResult({
+			id: 123,
+			title: "Wire - Pink Flag",
+			year: "1977",
+			label: ["Harvest"],
+			genre: ["Rock"],
+			format: ["Vinyl", "LP", "Album"],
+			country: "UK",
+			uri: "/release/123",
+		});
+		expect(c).toMatchObject({
+			discogsId: "123",
+			artist: "Wire",
+			title: "Pink Flag",
+			label: "Harvest",
+			genre: "Rock",
+			country: "UK",
+		});
+	});
+
+	it('nulls empty label/genre arrays instead of the string "undefined"', () => {
+		// The bug this guards: `String([][0])` is `"undefined"`, so an empty array
+		// would otherwise persist + display the literal word "undefined".
+		const c = mapReleaseSearchResult({
+			id: 1,
+			title: "A - B",
+			label: [],
+			genre: [],
+		});
+		expect(c.label).toBeNull();
+		expect(c.genre).toBeNull();
+	});
+});
+
+describe("mapMasterSearchResult", () => {
+	it('nulls an empty genre array instead of the string "undefined"', () => {
+		const c = mapMasterSearchResult({ id: 9, title: "A - B", genre: [] });
+		expect(c.genre).toBeNull();
+	});
+});
 
 describe("mapReleaseCandidate", () => {
 	it("shapes a full release payload into a candidate", () => {

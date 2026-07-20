@@ -98,6 +98,57 @@ function looksLikeMasterId(input: string): boolean {
 	return /^\d+$/.test(s) || /\/masters?\/\d+/.test(s);
 }
 
+/** An error's message, or a fallback when it isn't an `Error`. */
+function errText(error: unknown, fallback: string): string {
+	return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * The "server IP is rate-limited → retry from your browser" fallback block, shown
+ * when a server-side Discogs call (search or paste-a-URL lookup) fails. The Worker
+ * egresses from a shared, throttled IP; the admin's own browser has a clean one, so
+ * this offers the unauthenticated re-run (see src/lib/discogs-browser.ts). Shared by
+ * both pickers' four failure sites so the copy/layout/disabled logic can't drift.
+ */
+function RateLimitFallback({
+	primaryError,
+	onRetry,
+	retryPending,
+	retryDisabled = false,
+	retryLabel,
+	retryPendingLabel,
+	browserError,
+}: {
+	primaryError: string;
+	onRetry: () => void;
+	retryPending: boolean;
+	retryDisabled?: boolean;
+	retryLabel: string;
+	retryPendingLabel: string;
+	browserError?: string;
+}) {
+	return (
+		<div className="space-y-2" role="alert">
+			<p className="text-xs text-red-600">{primaryError}</p>
+			<div className="flex items-center justify-between gap-2">
+				<p className="text-xs text-muted-foreground">
+					The server shares a rate-limited IP. Retry from your browser instead.
+				</p>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={retryPending || retryDisabled}
+					onClick={onRetry}
+				>
+					{retryPending ? retryPendingLabel : retryLabel}
+				</Button>
+			</div>
+			{browserError && <p className="text-xs text-red-600">{browserError}</p>}
+		</div>
+	);
+}
+
 /** Read a file to a data URL — used to ship a replacement capture to the server. */
 function readFileAsDataUrl(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -559,37 +610,23 @@ function MasterPicker({
 					/>
 				</div>
 				{search.isError && (
-					<div className="space-y-2" role="alert">
-						<p className="text-xs text-red-600">
-							{search.error instanceof Error
-								? search.error.message
-								: "Search failed. Try again."}
-						</p>
-						<div className="flex items-center justify-between gap-2">
-							<p className="text-xs text-muted-foreground">
-								The server shares a rate-limited IP. Retry from your browser
-								instead.
-							</p>
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								disabled={browserSearch.isPending}
-								onClick={() =>
-									browserSearch.mutate({ artist: q.artist, title: q.title })
-								}
-							>
-								{browserSearch.isPending ? "Searching…" : "Search from browser"}
-							</Button>
-						</div>
-						{browserSearch.isError && (
-							<p className="text-xs text-red-600">
-								{browserSearch.error instanceof Error
-									? browserSearch.error.message
-									: "Browser search failed. Try again."}
-							</p>
-						)}
-					</div>
+					<RateLimitFallback
+						primaryError={errText(search.error, "Search failed. Try again.")}
+						onRetry={() =>
+							browserSearch.mutate({ artist: q.artist, title: q.title })
+						}
+						retryPending={browserSearch.isPending}
+						retryLabel="Search from browser"
+						retryPendingLabel="Searching…"
+						browserError={
+							browserSearch.isError
+								? errText(
+										browserSearch.error,
+										"Browser search failed. Try again.",
+									)
+								: undefined
+						}
+					/>
 				)}
 				<div className="flex justify-end">
 					<Button
@@ -681,33 +718,25 @@ function MasterPicker({
 					</Button>
 				</div>
 				{lookup.isError && (
-					<div className="space-y-1" role="alert">
-						<p className="text-xs text-red-600">{lookup.error.message}</p>
-						<div className="flex items-center justify-between gap-2">
-							<p className="text-xs text-muted-foreground">
-								The server shares a rate-limited IP. Retry from your browser
-								instead.
-							</p>
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								disabled={
-									browserLookup.isPending || !looksLikeMasterId(urlInput)
-								}
-								onClick={() => browserLookup.mutate(urlInput)}
-							>
-								{browserLookup.isPending ? "Linking…" : "Link from browser"}
-							</Button>
-						</div>
-						{browserLookup.isError && (
-							<p className="text-xs text-red-600">
-								{browserLookup.error instanceof Error
-									? browserLookup.error.message
-									: "Browser lookup failed. Try again."}
-							</p>
+					<RateLimitFallback
+						primaryError={errText(
+							lookup.error,
+							"Couldn’t find a Discogs master at that URL.",
 						)}
-					</div>
+						onRetry={() => browserLookup.mutate(urlInput)}
+						retryPending={browserLookup.isPending}
+						retryDisabled={!looksLikeMasterId(urlInput)}
+						retryLabel="Link from browser"
+						retryPendingLabel="Linking…"
+						browserError={
+							browserLookup.isError
+								? errText(
+										browserLookup.error,
+										"Browser lookup failed. Try again.",
+									)
+								: undefined
+						}
+					/>
 				)}
 			</form>
 		</div>
@@ -1233,7 +1262,13 @@ function RecordDetail() {
 					{record.professionalJobStatus === "failed" &&
 						record.professionalError && (
 							<span className="text-xs text-red-600 dark:text-red-400">
+								{/* The recovery guidance lives here (not in the error strings)
+								    so every professional failure — reaper note or matte failure
+								    — surfaces it exactly once. A line break separates it from the
+								    error, which may or may not end in punctuation. */}
 								Last generation failed: {record.professionalError}
+								<br />
+								Open the editor and Apply again to retry.
 							</span>
 						)}
 				</div>
@@ -1487,37 +1522,24 @@ function RecordDetail() {
 											)}
 
 											{search.isError && (
-												<div className="space-y-2" role="alert">
-													<p className="text-xs text-red-600">
-														{search.error instanceof Error
-															? search.error.message
-															: "Search failed. Try again."}
-													</p>
-													<div className="flex items-center justify-between gap-2">
-														<p className="text-xs text-muted-foreground">
-															The server shares a rate-limited IP. Retry from
-															your browser instead.
-														</p>
-														<Button
-															type="button"
-															variant="outline"
-															size="sm"
-															disabled={browserSearch.isPending}
-															onClick={() => browserSearch.mutate(query)}
-														>
-															{browserSearch.isPending
-																? "Searching…"
-																: "Search from browser"}
-														</Button>
-													</div>
-													{browserSearch.isError && (
-														<p className="text-xs text-red-600">
-															{browserSearch.error instanceof Error
-																? browserSearch.error.message
-																: "Browser search failed. Try again."}
-														</p>
+												<RateLimitFallback
+													primaryError={errText(
+														search.error,
+														"Search failed. Try again.",
 													)}
-												</div>
+													onRetry={() => browserSearch.mutate(query)}
+													retryPending={browserSearch.isPending}
+													retryLabel="Search from browser"
+													retryPendingLabel="Searching…"
+													browserError={
+														browserSearch.isError
+															? errText(
+																	browserSearch.error,
+																	"Browser search failed. Try again.",
+																)
+															: undefined
+													}
+												/>
 											)}
 											{search.isSuccess && (search.data?.length ?? 0) === 0 && (
 												<p
@@ -1566,38 +1588,25 @@ function RecordDetail() {
 												/>
 											</div>
 											{lookup.isError && (
-												<div className="space-y-2" role="alert">
-													<p className="text-xs text-red-600">
-														{lookup.error.message}
-													</p>
-													<div className="flex items-center justify-between gap-2">
-														<p className="text-xs text-muted-foreground">
-															The server shares a rate-limited IP. Retry from
-															your browser instead.
-														</p>
-														<Button
-															type="button"
-															variant="outline"
-															size="sm"
-															disabled={
-																browserLookup.isPending ||
-																!looksLikeReleaseId(discogsUrl)
-															}
-															onClick={() => browserLookup.mutate(discogsUrl)}
-														>
-															{browserLookup.isPending
-																? "Fetching…"
-																: "Fetch from browser"}
-														</Button>
-													</div>
-													{browserLookup.isError && (
-														<p className="text-xs text-red-600">
-															{browserLookup.error instanceof Error
-																? browserLookup.error.message
-																: "Browser lookup failed. Try again."}
-														</p>
+												<RateLimitFallback
+													primaryError={errText(
+														lookup.error,
+														"Couldn’t find a Discogs release at that URL.",
 													)}
-												</div>
+													onRetry={() => browserLookup.mutate(discogsUrl)}
+													retryPending={browserLookup.isPending}
+													retryDisabled={!looksLikeReleaseId(discogsUrl)}
+													retryLabel="Fetch from browser"
+													retryPendingLabel="Fetching…"
+													browserError={
+														browserLookup.isError
+															? errText(
+																	browserLookup.error,
+																	"Browser lookup failed. Try again.",
+																)
+															: undefined
+													}
+												/>
 											)}
 											<div className="flex justify-end">
 												<Button

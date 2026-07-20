@@ -33,7 +33,9 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	// in-app action — `openRecord` sets the flag before navigating. Direct
 	// navigation / SSR leaves it false, so the drawer appears in place instead of
 	// looking like a spurious transition on load. Captured once per mount (the
-	// route swap that opens a record remounts this view) and cleared after.
+	// route swap that opens a record remounts this view) and cleared after — the
+	// clear stays in an effect so the initializer is a pure read (Strict Mode /
+	// concurrent rendering may invoke it twice).
 	const [animateOpen] = useState(() => animateOpenRef.current);
 	useEffect(() => {
 		animateOpenRef.current = false;
