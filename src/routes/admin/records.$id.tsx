@@ -63,6 +63,7 @@ import {
 	searchDiscogs,
 	searchDiscogsMasters,
 } from "#/lib/records";
+import { recordPath } from "#/lib/records-path";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 import {
 	DEFAULT_REFRAME_PARAMS,
@@ -1076,7 +1077,15 @@ function RecordDetail() {
 								{record.status === "review" && !record.masterId ? (
 									<UnmatchedBadge />
 								) : (
-									<StatusBadge status={record.status} />
+									<StatusBadge
+										status={record.status}
+										// A published record has a live public page — link the badge to it.
+										href={
+											record.status === "complete"
+												? recordPath({ id: record.id, title: record.title })
+												: undefined
+										}
+									/>
 								)}
 							</div>
 						</div>

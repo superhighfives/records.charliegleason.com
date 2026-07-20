@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 
 import { cn } from "#/lib/utils.ts";
 
@@ -8,6 +9,10 @@ import { cn } from "#/lib/utils.ts";
  * (headings, tables, code blocks, raw HTML) is stripped rather than
  * rendered. react-markdown disables raw HTML by default, so this is
  * safe to render for admin-authored notes.
+ *
+ * `remark-breaks` makes a single newline a hard line break (a `<br>`)
+ * rather than collapsing it to a space, so notes pasted with their own
+ * line breaks — lyrics, addresses, lists of names — keep them.
  */
 const ALLOWED_ELEMENTS = [
 	"p",
@@ -35,6 +40,7 @@ export function NotesContent({ children, className }: NotesContentProps) {
 			)}
 		>
 			<ReactMarkdown
+				remarkPlugins={[remarkBreaks]}
 				allowedElements={ALLOWED_ELEMENTS}
 				unwrapDisallowed
 				components={{

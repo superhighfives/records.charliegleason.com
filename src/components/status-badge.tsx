@@ -1,3 +1,5 @@
+import { ExternalLink } from "lucide-react";
+
 import type { Record } from "#/db/schema";
 import { cn } from "#/lib/utils";
 
@@ -34,20 +36,32 @@ type Record2<K extends string, V> = { [P in K]: V };
 export function StatusBadge({
 	status,
 	className,
+	href,
 }: {
 	status: Status | null;
 	className?: string;
+	/** When set, the badge becomes a link (e.g. a published record's live page),
+	 *  opening in a new tab with an external-link affordance. */
+	href?: string;
 }) {
 	const style = STYLES[status ?? "complete"];
-	return (
-		<span
-			className={cn(
-				"inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium",
-				style.className,
-				className,
-			)}
-		>
-			{style.label}
-		</span>
+	const classes = cn(
+		"inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium",
+		style.className,
+		className,
 	);
+	if (href) {
+		return (
+			<a
+				href={href}
+				target="_blank"
+				rel="noopener noreferrer"
+				className={cn(classes, "transition-colors hover:bg-foreground/5")}
+			>
+				{style.label}
+				<ExternalLink className="size-3" />
+			</a>
+		);
+	}
+	return <span className={classes}>{style.label}</span>;
 }
