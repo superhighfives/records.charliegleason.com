@@ -1,3 +1,4 @@
+import { useClerk } from "@clerk/clerk-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Check, Disc, Loader2, OctagonX } from "lucide-react";
@@ -259,6 +260,22 @@ function QueueRow({
  * Polls via {@link inFlightQueryOptions}. The trigger hides entirely when there's nothing
  * running and no session history, so it's invisible at rest.
  */
+/**
+ * A write server function guarded by `authMiddleware` rejects with a 401/403 (message
+ * "Unauthorized"/"Forbidden") when the request's session token is stale — which can happen
+ * while the SPA stays mounted and the client-side `<SignedIn>` gate still reads as signed in.
+ * Detect that so the queue can prompt a re-auth instead of showing a dead-end error.
+ */
+function isAuthError(error: unknown): boolean {
+	if (!error) return false;
+	const status =
+		(error as { status?: number; statusCode?: number }).status ??
+		(error as { statusCode?: number }).statusCode;
+	if (status === 401 || status === 403) return true;
+	const message = error instanceof Error ? error.message : String(error);
+	return /unauthor|forbidden/i.test(message);
+}
+
 export function QueueMenu() {
 	const { data } = useQuery(inFlightQueryOptions);
 	const live = data ?? [];
@@ -275,20 +292,44 @@ export function QueueMenu() {
 	// dialog, so it doesn't fight the dropdown's own open/close. Reset the armed state
 	// whenever the menu closes so it never reopens already-confirming.
 	const queryClient = useQueryClient();
+	const { redirectToSignIn } = useClerk();
 	const [confirmingFailAll, setConfirmingFailAll] = useState(false);
 	const failAll = useMutation({
 		mutationFn: () => failAllInFlight(),
 		onSuccess: async ({ count }) => {
-			setConfirmingFailAll(false);
-			// Fuzzy-matches the in-flight key too, so the list clears on the next tick.
-			await queryClient.invalidateQueries({ queryKey: ["records"] });
 			toast.success(
 				count === 0
 					? "Nothing was still running."
 					: `Stopped ${count} job${count === 1 ? "" : "s"}.`,
 			);
 		},
-		onError: () => toast.error("Couldn't stop the running jobs."),
+		onError: (error) => {
+			// A stale session token makes the write 401 while the shell still reads as
+			// signed in — offer a re-auth instead of a dead-end error.
+			if (isAuthError(error)) {
+				toast.error("Your session expired — sign in again to stop the jobs.", {
+					action: {
+						label: "Sign in",
+						onClick: () => redirectToSignIn(),
+					},
+				});
+				return;
+			}
+			// Otherwise surface the actual reason instead of a blanket message: the server
+			// may have stopped the jobs even when the client saw a failure (a healthy
+			// handler behind a flaky response), and a bare "Couldn't stop" hides whether it
+			// was a network blip or a real server error.
+			const reason = error instanceof Error ? error.message : String(error);
+			toast.error(`Couldn't stop the running jobs: ${reason}`);
+		},
+		// Reconcile with server truth on both paths: the confirm row closes and the
+		// in-flight list re-fetches whether the call reported success or failure, so a
+		// silent server-side success can't leave the UI stuck showing stopped jobs.
+		// (Fuzzy-matches the in-flight key too, so the list clears on the next tick.)
+		onSettled: async () => {
+			setConfirmingFailAll(false);
+			await queryClient.invalidateQueries({ queryKey: ["records"] });
+		},
 	});
 
 	if (live.length === 0 && finished.length === 0) return null;
@@ -368,7 +409,7 @@ export function QueueMenu() {
 					<>
 						<DropdownMenuSeparator />
 						{confirmingFailAll ? (
-							<div className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+							<div className="flex min-h-9 items-center justify-between gap-2 px-2 py-1.5 text-xs">
 								<span className="text-muted-foreground">
 									Stop {live.length} running job{live.length === 1 ? "" : "s"}?
 								</span>
@@ -397,7 +438,7 @@ export function QueueMenu() {
 									e.preventDefault();
 									setConfirmingFailAll(true);
 								}}
-								className="justify-center gap-2 text-xs text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+								className="min-h-9 justify-center gap-2 text-xs text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
 							>
 								<OctagonX className="size-3.5" />
 								Fail all
