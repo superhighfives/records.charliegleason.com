@@ -10,6 +10,16 @@ cutting into the depicted artwork or grabbing a neighbouring object. The caller
 (`src/lib/matte.ts`) builds the trimap from the admin's picked sleeve corners.
 """
 
+import os
+
+# Reduce CUDA allocator fragmentation before torch initialises the allocator. ViTMatte's
+# peak allocation for a large `max_size` input can OOM a GPU even with nominal headroom,
+# because PyTorch reserves blocks it then can't reuse ("reserved but unallocated" in the OOM
+# message). Expandable segments let the caching allocator grow one segment instead of
+# fragmenting — the fix the CUDA OOM error itself suggests. Must be set before the first CUDA
+# allocation, so it goes at the very top; `setdefault` lets a Replicate-level env var win.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import tempfile
 
 import torch
