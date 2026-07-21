@@ -161,8 +161,11 @@
 			},
 			// Matte container — repeated here because bindings aren't inherited, so preview
 			// renders mattes the same way production does. Its deploy builds the image too.
+			// Needs an explicit `name` (unlike production, this env block has no top-level
+			// `name` to derive the container app name from).
 			"containers": [
 				{
+					"name": "records-preview-matte",
 					"class_name": "MatteContainer",
 					"image": "./containers/matte/Dockerfile",
 					"image_build_context": ".",
