@@ -1,8 +1,8 @@
 /**
- * Splitting helpers for bulk work, kept dependency-free so both the server
- * data-access layer and the queue producer can share them — and so the splitting
- * math is unit-testable without a Workers runtime (see batching.test.ts). Two
- * hard platform limits drive everything here:
+ * Pure queue helpers kept dependency-free so both the server data-access layer and the
+ * queue producer/consumer can share them — and so the logic is unit-testable without a
+ * Workers runtime (see batching.test.ts). Covers the bulk-splitting math (bounded by two
+ * hard platform limits) and the Apply pipeline's matte state machine:
  *
  *  - D1 rejects any query with more than 100 bound parameters.
  *  - Cloudflare Queues accept at most 100 messages per `sendBatch` call.
@@ -76,4 +76,25 @@ export function toQueueBatches(
 	return chunk(recordIds, QUEUE_BATCH_SIZE).map((slice) =>
 		slice.map((recordId) => ({ body: { recordId, mode } })),
 	);
+}
+
+/** What the `professional-matte` consumer should do after an AI-matte attempt. */
+export type MatteAction = "commit" | "retry-ai" | "fallback";
+
+/**
+ * Decide the next step of the AI-matte stage (`professional-matte`) — the "prefer AI"
+ * state machine, pulled out pure so it's testable without the Queue/DB plumbing. A
+ * successful render commits; a failure retries the AI stage while the queue's redelivery
+ * budget lasts (so a transient Replicate/network blip gets another AI attempt rather than
+ * an immediate downgrade), and only falls back to the deterministic render once AI is
+ * genuinely exhausted. `attempts` is the current delivery's `message.attempts`; the
+ * comparison mirrors the queue's own `willRetry` (attempts ≤ `maxRetries` ⇒ retry).
+ */
+export function nextMatteAction(
+	aiSucceeded: boolean,
+	attempts: number,
+	maxRetries: number,
+): MatteAction {
+	if (aiSucceeded) return "commit";
+	return attempts <= maxRetries ? "retry-ai" : "fallback";
 }

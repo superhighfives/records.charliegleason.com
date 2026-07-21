@@ -5,7 +5,11 @@ import { eq, ne } from "drizzle-orm";
 import { getDb } from "#/db";
 import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
-import { type AnalyzeMessage, toQueueBatches } from "#/lib/batching";
+import {
+	type AnalyzeMessage,
+	nextMatteAction,
+	toQueueBatches,
+} from "#/lib/batching";
 import {
 	getMasterDetail,
 	getReleaseDetail,
@@ -433,33 +437,44 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 
 			// AI matte only — no inline deterministic fallback (that would stack the two big
 			// renders on one isolate). We PREFER the AI matte, so a failure isn't an
-			// immediate downgrade: log the real error to Sentry and retry the AI stage
-			// (backoff) until the queue's retries run out — the deterministic fallback is a
-			// LAST resort, not the response to a transient Replicate/network blip.
-			let aiMatte: MatteKeys;
+			// immediate downgrade; `nextMatteAction` (pure, tested) decides between commit,
+			// another AI attempt, or the last-resort deterministic fallback.
+			let aiMatte: MatteKeys | null = null;
+			let aiError: unknown = null;
 			try {
 				aiMatte = await renderAiMatte(stage);
 			} catch (err) {
-				const detail = err instanceof Error ? err.message : String(err);
-				const willRetry = message.attempts <= MAX_RETRIES;
-				console.warn(
-					`[queue] AI matte failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
-				);
-				// Capture the ACTUAL AI failure (Replicate error, fetch status, OOM, …) —
-				// otherwise the deterministic fallback silently masks why AI never ran.
-				Sentry.captureException(err);
-				if (willRetry) {
-					// Keep trying AI — don't drop to deterministic yet.
-					await markProfessionalFailed(db, recordId, true, detail);
-					message.retry({ delaySeconds: backoffSeconds(message.attempts) });
-					return;
-				}
-				// AI genuinely exhausted → last-resort deterministic fallback, fresh isolate.
-				await enqueueProfessionalMatteFallback(recordId, stage);
+				aiError = err;
+			}
+
+			const action = nextMatteAction(
+				aiMatte != null,
+				message.attempts,
+				MAX_RETRIES,
+			);
+			if (action === "commit") {
+				await commitProfessionalMatte(record, stage, aiMatte, null);
 				message.ack();
 				return;
 			}
-			await commitProfessionalMatte(record, stage, aiMatte, null);
+
+			// AI failed — capture the ACTUAL error (Replicate error, fetch status, OOM, …)
+			// so the fallback can't silently mask why AI never ran.
+			const detail =
+				aiError instanceof Error ? aiError.message : String(aiError);
+			console.warn(
+				`[queue] AI matte failed for record ${recordId} (attempt ${message.attempts}, action=${action}): ${detail}`,
+			);
+			Sentry.captureException(aiError);
+			if (action === "retry-ai") {
+				// Keep trying AI — don't drop to deterministic yet.
+				await markProfessionalFailed(db, recordId, true, detail);
+				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
+				return;
+			}
+			// action === "fallback" — AI genuinely exhausted, defer the deterministic
+			// render to its own fresh isolate.
+			await enqueueProfessionalMatteFallback(recordId, stage);
 			message.ack();
 			return;
 		} catch (err) {

@@ -4,6 +4,7 @@ import {
 	type AnalyzeMessage,
 	chunk,
 	D1_PARAM_CHUNK,
+	nextMatteAction,
 	QUEUE_BATCH_SIZE,
 	toQueueBatches,
 } from "./batching";
@@ -109,5 +110,39 @@ describe("toQueueBatches", () => {
 		for (const message of bodies) {
 			expect(message.body.mode).toBe("refresh");
 		}
+	});
+});
+
+describe("nextMatteAction", () => {
+	const MAX = 3;
+
+	it("commits as soon as the AI matte succeeds, regardless of attempt", () => {
+		for (const attempts of [1, MAX, MAX + 1, 99]) {
+			expect(nextMatteAction(true, attempts, MAX)).toBe("commit");
+		}
+	});
+
+	it("retries the AI stage while the redelivery budget lasts", () => {
+		// `willRetry` is attempts <= maxRetries, so attempts 1..MAX keep trying AI.
+		for (let attempts = 1; attempts <= MAX; attempts++) {
+			expect(nextMatteAction(false, attempts, MAX)).toBe("retry-ai");
+		}
+	});
+
+	it("falls back to deterministic only once AI is genuinely exhausted", () => {
+		expect(nextMatteAction(false, MAX + 1, MAX)).toBe("fallback");
+		expect(nextMatteAction(false, 100, MAX)).toBe("fallback");
+	});
+
+	it("never falls back before the last AI attempt (prefer-AI invariant)", () => {
+		// With any positive budget, the first failed attempt must retry AI, not degrade.
+		for (const max of [1, 3, 5]) {
+			expect(nextMatteAction(false, 1, max)).toBe("retry-ai");
+		}
+	});
+
+	it("falls back immediately when there is no retry budget", () => {
+		// maxRetries 0 → the first (and only) failure has nowhere to retry.
+		expect(nextMatteAction(false, 1, 0)).toBe("fallback");
 	});
 });
