@@ -5,10 +5,10 @@ import type { Record } from "#/db/schema";
 import { bytesToBase64 } from "#/lib/image-data";
 import {
 	applyPolish,
-	type Corners,
 	detectSleeveCorners,
 	type RgbaImage,
 	reframeFromCorners,
+	toPixelCorners,
 } from "#/lib/photo-processing";
 import {
 	DEFAULT_REFRAME_PARAMS,
@@ -157,15 +157,6 @@ export function encodePng(image: RgbaImage): Uint8Array {
 	} finally {
 		img.free();
 	}
-}
-
-/** Scale normalised (0..1) corners up to pixel coordinates for a `w`×`h` capture. */
-export function toPixelCorners(
-	corners: NormalizedCorners,
-	w: number,
-	h: number,
-): Corners {
-	return corners.map(([x, y]) => [x * (w - 1), y * (h - 1)]) as Corners;
 }
 
 // A normalised capture is a ~2048² webp, comfortably under ~2 MB. Anything materially
