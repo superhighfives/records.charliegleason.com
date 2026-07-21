@@ -1445,6 +1445,9 @@ export const retryProfessionalGenerations = createServerFn({ method: "POST" })
 					.update(records)
 					.set({
 						professionalJobStatus: "queued",
+						// Restart at stage 1 — mirrors the per-record reframeRecord so a row
+						// that failed mid-stage-2 doesn't carry a stale "matte" marker.
+						professionalStage: "cover",
 						professionalError: null,
 						professionalRetryCount: 0,
 						updatedAt: now,
@@ -1510,11 +1513,16 @@ export const retryProfessionalMattes = createServerFn({ method: "POST" })
 				}
 			}
 			if (items.length === 0) return { count: 0 };
-			for (const batch of chunk(
-				items.map((i) => i.recordId),
-				D1_PARAM_CHUNK,
-			)) {
-				await db
+			const byId = new Map(items.map((i) => [i.recordId, i]));
+			// Re-apply the eligibility predicate in the UPDATE itself, atomically with the
+			// flip — a row that changed between the SELECT above and this write (e.g. a
+			// concurrent editor Apply that just landed an AI matte, so it's no longer
+			// `deterministic`) is skipped rather than blindly re-queued and re-enqueued from
+			// a now-stale snapshot, which would clobber what that job produced. Enqueue only
+			// the rows this UPDATE actually flipped (its returned ids).
+			const flipped: number[] = [];
+			for (const batch of chunk([...byId.keys()], D1_PARAM_CHUNK)) {
+				const rows = await db
 					.update(records)
 					.set({
 						professionalJobStatus: "queued",
@@ -1522,10 +1530,25 @@ export const retryProfessionalMattes = createServerFn({ method: "POST" })
 						professionalRetryCount: 0,
 						updatedAt: now,
 					})
-					.where(inArray(records.id, batch));
+					.where(
+						and(
+							inArray(records.id, batch),
+							eq(records.professionalAlphaSource, "deterministic"),
+							isNotNull(records.capturePhotoKey),
+							isNotNull(records.professionalImageKey),
+						),
+					)
+					.returning({ id: records.id });
+				flipped.push(...rows.map(({ id }) => id));
 			}
-			await enqueueProfessionalMatteBatch(items);
-			return { count: items.length };
+			const toEnqueue = flipped
+				.map((id) => byId.get(id))
+				.filter(
+					(i): i is { recordId: number; stage: CoverStageResult } => i != null,
+				);
+			if (toEnqueue.length === 0) return { count: 0 };
+			await enqueueProfessionalMatteBatch(toEnqueue);
+			return { count: toEnqueue.length };
 		}),
 	);
 
