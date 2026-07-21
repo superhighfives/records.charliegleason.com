@@ -332,6 +332,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				.update(records)
 				.set({
 					professionalJobStatus: "processing",
+					professionalStage: "cover",
 					professionalError: null,
 					updatedAt: new Date(),
 				})
@@ -396,7 +397,11 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		try {
 			const [record] = await db
 				.update(records)
-				.set({ professionalJobStatus: "processing", updatedAt: new Date() })
+				.set({
+					professionalJobStatus: "processing",
+					professionalStage: "matte",
+					updatedAt: new Date(),
+				})
 				.where(eq(records.id, recordId))
 				.returning();
 

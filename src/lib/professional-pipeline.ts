@@ -196,6 +196,7 @@ export async function commitProfessionalMatte(
 			// Apply promotes the (new) cover to live regardless — the matte is best-effort.
 			professionalStatus: "approved",
 			professionalJobStatus: matteFailed ? "failed" : "idle",
+			professionalStage: null,
 			professionalError: matteFailed
 				? `Matte generation failed: ${matteError instanceof Error ? matteError.message : String(matteError)}`
 				: opts.aiFallbackReason
