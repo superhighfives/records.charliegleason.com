@@ -352,16 +352,25 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		const reaped = (await Promise.all(reaps)).filter(
 			(r): r is { id: number; outcome: "retry" | "fail" } => r != null,
 		);
+		const reapedOutcome = new Map(reaped.map((r) => [r.id, r.outcome]));
 		// Send the fresh queue message only after the row-state UPDATE committed, so a failed
 		// enqueue can't leave a row flagged running with nothing actually queued (the next
 		// poll re-reaps it). A row that fell out of the running state before its UPDATE
-		// landed simply isn't in `reaped`.
+		// landed simply isn't in `reaped`. Each send is isolated: a transient Queues-binding
+		// failure on one row must not throw out of the handler (this whole fn would 500) nor
+		// skip the remaining rows' sends. The row is already flipped to queued/pending, so
+		// the next poll re-reaps and re-sends it; we just log so the miss isn't silent.
 		for (const { id, outcome } of reaped) {
 			if (outcome !== "retry") continue;
 			const wasAnalyzing = rows.find((r) => r.id === id)?.status;
-			await (wasAnalyzing === "pending" || wasAnalyzing === "processing"
-				? enqueueAnalyze(id)
-				: enqueueProfessional(id));
+			const analyzing =
+				wasAnalyzing === "pending" || wasAnalyzing === "processing";
+			try {
+				await (analyzing ? enqueueAnalyze(id) : enqueueProfessional(id));
+			} catch (err) {
+				console.error(`[reaper] re-enqueue failed for record ${id}`, err);
+				Sentry.captureException(err);
+			}
 		}
 		// Only terminally-failed rows leave the in-flight menu; re-enqueued ones are still
 		// running (freshly `queued`/`pending`) and stay.
@@ -374,6 +383,11 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 			.map((row): InFlightItem => {
 				const analyzing =
 					row.status === "pending" || row.status === "processing";
+				// A row re-enqueued in THIS sweep was just flipped to queued/pending with a
+				// fresh, stage-less job — reflect that rather than the pre-reap `rows`
+				// snapshot's now-stale `processing`/`stage` (which would otherwise show a
+				// plausible-but-wrong "still running stage N" for up to STALE_JOB_MS).
+				const retried = reapedOutcome.get(row.id) === "retry";
 				return {
 					id: row.id,
 					artist: row.artist,
@@ -381,10 +395,15 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 					thumbKey: displayCoverKey(row, { includeCapture: true }),
 					kind: analyzing ? "analyze" : "professional",
 					state: analyzing
-						? (row.status as "pending" | "processing")
-						: (row.professionalJobStatus as "queued" | "processing"),
-					// Only meaningful for a processing professional job; null otherwise.
-					stage: analyzing ? null : row.professionalStage,
+						? retried
+							? "pending"
+							: (row.status as "pending" | "processing")
+						: retried
+							? "queued"
+							: (row.professionalJobStatus as "queued" | "processing"),
+					// Only meaningful for a processing professional job; a freshly re-enqueued
+					// one hasn't entered a stage yet, so null.
+					stage: analyzing || retried ? null : row.professionalStage,
 				};
 			});
 	}),
