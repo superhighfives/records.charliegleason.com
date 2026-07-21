@@ -34,7 +34,9 @@ import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
 	enqueueProfessional,
+	enqueueProfessionalBatch,
 	enqueueProfessionalMatte,
+	enqueueProfessionalMatteBatch,
 	enqueueRefreshBatch,
 	fetchValueForRecord,
 	refreshRecordById,
@@ -1416,6 +1418,114 @@ export const unpublishRecords = createServerFn({ method: "POST" })
 				count += rows.length;
 			}
 			return { count };
+		}),
+	);
+
+/**
+ * Bulk "Retry generation". Re-runs the full Apply pipeline (reframe + Real-ESRGAN enhance +
+ * AI matte) for every selected record that has a capture to generate from — mirroring the
+ * per-record {@link reframeRecord} but keyed only by id (uses each row's stored corners +
+ * tone). Only rows currently flagged `failed` with a capture are acted on — a mixed
+ * selection's healthy rows are left untouched. Flips each to `queued`, clears the
+ * error, resets the reaper's auto-retry budget, and enqueues in chunked `sendBatch` calls.
+ * Leaves the display `professionalStatus` alone, so an already-approved cover stays live
+ * until the fresh one swaps in. Returns how many were re-queued.
+ */
+export const retryProfessionalGenerations = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "retryProfessionalGenerations" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const now = new Date();
+			const requeued: number[] = [];
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.update(records)
+					.set({
+						professionalJobStatus: "queued",
+						professionalError: null,
+						professionalRetryCount: 0,
+						updatedAt: now,
+					})
+					// Only the flagged-failed rows that have a capture to warp — a mixed
+					// selection's healthy rows are left alone (no needless paid re-render).
+					.where(
+						and(
+							inArray(records.id, batch),
+							eq(records.professionalJobStatus, "failed"),
+							isNotNull(records.capturePhotoKey),
+						),
+					)
+					.returning({ id: records.id });
+				requeued.push(...rows.map(({ id }) => id));
+			}
+			await enqueueProfessionalBatch(requeued);
+			return { count: requeued.length };
+		}),
+	);
+
+/**
+ * Bulk "Retry AI matte". Re-runs ONLY stage 2 (the AI matte + commit) for every selected
+ * record that has a live cover + its source capture — mirroring the per-record
+ * {@link retryProfessionalMatte}, reconstructing each row's stage-1 snapshot so the re-cut
+ * matte stays consistent with the live cover (which swaps in atomically only if the AI
+ * matte lands). Skips the reframe + enhance the full pipeline would redo. Only rows on the
+ * deterministic fallback with a cover + capture are acted on; everything else in the
+ * selection is silently skipped. Returns how many were re-queued.
+ */
+export const retryProfessionalMattes = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "retryProfessionalMattes" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const now = new Date();
+			const items: Array<{ recordId: number; stage: CoverStageResult }> = [];
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.select()
+					.from(records)
+					.where(inArray(records.id, batch));
+				for (const record of rows) {
+					// Only rows actually on the deterministic fallback (what "Retry AI matte"
+					// upgrades) — a mixed selection's AI-matte / no-matte rows are left alone.
+					if (record.professionalAlphaSource !== "deterministic") continue;
+					// Need a committed cover + its source capture to re-cut the matte from.
+					if (!record.capturePhotoKey || !record.professionalImageKey) continue;
+					const band = parseCornerBand(record.sleeveCornersJson);
+					const params = parseReframeParams(record.professionalParamsJson);
+					items.push({
+						recordId: record.id,
+						stage: {
+							coverKey: record.professionalImageKey,
+							enhanced: record.professionalEnhanced ?? false,
+							captureKey: record.capturePhotoKey,
+							bandJson: serializeCornerBand(band),
+							paramsJson: JSON.stringify(params),
+						},
+					});
+				}
+			}
+			if (items.length === 0) return { count: 0 };
+			for (const batch of chunk(
+				items.map((i) => i.recordId),
+				D1_PARAM_CHUNK,
+			)) {
+				await db
+					.update(records)
+					.set({
+						professionalJobStatus: "queued",
+						professionalError: null,
+						professionalRetryCount: 0,
+						updatedAt: now,
+					})
+					.where(inArray(records.id, batch));
+			}
+			await enqueueProfessionalMatteBatch(items);
+			return { count: items.length };
 		}),
 	);
 
