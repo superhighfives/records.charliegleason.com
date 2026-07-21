@@ -248,10 +248,18 @@ export async function upscaleImage(
 	const url = firstOutputUrl(prediction.output);
 	if (!url) throw new Error("Replicate returned no upscaled image");
 	const res = await fetch(url);
-	if (!res.ok || !res.body)
+	if (!res.ok)
 		throw new Error(`Fetching the upscaled image failed (${res.status})`);
 
-	const capped = await env.IMAGES.input(res.body)
+	// Buffer the CDN response fully before the Images transform. Streaming `res.body`
+	// straight into the binding couples the (sometimes slow) transform to the upstream
+	// replicate.delivery connection: if that read paces slowly the connection idles out
+	// and the Images binding throws an uncatchable-looking "Network connection lost."
+	// mid-transform (confirmed in Sentry — culprit `images-api throwErrorIfErrorResponse`).
+	// Draining to bytes first consumes the body promptly and hands Images stable in-memory
+	// input, confining any real network flakiness to this fetch (where our retry covers it).
+	const bytes = new Uint8Array(await res.arrayBuffer());
+	const capped = await env.IMAGES.input(blobStream(bytes))
 		.transform({ width: cap, height: cap, fit: "scale-down" })
 		.output({ format: "image/webp", quality: 92 });
 	return decodeRgba(new Uint8Array(await capped.response().arrayBuffer()));
@@ -297,11 +305,16 @@ export async function upscaleProfessional(
 	if (!outputUrl) throw new Error("Replicate returned no upscaled image");
 
 	const upscaled = await fetch(outputUrl);
-	if (!upscaled.ok || !upscaled.body) {
+	if (!upscaled.ok) {
 		throw new Error(`Fetching the upscaled image failed (${upscaled.status})`);
 	}
 
-	const out = await env.IMAGES.input(upscaled.body)
+	// Buffer before the Images transform — see upscaleImage: streaming the CDN body
+	// straight into the binding is what surfaces "Network connection lost." mid-read
+	// (this is the `[pro] enhance failed` path). Drain to bytes, then hand Images
+	// stable in-memory input.
+	const upscaledBytes = new Uint8Array(await upscaled.arrayBuffer());
+	const out = await env.IMAGES.input(blobStream(upscaledBytes))
 		.transform({ width: UPSCALE_MAX, height: UPSCALE_MAX, fit: "scale-down" })
 		.output({ format: "image/webp", quality: 92 });
 	const buffer = await out.response().arrayBuffer();
