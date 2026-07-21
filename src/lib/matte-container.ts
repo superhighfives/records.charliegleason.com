@@ -47,7 +47,11 @@ export async function renderMatteInContainer(input: {
 	params: ReframeParams;
 	mode: "ai" | "deterministic";
 }): Promise<ContainerMatte> {
-	const stub = await getRandom(env.MATTE_CONTAINER, MATTE_CONTAINER_INSTANCES);
+	// Only bound in production; the caller (renderAiMatte / renderDeterministicMatte) checks
+	// presence before routing here, so this guard is just for the type + a clear failure.
+	const binding = env.MATTE_CONTAINER;
+	if (!binding) throw new Error("MATTE_CONTAINER binding is not configured");
+	const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
 	const res = await stub.fetch("http://matte-container/matte", {
 		method: "POST",
 		headers: { "content-type": "application/json" },

@@ -3,7 +3,10 @@ import { eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
-import { generateMatteViaContainer } from "#/lib/matte";
+import {
+	generateMatteFromCapture,
+	generateMatteViaContainer,
+} from "#/lib/matte";
 import { reframeFromCapture, upscaleProfessional } from "#/lib/professional";
 import { parseReframeParams } from "#/lib/reframe-params";
 import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
@@ -104,34 +107,46 @@ export type MatteKeys = {
 };
 
 /**
- * Render ONLY the paid AI matte from a stage-1 {@link CoverStageResult} snapshot, in the
- * matte container (real RAM — off the 128 MB queue-consumer isolate that OOM-looped on this
- * render). Throws on any AI failure without falling back in-container, so the queue's retry
- * then deterministic-fallback logic is unchanged (see {@link renderDeterministicMatte}).
+ * Render ONLY the paid AI matte from a stage-1 {@link CoverStageResult} snapshot. Where the
+ * matte container is bound (production) it renders there — real RAM, off the 128 MB
+ * queue-consumer isolate that OOM-looped on this render. Where it isn't (preview, whose
+ * `versions upload` deploy can't host the container's DO), it falls back to the in-Worker
+ * render. Either way it throws on AI failure without a deterministic fallback, so the queue's
+ * retry then deterministic-fallback logic is unchanged (see {@link renderDeterministicMatte}).
  */
 export function renderAiMatte(stage: CoverStageResult): Promise<MatteKeys> {
-	return generateMatteViaContainer(
-		stage.captureKey,
-		parseCornerBand(stage.bandJson),
-		parseReframeParams(stage.paramsJson),
-		"ai",
-	);
+	const band = parseCornerBand(stage.bandJson);
+	const params = parseReframeParams(stage.paramsJson);
+	if (env.MATTE_CONTAINER) {
+		return generateMatteViaContainer(stage.captureKey, band, params, "ai");
+	}
+	return generateMatteFromCapture(stage.captureKey, band, params, {
+		useAi: true,
+		fallback: false,
+	});
 }
 
 /**
  * Render ONLY the free deterministic matte from the stage-1 snapshot — the fallback the queue
- * runs after {@link renderAiMatte}'s AI attempts are exhausted. Also renders in the container,
- * so the ~3000² deskew never touches the Worker isolate either.
+ * runs after {@link renderAiMatte}'s AI attempts are exhausted. Renders in the container where
+ * bound (so the ~3000² deskew never touches the Worker isolate), else in-Worker (preview).
  */
 export function renderDeterministicMatte(
 	stage: CoverStageResult,
 ): Promise<MatteKeys> {
-	return generateMatteViaContainer(
-		stage.captureKey,
-		parseCornerBand(stage.bandJson),
-		parseReframeParams(stage.paramsJson),
-		"deterministic",
-	);
+	const band = parseCornerBand(stage.bandJson);
+	const params = parseReframeParams(stage.paramsJson);
+	if (env.MATTE_CONTAINER) {
+		return generateMatteViaContainer(
+			stage.captureKey,
+			band,
+			params,
+			"deterministic",
+		);
+	}
+	return generateMatteFromCapture(stage.captureKey, band, params, {
+		useAi: false,
+	});
 }
 
 /**

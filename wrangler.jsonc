@@ -84,8 +84,9 @@
 	// off the 128 MB queue-consumer isolate that OOM-looped on it. Built from
 	// containers/matte/Dockerfile with the REPO ROOT as build context
 	// (`image_build_context: "."`) so the bundle step can reach the shared src/lib pure
-	// modules. Fronted by the MatteContainer DO. Repeated in env.preview (bindings aren't
-	// inherited) so preview exercises the same path.
+	// modules. Fronted by the MatteContainer DO. Production only — preview can't host the
+	// DO (its `versions upload` deploy can't apply DO migrations), so it falls back to the
+	// in-Worker matte render (see renderAiMatte / renderDeterministicMatte).
 	"containers": [
 		{
 			"class_name": "MatteContainer",
@@ -155,32 +156,14 @@
 				"crons": []
 			},
 			// `vars` is non-inheritable, so restate it — marks this the preview deploy
-			// so Sentry stays disabled (src/server.ts).
+			// so Sentry stays disabled (src/server.ts). No matte container here on purpose:
+			// preview ships via `wrangler versions upload`, which can't apply the container's
+			// Durable Object migration (only a non-versioned `deploy` can). With no
+			// MATTE_CONTAINER binding, the Apply pipeline falls back to the in-Worker matte
+			// render in preview (see renderAiMatte / renderDeterministicMatte).
 			"vars": {
 				"ENVIRONMENT": "preview"
 			},
-			// Matte container — repeated here because bindings aren't inherited, so preview
-			// renders mattes the same way production does. Its deploy builds the image too.
-			// Needs an explicit `name` (unlike production, this env block has no top-level
-			// `name` to derive the container app name from).
-			"containers": [
-				{
-					"name": "records-preview-matte",
-					"class_name": "MatteContainer",
-					"image": "./containers/matte/Dockerfile",
-					"image_build_context": ".",
-					"instance_type": "standard-1",
-					"max_instances": 3
-				}
-			],
-			"durable_objects": {
-				"bindings": [
-					{ "name": "MATTE_CONTAINER", "class_name": "MatteContainer" }
-				]
-			},
-			"migrations": [
-				{ "tag": "v1", "new_sqlite_classes": ["MatteContainer"] }
-			],
 			"d1_databases": [
 				{
 					"binding": "DB",
