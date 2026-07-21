@@ -80,6 +80,30 @@
 	"images": {
 		"binding": "IMAGES"
 	},
+	// Matte render container — the Apply pipeline's sleeve matte renders here (real RAM),
+	// off the 128 MB queue-consumer isolate that OOM-looped on it. Built from
+	// containers/matte/Dockerfile with the REPO ROOT as build context
+	// (`image_build_context: "."`) so the bundle step can reach the shared src/lib pure
+	// modules. Fronted by the MatteContainer DO. Production only — preview can't host the
+	// DO (its `versions upload` deploy can't apply DO migrations), so it falls back to the
+	// in-Worker matte render (see renderAiMatte / renderDeterministicMatte).
+	"containers": [
+		{
+			"class_name": "MatteContainer",
+			"image": "./containers/matte/Dockerfile",
+			"image_build_context": ".",
+			"instance_type": "standard-1",
+			"max_instances": 3
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{ "name": "MATTE_CONTAINER", "class_name": "MatteContainer" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["MatteContainer"] }
+	],
 	// Weekly "records to buy" digest email (Cron Trigger drives the job) —
 	// Mondays at 14:00 UTC.
 	"triggers": {
@@ -132,10 +156,19 @@
 				"crons": []
 			},
 			// `vars` is non-inheritable, so restate it — marks this the preview deploy
-			// so Sentry stays disabled (src/server.ts).
+			// so Sentry stays disabled (src/server.ts). No matte container here on purpose:
+			// preview ships via `wrangler versions upload`, which can't apply the container's
+			// Durable Object migration (only a non-versioned `deploy` can). With no
+			// MATTE_CONTAINER binding, the Apply pipeline falls back to the in-Worker matte
+			// render in preview (see renderAiMatte / renderDeterministicMatte).
 			"vars": {
 				"ENVIRONMENT": "preview"
 			},
+			// Migrations ARE inherited by named environments (unlike bindings), so the
+			// top-level MatteContainer DO migration would otherwise ride along — and preview's
+			// `versions upload` can't apply DO migrations (code 10211). Override to empty: no
+			// container DO in preview, so the matte falls back to the in-Worker render.
+			"migrations": [],
 			"d1_databases": [
 				{
 					"binding": "DB",

@@ -1,0 +1,16 @@
+{
+	"name": "records-matte-container",
+	"private": true,
+	"type": "module",
+	"description": "Standalone matte renderer — runs the memory-heavy sleeve matte outside the 128MB Worker isolate. Fronted by the MatteContainer DO in the main Worker.",
+	"scripts": {
+		"build": "node build.mjs",
+		"start": "node dist/server.js"
+	},
+	"dependencies": {
+		"sharp": "^0.33.5"
+	},
+	"devDependencies": {
+		"esbuild": "^0.24.2"
+	}
+}

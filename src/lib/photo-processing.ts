@@ -26,6 +26,15 @@ export type Corner = [number, number];
 /** Four corners in TL, TR, BR, BL order (clockwise from top-left). */
 export type Corners = [Corner, Corner, Corner, Corner];
 
+/** Scale normalised (0..1) corners up to pixel coordinates for a `w`×`h` image. */
+export function toPixelCorners(
+	corners: NormalizedCorners,
+	w: number,
+	h: number,
+): Corners {
+	return corners.map(([x, y]) => [x * (w - 1), y * (h - 1)]) as Corners;
+}
+
 // ---------- linear algebra (just enough for a homography) ----------
 
 /** Solve an 8x8 linear system by Gaussian elimination with partial pivoting. */
