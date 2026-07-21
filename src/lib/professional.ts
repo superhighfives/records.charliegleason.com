@@ -16,6 +16,7 @@ import {
 	type ReframeParams,
 } from "#/lib/reframe-params";
 import { firstOutputUrl, runVersion } from "#/lib/replicate";
+import { NonRetryableError, withRetry } from "#/lib/retry";
 import {
 	bandFromQuad,
 	type CornerBand,
@@ -82,6 +83,48 @@ const UPSCALE_MAX = 4000;
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
 export function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 	return new Blob([bytes as BlobPart]).stream();
+}
+
+const IMAGES_FETCH_ATTEMPTS = 3;
+const IMAGES_RETRY_BASE_MS = 400;
+
+/**
+ * Fetch a Replicate output image by URL and re-encode it to a bounded square webp through
+ * the Images binding, returning the encoded bytes. Shared by {@link upscaleImage} and
+ * {@link upscaleProfessional} — the two ESRGAN-output call sites.
+ *
+ * Two subtleties this centralises:
+ *   - Buffer the CDN response to bytes BEFORE the transform. Streaming a live `res.body`
+ *     straight into Images lets the (slow) transform pace the upstream read until the idle
+ *     replicate.delivery connection is reaped, and the binding throws an uncatchable-looking
+ *     "Network connection lost." mid-transform (Sentry culprit `images-api
+ *     throwErrorIfErrorResponse`). Draining first hands Images stable in-memory input.
+ *   - Retry that transient locally (a few cheap re-fetches of the same URL) rather than
+ *     re-running the whole ~90s Replicate chain via the queue's outer retry. A non-2xx
+ *     response (expired CDN link, 401/403 config) won't fix itself, so it's thrown
+ *     {@link NonRetryableError} and surfaces immediately — like `discogsFetch`'s 401/404
+ *     handling — instead of burning all attempts on it.
+ */
+async function fetchScaledWebp(
+	url: string,
+	maxSize: number,
+): Promise<ArrayBuffer> {
+	return withRetry(
+		async () => {
+			const res = await fetch(url);
+			if (!res.ok) {
+				throw new NonRetryableError(
+					`Fetching the upscaled image failed (${res.status})`,
+				);
+			}
+			const bytes = new Uint8Array(await res.arrayBuffer());
+			const out = await env.IMAGES.input(blobStream(bytes))
+				.transform({ width: maxSize, height: maxSize, fit: "scale-down" })
+				.output({ format: "image/webp", quality: 92 });
+			return out.response().arrayBuffer();
+		},
+		{ attempts: IMAGES_FETCH_ATTEMPTS, baseMs: IMAGES_RETRY_BASE_MS },
+	);
 }
 
 /** Decode encoded image bytes to an {@link RgbaImage} via Photon. */
@@ -247,14 +290,7 @@ export async function upscaleImage(
 	});
 	const url = firstOutputUrl(prediction.output);
 	if (!url) throw new Error("Replicate returned no upscaled image");
-	const res = await fetch(url);
-	if (!res.ok || !res.body)
-		throw new Error(`Fetching the upscaled image failed (${res.status})`);
-
-	const capped = await env.IMAGES.input(res.body)
-		.transform({ width: cap, height: cap, fit: "scale-down" })
-		.output({ format: "image/webp", quality: 92 });
-	return decodeRgba(new Uint8Array(await capped.response().arrayBuffer()));
+	return decodeRgba(new Uint8Array(await fetchScaledWebp(url, cap)));
 }
 
 /**
@@ -296,15 +332,9 @@ export async function upscaleProfessional(
 	const outputUrl = firstOutputUrl(prediction.output);
 	if (!outputUrl) throw new Error("Replicate returned no upscaled image");
 
-	const upscaled = await fetch(outputUrl);
-	if (!upscaled.ok || !upscaled.body) {
-		throw new Error(`Fetching the upscaled image failed (${upscaled.status})`);
-	}
-
-	const out = await env.IMAGES.input(upscaled.body)
-		.transform({ width: UPSCALE_MAX, height: UPSCALE_MAX, fit: "scale-down" })
-		.output({ format: "image/webp", quality: 92 });
-	const buffer = await out.response().arrayBuffer();
+	// Same fetch-then-Images-transform as upscaleImage (this is the `[pro] enhance failed`
+	// path) — see fetchScaledWebp for the buffer-before-transform + local-retry rationale.
+	const buffer = await fetchScaledWebp(outputUrl, UPSCALE_MAX);
 
 	const key = `professional/${crypto.randomUUID()}.webp`;
 	await env.PHOTOS.put(key, buffer, {
