@@ -164,6 +164,11 @@
 			"vars": {
 				"ENVIRONMENT": "preview"
 			},
+			// Migrations ARE inherited by named environments (unlike bindings), so the
+			// top-level MatteContainer DO migration would otherwise ride along — and preview's
+			// `versions upload` can't apply DO migrations (code 10211). Override to empty: no
+			// container DO in preview, so the matte falls back to the in-Worker render.
+			"migrations": [],
 			"d1_databases": [
 				{
 					"binding": "DB",
