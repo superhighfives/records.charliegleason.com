@@ -3,7 +3,7 @@ import * as Sentry from "@sentry/cloudflare";
 import { eq, ne } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { type Record, records } from "#/db/schema";
+import { type JobStep, type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import {
 	type AnalyzeMessage,
@@ -63,8 +63,29 @@ async function markProfessionalFailed(
 		.set({
 			professionalJobStatus: willRetry ? "queued" : "failed",
 			professionalError: detail,
+			// Terminal (failed) or headed back to the queue (a re-enqueue restarts at
+			// reframe) — either way the current sub-step no longer applies.
+			jobStep: null,
 			updatedAt: new Date(),
 		})
+		.where(eq(records.id, recordId))
+		.catch(() => {});
+}
+
+/**
+ * Stamp the current display-only sub-step on the row (see `records.jobStep`) so the header
+ * queue can show "(2/4) Enhancing" etc. Best-effort and non-fatal — a missed write just
+ * leaves the menu on the previous step for another poll. Bumps `updatedAt` too, so a long
+ * step that's actively progressing doesn't drift toward the reaper's stale-job threshold.
+ */
+async function setJobStep(
+	db: ReturnType<typeof getDb>,
+	recordId: number,
+	step: JobStep,
+): Promise<void> {
+	await db
+		.update(records)
+		.set({ jobStep: step, updatedAt: new Date() })
 		.where(eq(records.id, recordId))
 		.catch(() => {});
 }
@@ -363,6 +384,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				.set({
 					professionalJobStatus: "processing",
 					professionalStage: "cover",
+					// First visible sub-step; the enhance checkpoint follows via the callback.
+					jobStep: "reframe",
 					professionalError: null,
 					updatedAt: new Date(),
 				})
@@ -375,7 +398,9 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				return;
 			}
 
-			const stage = await generateProfessionalCover(record);
+			const stage = await generateProfessionalCover(record, (step) =>
+				setJobStep(db, recordId, step),
+			);
 			// Do NOT delete stage.coverKey if this throws: a queue `send` can fail on the
 			// client (timed-out ack) after the message was actually accepted server-side.
 			// Deleting the key then would leave that in-flight matte message committing
@@ -430,6 +455,9 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				.set({
 					professionalJobStatus: "processing",
 					professionalStage: "matte",
+					// The AI attempt vs the (last-resort) deterministic render read differently
+					// in the menu; the finishing checkpoint is stamped just before the commit.
+					jobStep: isFallback ? "matte-fallback" : "matte-ai",
 					updatedAt: new Date(),
 				})
 				.where(eq(records.id, recordId))
@@ -474,6 +502,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 					matteError = err;
 					return null;
 				});
+				await setJobStep(db, recordId, "finishing");
 				// A successful deterministic fallback still notes why AI was skipped, so the
 				// silent downgrade is visible in the admin UI (not just Sentry).
 				await commitProfessionalMatte(record, stage, matte, matteError, {
@@ -501,6 +530,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				MAX_RETRIES,
 			);
 			if (action === "commit") {
+				await setJobStep(db, recordId, "finishing");
 				await commitProfessionalMatte(record, stage, aiMatte, null);
 				message.ack();
 				return;
@@ -546,7 +576,13 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	try {
 		const [record] = await db
 			.update(records)
-			.set({ status: "processing", error: null, updatedAt: new Date() })
+			.set({
+				status: "processing",
+				error: null,
+				// First visible sub-step; the rest follow via the callback below.
+				jobStep: "reading",
+				updatedAt: new Date(),
+			})
 			.where(eq(records.id, recordId))
 			.returning();
 
@@ -556,7 +592,9 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			return;
 		}
 
-		const result = await analyzeCapture(record);
+		const result = await analyzeCapture(record, (step) =>
+			setJobStep(db, recordId, step),
+		);
 
 		if (!result.masterId) {
 			// Identified the sleeve but couldn't attach a Discogs album (master) —
@@ -624,7 +662,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				duplicateOf,
 				status: "review",
 				error: null,
-				// Analysis landed — clear the reaper's auto-retry budget.
+				// Analysis landed — clear the progress marker + the reaper's auto-retry budget.
+				jobStep: null,
 				analyzeRetryCount: 0,
 				updatedAt: new Date(),
 			})
@@ -646,6 +685,9 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			.set({
 				status: willRetry ? "pending" : "failed",
 				error: detail,
+				// Terminal (failed) or headed back to the queue (a retry restarts at reading)
+				// — either way the current sub-step no longer applies.
+				jobStep: null,
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, recordId))

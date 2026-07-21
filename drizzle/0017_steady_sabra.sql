@@ -1,0 +1,1 @@
+ALTER TABLE `records` ADD `job_step` text;

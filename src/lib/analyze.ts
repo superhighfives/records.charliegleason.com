@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 
-import type { Record } from "#/db/schema";
+import type { JobStep, Record } from "#/db/schema";
 import { runClaude } from "#/lib/ai";
 import {
 	type DiscogsCandidate,
@@ -290,7 +290,13 @@ async function identifyWithWebSearch(
  * on Pitchfork, and source a resized cover. Never stores anything on the record —
  * the queue consumer writes the result.
  */
-export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
+export async function analyzeCapture(
+	record: Record,
+	// Fired as each visible sub-step begins so the caller can surface it (see
+	// `records.jobStep`). Best-effort/display-only — the caller swallows write errors.
+	// The initial "reading" step is stamped by the caller before this runs.
+	onStep?: (step: JobStep) => Promise<void>,
+): Promise<AnalysisResult> {
 	if (!record.capturePhotoKey) {
 		throw new Error("record has no capture photo to analyze");
 	}
@@ -309,6 +315,7 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 
 	// 2. Discogs lookup — identify the ALBUM (master), not a specific pressing. The
 	// collector pins a release later; the cover only needs to name the album.
+	await onStep?.("matching");
 	let masters = extraction.artist
 		? await searchMasters({
 				artist: extraction.artist,
@@ -321,6 +328,7 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 
 	// 3. Escalate to web search when unsure or unmatched.
 	if (extraction.confidence < 0.3 || masters.length === 0) {
+		await onStep?.("web-search");
 		console.info(
 			`[analyze] escalating to web search (confidence=${extraction.confidence}, discogs masters=${masters.length})`,
 		);
@@ -351,12 +359,14 @@ export async function analyzeCapture(record: Record): Promise<AnalysisResult> {
 		: null;
 
 	// 4. Pitchfork score (best-effort).
+	await onStep?.("scoring");
 	const pitchfork = await getPitchforkScore(
 		extraction.artist,
 		extraction.title,
 	);
 
 	// 5. Source + resize the cover from the album's canonical (main) release.
+	await onStep?.("artwork");
 	const coverReleaseId = detail?.mainReleaseId ?? null;
 	const coverImageKey = coverReleaseId
 		? await sourceCoverFromDiscogs(coverReleaseId)

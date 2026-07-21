@@ -120,6 +120,13 @@
       "when": 1784604206103,
       "tag": "0016_lethal_talos",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1784665546973,
+      "tag": "0017_steady_sabra",
+      "breakpoints": true
     }
   ]
 }

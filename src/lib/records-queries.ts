@@ -4,6 +4,7 @@ import {
 	getRecord,
 	listInFlight,
 	listPublicRecords,
+	listQueueOutcomes,
 	listRecords,
 } from "#/lib/records";
 
@@ -59,3 +60,21 @@ export const inFlightQueryOptions = queryOptions({
 	// back. (No-op once the queue empties, since the interval above is then false.)
 	refetchIntervalInBackground: true,
 });
+
+/**
+ * Terminal outcomes (failed / deterministic-matte fallback / ok) for the header queue's
+ * finished rows, keyed on the exact id set so it refetches whenever an item joins or leaves
+ * the client's session history. A finished item's outcome is stable — a retry moves it back
+ * into the in-flight set, out of this list — so there's no interval; one fetch per id-set
+ * change is enough. The sorted key keeps a re-ordered-but-identical set from refetching.
+ */
+export const queueOutcomesQueryOptions = (ids: number[]) =>
+	queryOptions({
+		queryKey: [
+			"records",
+			"queue-outcomes",
+			[...ids].sort((a, b) => a - b),
+		] as const,
+		queryFn: () => listQueueOutcomes({ data: ids }),
+		enabled: ids.length > 0,
+	});
