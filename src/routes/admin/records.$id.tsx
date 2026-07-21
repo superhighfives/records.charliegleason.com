@@ -66,6 +66,7 @@ import {
 	reframeRecord,
 	replaceCapture,
 	reprocessRecord,
+	retryProfessionalMatte,
 	searchDiscogs,
 	searchDiscogsMasters,
 	unpublishRecord,
@@ -968,6 +969,23 @@ function RecordDetail() {
 		}
 	}
 
+	// Re-run just the AI matte after a record fell back to the deterministic path
+	// (the amber note below the capture actions). Re-enqueues stage 2 only — the cover
+	// stays live and swaps its matte in atomically if the AI attempt lands this time.
+	const retryMatte = useMutation({
+		mutationFn: () => retryProfessionalMatte({ data: { id: recordId } }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			toast.success("Retrying the AI matte… this runs in the background.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't retry the AI matte.",
+			),
+	});
+
 	const retry = useMutation({
 		mutationFn: () => reprocessRecord({ data: recordId }),
 		onSuccess: invalidate,
@@ -1283,6 +1301,23 @@ function RecordDetail() {
 						record.professionalError && (
 							<span className="text-xs text-amber-600 dark:text-amber-400">
 								{record.professionalError}
+								{/* Offer a one-click re-run only when we're actually on the
+								    deterministic matte (the case a retry can upgrade) — the AI
+								    stage re-enqueues on its own, leaving the fallback cover live
+								    until/unless it succeeds. */}
+								{record.professionalAlphaSource === "deterministic" && (
+									<>
+										{" "}
+										<button
+											type="button"
+											disabled={retryMatte.isPending}
+											onClick={() => retryMatte.mutate()}
+											className="font-medium underline underline-offset-4 disabled:opacity-60"
+										>
+											{retryMatte.isPending ? "Retrying…" : "Retry AI matte"}
+										</button>
+									</>
+								)}
 							</span>
 						)}
 				</div>

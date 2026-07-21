@@ -29,10 +29,12 @@ import {
 } from "#/lib/images";
 import { generateMatteFromCapture } from "#/lib/matte";
 import { detectCaptureCorners, professionalPipeline } from "#/lib/professional";
+import type { CoverStageResult } from "#/lib/professional-pipeline";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
 	enqueueProfessional,
+	enqueueProfessionalMatte,
 	enqueueRefreshBatch,
 	fetchValueForRecord,
 	refreshRecordById,
@@ -191,6 +193,15 @@ export const getRecord = createServerFn({ method: "GET" })
 const STALE_JOB_MS = 5 * 60 * 1000;
 
 /**
+ * How many times the reaper re-enqueues a FRESH job before giving up and flagging a dead
+ * job terminally failed. Targets uncatchable interruptions (OOM / eviction / mid-deploy
+ * termination) the queue's own per-message retries can't recover — a clean re-run usually
+ * clears a transient one. Counted per-pipeline on the row (`analyzeRetryCount` /
+ * `professionalRetryCount`); reset on success and manual re-triggers.
+ */
+const MAX_AUTO_RETRIES = 3;
+
+/**
  * The error stamped on a reaped job. The analyze note carries its own retry guidance
  * (its failure display shows the note verbatim). The pro note deliberately does NOT: the
  * editor appends the "Apply again" guidance to *every* professional failure — reaper note
@@ -239,6 +250,8 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 				professionalStatus: records.professionalStatus,
 				professionalImageKey: records.professionalImageKey,
 				capturePhotoKey: records.capturePhotoKey,
+				analyzeRetryCount: records.analyzeRetryCount,
+				professionalRetryCount: records.professionalRetryCount,
 				updatedAt: records.updatedAt,
 			})
 			.from(records)
@@ -250,38 +263,68 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 			)
 			.orderBy(desc(records.updatedAt));
 
-		// Reap dead jobs so they leave the menu and offer a retry instead of
-		// spinning forever. The status guard on each UPDATE makes it race-safe: a
-		// job that legitimately finished between this SELECT and the UPDATE no
-		// longer matches, so we never clobber a just-completed generation. This poll
-		// is the only frequent code path, so it doubles as the self-heal sweep — no
-		// extra cron needed. Reaped rows are dropped from the returned list below.
+		// Reap dead jobs so they don't spin forever. Each is either re-enqueued (a fresh,
+		// clean-isolate run, while its auto-retry budget lasts) or flagged terminally failed
+		// for manual action. The status guard on each UPDATE makes it race-safe: a job that
+		// legitimately finished between this SELECT and the UPDATE no longer matches, so we
+		// never clobber a just-completed generation. This poll is the only frequent code
+		// path, so it doubles as the self-heal sweep — no extra cron needed. `outcome`
+		// distinguishes the two: a re-enqueued job is still in flight (stays in the menu, and
+		// we send it a fresh queue message); a failed one is dropped from the returned list.
 		const now = Date.now();
-		const reaps: Promise<number | null>[] = [];
+		const reaps: Promise<{ id: number; outcome: "retry" | "fail" } | null>[] =
+			[];
 		for (const row of rows) {
 			if (!row.updatedAt || now - row.updatedAt.getTime() <= STALE_JOB_MS) {
 				continue;
 			}
 			const analyzing = row.status === "pending" || row.status === "processing";
+			const retryCount =
+				(analyzing ? row.analyzeRetryCount : row.professionalRetryCount) ?? 0;
+			// Under budget → re-enqueue a fresh job (clear the error, bump the counter, keep
+			// it in the running state); budget exhausted → flag failed with the interrupted
+			// note so the editor offers a manual retry.
+			const willRetry = retryCount < MAX_AUTO_RETRIES;
+			const outcome: "retry" | "fail" = willRetry ? "retry" : "fail";
 			reaps.push(
 				db
 					.update(records)
 					.set(
 						analyzing
-							? {
-									status: "failed",
-									error: STALE_ANALYZE_NOTE,
-									updatedAt: new Date(),
-								}
-							: {
-									professionalJobStatus: "failed",
-									professionalError: STALE_PRO_NOTE,
-									updatedAt: new Date(),
-								},
+							? willRetry
+								? {
+										status: "pending",
+										error: null,
+										analyzeRetryCount: retryCount + 1,
+										updatedAt: new Date(),
+									}
+								: {
+										status: "failed",
+										error: STALE_ANALYZE_NOTE,
+										updatedAt: new Date(),
+									}
+							: willRetry
+								? {
+										professionalJobStatus: "queued",
+										professionalError: null,
+										professionalRetryCount: retryCount + 1,
+										updatedAt: new Date(),
+									}
+								: {
+										professionalJobStatus: "failed",
+										professionalError: STALE_PRO_NOTE,
+										updatedAt: new Date(),
+									},
 					)
 					.where(
 						and(
 							eq(records.id, row.id),
+							// Optimistic lock on the exact timestamp we read: exactly one writer
+							// wins, so concurrent polls (or a race with the job finishing) can't
+							// double-enqueue / double-count. A re-enqueue lands the row back in
+							// `queued`/`pending` — inside the status guard below — so unlike the
+							// old always-`failed` reap, the status guard alone is NOT idempotent.
+							eq(records.updatedAt, row.updatedAt),
 							analyzing
 								? inArray(records.status, ["pending", "processing"])
 								: inArray(records.professionalJobStatus, [
@@ -290,20 +333,37 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 									]),
 						),
 					)
-					// Only treat a row as reaped once its UPDATE lands. A swallowed
-					// transient D1 error leaves the id out of `stale`, so the row stays
-					// in the response and the next poll retries the reap — rather than
-					// vanishing from the header while still in-flight in the DB.
-					.then(() => row.id)
+					.returning({ id: records.id })
+					// Only act on a row once its UPDATE lands. A swallowed transient D1 error
+					// (or a lost race with a job that just finished) leaves it out of `reaped`,
+					// so the row stays in the response and the next poll retries the sweep —
+					// rather than vanishing from the header (or double-enqueuing) mid-flight.
+					.then((r) => (r.length ? { id: row.id, outcome } : null))
 					.catch(() => null),
 			);
 		}
-		const stale = new Set(
-			(await Promise.all(reaps)).filter((id): id is number => id != null),
+		const reaped = (await Promise.all(reaps)).filter(
+			(r): r is { id: number; outcome: "retry" | "fail" } => r != null,
+		);
+		// Send the fresh queue message only after the row-state UPDATE committed, so a failed
+		// enqueue can't leave a row flagged running with nothing actually queued (the next
+		// poll re-reaps it). A row that fell out of the running state before its UPDATE
+		// landed simply isn't in `reaped`.
+		for (const { id, outcome } of reaped) {
+			if (outcome !== "retry") continue;
+			const wasAnalyzing = rows.find((r) => r.id === id)?.status;
+			await (wasAnalyzing === "pending" || wasAnalyzing === "processing"
+				? enqueueAnalyze(id)
+				: enqueueProfessional(id));
+		}
+		// Only terminally-failed rows leave the in-flight menu; re-enqueued ones are still
+		// running (freshly `queued`/`pending`) and stay.
+		const dropped = new Set(
+			reaped.filter((r) => r.outcome === "fail").map((r) => r.id),
 		);
 
 		return rows
-			.filter((row) => !stale.has(row.id))
+			.filter((row) => !dropped.has(row.id))
 			.map((row): InFlightItem => {
 				const analyzing =
 					row.status === "pending" || row.status === "processing";
@@ -615,7 +675,13 @@ export const reprocessRecord = createServerFn({ method: "POST" })
 			const db = getDb(env.DB);
 			const [row] = await db
 				.update(records)
-				.set({ status: "pending", error: null, updatedAt: new Date() })
+				// Fresh manual retry → reset the reaper's auto-retry budget.
+				.set({
+					status: "pending",
+					error: null,
+					analyzeRetryCount: 0,
+					updatedAt: new Date(),
+				})
 				.where(eq(records.id, id))
 				.returning();
 			if (row) await enqueueAnalyze(id);
@@ -708,11 +774,72 @@ export const reframeRecord = createServerFn({ method: "POST" })
 					professionalParamsJson: JSON.stringify(params),
 					professionalJobStatus: "queued",
 					professionalError: null,
+					// Fresh manual Apply → reset the reaper's auto-retry budget.
+					professionalRetryCount: 0,
 					updatedAt: new Date(),
 				})
 				.where(eq(records.id, id))
 				.returning();
 			await enqueueProfessional(id);
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Re-run ONLY the AI matte for a record whose last Apply landed the deterministic fallback
+ * (the amber "AI matte unavailable…" note) — a transient stage-2 blip, not a bad cover. It
+ * reconstructs the stage-1 {@link CoverStageResult} snapshot from the row (the already-good
+ * `professionalImageKey` as `coverKey`, plus the same capture + corners + tone the cover was
+ * cut from) and re-enqueues stage 2 via {@link enqueueProfessionalMatte} — skipping the
+ * (successful) reframe + Real-ESRGAN enhance that {@link reframeRecord} would redo. The matte
+ * is still cut from the capture + band + params, so it stays consistent with the live cover,
+ * which swaps in atomically only if the AI matte succeeds. Like `reframeRecord`, this leaves
+ * the display `professionalStatus` untouched (the fallback cover stays live) and only flips
+ * `professionalJobStatus: "queued"`. Throws if there's no cover/capture to matte from.
+ */
+export const retryProfessionalMatte = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((input: { id: number }) => ({ id: input.id }))
+	.handler(({ data: { id } }) =>
+		Sentry.startSpan({ name: "retryProfessionalMatte" }, async () => {
+			const db = getDb(env.DB);
+			const [record] = await db
+				.select()
+				.from(records)
+				.where(eq(records.id, id))
+				.limit(1);
+			if (!record) return null;
+			if (!record.capturePhotoKey) {
+				throw new Error("This record has no capture photo to matte from.");
+			}
+			if (!record.professionalImageKey) {
+				throw new Error("This record has no professional cover to matte.");
+			}
+			// Rebuild the exact stage-1 snapshot the cover was committed from (mirrors
+			// generateProfessionalCover's output) so the re-run matte is cut from the same
+			// inputs as the live cover — the cover key rides through unchanged and re-commits
+			// to itself (never binned), only the matte keys are replaced.
+			const band = parseCornerBand(record.sleeveCornersJson);
+			const params = parseReframeParams(record.professionalParamsJson);
+			const stage: CoverStageResult = {
+				coverKey: record.professionalImageKey,
+				enhanced: record.professionalEnhanced ?? false,
+				captureKey: record.capturePhotoKey,
+				bandJson: serializeCornerBand(band),
+				paramsJson: JSON.stringify(params),
+			};
+			const [row] = await db
+				.update(records)
+				.set({
+					professionalJobStatus: "queued",
+					professionalError: null,
+					// Fresh manual retry → reset the reaper's auto-retry budget.
+					professionalRetryCount: 0,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			await enqueueProfessionalMatte(id, stage);
 			return row ?? null;
 		}),
 	);
@@ -815,6 +942,8 @@ export const replaceCapture = createServerFn({ method: "POST" })
 					...proFields,
 					// A new capture regenerates from scratch — no longer an upscale.
 					professionalEnhanced: false,
+					// Fresh source image → reset the reaper's auto-retry budget.
+					professionalRetryCount: 0,
 					updatedAt: new Date(),
 				})
 				.where(eq(records.id, id))
@@ -1179,7 +1308,13 @@ export const retryRecords = createServerFn({ method: "POST" })
 			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
 				const rows = await db
 					.update(records)
-					.set({ status: "pending", error: null, updatedAt: now })
+					// Fresh manual retry → reset the reaper's auto-retry budget.
+					.set({
+						status: "pending",
+						error: null,
+						analyzeRetryCount: 0,
+						updatedAt: now,
+					})
 					.where(inArray(records.id, batch))
 					.returning({ id: records.id });
 				updated.push(...rows.map(({ id }) => id));

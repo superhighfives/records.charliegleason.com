@@ -589,6 +589,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				duplicateOf,
 				status: "review",
 				error: null,
+				// Analysis landed — clear the reaper's auto-retry budget.
+				analyzeRetryCount: 0,
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, recordId));
