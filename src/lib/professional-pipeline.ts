@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { type Record, records } from "#/db/schema";
+import { type JobStep, type Record, records } from "#/db/schema";
 import { generateMatteFromCapture } from "#/lib/matte";
 import { reframeFromCapture, upscaleProfessional } from "#/lib/professional";
 import { parseReframeParams } from "#/lib/reframe-params";
@@ -62,6 +62,9 @@ export interface CoverStageResult {
  */
 export async function generateProfessionalCover(
 	record: Record,
+	// Fired as each visible sub-step begins so the caller can surface it (see
+	// `records.jobStep`). Best-effort/display-only — the caller swallows write errors.
+	onStep?: (step: JobStep) => Promise<void>,
 ): Promise<CoverStageResult> {
 	if (!record.capturePhotoKey) {
 		throw new Error("This record has no capture photo to generate from.");
@@ -72,6 +75,7 @@ export async function generateProfessionalCover(
 
 	// The square hero (free) — staging for the enhance.
 	const { key: baseKey } = await reframeFromCapture(captureKey, band, params);
+	await onStep?.("enhance");
 	// Enhance is best-effort: a Replicate hiccup degrades to the plain reframe.
 	const enhancedKey = await upscaleProfessional(baseKey)
 		.then((r) => r.key)
@@ -196,8 +200,9 @@ export async function commitProfessionalMatte(
 			// Apply promotes the (new) cover to live regardless — the matte is best-effort.
 			professionalStatus: "approved",
 			professionalJobStatus: matteFailed ? "failed" : "idle",
-			// The two-step pipeline finished — clear the progress marker.
+			// The two-step pipeline finished — clear the progress markers.
 			professionalStage: null,
+			jobStep: null,
 			// Generation reached a committed cover — clear the reaper's auto-retry budget (a
 			// fresh Apply / reprocess starts a new one). Even the matte-failed path is
 			// terminal-with-action, not a reap target, so resetting here is safe.

@@ -4,7 +4,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { type Record as RecordRow, records } from "#/db/schema";
+import { type JobStep, type Record as RecordRow, records } from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
 import { displayCoverKey } from "#/lib/cover";
@@ -185,6 +185,61 @@ export const getRecord = createServerFn({ method: "GET" })
 		}),
 	);
 
+/** The terminal result of a record's last job, for the header queue's finished rows. */
+export interface QueueOutcome {
+	id: number;
+	/**
+	 * `failed` — the analyze or Apply job ended in `failed`; `fallback` — the Apply landed a
+	 * cover but on the deterministic matte, not the AI one (AI matte unavailable); `ok` —
+	 * a clean finish.
+	 */
+	outcome: "ok" | "fallback" | "failed";
+}
+
+/**
+ * Terminal outcomes for a set of records, for the header queue's finished rows. The queue
+ * derives "finished" client-side by diffing the in-flight set, so an item just vanishes the
+ * instant its job ends — the client never sees the final state. This fills that gap: given
+ * the ids the client is holding in its session history, report whether each failed, landed
+ * on the deterministic matte, or finished clean, so the menu can flag them. Admin-only; ids
+ * come from the bounded client history (≤ MAX_FINISHED), so this is a single small lookup.
+ */
+export const listQueueOutcomes = createServerFn({ method: "GET" })
+	.validator((ids: unknown) =>
+		Array.isArray(ids)
+			? ids.filter((n): n is number => typeof n === "number")
+			: [],
+	)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "listQueueOutcomes" }, async () => {
+			if (!(await getAdminSession())) return [] as QueueOutcome[];
+			if (ids.length === 0) return [] as QueueOutcome[];
+
+			const db = getDb(env.DB);
+			const rows = await db
+				.select({
+					id: records.id,
+					status: records.status,
+					professionalJobStatus: records.professionalJobStatus,
+					professionalAlphaSource: records.professionalAlphaSource,
+				})
+				.from(records)
+				// Bounded to the client's history size; clamp defensively so a tampered
+				// payload can't blow past D1's bound-parameter limit.
+				.where(inArray(records.id, ids.slice(0, 50)));
+
+			return rows.map((row): QueueOutcome => {
+				// A hard failure on either pipeline reads red; a landed-but-downgraded matte
+				// (AI unavailable → deterministic) reads amber; anything else is a clean finish.
+				if (row.status === "failed" || row.professionalJobStatus === "failed")
+					return { id: row.id, outcome: "failed" };
+				if (row.professionalAlphaSource === "deterministic")
+					return { id: row.id, outcome: "fallback" };
+				return { id: row.id, outcome: "ok" };
+			});
+		}),
+	);
+
 /**
  * A background job untouched for longer than this is treated as dead. A queue
  * consumer that's killed mid-run (OOM, wall-clock eviction) never reaches its
@@ -231,7 +286,62 @@ export interface InFlightItem {
 	 * professional jobs, and legacy rows with no stage recorded.
 	 */
 	stage: "cover" | "matte" | null;
+	/**
+	 * The fine-grained sub-step within whichever pipeline is running (see `records.jobStep`),
+	 * so the menu can show "(2/4) Enhancing" / "(1/4) Reading cover". Null for a queued job
+	 * not yet started, a freshly re-enqueued one, and legacy rows — the menu falls back to
+	 * the coarse stage label.
+	 */
+	step: JobStep | null;
 }
+
+/**
+ * Terminally fail every in-flight job — the "Fail all" escape hatch in the header queue,
+ * for when the pipeline is thrashing (e.g. a matte stage OOM-looping: it dies uncatchably,
+ * the row stays `processing`, and the reaper keeps re-enqueuing it). Flags both pipelines
+ * failed so the reaper stops touching them and each becomes a manual-retry-able row —
+ * `professionalStatus` / analysis fields are left intact, so an already-live cover or a
+ * prior analysis survives. Clears the progress markers (`professionalStage`, `jobStep`).
+ * Admin-only. Returns how many rows it stopped.
+ */
+export const failAllInFlight = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.handler(() =>
+		Sentry.startSpan({ name: "failAllInFlight" }, async () => {
+			const db = getDb(env.DB);
+			const note = "Stopped from the queue — Apply / retry to run it again.";
+
+			const [pro, analyze] = await Promise.all([
+				db
+					.update(records)
+					.set({
+						professionalJobStatus: "failed",
+						professionalStage: null,
+						jobStep: null,
+						professionalError: note,
+						updatedAt: new Date(),
+					})
+					.where(
+						inArray(records.professionalJobStatus, ["queued", "processing"]),
+					)
+					.returning({ id: records.id }),
+				db
+					.update(records)
+					.set({
+						status: "failed",
+						jobStep: null,
+						error: note,
+						updatedAt: new Date(),
+					})
+					.where(inArray(records.status, ["pending", "processing"]))
+					.returning({ id: records.id }),
+			]);
+
+			// A record with both a running analyze and pro job is one stopped row, not two.
+			const ids = new Set([...pro, ...analyze].map((r) => r.id));
+			return { count: ids.size };
+		}),
+	);
 
 /**
  * Everything currently in flight, for the admin header's queue dropdown: captures being
@@ -256,6 +366,7 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 				status: records.status,
 				professionalJobStatus: records.professionalJobStatus,
 				professionalStage: records.professionalStage,
+				jobStep: records.jobStep,
 				professionalStatus: records.professionalStatus,
 				professionalImageKey: records.professionalImageKey,
 				capturePhotoKey: records.capturePhotoKey,
@@ -304,24 +415,30 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 								? {
 										status: "pending",
 										error: null,
+										// A reaped job restarts from its first sub-step — drop the
+										// stale marker so a queued row can't show a live step.
+										jobStep: null,
 										analyzeRetryCount: retryCount + 1,
 										updatedAt: new Date(),
 									}
 								: {
 										status: "failed",
 										error: STALE_ANALYZE_NOTE,
+										jobStep: null,
 										updatedAt: new Date(),
 									}
 							: willRetry
 								? {
 										professionalJobStatus: "queued",
 										professionalError: null,
+										jobStep: null,
 										professionalRetryCount: retryCount + 1,
 										updatedAt: new Date(),
 									}
 								: {
 										professionalJobStatus: "failed",
 										professionalError: STALE_PRO_NOTE,
+										jobStep: null,
 										updatedAt: new Date(),
 									},
 					)
@@ -406,6 +523,9 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 					// Only meaningful for a processing professional job; a freshly re-enqueued
 					// one hasn't entered a stage yet, so null.
 					stage: analyzing || retried ? null : row.professionalStage,
+					// A re-enqueued job restarts from its first sub-step — the pre-reap
+					// snapshot's `jobStep` is stale, so null it (mirrors `stage` above).
+					step: retried ? null : row.jobStep,
 				};
 			});
 	}),

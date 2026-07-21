@@ -98,6 +98,29 @@ export const records = sqliteTable("records", {
 	professionalStage: text("professional_stage", {
 		enum: ["cover", "matte"],
 	}),
+	// A finer-grained, DISPLAY-ONLY sub-step within whichever pipeline is running, so the
+	// header "in flight" menu can show real progress ("(2/4) Enhancing", "(1/4) Reading
+	// cover") rather than just the coarse `professionalStage`. Shared across both pipelines —
+	// a record is only ever in one at a time. Written by the consumer as each sub-step begins
+	// and cleared to null on every terminal state (so a finished/failed row shows no stale
+	// step); NOT load-bearing — nothing but the menu label reads it, so the reaper and editor
+	// stay keyed on `professionalStage`/`status`. Null on legacy rows and between jobs.
+	//   analyze: reading → matching (→ web-search) → scoring → artwork
+	//   apply:   reframe → enhance → matte-ai | matte-fallback → finishing
+	jobStep: text("job_step", {
+		enum: [
+			"reading",
+			"matching",
+			"web-search",
+			"scoring",
+			"artwork",
+			"reframe",
+			"enhance",
+			"matte-ai",
+			"matte-fallback",
+			"finishing",
+		],
+	}),
 	// Whether `professionalImageKey` is a Real-ESRGAN-upscaled master (the editor's
 	// paid "Enhance"), vs a plain reframe of the capture. Reset to false whenever the
 	// photo is regenerated from the capture. Powers the admin "Enhanced" filter.
@@ -163,3 +186,6 @@ export const records = sqliteTable("records", {
 
 export type Record = typeof records.$inferSelect;
 export type NewRecord = typeof records.$inferInsert;
+
+/** A fine-grained display-only sub-step of a running pipeline (see `records.jobStep`). */
+export type JobStep = NonNullable<Record["jobStep"]>;

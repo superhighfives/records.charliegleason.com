@@ -1,7 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Check, Disc, Loader2 } from "lucide-react";
+import { Check, Disc, Loader2, OctagonX } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import {
 	DropdownMenu,
@@ -10,19 +11,50 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu";
-import type { InFlightItem } from "#/lib/records";
-import { inFlightQueryOptions } from "#/lib/records-queries";
+import type { JobStep } from "#/db/schema";
+import type { InFlightItem, QueueOutcome } from "#/lib/records";
+import { failAllInFlight } from "#/lib/records";
+import {
+	inFlightQueryOptions,
+	queueOutcomesQueryOptions,
+} from "#/lib/records-queries";
 
 /**
- * The step label for a queued item: which stage of its pipeline it's actually in —
- * waiting in the queue vs actively running. The generate pipeline runs in two sequential
- * stages (cover, then matte), so a processing job shows which one it's on as "(1/2)" /
- * "(2/2)"; the same row updates in place as `stage` advances on the next poll. Legacy
- * rows with no recorded stage fall back to the plain "Generating photo". `active` is true
- * once the job is actually running (not just queued), so the menu can accent the live
- * step in the brand colour and leave a still-waiting one muted.
+ * Numbered, human labels for the fine-grained `jobStep` the consumer records as it works.
+ * Both pipelines read as "(n/4) …" on a fixed denominator; the conditional steps (web-search
+ * escalation, deterministic matte fallback) reuse their parent step's number rather than
+ * bumping the total, so the count never jumps around mid-run.
+ */
+const STEP_LABELS: Record<JobStep, string> = {
+	// analyze — reading → matching (→ web-search) → scoring → artwork
+	reading: "(1/4) Reading cover",
+	matching: "(2/4) Matching on Discogs",
+	"web-search": "(2/4) Searching the web",
+	scoring: "(3/4) Scoring",
+	artwork: "(4/4) Fetching artwork",
+	// apply — reframe → enhance → matte-ai | matte-fallback → finishing
+	reframe: "(1/4) Reframing sleeve",
+	enhance: "(2/4) Enhancing",
+	"matte-ai": "(3/4) Generating matte",
+	"matte-fallback": "(3/4) Generating matte (fallback)",
+	finishing: "(4/4) Finishing",
+};
+
+/**
+ * The step label for a queued item: which stage of its pipeline it's actually in — waiting
+ * in the queue vs actively running. A processing job that's recorded a fine-grained
+ * `jobStep` shows that numbered sub-step ("(2/4) Enhancing"); the same row updates in place
+ * as the step advances on the next poll. Without one — a queued job, a freshly re-enqueued
+ * one, or a legacy row — it falls back to the coarse stage label. `active` is true once the
+ * job is actually running (not just queued), so the menu accents the live step in the brand
+ * colour and leaves a still-waiting one muted.
  */
 function stepLabel(item: InFlightItem): { text: string; active: boolean } {
+	// A recorded sub-step wins — the most specific, numbered label — but only while actually
+	// running, so a stale marker on a queued/re-enqueued row can't read as live progress.
+	if (item.step && item.state === "processing")
+		return { text: STEP_LABELS[item.step], active: true };
+
 	if (item.kind === "analyze") {
 		return item.state === "processing"
 			? { text: "Analyzing capture", active: true }
@@ -33,8 +65,39 @@ function stepLabel(item: InFlightItem): { text: string; active: boolean } {
 	if (item.stage === "cover")
 		return { text: "(1/2) Generating photo", active: true };
 	if (item.stage === "matte")
-		return { text: "(2/2) Finishing photo", active: true };
+		return { text: "(2/2) Generating matte", active: true };
 	return { text: "Generating photo", active: true };
+}
+
+/**
+ * The label + colour for a finished row, keyed on its terminal outcome. A clean finish is
+ * muted with no dot; a deterministic-matte fallback and a hard failure each get a coloured
+ * status dot to the left (amber / red) so the outcome is legible at a glance, matching the
+ * amber "AI matte unavailable" / red "generation failed" states in the editor. `undefined`
+ * (outcomes still loading, or an id not yet resolved) reads as a plain finish.
+ */
+function FinishedLabel({
+	outcome,
+}: {
+	outcome: QueueOutcome["outcome"] | undefined;
+}) {
+	if (outcome === "failed") {
+		return (
+			<span className="flex items-center gap-1.5 text-red-600 dark:text-red-400">
+				<span className="size-1.5 shrink-0 rounded-full bg-current" />
+				Failed
+			</span>
+		);
+	}
+	if (outcome === "fallback") {
+		return (
+			<span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+				<span className="size-1.5 shrink-0 rounded-full bg-current" />
+				Finished (no AI matte)
+			</span>
+		);
+	}
+	return <span className="text-muted-foreground">Finished</span>;
 }
 
 /** A job that has left the in-flight set — kept around for the rest of the session. */
@@ -201,13 +264,44 @@ export function QueueMenu() {
 	const live = data ?? [];
 	const { finished, clear } = useQueueHistory(live);
 
+	// Resolve each finished row's terminal outcome (failed / deterministic-matte fallback /
+	// ok) — the in-flight diff loses it when the item departs, so we look it up by id here.
+	const { data: outcomes } = useQuery(
+		queueOutcomesQueryOptions(finished.map((f) => f.id)),
+	);
+	const outcomeById = new Map((outcomes ?? []).map((o) => [o.id, o.outcome]));
+
+	// "Fail all" is a two-step action inside the menu (arm → confirm) rather than a native
+	// dialog, so it doesn't fight the dropdown's own open/close. Reset the armed state
+	// whenever the menu closes so it never reopens already-confirming.
+	const queryClient = useQueryClient();
+	const [confirmingFailAll, setConfirmingFailAll] = useState(false);
+	const failAll = useMutation({
+		mutationFn: () => failAllInFlight(),
+		onSuccess: async ({ count }) => {
+			setConfirmingFailAll(false);
+			// Fuzzy-matches the in-flight key too, so the list clears on the next tick.
+			await queryClient.invalidateQueries({ queryKey: ["records"] });
+			toast.success(
+				count === 0
+					? "Nothing was still running."
+					: `Stopped ${count} job${count === 1 ? "" : "s"}.`,
+			);
+		},
+		onError: () => toast.error("Couldn't stop the running jobs."),
+	});
+
 	if (live.length === 0 && finished.length === 0) return null;
 
 	const busy = live.length > 0;
 	const count = busy ? live.length : finished.length;
 
 	return (
-		<DropdownMenu>
+		<DropdownMenu
+			onOpenChange={(open) => {
+				if (!open) setConfirmingFailAll(false);
+			}}
+		>
 			<DropdownMenuTrigger
 				aria-label={
 					busy
@@ -259,17 +353,58 @@ export function QueueMenu() {
 									artist={item.artist}
 									title={item.title}
 									thumbKey={item.thumbKey}
-									label={
-										<span className="text-muted-foreground">
-											Finished — tap to view
-										</span>
-									}
+									label={<FinishedLabel outcome={outcomeById.get(item.id)} />}
 									busy={false}
 								/>
 							))}
 						</>
 					)}
 				</div>
+				{/* "Fail all" — stop everything in flight when the pipeline is thrashing.
+				    Two-step so a stray click can't nuke a live capture session: the first
+				    select arms it (keeping the menu open via preventDefault), the second
+				    fires. Only shown while something is actually running. */}
+				{busy && (
+					<>
+						<DropdownMenuSeparator />
+						{confirmingFailAll ? (
+							<div className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+								<span className="text-muted-foreground">
+									Stop {live.length} running job{live.length === 1 ? "" : "s"}?
+								</span>
+								<div className="flex items-center gap-1">
+									<button
+										type="button"
+										onClick={() => setConfirmingFailAll(false)}
+										className="rounded px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+									>
+										Cancel
+									</button>
+									<button
+										type="button"
+										disabled={failAll.isPending}
+										onClick={() => failAll.mutate()}
+										className="rounded px-2 py-1 font-medium text-red-600 hover:bg-accent disabled:opacity-60 dark:text-red-400"
+									>
+										{failAll.isPending ? "Stopping…" : "Stop all"}
+									</button>
+								</div>
+							</div>
+						) : (
+							<DropdownMenuItem
+								// Keep the menu open so the confirm step can replace this row.
+								onSelect={(e) => {
+									e.preventDefault();
+									setConfirmingFailAll(true);
+								}}
+								className="justify-center gap-2 text-xs text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+							>
+								<OctagonX className="size-3.5" />
+								Fail all
+							</DropdownMenuItem>
+						)}
+					</>
+				)}
 				{finished.length > 0 && (
 					<>
 						<DropdownMenuSeparator />
