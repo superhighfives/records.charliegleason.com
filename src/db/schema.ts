@@ -90,6 +90,14 @@ export const records = sqliteTable("records", {
 	professionalJobStatus: text("professional_job_status", {
 		enum: ["idle", "queued", "processing", "failed"],
 	}).default("idle"),
+	// Which stage of the two-step Apply pipeline is currently running, so the header
+	// "in flight" menu can show progress as "(1/2)" (cover: reframe + enhance) →
+	// "(2/2)" (matte + commit). Set by the consumer as each stage starts and cleared
+	// on commit; `professionalJobStatus` stays `processing` across both. Null on legacy
+	// rows and whenever no job is running (the menu falls back to the plain label).
+	professionalStage: text("professional_stage", {
+		enum: ["cover", "matte"],
+	}),
 	// Whether `professionalImageKey` is a Real-ESRGAN-upscaled master (the editor's
 	// paid "Enhance"), vs a plain reframe of the capture. Reset to false whenever the
 	// photo is regenerated from the capture. Powers the admin "Enhanced" filter.

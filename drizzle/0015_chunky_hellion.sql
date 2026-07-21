@@ -1,0 +1,1 @@
+ALTER TABLE `records` ADD `professional_stage` text;

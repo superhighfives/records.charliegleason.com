@@ -15,8 +15,10 @@ import { inFlightQueryOptions } from "#/lib/records-queries";
 
 /**
  * The step label for a queued item: which stage of its pipeline it's actually in —
- * waiting in the queue vs actively running. (The generate phase runs the enhance and
- * matte in parallel, so there's no finer reframe→enhance→matte sequence to show.)
+ * waiting in the queue vs actively running. The generate pipeline runs in two sequential
+ * stages (cover, then matte), so a processing job shows which one it's on as "(1/2)" /
+ * "(2/2)"; the same row updates in place as `stage` advances on the next poll. Legacy
+ * rows with no recorded stage fall back to the plain "Generating photo".
  */
 function stepLabel(item: InFlightItem): string {
 	if (item.kind === "analyze") {
@@ -24,9 +26,10 @@ function stepLabel(item: InFlightItem): string {
 			? "Analyzing capture"
 			: "Queued to analyze";
 	}
-	return item.state === "processing"
-		? "Generating photo"
-		: "Queued to generate";
+	if (item.state !== "processing") return "Queued to generate";
+	if (item.stage === "cover") return "(1/2) Generating photo";
+	if (item.stage === "matte") return "(2/2) Finishing photo";
+	return "Generating photo";
 }
 
 /** A job that has left the in-flight set — kept around for the rest of the session. */
@@ -215,31 +218,39 @@ export function QueueMenu() {
 				<span className="tabular-nums">{count}</span>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-72">
-				{live.map((item) => (
-					<QueueRow
-						key={item.id}
-						id={item.id}
-						artist={item.artist}
-						title={item.title}
-						thumbKey={item.thumbKey}
-						label={stepLabel(item)}
-						busy
-					/>
-				))}
+				{/* The list can get long (a whole capture session), so it scrolls; the
+				    "Clear finished" action stays pinned below as a non-scrolling sibling. */}
+				<div className="max-h-[400px] overflow-y-auto overflow-x-hidden">
+					{live.map((item) => (
+						<QueueRow
+							key={item.id}
+							id={item.id}
+							artist={item.artist}
+							title={item.title}
+							thumbKey={item.thumbKey}
+							label={stepLabel(item)}
+							busy
+						/>
+					))}
+					{finished.length > 0 && (
+						<>
+							{busy && <DropdownMenuSeparator />}
+							{finished.map((item) => (
+								<QueueRow
+									key={item.id}
+									id={item.id}
+									artist={item.artist}
+									title={item.title}
+									thumbKey={item.thumbKey}
+									label="Finished — tap to view"
+									busy={false}
+								/>
+							))}
+						</>
+					)}
+				</div>
 				{finished.length > 0 && (
 					<>
-						{busy && <DropdownMenuSeparator />}
-						{finished.map((item) => (
-							<QueueRow
-								key={item.id}
-								id={item.id}
-								artist={item.artist}
-								title={item.title}
-								thumbKey={item.thumbKey}
-								label="Finished — tap to view"
-								busy={false}
-							/>
-						))}
 						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							onSelect={() => clear()}
