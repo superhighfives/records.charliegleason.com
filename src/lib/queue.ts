@@ -7,7 +7,9 @@ import { type Record, records } from "#/db/schema";
 import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
 import {
 	type AnalyzeMessage,
+	chunk,
 	nextMatteAction,
+	QUEUE_BATCH_SIZE,
 	toQueueBatches,
 } from "#/lib/batching";
 import {
@@ -98,6 +100,34 @@ export async function enqueueProfessionalMatte(
 	stage: CoverStageResult,
 ): Promise<void> {
 	await analyzeQueue().send({ recordId, mode: "professional-matte", ...stage });
+}
+
+/**
+ * Bulk variant of {@link enqueueProfessional} — kicks the full Apply pipeline (stage 1
+ * cover → stage 2 matte) for many records in chunked `sendBatch` calls rather than one
+ * `send` per id, so a bulk "Retry generation" over a large selection doesn't fan out into
+ * hundreds of individual queue writes.
+ */
+export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
+	return enqueueBatch(recordIds, "professional");
+}
+
+/**
+ * Bulk variant of {@link enqueueProfessionalMatte} — re-runs ONLY stage 2 (the AI matte +
+ * commit) for many records, each carrying its own stage-1 snapshot, in chunked `sendBatch`
+ * calls. Used by the admin "Retry AI matte" bulk action. Unlike {@link enqueueBatch}, the
+ * bodies differ per record (each has its own cover snapshot), so it can't go through the
+ * id-only {@link toQueueBatches} path; it chunks the pre-built messages here.
+ */
+export async function enqueueProfessionalMatteBatch(
+	items: Array<{ recordId: number; stage: CoverStageResult }>,
+): Promise<void> {
+	const messages = items.map(({ recordId, stage }) => ({
+		body: { recordId, mode: "professional-matte" as const, ...stage },
+	}));
+	for (const batch of chunk(messages, QUEUE_BATCH_SIZE)) {
+		await analyzeQueue().sendBatch(batch);
+	}
 }
 
 /**

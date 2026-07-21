@@ -59,6 +59,8 @@ import {
 	deleteRecord,
 	deleteRecords,
 	publishRecords,
+	retryProfessionalGenerations,
+	retryProfessionalMattes,
 	unpublishRecords,
 } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
@@ -290,7 +292,12 @@ function toggleFacet(active: string[], token: string): string[] {
 // (off the homepage, still in the queue), `delete` removes them. Publish and
 // unpublish share one toolbar slot — see `bulkActions`. Each endpoint returns
 // how many rows it acted on.
-type BulkAction = "publish" | "unpublish" | "delete";
+type BulkAction =
+	| "publish"
+	| "unpublish"
+	| "retryGeneration"
+	| "retryMatte"
+	| "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
@@ -308,6 +315,19 @@ const BULK_ACTIONS: {
 		label: "Unpublish",
 		verb: "unpublished",
 		fn: unpublishRecords,
+	},
+	// The count these return can be lower than the selection: the server skips rows with
+	// nothing to act on (no capture for regeneration; no cover/capture for the matte), so
+	// the toast reflects what was actually re-queued.
+	retryGeneration: {
+		label: "Retry generation",
+		verb: "queued for regeneration",
+		fn: retryProfessionalGenerations,
+	},
+	retryMatte: {
+		label: "Retry AI matte",
+		verb: "queued for AI matte",
+		fn: retryProfessionalMattes,
 	},
 	delete: {
 		label: "Delete",
@@ -577,7 +597,9 @@ function AdminRecords() {
 			toast.success(`${count} ${count === 1 ? "record" : "records"} ${verb}.`);
 		},
 		onError: (_error, { action }) => {
-			toast.error(`Couldn't ${action} the selected records.`);
+			toast.error(
+				`Couldn't ${BULK_ACTIONS[action].label.toLowerCase()} the selected records.`,
+			);
 		},
 	});
 
@@ -843,8 +865,19 @@ function AdminRecords() {
 	const allPublished =
 		hasSelection &&
 		selectedRows.every((r) => (r.original.status ?? "complete") === "complete");
+	// The two retry actions only appear when the selection actually contains rows they'd
+	// act on — a failed generation, or a matte that fell back to the deterministic path —
+	// so the toolbar stays uncluttered for a normal selection.
+	const anyGenFailed = selectedRows.some(
+		(r) => r.original.professionalJobStatus === "failed",
+	);
+	const anyMatteFallback = selectedRows.some(
+		(r) => r.original.professionalAlphaSource === "deterministic",
+	);
 	const bulkActions: BulkAction[] = [
 		allPublished ? "unpublish" : "publish",
+		...(anyGenFailed ? (["retryGeneration"] as const) : []),
+		...(anyMatteFallback ? (["retryMatte"] as const) : []),
 		"delete",
 	];
 	// Rows visible under the current tab + search. Drives the empty state and
@@ -895,12 +928,23 @@ function AdminRecords() {
 	// Run a bulk action against the current selection, confirming first for the
 	// destructive ones. Shared by the desktop buttons and the mobile menu.
 	const runBulkAction = (action: BulkAction) => {
+		const n = selectedIds.length;
+		const noun = n === 1 ? "record" : "records";
 		if (
 			BULK_ACTIONS[action].destructive &&
+			!confirm(`Delete ${n} ${noun}? This can't be undone.`)
+		) {
+			return;
+		}
+		// The retries fan out paid background jobs (Real-ESRGAN / the matting model), so
+		// confirm before spending on a whole selection — rows with nothing to redo are
+		// skipped server-side, so the actual job count may be lower.
+		if (
+			(action === "retryGeneration" || action === "retryMatte") &&
 			!confirm(
-				`Delete ${selectedIds.length} ${
-					selectedIds.length === 1 ? "record" : "records"
-				}? This can't be undone.`,
+				`Re-run ${
+					action === "retryMatte" ? "the AI matte" : "generation"
+				} for ${n} selected ${noun}? This runs paid background jobs.`,
 			)
 		) {
 			return;

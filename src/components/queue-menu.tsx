@@ -18,18 +18,23 @@ import { inFlightQueryOptions } from "#/lib/records-queries";
  * waiting in the queue vs actively running. The generate pipeline runs in two sequential
  * stages (cover, then matte), so a processing job shows which one it's on as "(1/2)" /
  * "(2/2)"; the same row updates in place as `stage` advances on the next poll. Legacy
- * rows with no recorded stage fall back to the plain "Generating photo".
+ * rows with no recorded stage fall back to the plain "Generating photo". `active` is true
+ * once the job is actually running (not just queued), so the menu can accent the live
+ * step in the brand colour and leave a still-waiting one muted.
  */
-function stepLabel(item: InFlightItem): string {
+function stepLabel(item: InFlightItem): { text: string; active: boolean } {
 	if (item.kind === "analyze") {
 		return item.state === "processing"
-			? "Analyzing capture"
-			: "Queued to analyze";
+			? { text: "Analyzing capture", active: true }
+			: { text: "Queued to analyze", active: false };
 	}
-	if (item.state !== "processing") return "Queued to generate";
-	if (item.stage === "cover") return "(1/2) Generating photo";
-	if (item.stage === "matte") return "(2/2) Finishing photo";
-	return "Generating photo";
+	if (item.state !== "processing")
+		return { text: "Queued to generate", active: false };
+	if (item.stage === "cover")
+		return { text: "(1/2) Generating photo", active: true };
+	if (item.stage === "matte")
+		return { text: "(2/2) Finishing photo", active: true };
+	return { text: "Generating photo", active: true };
 }
 
 /** A job that has left the in-flight set — kept around for the rest of the session. */
@@ -176,7 +181,8 @@ function QueueRow({
 					<span className="truncate font-medium">
 						{artist} — {title}
 					</span>
-					<span className="text-xs text-muted-foreground">{label}</span>
+					{/* Colour is set by the caller's node (active step = brand, else muted). */}
+					<span className="text-xs">{label}</span>
 				</span>
 			</Link>
 		</DropdownMenuItem>
@@ -221,17 +227,28 @@ export function QueueMenu() {
 				{/* The list can get long (a whole capture session), so it scrolls; the
 				    "Clear finished" action stays pinned below as a non-scrolling sibling. */}
 				<div className="max-h-[400px] overflow-y-auto overflow-x-hidden">
-					{live.map((item) => (
-						<QueueRow
-							key={item.id}
-							id={item.id}
-							artist={item.artist}
-							title={item.title}
-							thumbKey={item.thumbKey}
-							label={stepLabel(item)}
-							busy
-						/>
-					))}
+					{live.map((item) => {
+						const step = stepLabel(item);
+						return (
+							<QueueRow
+								key={item.id}
+								id={item.id}
+								artist={item.artist}
+								title={item.title}
+								thumbKey={item.thumbKey}
+								label={
+									<span
+										className={
+											step.active ? "text-brand" : "text-muted-foreground"
+										}
+									>
+										{step.text}
+									</span>
+								}
+								busy
+							/>
+						);
+					})}
 					{finished.length > 0 && (
 						<>
 							{busy && <DropdownMenuSeparator />}
@@ -242,7 +259,11 @@ export function QueueMenu() {
 									artist={item.artist}
 									title={item.title}
 									thumbKey={item.thumbKey}
-									label="Finished — tap to view"
+									label={
+										<span className="text-muted-foreground">
+											Finished — tap to view
+										</span>
+									}
 									busy={false}
 								/>
 							))}
