@@ -19,6 +19,6 @@ await esbuild.build({
 	// Native module — installed via package.json in the runtime image, not bundled.
 	external: ["sharp"],
 	// `#/lib/x` → `<repo>/src/lib/x`, matching the main package's `imports` map.
-	alias: { "#": resolve(dir, "../src") },
+	alias: { "#": resolve(dir, "../../src") },
 	logLevel: "info",
 });

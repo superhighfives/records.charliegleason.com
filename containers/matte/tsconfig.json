@@ -12,7 +12,7 @@
 		"esModuleInterop": true,
 		"verbatimModuleSyntax": true,
 		"paths": {
-			"#/*": ["../src/*"]
+			"#/*": ["../../src/*"]
 		}
 	},
 	"include": ["src/**/*.ts", "build.mjs"]

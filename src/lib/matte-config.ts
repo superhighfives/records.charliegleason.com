@@ -1,7 +1,7 @@
 /**
  * The matte render's tunable constants + derived options, kept in their own pure,
  * dependency-free module (no `cloudflare:workers`, no Photon) so BOTH the Worker matte
- * pipeline (`matte.ts`) and the standalone matte container (`matte-container/`) share a
+ * pipeline (`matte.ts`) and the standalone matte container (`containers/matte/`) share a
  * single source of truth. Nothing here touches a binding — it's numbers + a small helper —
  * so tuning a value moves both renderers in lockstep and they can't drift.
  *

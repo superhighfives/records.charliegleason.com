@@ -7,10 +7,10 @@
 # --- build: bundle server.ts + the repo's shared pure lib into one JS file ---
 FROM node:22-slim AS build
 WORKDIR /app
-COPY matte-container/package.json matte-container/build.mjs ./matte-container/
-COPY matte-container/src ./matte-container/src
+COPY containers/matte/package.json containers/matte/build.mjs ./containers/matte/
+COPY containers/matte/src ./containers/matte/src
 COPY src ./src
-RUN cd matte-container \
+RUN cd containers/matte \
 	&& npm install --no-save esbuild@0.24.2 \
 	&& node build.mjs
 
@@ -19,8 +19,8 @@ FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
-COPY matte-container/package.json ./
+COPY containers/matte/package.json ./
 RUN npm install --omit=dev && npm cache clean --force
-COPY --from=build /app/matte-container/dist ./dist
+COPY --from=build /app/containers/matte/dist ./dist
 EXPOSE 8080
 CMD ["node", "dist/server.js"]

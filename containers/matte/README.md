@@ -44,7 +44,7 @@ Only the binding-coupled surface is reimplemented here (`src/image-io.ts`): `dec
 ## Build & run
 
 ```sh
-cd matte-container
+cd containers/matte
 bun install          # sharp (runtime) + esbuild (build)
 bun run build        # esbuild → dist/server.js (bundles the shared #/lib code, sharp external)
 bun run start        # node dist/server.js  (listens on :8080)

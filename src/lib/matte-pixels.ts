@@ -2,7 +2,7 @@
  * Small, pure alpha-mask helpers for the AI matte path — resampling the model output to
  * the content grid, wrapping a grey mask as RGBA for PNG encoding, and bilinearly resizing
  * a single-channel mask. Kept binding-free (no Photon, no `cloudflare:workers`) so BOTH the
- * Worker matte pipeline (`matte.ts`) and the standalone matte container (`matte-container/`)
+ * Worker matte pipeline (`matte.ts`) and the standalone matte container (`containers/matte/`)
  * run the exact same pixel math — this is where subtle edge bugs would hide, so there must
  * be only one copy.
  */

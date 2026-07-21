@@ -1,11 +1,11 @@
-# Build context is the repo root — keep it small. Only `src/` and `matte-container/` are
+# Build context is the repo root — keep it small. Only `src/` and `containers/matte/` are
 # needed (see Dockerfile). This scoped ignore file applies to this Dockerfile only.
 node_modules
 **/node_modules
 .git
 dist
-matte-container/dist
-matte-container/node_modules
+containers/matte/dist
+containers/matte/node_modules
 drizzle
 public
 .wrangler
