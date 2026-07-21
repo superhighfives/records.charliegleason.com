@@ -1271,6 +1271,20 @@ function RecordDetail() {
 								Open the editor and Apply again to retry.
 							</span>
 						)}
+					{/* A non-fatal note on a *successful* render — e.g. the AI matte fell back
+					    to the deterministic path. Gated on approved + idle (not just "job not
+					    failed"), because `professionalError` is shared with the free capture-time
+					    pipeline, which sets `professionalStatus: "failed"` (never touching
+					    professionalJobStatus) — a real failure we must not repaint as a benign
+					    amber note. Approved+idle uniquely means the queued Apply landed a live
+					    cover and left a downgrade note, so no red / retry prompt. */}
+					{record.professionalStatus === "approved" &&
+						record.professionalJobStatus === "idle" &&
+						record.professionalError && (
+							<span className="text-xs text-amber-600 dark:text-amber-400">
+								{record.professionalError}
+							</span>
+						)}
 				</div>
 			)}
 

@@ -397,15 +397,20 @@ async function matteAI(
 
 /**
  * Generate + store both matte variants for a decoded capture. With `useAi`, tries the
- * paid matting model and falls back to the free deterministic silhouette on any
- * failure (unconfigured model, Replicate down, fetch error); otherwise runs the
- * deterministic path directly. Returns the two R2 keys and which path produced them.
+ * paid matting model; on any failure (unconfigured model, Replicate down, fetch error)
+ * it falls back to the free deterministic silhouette — UNLESS `fallback: false`, in which
+ * case the AI failure rethrows and no deterministic pass runs in this isolate. That's how
+ * the Apply pipeline keeps the two heavy renders apart: the AI stage runs `fallback: false`
+ * so a failed AI attempt never stacks its buffers with the (larger, ~3000² deskew)
+ * deterministic render on one 128 MB isolate — the deterministic fallback is re-enqueued to
+ * a fresh isolate instead (see `professional-pipeline.ts`). Without `useAi`, the
+ * deterministic path runs directly. Returns the two R2 keys and which path produced them.
  */
 export async function generateMatte(
 	capture: RgbaImage,
 	band: CornerBand,
 	params: ReframeParams,
-	opts: { useAi: boolean },
+	opts: { useAi: boolean; fallback?: boolean },
 ): Promise<{
 	shadowKey: string;
 	cutoutKey: string;
@@ -416,6 +421,10 @@ export async function generateMatte(
 			const keys = await storeMatte(await matteAI(capture, band, params));
 			return { ...keys, source: "ai" };
 		} catch (err) {
+			// `fallback: false` — don't run the deterministic render in this (AI) isolate;
+			// let the caller re-enqueue it to a clean heap. Prevents the two big renders
+			// from sharing one 128 MB isolate and OOMing.
+			if (opts.fallback === false) throw err;
 			console.warn("matte: AI path failed, falling back to deterministic", err);
 		}
 	}
@@ -437,7 +446,7 @@ export async function generateMatteFromCapture(
 	capturePhotoKey: string,
 	band: CornerBand,
 	params: ReframeParams,
-	opts: { useAi: boolean },
+	opts: { useAi: boolean; fallback?: boolean },
 ): Promise<{
 	shadowKey: string;
 	cutoutKey: string;

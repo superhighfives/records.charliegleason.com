@@ -92,42 +92,82 @@ export async function generateProfessionalCover(
 	};
 }
 
+/** The two R2 matte keys + which path produced them — what a matte render returns. */
+export type MatteKeys = {
+	shadowKey: string;
+	cutoutKey: string;
+	source: "ai" | "deterministic";
+};
+
 /**
- * Stage 2 — the AI matte and the final atomic commit. Renders the matte from the
- * stage-1 {@link CoverStageResult} snapshot (capture + corners + tone) — NOT a fresh read
- * of the record — so it's cut from the exact same inputs as the cover it's paired with,
- * then swaps in the `coverKey` alongside the new matte keys in a single DB write,
- * promoting the professional photo to live. The record is re-read only for the atomic
- * write target + binning the superseded cover/matte from R2. `enhanced` records whether
- * `coverKey` came from the Real-ESRGAN pass (persisted as `professionalEnhanced`).
+ * Render ONLY the paid AI matte from a stage-1 {@link CoverStageResult} snapshot, with the
+ * in-isolate deterministic fallback disabled (`fallback: false`) — so a failed AI attempt
+ * rethrows here instead of stacking the (much larger, ~3000² deskew) deterministic render
+ * on the same isolate the AI buffers already loaded. The queue re-enqueues the fallback to
+ * a fresh isolate on failure (see {@link renderDeterministicMatte}). Throws on any AI
+ * failure; the caller decides what to do.
+ */
+export function renderAiMatte(stage: CoverStageResult): Promise<MatteKeys> {
+	return generateMatteFromCapture(
+		stage.captureKey,
+		parseCornerBand(stage.bandJson),
+		parseReframeParams(stage.paramsJson),
+		{ useAi: true, fallback: false },
+	);
+}
+
+/**
+ * Render ONLY the free deterministic matte from the stage-1 snapshot — the fallback the
+ * queue runs in its own fresh isolate after {@link renderAiMatte} fails. Kept off the AI
+ * isolate on purpose: its deskew buffer (~3000²) alone is a big fraction of the 128 MB
+ * budget, so it must not share a heap with the AI attempt's residue.
+ */
+export function renderDeterministicMatte(
+	stage: CoverStageResult,
+): Promise<MatteKeys> {
+	return generateMatteFromCapture(
+		stage.captureKey,
+		parseCornerBand(stage.bandJson),
+		parseReframeParams(stage.paramsJson),
+		{ useAi: false },
+	);
+}
+
+/**
+ * Stage 2 — commit a rendered matte alongside the stage-1 cover in one atomic DB write,
+ * promoting the professional photo to live. The `matte` is rendered separately (by the
+ * queue, per-isolate: {@link renderAiMatte} then, on failure, {@link renderDeterministicMatte}
+ * in a fresh isolate) and passed in — NOT generated here — so the two memory-heavy renders
+ * never share this commit's isolate. All display fields (cover + matte) are written from the
+ * stage-1 {@link CoverStageResult} snapshot (capture + corners + tone), so the committed
+ * cover and matte are always cut from the same inputs even if the record changed between
+ * stages. The record is re-read only for the atomic write target + binning the superseded
+ * cover/matte from R2. `enhanced` records whether `coverKey` came from the Real-ESRGAN pass.
+ *
+ * Pass `matte: null` with the `matteError` that killed BOTH the AI and deterministic paths
+ * to preserve the existing matte, commit the (fresh) cover anyway, and flag the job
+ * `failed` so the editor offers a retry — rather than binning a good matte we already had.
+ *
+ * `opts.aiFallbackReason` is the AI matte's failure reason when this commit is the
+ * *deterministic fallback succeeding* — recorded as a non-fatal note on `professionalError`
+ * (job stays `idle`, not `failed`) so the admin can see the AI path was skipped and why,
+ * rather than the downgrade being silent (Sentry-only).
  */
 export async function commitProfessionalMatte(
 	record: Record,
 	stage: CoverStageResult,
+	matte: MatteKeys | null,
+	matteError: unknown,
+	opts: { aiFallbackReason?: string | null } = {},
 ): Promise<void> {
-	const { coverKey, enhanced, captureKey, bandJson, paramsJson } = stage;
-	// Parse the carried snapshot — the same capture/band/params stage 1 built the cover
-	// from — rather than re-reading the record, so a change to the capture or corners
-	// between stages (e.g. a concurrent Replace capture) can't pair this matte with a
-	// cover cut from a different capture.
-	const band = parseCornerBand(bandJson);
-	const params = parseReframeParams(paramsJson);
+	const { coverKey, enhanced, bandJson, paramsJson } = stage;
 
-	let matteError: unknown = null;
-	const matte = await generateMatteFromCapture(captureKey, band, params, {
-		useAi: true,
-	}).catch((err) => {
-		console.error(`[pro] matte failed for record ${record.id}`, err);
-		matteError = err;
-		return null;
-	});
-
-	// A matte failure must NOT wipe a matte we already had. `generateMatte` already
-	// falls back from the AI path to the deterministic one internally, so reaching
-	// here means *both* died — almost always a transient R2/Images blip (e.g.
-	// "Network connection lost."). Keep the existing matte live, commit the (fresh)
-	// cover, and flag the job `failed` with the error so the editor offers a retry —
-	// rather than silently degrading to no matte and binning the good one.
+	// A matte failure must NOT wipe a matte we already had. Reaching here with `matte:
+	// null` means *both* the AI and deterministic renders died (each in its own isolate)
+	// — almost always a transient R2/Images blip (e.g. "Network connection lost."). Keep
+	// the existing matte live, commit the (fresh) cover, and flag the job `failed` with
+	// the error so the editor offers a retry — rather than silently degrading to no matte
+	// and binning the good one.
 	const matteFailed = matteError != null;
 	const shadowKey = matteFailed
 		? record.professionalAlphaKey
@@ -158,7 +198,9 @@ export async function commitProfessionalMatte(
 			professionalJobStatus: matteFailed ? "failed" : "idle",
 			professionalError: matteFailed
 				? `Matte generation failed: ${matteError instanceof Error ? matteError.message : String(matteError)}`
-				: null,
+				: opts.aiFallbackReason
+					? `AI matte unavailable — used the deterministic fallback: ${opts.aiFallbackReason}`
+					: null,
 			updatedAt: new Date(),
 		})
 		.where(eq(records.id, record.id));

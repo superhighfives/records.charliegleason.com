@@ -1,8 +1,8 @@
 /**
- * Splitting helpers for bulk work, kept dependency-free so both the server
- * data-access layer and the queue producer can share them — and so the splitting
- * math is unit-testable without a Workers runtime (see batching.test.ts). Two
- * hard platform limits drive everything here:
+ * Pure queue helpers kept dependency-free so both the server data-access layer and the
+ * queue producer/consumer can share them — and so the logic is unit-testable without a
+ * Workers runtime (see batching.test.ts). Covers the bulk-splitting math (bounded by two
+ * hard platform limits) and the Apply pipeline's matte state machine:
  *
  *  - D1 rejects any query with more than 100 bound parameters.
  *  - Cloudflare Queues accept at most 100 messages per `sendBatch` call.
@@ -13,11 +13,20 @@ export interface AnalyzeMessage {
 	recordId: number;
 	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls the
 	// Discogs release for an already-identified record. The paid Apply pipeline is
-	// split across two messages so each memory-heavy step gets its own fresh isolate
-	// (a single invocation running reframe+enhance+matte brushed the 128 MB ceiling
-	// and OOM'd): "professional" does the reframe + Real-ESRGAN enhance (the cover),
-	// then enqueues "professional-matte" for the AI matte + the final atomic commit.
-	mode?: "analyze" | "refresh" | "professional" | "professional-matte";
+	// split across messages so each memory-heavy step gets its own fresh isolate (a
+	// single invocation running reframe+enhance+matte brushed the 128 MB ceiling and
+	// OOM'd): "professional" does the reframe + Real-ESRGAN enhance (the cover), then
+	// enqueues "professional-matte" for the AI matte + the final atomic commit. If that
+	// AI matte fails, its (larger) deterministic fallback is deferred to yet another
+	// isolate — "professional-matte-fallback" — rather than run inline, since stacking
+	// the failed AI attempt's buffers with the ~3000² deterministic deskew on one isolate
+	// is itself what OOM'd.
+	mode?:
+		| "analyze"
+		| "refresh"
+		| "professional"
+		| "professional-matte"
+		| "professional-matte-fallback";
 	// Only set on "professional-matte": the stage-1 result — the cover key + the exact
 	// (serialized) capture/band/params the cover was built from. Carried forward so the
 	// matte stage (a) renders the matte from and re-persists the SAME inputs, keeping
@@ -28,6 +37,11 @@ export interface AnalyzeMessage {
 	captureKey?: string;
 	bandJson?: string;
 	paramsJson?: string;
+	// Only set on "professional-matte-fallback": the AI matte's actual failure reason
+	// (why we're running the deterministic fallback at all). Carried so a *successful*
+	// fallback can still record it in the admin UI — otherwise the AI failure is invisible
+	// there, only in Sentry. Not shown publicly (`professionalError` is admin-only).
+	aiMatteError?: string;
 }
 
 /**
@@ -67,4 +81,25 @@ export function toQueueBatches(
 	return chunk(recordIds, QUEUE_BATCH_SIZE).map((slice) =>
 		slice.map((recordId) => ({ body: { recordId, mode } })),
 	);
+}
+
+/** What the `professional-matte` consumer should do after an AI-matte attempt. */
+export type MatteAction = "commit" | "retry-ai" | "fallback";
+
+/**
+ * Decide the next step of the AI-matte stage (`professional-matte`) — the "prefer AI"
+ * state machine, pulled out pure so it's testable without the Queue/DB plumbing. A
+ * successful render commits; a failure retries the AI stage while the queue's redelivery
+ * budget lasts (so a transient Replicate/network blip gets another AI attempt rather than
+ * an immediate downgrade), and only falls back to the deterministic render once AI is
+ * genuinely exhausted. `attempts` is the current delivery's `message.attempts`; the
+ * comparison mirrors the queue's own `willRetry` (attempts ≤ `maxRetries` ⇒ retry).
+ */
+export function nextMatteAction(
+	aiSucceeded: boolean,
+	attempts: number,
+	maxRetries: number,
+): MatteAction {
+	if (aiSucceeded) return "commit";
+	return attempts <= maxRetries ? "retry-ai" : "fallback";
 }
