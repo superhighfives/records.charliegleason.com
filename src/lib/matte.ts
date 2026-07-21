@@ -312,14 +312,41 @@ export async function generateMatteFromCapture(
 	return generateMatte(await loadCapture(capturePhotoKey), band, params, opts);
 }
 
+// HEIF/HEIC brand codes (the `ftyp` box's major brand). iPhone captures stored as their
+// raw original — the fallback when Image Transformations were unavailable at capture time —
+// can be HEIC, which sharp's prebuilt libvips can't decode. The Images binding can, so those
+// (and only those) get normalised to webp before the container call.
+const HEIC_BRANDS = new Set([
+	"heic",
+	"heix",
+	"hevc",
+	"hevx",
+	"heim",
+	"heis",
+	"hevm",
+	"hevs",
+	"mif1",
+	"msf1",
+]);
+
+/** Sniff a HEIC/HEIF file by its ISO-BMFF `ftyp` box (bytes 4–8 "ftyp", 8–12 the brand). */
+function looksLikeHeic(bytes: Uint8Array): boolean {
+	if (bytes.length < 12) return false;
+	const box = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
+	if (box !== "ftyp") return false;
+	const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+	return HEIC_BRANDS.has(brand);
+}
+
 /**
- * The container equivalent of {@link generateMatteFromCapture}: hand the raw capture bytes to
- * the matte container (which does the memory-heavy render off the 128 MB isolate — see
+ * The container equivalent of {@link generateMatteFromCapture}: hand the capture bytes to the
+ * matte container (which does the memory-heavy render off the 128 MB isolate — see
  * `containers/matte/`), then store the two webp variants it returns and hand back the same
  * `{ shadowKey, cutoutKey, source }` shape. `mode: "ai"` throws on failure (no in-container
  * fallback), so the queue's AI-preferred retry logic is unchanged; `mode: "deterministic"`
  * runs the free silhouette. The capture is sent encoded (not decoded) so the payload stays a
- * ~2 MB webp; sharp decodes it container-side.
+ * ~2 MB webp; sharp decodes it container-side — except a raw HEIC original (sharp can't read
+ * those), which is normalised to a bounded webp via the Images binding first.
  */
 export async function generateMatteViaContainer(
 	capturePhotoKey: string,
@@ -334,7 +361,20 @@ export async function generateMatteViaContainer(
 	const object = await env.PHOTOS.get(capturePhotoKey);
 	if (!object)
 		throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);
-	const capture = new Uint8Array(await object.arrayBuffer());
+	const raw = new Uint8Array(await object.arrayBuffer());
+	// Common case (webp/jpeg/png): send untouched, keeping the container path off the Images
+	// binding. HEIC: transcode to a bounded webp first so sharp can decode it container-side.
+	const capture = looksLikeHeic(raw)
+		? new Uint8Array(
+				await (
+					await env.IMAGES.input(blobStream(raw))
+						.transform({ width: 2048, height: 2048, fit: "scale-down" })
+						.output({ format: "image/webp", quality: 92 })
+				)
+					.response()
+					.arrayBuffer(),
+			)
+		: raw;
 	const result = await renderMatteInContainer({ capture, band, params, mode });
 	const keys = await storeMatteBytes(result.shadow, result.cutout);
 	return { ...keys, source: result.source };
