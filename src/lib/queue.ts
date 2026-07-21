@@ -104,16 +104,19 @@ export async function enqueueProfessionalMatte(
  * Enqueue the deterministic-matte fallback — stage 2b — after the AI matte failed. Runs
  * the (larger, ~3000² deskew) deterministic render in its OWN fresh isolate rather than
  * inline in the AI stage, then commits the same stage-1 cover with it. Carries the same
- * snapshot so the committed cover + matte stay cut from one set of inputs.
+ * snapshot so the committed cover + matte stay cut from one set of inputs, plus the AI
+ * failure reason so a successful fallback can still surface it in the admin UI.
  */
 export async function enqueueProfessionalMatteFallback(
 	recordId: number,
 	stage: CoverStageResult,
+	aiMatteError: string,
 ): Promise<void> {
 	await analyzeQueue().send({
 		recordId,
 		mode: "professional-matte-fallback",
 		...stage,
+		aiMatteError,
 	});
 }
 
@@ -382,8 +385,14 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	// matte wins swaps in with the same cover atomically (no public gap).
 	if (mode === "professional-matte" || mode === "professional-matte-fallback") {
 		const isFallback = mode === "professional-matte-fallback";
-		const { coverKey, enhanced, captureKey, bandJson, paramsJson } =
-			message.body;
+		const {
+			coverKey,
+			enhanced,
+			captureKey,
+			bandJson,
+			paramsJson,
+			aiMatteError,
+		} = message.body;
 		try {
 			const [record] = await db
 				.update(records)
@@ -430,7 +439,11 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 					matteError = err;
 					return null;
 				});
-				await commitProfessionalMatte(record, stage, matte, matteError);
+				// A successful deterministic fallback still notes why AI was skipped, so the
+				// silent downgrade is visible in the admin UI (not just Sentry).
+				await commitProfessionalMatte(record, stage, matte, matteError, {
+					aiFallbackReason: aiMatteError ?? null,
+				});
 				message.ack();
 				return;
 			}
@@ -473,8 +486,9 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				return;
 			}
 			// action === "fallback" — AI genuinely exhausted, defer the deterministic
-			// render to its own fresh isolate.
-			await enqueueProfessionalMatteFallback(recordId, stage);
+			// render to its own fresh isolate (carrying the AI reason so a successful
+			// fallback can still show it in the admin UI).
+			await enqueueProfessionalMatteFallback(recordId, stage, detail);
 			message.ack();
 			return;
 		} catch (err) {

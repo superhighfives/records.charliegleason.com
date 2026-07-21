@@ -1271,6 +1271,16 @@ function RecordDetail() {
 								Open the editor and Apply again to retry.
 							</span>
 						)}
+					{/* A non-fatal note (job didn't fail, isn't running) — e.g. the AI matte
+					    fell back to the deterministic path. The render succeeded, so no red /
+					    retry prompt; just surface the reason so the degrade isn't invisible. */}
+					{record.professionalJobStatus !== "failed" &&
+						!proGenerating &&
+						record.professionalError && (
+							<span className="text-xs text-amber-600 dark:text-amber-400">
+								{record.professionalError}
+							</span>
+						)}
 				</div>
 			)}
 

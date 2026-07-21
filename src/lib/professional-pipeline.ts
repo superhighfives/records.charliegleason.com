@@ -147,12 +147,18 @@ export function renderDeterministicMatte(
  * Pass `matte: null` with the `matteError` that killed BOTH the AI and deterministic paths
  * to preserve the existing matte, commit the (fresh) cover anyway, and flag the job
  * `failed` so the editor offers a retry — rather than binning a good matte we already had.
+ *
+ * `opts.aiFallbackReason` is the AI matte's failure reason when this commit is the
+ * *deterministic fallback succeeding* — recorded as a non-fatal note on `professionalError`
+ * (job stays `idle`, not `failed`) so the admin can see the AI path was skipped and why,
+ * rather than the downgrade being silent (Sentry-only).
  */
 export async function commitProfessionalMatte(
 	record: Record,
 	stage: CoverStageResult,
 	matte: MatteKeys | null,
 	matteError: unknown,
+	opts: { aiFallbackReason?: string | null } = {},
 ): Promise<void> {
 	const { coverKey, enhanced, bandJson, paramsJson } = stage;
 
@@ -192,7 +198,9 @@ export async function commitProfessionalMatte(
 			professionalJobStatus: matteFailed ? "failed" : "idle",
 			professionalError: matteFailed
 				? `Matte generation failed: ${matteError instanceof Error ? matteError.message : String(matteError)}`
-				: null,
+				: opts.aiFallbackReason
+					? `AI matte unavailable — used the deterministic fallback: ${opts.aiFallbackReason}`
+					: null,
 			updatedAt: new Date(),
 		})
 		.where(eq(records.id, record.id));

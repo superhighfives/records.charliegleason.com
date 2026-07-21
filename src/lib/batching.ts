@@ -37,6 +37,11 @@ export interface AnalyzeMessage {
 	captureKey?: string;
 	bandJson?: string;
 	paramsJson?: string;
+	// Only set on "professional-matte-fallback": the AI matte's actual failure reason
+	// (why we're running the deterministic fallback at all). Carried so a *successful*
+	// fallback can still record it in the admin UI — otherwise the AI failure is invisible
+	// there, only in Sentry. Not shown publicly (`professionalError` is admin-only).
+	aiMatteError?: string;
 }
 
 /**
