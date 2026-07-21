@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "66a4e4a1-73e2-4a2d-9bb8-133f34c16883",
-  "prevId": "8859d5a5-d219-4f58-801b-d115daba6664",
+  "id": "94b06a3a-ffab-45be-b69b-39176cbeb040",
+  "prevId": "66a4e4a1-73e2-4a2d-9bb8-133f34c16883",
   "tables": {
     "records": {
       "name": "records",
@@ -263,6 +263,22 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "analyze_retry_count": {
+          "name": "analyze_retry_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 0
+        },
+        "professional_retry_count": {
+          "name": "professional_retry_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 0
         },
         "notes": {
           "name": "notes",

@@ -223,6 +223,12 @@ export interface InFlightItem {
 	kind: "analyze" | "professional";
 	/** The finer-grained state (all actively running — the menu shows a spinner). */
 	state: "pending" | "processing" | "queued";
+	/**
+	 * For a processing `professional` job, which of the two Apply stages it's in, so the
+	 * menu can show "(1/2)" (cover) vs "(2/2)" (matte). Null for analyze jobs, queued
+	 * professional jobs, and legacy rows with no stage recorded.
+	 */
+	stage: "cover" | "matte" | null;
 }
 
 /**
@@ -247,6 +253,7 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 				title: records.title,
 				status: records.status,
 				professionalJobStatus: records.professionalJobStatus,
+				professionalStage: records.professionalStage,
 				professionalStatus: records.professionalStatus,
 				professionalImageKey: records.professionalImageKey,
 				capturePhotoKey: records.capturePhotoKey,
@@ -376,6 +383,8 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 					state: analyzing
 						? (row.status as "pending" | "processing")
 						: (row.professionalJobStatus as "queued" | "processing"),
+					// Only meaningful for a processing professional job; null otherwise.
+					stage: analyzing ? null : row.professionalStage,
 				};
 			});
 	}),
@@ -773,6 +782,7 @@ export const reframeRecord = createServerFn({ method: "POST" })
 					sleeveCornersJson: serializeCornerBand(effectiveBand),
 					professionalParamsJson: JSON.stringify(params),
 					professionalJobStatus: "queued",
+					professionalStage: "cover",
 					professionalError: null,
 					// Fresh manual Apply → reset the reaper's auto-retry budget.
 					professionalRetryCount: 0,
