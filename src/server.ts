@@ -2,6 +2,11 @@ import * as Sentry from "@sentry/cloudflare";
 import entry from "@tanstack/react-start/server-entry";
 
 import { runWeeklyDigest } from "#/lib/digest";
+
+// Re-export the container Durable Object so wrangler can bind it (see wrangler.jsonc
+// `containers` + `durable_objects`). It fronts the matte render image in `containers/matte/`.
+export { MatteContainer } from "#/lib/matte-container";
+
 import { type AnalyzeMessage, handleAnalyzeBatch } from "#/lib/queue";
 
 /**

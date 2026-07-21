@@ -23,7 +23,12 @@
 	// Lets the worker tell production apart from the preview deploy at runtime —
 	// used to gate Sentry reporting (src/server.ts). Overridden in env.preview.
 	"vars": {
-		"ENVIRONMENT": "production"
+		"ENVIRONMENT": "production",
+		// Where the sleeve matte renders: "worker" (in the 128 MB queue-consumer isolate,
+		// the legacy path that OOM-loops on big captures) or "container" (offloaded to the
+		// MatteContainer — real RAM, no OOM). Defaults to "worker"; flip to "container" once
+		// the image is built + deployed and validated (see containers/matte/README.md).
+		"MATTE_RENDERER": "worker"
 	},
 	// D1 — primary database (Drizzle). `remote: true` makes `wrangler dev` use the
 	// real D1 instead of a local SQLite file.
@@ -80,6 +85,29 @@
 	"images": {
 		"binding": "IMAGES"
 	},
+	// Matte render container — offloads the memory-heavy sleeve matte off the 128 MB
+	// queue-consumer isolate (the matte OOM-loop). Built from containers/matte/Dockerfile
+	// with the REPO ROOT as build context (`image_build_context: "."`) so the bundle step
+	// can reach the shared src/lib pure modules. Fronted by the MatteContainer DO; only
+	// used when MATTE_RENDERER=container (above). Not repeated in env.preview — preview
+	// stays on the worker path, so its deploy never builds this image.
+	"containers": [
+		{
+			"class_name": "MatteContainer",
+			"image": "./containers/matte/Dockerfile",
+			"image_build_context": ".",
+			"instance_type": "standard-1",
+			"max_instances": 3
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{ "name": "MATTE_CONTAINER", "class_name": "MatteContainer" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["MatteContainer"] }
+	],
 	// Weekly "records to buy" digest email (Cron Trigger drives the job) —
 	// Mondays at 14:00 UTC.
 	"triggers": {
@@ -132,9 +160,12 @@
 				"crons": []
 			},
 			// `vars` is non-inheritable, so restate it — marks this the preview deploy
-			// so Sentry stays disabled (src/server.ts).
+			// so Sentry stays disabled (src/server.ts). Preview always renders the matte
+			// on the worker path (no container configured here), so its deploy never
+			// builds the container image.
 			"vars": {
-				"ENVIRONMENT": "preview"
+				"ENVIRONMENT": "preview",
+				"MATTE_RENDERER": "worker"
 			},
 			"d1_databases": [
 				{

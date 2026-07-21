@@ -3,7 +3,11 @@ import { eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
-import { generateMatteFromCapture } from "#/lib/matte";
+import {
+	generateMatteFromCapture,
+	generateMatteViaContainer,
+} from "#/lib/matte";
+import { matteContainerEnabled } from "#/lib/matte-container";
 import { reframeFromCapture, upscaleProfessional } from "#/lib/professional";
 import { parseReframeParams } from "#/lib/reframe-params";
 import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
@@ -112,12 +116,19 @@ export type MatteKeys = {
  * failure; the caller decides what to do.
  */
 export function renderAiMatte(stage: CoverStageResult): Promise<MatteKeys> {
-	return generateMatteFromCapture(
-		stage.captureKey,
-		parseCornerBand(stage.bandJson),
-		parseReframeParams(stage.paramsJson),
-		{ useAi: true, fallback: false },
-	);
+	const band = parseCornerBand(stage.bandJson);
+	const params = parseReframeParams(stage.paramsJson);
+	// Flag-gated cutover: `MATTE_RENDERER=container` runs the render in the matte container
+	// (real RAM, no 128 MB isolate OOM); default `worker` keeps the in-isolate path. The
+	// container's `ai` mode also rethrows on failure, so the queue's retry/fallback is
+	// identical either way.
+	if (matteContainerEnabled()) {
+		return generateMatteViaContainer(stage.captureKey, band, params, "ai");
+	}
+	return generateMatteFromCapture(stage.captureKey, band, params, {
+		useAi: true,
+		fallback: false,
+	});
 }
 
 /**
@@ -129,12 +140,19 @@ export function renderAiMatte(stage: CoverStageResult): Promise<MatteKeys> {
 export function renderDeterministicMatte(
 	stage: CoverStageResult,
 ): Promise<MatteKeys> {
-	return generateMatteFromCapture(
-		stage.captureKey,
-		parseCornerBand(stage.bandJson),
-		parseReframeParams(stage.paramsJson),
-		{ useAi: false },
-	);
+	const band = parseCornerBand(stage.bandJson);
+	const params = parseReframeParams(stage.paramsJson);
+	if (matteContainerEnabled()) {
+		return generateMatteViaContainer(
+			stage.captureKey,
+			band,
+			params,
+			"deterministic",
+		);
+	}
+	return generateMatteFromCapture(stage.captureKey, band, params, {
+		useAi: false,
+	});
 }
 
 /**

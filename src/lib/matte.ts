@@ -15,6 +15,7 @@ import {
 	VETO_FG_INSET,
 	VETO_RING,
 } from "#/lib/matte-config";
+import { renderMatteInContainer } from "#/lib/matte-container";
 import {
 	grayToRgba,
 	maskFromModelOutput,
@@ -95,17 +96,15 @@ async function encodeWebp(image: RgbaImage): Promise<ArrayBuffer> {
 	return out.response().arrayBuffer();
 }
 
-/** Store both matte variants under a shared `alpha/{uuid}` stem. */
-async function storeMatte(
-	result: MatteResult,
+/** Store two already-encoded webp matte variants under a shared `alpha/{uuid}` stem. */
+async function storeMatteBytes(
+	// `ArrayBuffer` from the Worker's `encodeWebp`; `Uint8Array` from the container response.
+	shadowBuf: ArrayBuffer | Uint8Array,
+	cutoutBuf: ArrayBuffer | Uint8Array,
 ): Promise<{ shadowKey: string; cutoutKey: string }> {
 	const uuid = crypto.randomUUID();
 	const shadowKey = `alpha/${uuid}.webp`;
 	const cutoutKey = `alpha/${uuid}-cutout.webp`;
-	const [shadowBuf, cutoutBuf] = await Promise.all([
-		encodeWebp(result.shadow),
-		encodeWebp(result.cutout),
-	]);
 	await Promise.all([
 		env.PHOTOS.put(shadowKey, shadowBuf, {
 			httpMetadata: { contentType: "image/webp" },
@@ -115,6 +114,17 @@ async function storeMatte(
 		}),
 	]);
 	return { shadowKey, cutoutKey };
+}
+
+/** Encode both matte variants (Images binding) then store them. */
+async function storeMatte(
+	result: MatteResult,
+): Promise<{ shadowKey: string; cutoutKey: string }> {
+	const [shadowBuf, cutoutBuf] = await Promise.all([
+		encodeWebp(result.shadow),
+		encodeWebp(result.cutout),
+	]);
+	return storeMatteBytes(shadowBuf, cutoutBuf);
 }
 
 /**
@@ -300,4 +310,32 @@ export async function generateMatteFromCapture(
 	source: "ai" | "deterministic";
 }> {
 	return generateMatte(await loadCapture(capturePhotoKey), band, params, opts);
+}
+
+/**
+ * The container equivalent of {@link generateMatteFromCapture}: hand the raw capture bytes to
+ * the matte container (which does the memory-heavy render off the 128 MB isolate — see
+ * `containers/matte/`), then store the two webp variants it returns and hand back the same
+ * `{ shadowKey, cutoutKey, source }` shape. `mode: "ai"` throws on failure (no in-container
+ * fallback), so the queue's AI-preferred retry logic is unchanged; `mode: "deterministic"`
+ * runs the free silhouette. The capture is sent encoded (not decoded) so the payload stays a
+ * ~2 MB webp; sharp decodes it container-side.
+ */
+export async function generateMatteViaContainer(
+	capturePhotoKey: string,
+	band: CornerBand,
+	params: ReframeParams,
+	mode: "ai" | "deterministic",
+): Promise<{
+	shadowKey: string;
+	cutoutKey: string;
+	source: "ai" | "deterministic";
+}> {
+	const object = await env.PHOTOS.get(capturePhotoKey);
+	if (!object)
+		throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);
+	const capture = new Uint8Array(await object.arrayBuffer());
+	const result = await renderMatteInContainer({ capture, band, params, mode });
+	const keys = await storeMatteBytes(result.shadow, result.cutout);
+	return { ...keys, source: result.source };
 }
