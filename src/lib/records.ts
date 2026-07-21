@@ -194,6 +194,13 @@ export interface QueueOutcome {
 	 * a clean finish.
 	 */
 	outcome: "ok" | "fallback" | "failed";
+	/**
+	 * The record's *current* display cover key, so the finished row can render a live thumbnail
+	 * instead of the key the client froze into its session history — a later re-Apply rewrites
+	 * the professional image under a new key and deletes the old object, which would 404 the
+	 * frozen key. Null when there's nothing to show (no approved photo and no capture).
+	 */
+	coverKey: string | null;
 }
 
 /**
@@ -222,6 +229,9 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 					status: records.status,
 					professionalJobStatus: records.professionalJobStatus,
 					professionalAlphaSource: records.professionalAlphaSource,
+					professionalStatus: records.professionalStatus,
+					professionalImageKey: records.professionalImageKey,
+					capturePhotoKey: records.capturePhotoKey,
 				})
 				.from(records)
 				// Bounded to the client's history size; clamp defensively so a tampered
@@ -229,13 +239,16 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 				.where(inArray(records.id, ids.slice(0, 50)));
 
 			return rows.map((row): QueueOutcome => {
+				// Current cover so the finished row shows a live thumbnail, not the client's
+				// frozen (possibly-since-deleted) key. Admin surface, so include the capture.
+				const coverKey = displayCoverKey(row, { includeCapture: true });
 				// A hard failure on either pipeline reads red; a landed-but-downgraded matte
 				// (AI unavailable → deterministic) reads amber; anything else is a clean finish.
 				if (row.status === "failed" || row.professionalJobStatus === "failed")
-					return { id: row.id, outcome: "failed" };
+					return { id: row.id, outcome: "failed", coverKey };
 				if (row.professionalAlphaSource === "deterministic")
-					return { id: row.id, outcome: "fallback" };
-				return { id: row.id, outcome: "ok" };
+					return { id: row.id, outcome: "fallback", coverKey };
+				return { id: row.id, outcome: "ok", coverKey };
 			});
 		}),
 	);

@@ -221,6 +221,11 @@ function QueueRow({
 	/** In-flight rows get a spinner fallback; finished rows a static one so they don't read as still-running. */
 	busy: boolean;
 }) {
+	// A key can 404 — a finished row's frozen history key whose object a later re-Apply
+	// deleted — so fall back to the icon instead of the browser's broken-image glyph.
+	// Tracked by key (not a bool) so a changed thumbKey retries rather than staying failed.
+	const [failedKey, setFailedKey] = useState<string | null>(null);
+	const showImage = thumbKey != null && failedKey !== thumbKey;
 	return (
 		<DropdownMenuItem asChild>
 			<Link
@@ -229,11 +234,12 @@ function QueueRow({
 				className="gap-3"
 			>
 				<span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded bg-muted">
-					{thumbKey ? (
+					{showImage ? (
 						<img
 							src={`/api/photos/${thumbKey}`}
 							alt=""
 							className="size-full object-cover"
+							onError={() => setFailedKey(thumbKey)}
 						/>
 					) : busy ? (
 						<Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -287,6 +293,9 @@ export function QueueMenu() {
 		queueOutcomesQueryOptions(finished.map((f) => f.id)),
 	);
 	const outcomeById = new Map((outcomes ?? []).map((o) => [o.id, o.outcome]));
+	// The record's *current* cover, so a finished row shows a live thumbnail rather than the
+	// key frozen into session history — which a later re-Apply can delete out from under it.
+	const coverKeyById = new Map((outcomes ?? []).map((o) => [o.id, o.coverKey]));
 
 	// "Fail all" is a two-step action inside the menu (arm → confirm) rather than a native
 	// dialog, so it doesn't fight the dropdown's own open/close. Reset the armed state
@@ -387,17 +396,26 @@ export function QueueMenu() {
 					{finished.length > 0 && (
 						<>
 							{busy && <DropdownMenuSeparator />}
-							{finished.map((item) => (
-								<QueueRow
-									key={item.id}
-									id={item.id}
-									artist={item.artist}
-									title={item.title}
-									thumbKey={item.thumbKey}
-									label={<FinishedLabel outcome={outcomeById.get(item.id)} />}
-									busy={false}
-								/>
-							))}
+							{finished.map((item) => {
+								// Prefer the record's current cover once the outcomes query has
+								// resolved it (present in the map — even as null); until then fall
+								// back to the key frozen in session history.
+								const current = coverKeyById.get(item.id);
+								const thumbKey = coverKeyById.has(item.id)
+									? current
+									: item.thumbKey;
+								return (
+									<QueueRow
+										key={item.id}
+										id={item.id}
+										artist={item.artist}
+										title={item.title}
+										thumbKey={thumbKey ?? null}
+										label={<FinishedLabel outcome={outcomeById.get(item.id)} />}
+										busy={false}
+									/>
+								);
+							})}
 						</>
 					)}
 				</div>
