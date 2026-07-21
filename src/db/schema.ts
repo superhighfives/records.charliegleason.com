@@ -121,6 +121,15 @@ export const records = sqliteTable("records", {
 	// column (not dropped) so a migration never has to remove something the currently
 	// deployed production code still selects; a later migration can drop it post-merge.
 	professionalPredictionId: text("professional_prediction_id"),
+	// Bounded auto-retry budgets for the self-heal reaper (see listInFlight): when a
+	// background job is found dead ("worker terminated mid-job" — an uncatchable OOM /
+	// eviction the queue's own retries can't recover), the reaper re-enqueues a FRESH job
+	// (clean isolate) up to MAX_AUTO_RETRIES times before flagging it terminally failed for
+	// manual action, rather than failing on the first interruption. Counts fresh re-enqueues
+	// only (the queue's per-message `attempts` retries are separate); reset to 0 on success
+	// and on any manual re-trigger (Apply / Reprocess / Replace capture / Retry AI matte).
+	analyzeRetryCount: integer("analyze_retry_count").default(0),
+	professionalRetryCount: integer("professional_retry_count").default(0),
 
 	notes: text("notes"),
 	source: text("source", { enum: ["photo", "manual", "import"] }).default(

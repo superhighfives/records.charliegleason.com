@@ -31,6 +31,8 @@ import {
 import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
+import { GenerationFailedBadge } from "#/components/generation-failed-badge";
+import { MatteFallbackBadge } from "#/components/matte-fallback-badge";
 import { RecordPanel } from "#/components/record-panel";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
@@ -181,6 +183,21 @@ const FACET_GROUPS: Array<{
 // Published/Unpublished filter already covers, and Unmatched flags the no-album case.)
 const FLAG_FACETS: FacetOption[] = [
 	{ token: "failed", label: "Failed", test: (r) => r.status === "failed" },
+	// The Apply (generation) job errored and stayed failed after the auto-retries — the
+	// cover didn't regenerate, so this needs manual action (open + Apply again).
+	{
+		token: "genFailed",
+		label: "Gen failed",
+		test: (r) => r.professionalJobStatus === "failed",
+	},
+	// Records whose Apply landed the free deterministic matte because the paid AI matte
+	// failed — the amber "AI matte unavailable…" note on the detail page. A soft
+	// attention state (the cover is live and fine), so it's a flag, not a facet pair.
+	{
+		token: "matteFallback",
+		label: "AI matte failed",
+		test: (r) => r.professionalAlphaSource === "deterministic",
+	},
 	{
 		token: "duplicate",
 		label: "Duplicate",
@@ -195,6 +212,14 @@ const FLAG_COLORS: globalThis.Record<string, { active: string; idle: string }> =
 		failed: {
 			active: "border-red-600 bg-red-600 text-white",
 			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
+		},
+		genFailed: {
+			active: "border-red-600 bg-red-600 text-white",
+			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
+		},
+		matteFallback: {
+			active: "border-amber-600 bg-amber-600 text-white",
+			idle: "border-amber-500/40 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400",
 		},
 		duplicate: {
 			active: "border-orange-600 bg-orange-600 text-white",
@@ -720,6 +745,12 @@ function AdminRecords() {
 						)}
 						{row.original.duplicateOf != null &&
 							liveIds.has(row.original.duplicateOf) && <DuplicateBadge />}
+						{row.original.professionalJobStatus === "failed" && (
+							<GenerationFailedBadge />
+						)}
+						{row.original.professionalAlphaSource === "deterministic" && (
+							<MatteFallbackBadge />
+						)}
 						<StatusError record={row.original} />
 					</Link>
 				),
@@ -1180,6 +1211,12 @@ function AdminRecords() {
 												<StatusBadge status={r.status} />
 											)}
 											{r.duplicateOf != null && <DuplicateBadge />}
+											{r.professionalJobStatus === "failed" && (
+												<GenerationFailedBadge />
+											)}
+											{r.professionalAlphaSource === "deterministic" && (
+												<MatteFallbackBadge />
+											)}
 											{r.pitchforkScore != null && (
 												<span className="text-xs text-muted-foreground tabular-nums">
 													Pitchfork {r.pitchforkScore}

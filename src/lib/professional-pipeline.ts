@@ -196,7 +196,12 @@ export async function commitProfessionalMatte(
 			// Apply promotes the (new) cover to live regardless — the matte is best-effort.
 			professionalStatus: "approved",
 			professionalJobStatus: matteFailed ? "failed" : "idle",
+			// The two-step pipeline finished — clear the progress marker.
 			professionalStage: null,
+			// Generation reached a committed cover — clear the reaper's auto-retry budget (a
+			// fresh Apply / reprocess starts a new one). Even the matte-failed path is
+			// terminal-with-action, not a reap target, so resetting here is safe.
+			professionalRetryCount: 0,
 			professionalError: matteFailed
 				? `Matte generation failed: ${matteError instanceof Error ? matteError.message : String(matteError)}`
 				: opts.aiFallbackReason
