@@ -20,15 +20,6 @@ import type { CornerBand } from "#/lib/sleeve-corners";
  */
 const MATTE_CONTAINER_INSTANCES = 3;
 
-/**
- * Whether the matte should render in the container. Reads the `MATTE_RENDERER` flag as a
- * plain string (wrangler types it as the literal default, so the equality is cast here) — the
- * one place the pipeline consults to route between the container and the in-Worker path.
- */
-export function matteContainerEnabled(): boolean {
-	return (env.MATTE_RENDERER as string) === "container";
-}
-
 /** The container Durable Object. Config (image, instance type) lives in wrangler.jsonc. */
 export class MatteContainer extends Container<Cloudflare.Env> {
 	defaultPort = 8080;
@@ -56,11 +47,7 @@ export async function renderMatteInContainer(input: {
 	params: ReframeParams;
 	mode: "ai" | "deterministic";
 }): Promise<ContainerMatte> {
-	// Only bound in production (preview stays on the worker path), so guard the optional
-	// binding — this is only reached when `matteContainerEnabled()` is true, i.e. in production.
-	const binding = env.MATTE_CONTAINER;
-	if (!binding) throw new Error("MATTE_CONTAINER binding is not configured");
-	const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
+	const stub = await getRandom(env.MATTE_CONTAINER, MATTE_CONTAINER_INSTANCES);
 	const res = await stub.fetch("http://matte-container/matte", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
