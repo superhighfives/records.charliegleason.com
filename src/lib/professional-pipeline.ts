@@ -14,7 +14,7 @@ import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
 /**
  * The paid "Apply" pipeline, split across two queue messages so each memory-heavy step
  * runs in its own invocation — {@link generateProfessionalCover} (reframe + Real-ESRGAN
- * enhance), then {@link commitProfessionalMatte} (AI matte + the final commit). A single
+ * enhance), then {@link commitProfessionalMatte} (Magic matte + the final commit). A single
  * invocation doing all three stacked a reframe buffer, the enhance, and the matte's
  * full-resolution RGBA buffers (~2000² warp + ESRGAN + 2400² matte warp) on one 128 MB
  * isolate — enough to tip a marginal run into an uncatchable OOM that left the record
@@ -33,9 +33,10 @@ import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
  * between stages — e.g. a concurrent Replace capture — could pair a stage-1 cover with a
  * matte cut from a different capture.)
  *
- * Both Replicate steps stay best-effort: an enhance hiccup degrades to a plain reframe,
- * and a matte hiccup falls back (AI → deterministic, and a total matte failure preserves
- * the existing matte and flags the job `failed` rather than binning a good one). Kept out
+ * The enhance is required (a hiccup throws → the queue retries, then flags the job
+ * `failed`, rather than committing a worse plain reframe). The matte stays best-effort:
+ * a hiccup falls back (AI → deterministic, and a total matte failure preserves the
+ * existing matte and flags the job `failed` rather than binning a good one). Kept out
  * of `records.ts` to avoid an import cycle with the queue (records → queue → this module).
  */
 
@@ -57,7 +58,7 @@ export interface CoverStageResult {
 
 /**
  * Stage 1 — the cover. Reframe the square from the record's stored corners + tone, then
- * (best-effort) Real-ESRGAN enhance it. Returns the cover key + the input snapshot it was
+ * Real-ESRGAN enhance it (required — a failure throws and fails the job). Returns the cover key + the input snapshot it was
  * built from (see {@link CoverStageResult}); writes nothing to the DB (the matte stage
  * commits). The reframe is cheap and the enhance streams through the Images binding (no
  * big in-JS RGBA), so this stage's memory footprint is modest — the heavy work is
@@ -79,18 +80,22 @@ export async function generateProfessionalCover(
 	// The square hero (free) — staging for the enhance.
 	const { key: baseKey } = await reframeFromCapture(captureKey, band, params);
 	await onStep?.("enhance");
-	// Enhance is best-effort: a Replicate hiccup degrades to the plain reframe.
-	const enhancedKey = await upscaleProfessional(baseKey)
-		.then((r) => r.key)
-		.catch((err) => {
-			console.error(`[pro] enhance failed for record ${record.id}`, err);
-			return null;
-		});
-	// When the enhance succeeds, the base reframe was only a staging step — bin it.
-	if (enhancedKey) await env.PHOTOS.delete(baseKey).catch(() => {});
+	// Enhance is required, not best-effort: a Replicate hiccup throws so the queue retries
+	// and — once retries are exhausted — flags the Apply job `failed` (the "Image failed"
+	// filter), rather than silently committing a worse, un-enhanced plain reframe. We'd
+	// rather it fail loudly than accumulate a "succeeded but degraded" state.
+	const { key: enhancedKey } = await upscaleProfessional(baseKey).catch(
+		async (err) => {
+			// The staging reframe is now orphaned; bin it before the throw propagates.
+			await env.PHOTOS.delete(baseKey).catch(() => {});
+			throw err;
+		},
+	);
+	// The base reframe was only a staging step for the enhance — bin it.
+	await env.PHOTOS.delete(baseKey).catch(() => {});
 	return {
-		coverKey: enhancedKey ?? baseKey,
-		enhanced: enhancedKey != null,
+		coverKey: enhancedKey,
+		enhanced: true,
 		// The exact inputs the cover came from — the matte stage renders from and
 		// re-persists these same values (not a fresh record read).
 		captureKey,
@@ -107,7 +112,7 @@ export type MatteKeys = {
 };
 
 /**
- * Render ONLY the paid AI matte from a stage-1 {@link CoverStageResult} snapshot. Where the
+ * Render ONLY the paid Magic matte from a stage-1 {@link CoverStageResult} snapshot. Where the
  * matte container is bound (production) it renders there — real RAM, off the 128 MB
  * queue-consumer isolate that OOM-looped on this render. Where it isn't (preview, whose
  * `versions upload` deploy can't host the container's DO), it falls back to the in-Worker
@@ -164,7 +169,7 @@ export function renderDeterministicMatte(
  * to preserve the existing matte, commit the (fresh) cover anyway, and flag the job
  * `failed` so the editor offers a retry — rather than binning a good matte we already had.
  *
- * `opts.aiFallbackReason` is the AI matte's failure reason when this commit is the
+ * `opts.aiFallbackReason` is the Magic matte's failure reason when this commit is the
  * *deterministic fallback succeeding* — recorded as a non-fatal note on `professionalError`
  * (job stays `idle`, not `failed`) so the admin can see the AI path was skipped and why,
  * rather than the downgrade being silent (Sentry-only).
@@ -222,7 +227,7 @@ export async function commitProfessionalMatte(
 			professionalError: matteFailed
 				? `Matte generation failed: ${matteError instanceof Error ? matteError.message : String(matteError)}`
 				: opts.aiFallbackReason
-					? `AI matte unavailable — used the deterministic fallback: ${opts.aiFallbackReason}`
+					? `Magic matte unavailable — used the deterministic fallback: ${opts.aiFallbackReason}`
 					: null,
 			updatedAt: new Date(),
 		})

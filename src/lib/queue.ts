@@ -103,7 +103,7 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 
 /**
  * Enqueue a record for the paid Apply pipeline. Kicks off stage 1 (reframe + enhance);
- * that stage enqueues stage 2 (the AI matte) itself via {@link enqueueProfessionalMatte},
+ * that stage enqueues stage 2 (the Magic matte) itself via {@link enqueueProfessionalMatte},
  * so each memory-heavy step runs in its own isolate.
  */
 export async function enqueueProfessional(recordId: number): Promise<void> {
@@ -111,7 +111,7 @@ export async function enqueueProfessional(recordId: number): Promise<void> {
 }
 
 /**
- * Enqueue stage 2 of the Apply pipeline — the AI matte + final commit — carrying the
+ * Enqueue stage 2 of the Apply pipeline — the Magic matte + final commit — carrying the
  * stage-1 result (cover key + the exact inputs it was built from) so the matte is cut
  * from the same snapshot and both swap in atomically. Called by the stage-1 consumer,
  * not the UI.
@@ -134,9 +134,9 @@ export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
 }
 
 /**
- * Bulk variant of {@link enqueueProfessionalMatte} — re-runs ONLY stage 2 (the AI matte +
+ * Bulk variant of {@link enqueueProfessionalMatte} — re-runs ONLY stage 2 (the Magic matte +
  * commit) for many records, each carrying its own stage-1 snapshot, in chunked `sendBatch`
- * calls. Used by the admin "Retry AI matte" bulk action. Unlike {@link enqueueBatch}, the
+ * calls. Used by the admin "Retry Magic matte" bulk action. Unlike {@link enqueueBatch}, the
  * bodies differ per record (each has its own cover snapshot), so it can't go through the
  * id-only {@link toQueueBatches} path; it chunks the pre-built messages here.
  */
@@ -152,7 +152,7 @@ export async function enqueueProfessionalMatteBatch(
 }
 
 /**
- * Enqueue the deterministic-matte fallback — stage 2b — after the AI matte failed. Runs
+ * Enqueue the deterministic-matte fallback — stage 2b — after the Magic matte failed. Runs
  * the (larger, ~3000² deskew) deterministic render in its OWN fresh isolate rather than
  * inline in the AI stage, then commits the same stage-1 cover with it. Carries the same
  * snapshot so the committed cover + matte stay cut from one set of inputs, plus the AI
@@ -430,8 +430,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	// reframe/enhance residue). Two modes, so the AI attempt and its (larger) deterministic
 	// fallback each get their OWN isolate — stacking a failed AI attempt's buffers with the
 	// ~3000² deterministic deskew on one 128 MB isolate is what OOM'd:
-	//   - "professional-matte": try the AI matte only (`renderAiMatte`, no inline fallback).
-	//     On success, commit cover + AI matte. On failure, log the real error to Sentry and
+	//   - "professional-matte": try the Magic matte only (`renderAiMatte`, no inline fallback).
+	//     On success, commit cover + Magic matte. On failure, log the real error to Sentry and
 	//     retry the AI stage until the queue's retries run out — only THEN re-enqueue the
 	//     deterministic fallback to a clean isolate (we prefer AI; deterministic is a last
 	//     resort, not the response to a transient blip).
@@ -488,7 +488,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			};
 
 			if (isFallback) {
-				// The AI matte already failed for good (its retries were exhausted upstream)
+				// The Magic matte already failed for good (its retries were exhausted upstream)
 				// — render the deterministic matte here on a clean heap. If it too dies,
 				// commit the cover with the existing matte preserved and flag `failed` (both
 				// paths gone → keep the good matte).
@@ -512,8 +512,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				return;
 			}
 
-			// AI matte only — no inline deterministic fallback (that would stack the two big
-			// renders on one isolate). We PREFER the AI matte, so a failure isn't an
+			// Magic matte only — no inline deterministic fallback (that would stack the two big
+			// renders on one isolate). We PREFER the Magic matte, so a failure isn't an
 			// immediate downgrade; `nextMatteAction` (pure, tested) decides between commit,
 			// another AI attempt, or the last-resort deterministic fallback.
 			let aiMatte: MatteKeys | null = null;
@@ -541,7 +541,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			const detail =
 				aiError instanceof Error ? aiError.message : String(aiError);
 			console.warn(
-				`[queue] AI matte failed for record ${recordId} (attempt ${message.attempts}, action=${action}): ${detail}`,
+				`[queue] Magic matte failed for record ${recordId} (attempt ${message.attempts}, action=${action}): ${detail}`,
 			);
 			Sentry.captureException(aiError);
 			if (action === "retry-ai") {
