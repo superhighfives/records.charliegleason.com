@@ -5,8 +5,6 @@ created: 2026-07-17
 updated: 2026-07-17
 ---
 
-# "Records I want" wishlist (album-level)
-
 ## Goal
 A simple "records I want" list in admin — a wishlist of albums to hunt for.
 The twist: it should be keyed to the **album itself**, not a specific pressing/release,

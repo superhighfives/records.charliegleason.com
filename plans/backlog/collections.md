@@ -5,8 +5,6 @@ created: 2026-07-18
 updated: 2026-07-18
 ---
 
-# Collections (smart + manual groupings of records I own)
-
 ## Goal
 Group records I **own** into named collections — e.g. "Sunday morning", "Late-night
 jazz", "Bought in 2019", "Blue Note originals". Collections can be built two ways:
