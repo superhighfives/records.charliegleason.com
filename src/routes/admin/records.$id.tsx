@@ -2042,7 +2042,7 @@ function RecordEditorHost() {
 
 	return (
 		<Dialog open={editorOpen} onOpenChange={handleOpenChange}>
-			<DialogContent className="max-w-5xl">
+			<DialogContent>
 				<DialogHeader>
 					{/* Title + the same back/next pager as the page header. `pr-8` keeps it
 					    clear of the dialog's absolute close button. Paging from here keeps the
