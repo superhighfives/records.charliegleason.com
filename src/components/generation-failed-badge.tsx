@@ -15,7 +15,7 @@ export function GenerationFailedBadge({ className }: { className?: string }) {
 			)}
 			title="Photo generation failed after retries — open the record and Apply again"
 		>
-			Gen failed
+			Image failed
 		</span>
 	);
 }

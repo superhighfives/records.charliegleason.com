@@ -15,7 +15,7 @@ export function MatteFallbackBadge({ className }: { className?: string }) {
 			)}
 			title="Cover is live, but the matte used the deterministic fallback — the AI matte can be retried"
 		>
-			AI matte
+			Lo-fi matte
 		</span>
 	);
 }

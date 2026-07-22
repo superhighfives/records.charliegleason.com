@@ -81,13 +81,13 @@ export async function generateProfessionalCover(
 	const { key: baseKey } = await reframeFromCapture(captureKey, band, params);
 	await onStep?.("enhance");
 	// Enhance is required, not best-effort: a Replicate hiccup throws so the queue retries
-	// and — once retries are exhausted — flags the Apply job `failed` (the "Gen failed"
+	// and — once retries are exhausted — flags the Apply job `failed` (the "Image failed"
 	// filter), rather than silently committing a worse, un-enhanced plain reframe. We'd
 	// rather it fail loudly than accumulate a "succeeded but degraded" state.
 	const { key: enhancedKey } = await upscaleProfessional(baseKey).catch(
-		(err) => {
+		async (err) => {
 			// The staging reframe is now orphaned; bin it before the throw propagates.
-			env.PHOTOS.delete(baseKey).catch(() => {});
+			await env.PHOTOS.delete(baseKey).catch(() => {});
 			throw err;
 		},
 	);
