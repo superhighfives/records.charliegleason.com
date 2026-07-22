@@ -53,7 +53,7 @@ export const MATTE_ESRGAN_MAX = 2200;
  * (`superhighfives/vitmatte-trimap`). Pinned so the input schema can't shift under us.
  */
 export const MATTE_MODEL_VERSION =
-	"db47c8e79ec5cc6a56feb4984258fc46fb22ec4da0c2b0a58692455c414212e0";
+	"193b4b013b262e9b64e57755d38ff82e497dd2f14537e2e274bc553a28c03237";
 
 /** Build the shared matte options from the record's reframe knobs (softened grade). */
 export function matteOptions(params: ReframeParams): MatteOptions {
