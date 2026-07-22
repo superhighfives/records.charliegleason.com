@@ -78,3 +78,30 @@ export async function renderMatteInContainer(input: {
 		cutout: base64ToBytes(json.cutout),
 	};
 }
+
+/**
+ * Enhance a reframed cover in the container: Real-ESRGAN super-resolution + the bounded lossy
+ * WebP encode, done with the container's sharp pipeline instead of the (load-flaky) Cloudflare
+ * Images binding. Takes the reframed-cover bytes, returns the WebP master bytes for the Worker
+ * to store in R2. Mirrors {@link renderMatteInContainer}'s transport (base64 JSON in/out).
+ */
+export async function enhanceCoverInContainer(input: {
+	image: Uint8Array;
+}): Promise<Uint8Array> {
+	const binding = env.MATTE_CONTAINER;
+	if (!binding) throw new Error("MATTE_CONTAINER binding is not configured");
+	const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
+	const res = await stub.fetch("http://matte-container/enhance", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			image: bytesToBase64(input.image),
+			replicateToken: env.REPLICATE_API_KEY,
+		}),
+	});
+	if (!res.ok) {
+		throw new Error(`enhance container ${res.status}: ${await res.text()}`);
+	}
+	const json = (await res.json()) as { webp: string };
+	return base64ToBytes(json.webp);
+}
