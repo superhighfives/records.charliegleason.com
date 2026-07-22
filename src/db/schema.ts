@@ -83,7 +83,7 @@ export const records = sqliteTable("records", {
 		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
 	}).default("idle"),
 	// The background-job lifecycle for the (queued) Apply pipeline — reframe + Real-ESRGAN
-	// enhance + AI matte, run in the queue consumer. `idle` = nothing running; `queued` =
+	// enhance + Magic matte, run in the queue consumer. `idle` = nothing running; `queued` =
 	// enqueued, awaiting the consumer; `processing` = the consumer is running it; `failed`
 	// = it errored after retries. Powers the header "in flight" menu and the editor's
 	// generating state, independently of the display `professionalStatus` above.
@@ -151,7 +151,7 @@ export const records = sqliteTable("records", {
 	// (clean isolate) up to MAX_AUTO_RETRIES times before flagging it terminally failed for
 	// manual action, rather than failing on the first interruption. Counts fresh re-enqueues
 	// only (the queue's per-message `attempts` retries are separate); reset to 0 on success
-	// and on any manual re-trigger (Apply / Reprocess / Replace capture / Retry AI matte).
+	// and on any manual re-trigger (Apply / Reprocess / Replace capture / Retry Magic matte).
 	analyzeRetryCount: integer("analyze_retry_count").default(0),
 	professionalRetryCount: integer("professional_retry_count").default(0),
 

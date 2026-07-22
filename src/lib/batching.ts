@@ -16,8 +16,8 @@ export interface AnalyzeMessage {
 	// split across messages so each memory-heavy step gets its own fresh isolate (a
 	// single invocation running reframe+enhance+matte brushed the 128 MB ceiling and
 	// OOM'd): "professional" does the reframe + Real-ESRGAN enhance (the cover), then
-	// enqueues "professional-matte" for the AI matte + the final atomic commit. If that
-	// AI matte fails, its (larger) deterministic fallback is deferred to yet another
+	// enqueues "professional-matte" for the Magic matte + the final atomic commit. If that
+	// Magic matte fails, its (larger) deterministic fallback is deferred to yet another
 	// isolate — "professional-matte-fallback" — rather than run inline, since stacking
 	// the failed AI attempt's buffers with the ~3000² deterministic deskew on one isolate
 	// is itself what OOM'd.
@@ -37,7 +37,7 @@ export interface AnalyzeMessage {
 	captureKey?: string;
 	bandJson?: string;
 	paramsJson?: string;
-	// Only set on "professional-matte-fallback": the AI matte's actual failure reason
+	// Only set on "professional-matte-fallback": the Magic matte's actual failure reason
 	// (why we're running the deterministic fallback at all). Carried so a *successful*
 	// fallback can still record it in the admin UI — otherwise the AI failure is invisible
 	// there, only in Sentry. Not shown publicly (`professionalError` is admin-only).
@@ -83,11 +83,11 @@ export function toQueueBatches(
 	);
 }
 
-/** What the `professional-matte` consumer should do after an AI-matte attempt. */
+/** What the `professional-matte` consumer should do after a Magic-matte attempt. */
 export type MatteAction = "commit" | "retry-ai" | "fallback";
 
 /**
- * Decide the next step of the AI-matte stage (`professional-matte`) — the "prefer AI"
+ * Decide the next step of the Magic-matte stage (`professional-matte`) — the "prefer AI"
  * state machine, pulled out pure so it's testable without the Queue/DB plumbing. A
  * successful render commits; a failure retries the AI stage while the queue's redelivery
  * budget lasts (so a transient Replicate/network blip gets another AI attempt rather than

@@ -190,7 +190,7 @@ export interface QueueOutcome {
 	id: number;
 	/**
 	 * `failed` — the analyze or Apply job ended in `failed`; `fallback` — the Apply landed a
-	 * cover but on the deterministic matte, not the AI one (AI matte unavailable); `ok` —
+	 * cover but on the deterministic matte, not the AI one (Magic matte unavailable); `ok` —
 	 * a clean finish.
 	 */
 	outcome: "ok" | "fallback" | "failed";
@@ -950,14 +950,14 @@ export const reframeRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Re-run ONLY the AI matte for a record whose last Apply landed the deterministic fallback
- * (the amber "AI matte unavailable…" note) — a transient stage-2 blip, not a bad cover. It
+ * Re-run ONLY the Magic matte for a record whose last Apply landed the deterministic fallback
+ * (the amber "Magic matte unavailable…" note) — a transient stage-2 blip, not a bad cover. It
  * reconstructs the stage-1 {@link CoverStageResult} snapshot from the row (the already-good
  * `professionalImageKey` as `coverKey`, plus the same capture + corners + tone the cover was
  * cut from) and re-enqueues stage 2 via {@link enqueueProfessionalMatte} — skipping the
  * (successful) reframe + Real-ESRGAN enhance that {@link reframeRecord} would redo. The matte
  * is still cut from the capture + band + params, so it stays consistent with the live cover,
- * which swaps in atomically only if the AI matte succeeds. Like `reframeRecord`, this leaves
+ * which swaps in atomically only if the Magic matte succeeds. Like `reframeRecord`, this leaves
  * the display `professionalStatus` untouched (the fallback cover stays live) and only flips
  * `professionalJobStatus: "queued"`. Throws if there's no cover/capture to matte from.
  */
@@ -1556,7 +1556,7 @@ export const unpublishRecords = createServerFn({ method: "POST" })
 
 /**
  * Bulk "Retry generation". Re-runs the full Apply pipeline (reframe + Real-ESRGAN enhance +
- * AI matte) for every selected record that has a capture to generate from — mirroring the
+ * Magic matte) for every selected record that has a capture to generate from — mirroring the
  * per-record {@link reframeRecord} but keyed only by id (uses each row's stored corners +
  * tone). Only rows currently flagged `failed` with a capture are acted on — a mixed
  * selection's healthy rows are left untouched. Flips each to `queued`, clears the
@@ -1603,7 +1603,7 @@ export const retryProfessionalGenerations = createServerFn({ method: "POST" })
 	);
 
 /**
- * Bulk "Retry AI matte". Re-runs ONLY stage 2 (the AI matte + commit) for every selected
+ * Bulk "Retry Magic matte". Re-runs ONLY stage 2 (the Magic matte + commit) for every selected
  * record that has a live cover + its source capture — mirroring the per-record
  * {@link retryProfessionalMatte}, reconstructing each row's stage-1 snapshot so the re-cut
  * matte stays consistent with the live cover (which swaps in atomically only if the AI
@@ -1626,8 +1626,8 @@ export const retryProfessionalMattes = createServerFn({ method: "POST" })
 					.from(records)
 					.where(inArray(records.id, batch));
 				for (const record of rows) {
-					// Only rows actually on the deterministic fallback (what "Retry AI matte"
-					// upgrades) — a mixed selection's AI-matte / no-matte rows are left alone.
+					// Only rows actually on the deterministic fallback (what "Retry Magic matte"
+					// upgrades) — a mixed selection's Magic-matte / no-matte rows are left alone.
 					if (record.professionalAlphaSource !== "deterministic") continue;
 					// Need a committed cover + its source capture to re-cut the matte from.
 					if (!record.capturePhotoKey || !record.professionalImageKey) continue;
@@ -1649,7 +1649,7 @@ export const retryProfessionalMattes = createServerFn({ method: "POST" })
 			const byId = new Map(items.map((i) => [i.recordId, i]));
 			// Re-apply the eligibility predicate in the UPDATE itself, atomically with the
 			// flip — a row that changed between the SELECT above and this write (e.g. a
-			// concurrent editor Apply that just landed an AI matte, so it's no longer
+			// concurrent editor Apply that just landed a Magic matte, so it's no longer
 			// `deterministic`) is skipped rather than blindly re-queued and re-enqueued from
 			// a now-stale snapshot, which would clobber what that job produced. Enqueue only
 			// the rows this UPDATE actually flipped (its returned ids).

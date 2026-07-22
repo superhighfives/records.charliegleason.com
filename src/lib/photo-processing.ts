@@ -1723,7 +1723,7 @@ export function warpMatteToSquare(
 /**
  * Cut `content` to `mask`, feather it, and perspective-warp the result onto an upright
  * rectangle via {@link warpMatteToSquare} — the squared-up floating-sleeve tail shared by
- * the deterministic and AI matte paths, both of which have a clean refined `quad`.
+ * the deterministic and Magic matte paths, both of which have a clean refined `quad`.
  *
  * CONSUMES `content`: the mask is applied to its buffer in place (no defensive copy) and
  * `bleedEdgeColor`/the warp mutate it further, so the caller must not read `content` after

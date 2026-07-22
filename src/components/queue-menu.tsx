@@ -74,7 +74,7 @@ function stepLabel(item: InFlightItem): { text: string; active: boolean } {
  * The label + colour for a finished row, keyed on its terminal outcome. A clean finish is
  * muted with no dot; a deterministic-matte fallback and a hard failure each get a coloured
  * status dot to the left (amber / red) so the outcome is legible at a glance, matching the
- * amber "AI matte unavailable" / red "generation failed" states in the editor. `undefined`
+ * amber "Magic matte unavailable" / red "generation failed" states in the editor. `undefined`
  * (outcomes still loading, or an id not yet resolved) reads as a plain finish.
  */
 function FinishedLabel({
@@ -94,7 +94,7 @@ function FinishedLabel({
 		return (
 			<span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
 				<span className="size-1.5 shrink-0 rounded-full bg-current" />
-				Finished (no AI matte)
+				Finished (no Magic matte)
 			</span>
 		);
 	}

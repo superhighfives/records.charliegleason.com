@@ -173,8 +173,8 @@ const FACET_GROUPS: Array<{
 	{
 		// Which matte cut the sleeve out. `professionalAlphaSource` is null until Apply
 		// runs, then "ai" (the paid matting model) or "deterministic" — the free edge-snap
-		// fallback the queue lands when the AI matte fails. "Lo-fi matte" is thus the same
-		// set the old amber "AI matte failed" flag surfaced, now framed as a matte source
+		// fallback the queue lands when the Magic matte fails. "Lo-fi matte" is thus the same
+		// set the old amber "Magic matte failed" flag surfaced, now framed as a matte source
 		// alongside its siblings rather than a standalone attention flag.
 		key: "matte",
 		label: "Matte",
@@ -214,7 +214,7 @@ const FLAG_FACETS: FacetOption[] = [
 		label: "Image failed",
 		test: (r) => r.professionalJobStatus === "failed",
 	},
-	// The deterministic-matte-fallback case (paid AI matte failed) is now the "Lo-fi
+	// The deterministic-matte-fallback case (paid Magic matte failed) is now the "Lo-fi
 	// matte" side of the `matte` facet group above, not a standalone flag.
 	{
 		token: "duplicate",
@@ -337,8 +337,8 @@ const BULK_ACTIONS: {
 		fn: retryProfessionalGenerations,
 	},
 	retryMatte: {
-		label: "Retry AI matte",
-		verb: "queued for AI matte",
+		label: "Retry Magic matte",
+		verb: "queued for Magic matte",
 		fn: retryProfessionalMattes,
 	},
 	delete: {
@@ -956,7 +956,7 @@ function AdminRecords() {
 			(action === "retryGeneration" || action === "retryMatte") &&
 			!confirm(
 				`Re-run ${
-					action === "retryMatte" ? "the AI matte" : "generation"
+					action === "retryMatte" ? "the Magic matte" : "generation"
 				} for ${n} selected ${noun}? This runs paid background jobs.`,
 			)
 		) {

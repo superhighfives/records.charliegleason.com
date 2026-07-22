@@ -116,7 +116,7 @@ describe("toQueueBatches", () => {
 describe("nextMatteAction", () => {
 	const MAX = 3;
 
-	it("commits as soon as the AI matte succeeds, regardless of attempt", () => {
+	it("commits as soon as the Magic matte succeeds, regardless of attempt", () => {
 		for (const attempts of [1, MAX, MAX + 1, 99]) {
 			expect(nextMatteAction(true, attempts, MAX)).toBe("commit");
 		}

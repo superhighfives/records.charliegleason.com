@@ -969,7 +969,7 @@ function RecordDetail() {
 		}
 	}
 
-	// Re-run just the AI matte after a record fell back to the deterministic path
+	// Re-run just the Magic matte after a record fell back to the deterministic path
 	// (the amber note below the capture actions). Re-enqueues stage 2 only — the cover
 	// stays live and swaps its matte in atomically if the AI attempt lands this time.
 	const retryMatte = useMutation({
@@ -978,11 +978,11 @@ function RecordDetail() {
 			if (row)
 				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
 			await invalidate();
-			toast.success("Retrying the AI matte… this runs in the background.");
+			toast.success("Retrying the Magic matte… this runs in the background.");
 		},
 		onError: (err) =>
 			toast.error(
-				err instanceof Error ? err.message : "Couldn't retry the AI matte.",
+				err instanceof Error ? err.message : "Couldn't retry the Magic matte.",
 			),
 	});
 
@@ -1289,7 +1289,7 @@ function RecordDetail() {
 								Open the editor and Apply again to retry.
 							</span>
 						)}
-					{/* A non-fatal note on a *successful* render — e.g. the AI matte fell back
+					{/* A non-fatal note on a *successful* render — e.g. the Magic matte fell back
 					    to the deterministic path. Gated on approved + idle (not just "job not
 					    failed"), because `professionalError` is shared with the free capture-time
 					    pipeline, which sets `professionalStatus: "failed"` (never touching
@@ -1314,7 +1314,7 @@ function RecordDetail() {
 											onClick={() => retryMatte.mutate()}
 											className="font-medium underline underline-offset-4 disabled:opacity-60"
 										>
-											{retryMatte.isPending ? "Retrying…" : "Retry AI matte"}
+											{retryMatte.isPending ? "Retrying…" : "Retry Magic matte"}
 										</button>
 									</>
 								)}
@@ -2061,7 +2061,7 @@ function RecordEditorHost() {
 					<DialogDescription>
 						Drag the outer frame onto the background and the inner one onto the
 						sleeve (or auto-detect), then tune the tone — the preview updates
-						live. Apply runs the whole pipeline (enhance + AI matte) and can
+						live. Apply runs the whole pipeline (enhance + Magic matte) and can
 						take a minute.
 					</DialogDescription>
 				</DialogHeader>
@@ -2137,7 +2137,7 @@ function RecordEditorBody({
 	}, [record.professionalJobStatus]);
 
 	// Apply the edit: persist the current corner band + tone and enqueue the paid pipeline
-	// (reframe + Real-ESRGAN enhance + AI matte), which runs in the background. Returns
+	// (reframe + Real-ESRGAN enhance + Magic matte), which runs in the background. Returns
 	// immediately; the editor stays open showing the regenerating state, and the record
 	// view polls and swaps in the generated cover + matte in place when it lands.
 	const applyPro = useMutation({
