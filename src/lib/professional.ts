@@ -70,15 +70,19 @@ const FINAL_SHARPEN = 1.0;
 // to a known version so the input schema can't shift under us.
 const REAL_ESRGAN_VERSION =
 	"b3ef194191d13140337468c916c2c5b96dd0cb06dffc032a022a31807f6a5ea8";
-// The model's GPU caps the *input* at ~2.1M pixels, so the full 2000² reframe (4M)
-// won't fit — downscale it under the budget first, then let the model scale it back
-// up and beyond. 1400² = 1.96M pixels, comfortably under the ceiling.
-const UPSCALE_INPUT_MAX = 1400;
-// 4× the (downscaled) input, so a 1400px source comes back as a 5600px master —
-// plenty of headroom for the model to recover detail before we cap it below.
+// This runs on Replicate's SHARED T4 (~14.5 GiB), and the underlying network is a fixed
+// x4 architecture: peak VRAM is the x4 forward pass over the *input*, so input pixels —
+// not the `scale` param, which only resizes afterwards — govern OOM. 1400² x4 = 5600²
+// (31M px) tips the T4 over (see the CUDA-OOM Sentry issues), and we then throw most of
+// it away by capping to UPSCALE_MAX anyway. 1024² (1.05M px) x4 = 4096² lands right at
+// the cap, so the stored master is unchanged while GPU activation memory drops ~47%.
+const UPSCALE_INPUT_MAX = 1024;
+// 4× matches the model's native scale (asking for less wouldn't save VRAM — the x4 tensor
+// is allocated regardless — and would only soften the result). 1024 → 4096px master.
 const UPSCALE_FACTOR = 4;
-// Bound the stored master so a big upscale can't balloon R2.
-const UPSCALE_MAX = 4000;
+// Bound the stored master so a big upscale can't balloon R2. Set to the exact x4 output
+// (1024 × 4) so the model's native result passes through without a redundant resample.
+const UPSCALE_MAX = 4096;
 
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
 export function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
