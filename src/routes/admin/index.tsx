@@ -86,12 +86,15 @@ interface FacetOption {
 // Filters are independent facets combined with AND. The tri-state segmented pairs let
 // you pick one side, the other, or neither (= don't care); the flag pills below are
 // simple on/off. Each token belongs to a group, and only one token per group is active.
+// `label` is the row heading in the filter popover (the options carry their own labels).
 const FACET_GROUPS: Array<{
 	key: string;
-	options: [FacetOption, FacetOption];
+	label: string;
+	options: FacetOption[];
 }> = [
 	{
 		key: "publish",
+		label: "Status",
 		options: [
 			{
 				token: "published",
@@ -107,6 +110,7 @@ const FACET_GROUPS: Array<{
 	},
 	{
 		key: "match",
+		label: "Match",
 		options: [
 			// "Matched" now means the record has an album (master) — the identity that
 			// makes it publishable. A pinned release is a separate axis (below).
@@ -120,6 +124,7 @@ const FACET_GROUPS: Array<{
 	},
 	{
 		key: "value",
+		label: "Value",
 		options: [
 			{
 				token: "valued",
@@ -135,6 +140,7 @@ const FACET_GROUPS: Array<{
 	},
 	{
 		key: "release",
+		label: "Release",
 		options: [
 			{
 				token: "pinned",
@@ -150,6 +156,7 @@ const FACET_GROUPS: Array<{
 	},
 	{
 		key: "photo",
+		label: "Photo",
 		options: [
 			{
 				token: "hasPhoto",
@@ -164,17 +171,28 @@ const FACET_GROUPS: Array<{
 		],
 	},
 	{
-		key: "enhance",
+		// Which matte cut the sleeve out. `professionalAlphaSource` is null until Apply
+		// runs, then "ai" (the paid matting model) or "deterministic" — the free edge-snap
+		// fallback the queue lands when the AI matte fails. "Lo-fi matte" is thus the same
+		// set the old amber "AI matte failed" flag surfaced, now framed as a matte source
+		// alongside its siblings rather than a standalone attention flag.
+		key: "matte",
+		label: "Matte",
 		options: [
 			{
-				token: "enhanced",
-				label: "Enhanced",
-				test: (r) => r.professionalEnhanced === true,
+				token: "noMatte",
+				label: "No matte",
+				test: (r) => r.professionalAlphaSource == null,
 			},
 			{
-				token: "unenhanced",
-				label: "Unenhanced",
-				test: (r) => r.professionalEnhanced !== true,
+				token: "aiMatte",
+				label: "Magic matte",
+				test: (r) => r.professionalAlphaSource === "ai",
+			},
+			{
+				token: "lofiMatte",
+				label: "Lo-fi matte",
+				test: (r) => r.professionalAlphaSource === "deterministic",
 			},
 		],
 	},
@@ -184,22 +202,20 @@ const FACET_GROUPS: Array<{
 // no "review" flag: the `review` status just means "unpublished" now, which the
 // Published/Unpublished filter already covers, and Unmatched flags the no-album case.)
 const FLAG_FACETS: FacetOption[] = [
-	{ token: "failed", label: "Failed", test: (r) => r.status === "failed" },
+	{
+		token: "failed",
+		label: "Analysis failed",
+		test: (r) => r.status === "failed",
+	},
 	// The Apply (generation) job errored and stayed failed after the auto-retries — the
 	// cover didn't regenerate, so this needs manual action (open + Apply again).
 	{
 		token: "genFailed",
-		label: "Gen failed",
+		label: "Image failed",
 		test: (r) => r.professionalJobStatus === "failed",
 	},
-	// Records whose Apply landed the free deterministic matte because the paid AI matte
-	// failed — the amber "AI matte unavailable…" note on the detail page. A soft
-	// attention state (the cover is live and fine), so it's a flag, not a facet pair.
-	{
-		token: "matteFallback",
-		label: "AI matte failed",
-		test: (r) => r.professionalAlphaSource === "deterministic",
-	},
+	// The deterministic-matte-fallback case (paid AI matte failed) is now the "Lo-fi
+	// matte" side of the `matte` facet group above, not a standalone flag.
 	{
 		token: "duplicate",
 		label: "Duplicate",
@@ -218,10 +234,6 @@ const FLAG_COLORS: globalThis.Record<string, { active: string; idle: string }> =
 		genFailed: {
 			active: "border-red-600 bg-red-600 text-white",
 			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
-		},
-		matteFallback: {
-			active: "border-amber-600 bg-amber-600 text-white",
-			idle: "border-amber-500/40 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400",
 		},
 		duplicate: {
 			active: "border-orange-600 bg-orange-600 text-white",
@@ -459,7 +471,8 @@ function useIsDesktop() {
 	return isDesktop;
 }
 
-/** One tri-state segmented pair — pick a side, the other, or neither (= don't care). */
+/** One segmented group — pick a side, another, or none (= don't care). Two options is
+ * the common case; the matte group has three. */
 function SegmentedFilter({
 	group,
 	active,
@@ -467,7 +480,7 @@ function SegmentedFilter({
 	liveIds,
 	onToggle,
 }: {
-	group: { key: string; options: [FacetOption, FacetOption] };
+	group: { key: string; options: FacetOption[] };
 	active: string[];
 	rows: Record[];
 	liveIds: Set<number>;
@@ -480,7 +493,7 @@ function SegmentedFilter({
 				const count = facetCount(rows, active, opt, group.key, liveIds);
 				return (
 					<Fragment key={opt.token}>
-						{i === 1 && (
+						{i > 0 && (
 							<span aria-hidden className="w-px self-stretch bg-border" />
 						)}
 						<button
@@ -1013,56 +1026,67 @@ function AdminRecords() {
 						</PopoverTrigger>
 						<PopoverContent
 							align="end"
-							className="w-[min(24rem,calc(100vw-2rem))] space-y-2"
+							className="w-[min(28rem,calc(100vw-2rem))] space-y-1"
 						>
-							<div className="flex flex-wrap items-center gap-2">
-								{FACET_GROUPS.map((group) => (
+							{/* One labelled row per group: a fixed label column keeps the
+							    segmented controls aligned in a tidy column instead of wrapping. */}
+							{FACET_GROUPS.map((group) => (
+								<div key={group.key} className="flex items-center gap-3">
+									<span className="w-14 shrink-0 text-xs text-muted-foreground">
+										{group.label}
+									</span>
 									<SegmentedFilter
-										key={group.key}
 										group={group}
 										active={activeFacets}
 										rows={data}
 										liveIds={liveIds}
 										onToggle={toggleFilter}
 									/>
-								))}
+								</div>
+							))}
+							<div className="flex items-start gap-3 border-t pt-2">
+								<span className="w-14 shrink-0 pt-1 text-xs text-muted-foreground">
+									Flags
+								</span>
+								<div className="flex flex-wrap items-center gap-2">
+									{FLAG_FACETS.map((flag) => {
+										const isActive = activeFacets.includes(flag.token);
+										const count = facetCount(
+											data,
+											activeFacets,
+											flag,
+											flag.token,
+											liveIds,
+										);
+										const color = FLAG_COLORS[flag.token];
+										return (
+											<button
+												key={flag.token}
+												type="button"
+												onClick={() => toggleFilter(flag.token)}
+												className={cn(
+													"shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors",
+													isActive ? color.active : color.idle,
+												)}
+											>
+												{flag.label}{" "}
+												<span className="tabular-nums opacity-70">{count}</span>
+											</button>
+										);
+									})}
+								</div>
 							</div>
-							<div className="flex flex-wrap items-center gap-2">
-								{FLAG_FACETS.map((flag) => {
-									const isActive = activeFacets.includes(flag.token);
-									const count = facetCount(
-										data,
-										activeFacets,
-										flag,
-										flag.token,
-										liveIds,
-									);
-									const color = FLAG_COLORS[flag.token];
-									return (
-										<button
-											key={flag.token}
-											type="button"
-											onClick={() => toggleFilter(flag.token)}
-											className={cn(
-												"shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors",
-												isActive ? color.active : color.idle,
-											)}
-										>
-											{flag.label}{" "}
-											<span className="tabular-nums opacity-70">{count}</span>
-										</button>
-									);
-								})}
-								{activeFacets.length > 0 && (
+							{activeFacets.length > 0 && (
+								<div className="flex justify-end border-t pt-2">
 									<button
 										type="button"
 										onClick={() => setFacets([])}
 										className="shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
 									>
-										Clear
+										Clear filters
 									</button>
-								)}
-							</div>
+								</div>
+							)}
 						</PopoverContent>
 					</Popover>
 
@@ -1098,7 +1122,7 @@ function AdminRecords() {
 			    same size whether or not the (button-height) actions are showing, so
 			    selecting a row doesn't resize it. Hidden entirely when empty. */}
 			{visibleRowCount > 0 && (
-				<div className="flex min-h-14 sticky top-4 z-10 items-center gap-2 rounded-lg border border-sidebar-accent bg-sidebar/80 px-5 py-2">
+				<div className="flex min-h-14 sticky top-4 z-10 items-center gap-2 rounded-lg border border-sidebar-accent bg-sidebar/80 backdrop-blur-sm px-5 py-2">
 					{hasSelection ? (
 						<span className="text-sm font-medium whitespace-nowrap">
 							{selectedIds.length} selected

@@ -121,9 +121,10 @@ export const records = sqliteTable("records", {
 			"finishing",
 		],
 	}),
-	// Whether `professionalImageKey` is a Real-ESRGAN-upscaled master (the editor's
-	// paid "Enhance"), vs a plain reframe of the capture. Reset to false whenever the
-	// photo is regenerated from the capture. Powers the admin "Enhanced" filter.
+	// Whether `professionalImageKey` is a Real-ESRGAN-upscaled master vs a plain reframe
+	// of the capture. Reset to false whenever the photo is regenerated from the capture;
+	// Apply now always enhances (a failed enhance fails the job rather than degrading), so
+	// on a committed Apply this is true — it's false only for a fresh reframe pre-Apply.
 	professionalEnhanced: integer("professional_enhanced", {
 		mode: "boolean",
 	}).default(false),
