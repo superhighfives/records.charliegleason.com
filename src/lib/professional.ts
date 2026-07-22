@@ -3,6 +3,7 @@ import { PhotonImage } from "@cf-wasm/photon";
 
 import type { Record } from "#/db/schema";
 import { bytesToBase64 } from "#/lib/image-data";
+import { enhanceCoverInContainer } from "#/lib/matte-container";
 import {
 	applyPolish,
 	detectSleeveCorners,
@@ -289,25 +290,15 @@ export async function upscaleImage(
 }
 
 /**
- * The PAID "Enhance" step: super-resolve an existing professional image (an R2 key)
- * through Real-ESRGAN and store the higher-res master under a fresh `professional/`
- * key. The model's GPU caps the input at ~2.1M pixels, so the full-size reframe is
- * first downscaled under that budget (Images binding), then shipped to Replicate as a
- * data URI (the R2 object isn't publicly reachable), and the upscaled result is
- * fetched back and canonicalised to a bounded webp — same format as everything else.
- * Returns the new key; throws on any Replicate/fetch/store failure so the caller can
- * leave the record's current cover untouched.
+ * In-Worker enhance (the preview fallback, where the matte container isn't bound): downscale
+ * under the model's input ceiling via the Images binding, run Real-ESRGAN, then fetch + cap the
+ * output back to a bounded webp — also through the Images binding. In production the container
+ * path below is used instead, keeping this (load-flaky) binding off the hot path.
  */
-export async function upscaleProfessional(
-	professionalKey: string,
-): Promise<{ key: string }> {
-	const object = await env.PHOTOS.get(professionalKey);
-	if (!object)
-		throw new Error(`professional photo missing in R2: ${professionalKey}`);
-
+async function enhanceCoverInWorker(bytes: Uint8Array): Promise<Uint8Array> {
 	// Downscale under the model's input-pixel ceiling before sending. A no-op if the
 	// source is already small enough; otherwise this is what the model upscales from.
-	const fitted = await env.IMAGES.input(object.body)
+	const fitted = await env.IMAGES.input(blobStream(bytes))
 		.transform({
 			width: UPSCALE_INPUT_MAX,
 			height: UPSCALE_INPUT_MAX,
@@ -327,12 +318,34 @@ export async function upscaleProfessional(
 	const outputUrl = firstOutputUrl(prediction.output);
 	if (!outputUrl) throw new Error("Replicate returned no upscaled image");
 
-	// Same fetch-then-Images-transform as upscaleImage (this is the `[pro] enhance failed`
-	// path) — see fetchScaledWebp for the buffer-before-transform + local-retry rationale.
-	const buffer = await fetchScaledWebp(outputUrl, UPSCALE_MAX);
+	// Same fetch-then-Images-transform as upscaleImage — see fetchScaledWebp for the
+	// buffer-before-transform + local-retry rationale.
+	return new Uint8Array(await fetchScaledWebp(outputUrl, UPSCALE_MAX));
+}
+
+/**
+ * The PAID "Enhance" step: super-resolve an existing professional image (an R2 key)
+ * through Real-ESRGAN and store the higher-res master under a fresh `professional/` key.
+ * The heavy lifting runs in the matte container (sharp: the ESRGAN call + the quality webp
+ * encode), off the Cloudflare Images binding that was dropping connections ("Network
+ * connection lost") on the reframe→webp step under Apply-burst load. Where the container
+ * isn't bound (preview), it falls back to {@link enhanceCoverInWorker}. Either way it returns
+ * the new key and throws on any failure, so the caller can leave the current cover untouched.
+ */
+export async function upscaleProfessional(
+	professionalKey: string,
+): Promise<{ key: string }> {
+	const object = await env.PHOTOS.get(professionalKey);
+	if (!object)
+		throw new Error(`professional photo missing in R2: ${professionalKey}`);
+	const bytes = new Uint8Array(await object.arrayBuffer());
+
+	const webp = env.MATTE_CONTAINER
+		? await enhanceCoverInContainer({ image: bytes })
+		: await enhanceCoverInWorker(bytes);
 
 	const key = `professional/${crypto.randomUUID()}.webp`;
-	await env.PHOTOS.put(key, buffer, {
+	await env.PHOTOS.put(key, webp, {
 		httpMetadata: { contentType: "image/webp" },
 	});
 	return { key };

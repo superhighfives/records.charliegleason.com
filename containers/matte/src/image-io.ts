@@ -15,9 +15,12 @@ import type { RgbaImage } from "#/lib/photo-processing";
 
 const REAL_ESRGAN_VERSION =
 	"b3ef194191d13140337468c916c2c5b96dd0cb06dffc032a022a31807f6a5ea8";
-const UPSCALE_INPUT_MAX = 1400;
+// Real-ESRGAN runs on Replicate's shared T4 and its network is a fixed x4, so peak VRAM is
+// the x4 pass over the *input* — a 1400px input (5600px output) OOMs. 1024 → 4096px lands at
+// UPSCALE_MAX and cuts GPU memory ~47%. Keep in sync with `src/lib/professional.ts`.
+const UPSCALE_INPUT_MAX = 1024;
 const UPSCALE_FACTOR = 4;
-const UPSCALE_MAX = 4000;
+const UPSCALE_MAX = 4096;
 
 import { firstOutputUrl, runVersion } from "./replicate.ts";
 
@@ -103,4 +106,50 @@ export async function upscaleImage(
 		})
 		.toBuffer();
 	return decodeRgba(out);
+}
+
+/**
+ * The container's version of `professional.ts#upscaleProfessional`: super-resolve an opaque
+ * cover through Real-ESRGAN and return a bounded lossy WebP master, ready to store in R2.
+ * Same steps as {@link upscaleImage} but stays in encoded space end-to-end (no RGBA decode)
+ * and hands back WebP bytes — sharp does the quality-controlled encode the Cloudflare Images
+ * binding used to, so the enhance never touches that (flaky under load) binding.
+ */
+export async function upscaleCoverToWebp(
+	bytes: Uint8Array,
+	replicateToken: string,
+): Promise<Buffer> {
+	const fitted = await sharp(bytes)
+		.resize({
+			width: UPSCALE_INPUT_MAX,
+			height: UPSCALE_INPUT_MAX,
+			fit: "inside",
+			withoutEnlargement: true,
+		})
+		.webp({ quality: 92 })
+		.toBuffer();
+	const dataUri = `data:image/webp;base64,${fitted.toString("base64")}`;
+
+	const prediction = await runVersion(replicateToken, REAL_ESRGAN_VERSION, {
+		image: dataUri,
+		scale: UPSCALE_FACTOR,
+		// Album art, not portraits — GFPGAN face restoration would meddle with cover
+		// faces/text, so leave it off for a faithful upscale.
+		face_enhance: false,
+	});
+	const url = firstOutputUrl(prediction.output);
+	if (!url) throw new Error("Replicate returned no upscaled image");
+
+	const res = await fetch(url);
+	if (!res.ok)
+		throw new Error(`fetching the upscaled image failed (${res.status})`);
+	return sharp(Buffer.from(await res.arrayBuffer()))
+		.resize({
+			width: UPSCALE_MAX,
+			height: UPSCALE_MAX,
+			fit: "inside",
+			withoutEnlargement: true,
+		})
+		.webp({ quality: 92 })
+		.toBuffer();
 }

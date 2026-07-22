@@ -7,6 +7,7 @@
 
 import { createServer } from "node:http";
 
+import { upscaleCoverToWebp } from "./image-io.ts";
 import { type MatteMode, renderMatte } from "./matte.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -30,6 +31,17 @@ function isMatteRequest(v: unknown): v is MatteRequest {
 	);
 }
 
+interface EnhanceRequest {
+	image: string; // base64 reframed-cover bytes
+	replicateToken: string;
+}
+
+function isEnhanceRequest(v: unknown): v is EnhanceRequest {
+	if (typeof v !== "object" || v === null) return false;
+	const r = v as Record<string, unknown>;
+	return typeof r.image === "string" && typeof r.replicateToken === "string";
+}
+
 async function readBody(
 	req: import("node:http").IncomingMessage,
 ): Promise<Buffer> {
@@ -43,36 +55,61 @@ const server = createServer(async (req, res) => {
 		res.writeHead(200, { "content-type": "text/plain" }).end("ok");
 		return;
 	}
-	if (req.method !== "POST" || req.url !== "/matte") {
+	if (req.method !== "POST") {
 		res.writeHead(404).end("not found");
 		return;
 	}
 	try {
-		const parsed: unknown = JSON.parse((await readBody(req)).toString("utf8"));
-		if (!isMatteRequest(parsed)) {
-			res
-				.writeHead(400, { "content-type": "application/json" })
-				.end(JSON.stringify({ error: "bad matte request" }));
+		if (req.url === "/matte") {
+			const parsed: unknown = JSON.parse(
+				(await readBody(req)).toString("utf8"),
+			);
+			if (!isMatteRequest(parsed)) {
+				res
+					.writeHead(400, { "content-type": "application/json" })
+					.end(JSON.stringify({ error: "bad matte request" }));
+				return;
+			}
+			const out = await renderMatte({
+				capture: new Uint8Array(Buffer.from(parsed.capture, "base64")),
+				// Trusted internal caller (the Worker DO); shapes match the shared types.
+				band: parsed.band as never,
+				params: (parsed.params ?? {}) as never,
+				mode: parsed.mode,
+				replicateToken: parsed.replicateToken,
+			});
+			res.writeHead(200, { "content-type": "application/json" }).end(
+				JSON.stringify({
+					source: out.source,
+					shadow: out.shadow.toString("base64"),
+					cutout: out.cutout.toString("base64"),
+				}),
+			);
 			return;
 		}
-		const out = await renderMatte({
-			capture: new Uint8Array(Buffer.from(parsed.capture, "base64")),
-			// Trusted internal caller (the Worker DO); shapes match the shared types.
-			band: parsed.band as never,
-			params: (parsed.params ?? {}) as never,
-			mode: parsed.mode,
-			replicateToken: parsed.replicateToken,
-		});
-		res.writeHead(200, { "content-type": "application/json" }).end(
-			JSON.stringify({
-				source: out.source,
-				shadow: out.shadow.toString("base64"),
-				cutout: out.cutout.toString("base64"),
-			}),
-		);
+		if (req.url === "/enhance") {
+			const parsed: unknown = JSON.parse(
+				(await readBody(req)).toString("utf8"),
+			);
+			if (!isEnhanceRequest(parsed)) {
+				res
+					.writeHead(400, { "content-type": "application/json" })
+					.end(JSON.stringify({ error: "bad enhance request" }));
+				return;
+			}
+			const webp = await upscaleCoverToWebp(
+				new Uint8Array(Buffer.from(parsed.image, "base64")),
+				parsed.replicateToken,
+			);
+			res
+				.writeHead(200, { "content-type": "application/json" })
+				.end(JSON.stringify({ webp: webp.toString("base64") }));
+			return;
+		}
+		res.writeHead(404).end("not found");
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		console.error(`[matte-container] render failed: ${message}`);
+		console.error(`[matte-container] request failed: ${message}`);
 		res
 			.writeHead(500, { "content-type": "application/json" })
 			.end(JSON.stringify({ error: message }));
