@@ -80,8 +80,9 @@ const UPSCALE_INPUT_MAX = 1024;
 // 4× matches the model's native scale (asking for less wouldn't save VRAM — the x4 tensor
 // is allocated regardless — and would only soften the result). 1024 → 4096px master.
 const UPSCALE_FACTOR = 4;
-// Bound the stored master so a big upscale can't balloon R2.
-const UPSCALE_MAX = 4000;
+// Bound the stored master so a big upscale can't balloon R2. Set to the exact x4 output
+// (1024 × 4) so the model's native result passes through without a redundant resample.
+const UPSCALE_MAX = 4096;
 
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
 export function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
