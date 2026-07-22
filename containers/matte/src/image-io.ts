@@ -5,22 +5,19 @@
  * `upscaleImage` (plus a WebP encoder), so the reused pixel math sees identical inputs — but
  * off the JS heap and out of the 128MB isolate, which is the whole point of the container.
  *
- * NOTE: the ESRGAN constants below mirror `src/lib/professional.ts`. Keep them in sync (the
- * version is a pinned hash that rarely changes).
+ * The ESRGAN constants come from the shared `#/lib/esrgan-config` so the Worker and container
+ * paths can't drift.
  */
 
 import sharp from "sharp";
 
+import {
+	REAL_ESRGAN_VERSION,
+	UPSCALE_FACTOR,
+	UPSCALE_INPUT_MAX,
+	UPSCALE_MAX,
+} from "#/lib/esrgan-config";
 import type { RgbaImage } from "#/lib/photo-processing";
-
-const REAL_ESRGAN_VERSION =
-	"b3ef194191d13140337468c916c2c5b96dd0cb06dffc032a022a31807f6a5ea8";
-// Real-ESRGAN runs on Replicate's shared T4 and its network is a fixed x4, so peak VRAM is
-// the x4 pass over the *input* — a 1400px input (5600px output) OOMs. 1024 → 4096px lands at
-// UPSCALE_MAX and cuts GPU memory ~47%. Keep in sync with `src/lib/professional.ts`.
-const UPSCALE_INPUT_MAX = 1024;
-const UPSCALE_FACTOR = 4;
-const UPSCALE_MAX = 4096;
 
 import { firstOutputUrl, runVersion } from "./replicate.ts";
 
