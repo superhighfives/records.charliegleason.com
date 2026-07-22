@@ -5,8 +5,6 @@ created: 2026-07-17
 updated: 2026-07-18
 ---
 
-# Master-first record model (release optional)
-
 ## Overview
 **Shipped.** The Discogs **master** (the album as a work) is now the primary identity of a
 record; the specific **release** (pressing) is an optional per-record pin. In the editor you
