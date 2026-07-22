@@ -19,6 +19,7 @@ import {
 	inFlightQueryOptions,
 	queueOutcomesQueryOptions,
 } from "#/lib/records-queries";
+import { cn } from "#/lib/utils";
 
 /**
  * Numbered, human labels for the fine-grained `jobStep` the consumer records as it works.
@@ -231,7 +232,9 @@ function QueueRow({
 			<Link
 				to="/admin/records/$id"
 				params={{ id: String(id) }}
-				className="gap-3"
+				// Scroll-list rows read as a background highlight, not the global focus
+				// ring, so hovering the long list stays calm — shadow-none cancels it.
+				className="gap-3 focus-visible:shadow-none"
 			>
 				<span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded bg-muted">
 					{showImage ? (
@@ -248,7 +251,13 @@ function QueueRow({
 					)}
 				</span>
 				<span className="flex min-w-0 flex-col">
-					<span className="truncate font-medium">
+					{/* Finished rows fade the title to muted too, matching their status text. */}
+					<span
+						className={cn(
+							"truncate font-medium",
+							!busy && "text-muted-foreground",
+						)}
+					>
 						{artist} — {title}
 					</span>
 					{/* Colour is set by the caller's node (active step = brand, else muted). */}
@@ -469,7 +478,7 @@ export function QueueMenu() {
 						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							onSelect={() => clear()}
-							className="justify-center text-xs text-muted-foreground"
+							className="min-h-9 justify-center text-xs text-muted-foreground"
 						>
 							Clear finished
 						</DropdownMenuItem>
