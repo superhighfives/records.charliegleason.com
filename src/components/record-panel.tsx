@@ -238,7 +238,7 @@ export function RecordPanel({
 			    for signed-out visitors, so this never shows on the public site. `pr-12`
 			    keeps the row clear of the Sheet's top-right close button. */}
 			<SignedIn>
-				<div className="flex items-center gap-2 border-b border-border bg-brand/5 px-6 py-2 pr-12">
+				<div className="flex items-center gap-2 border-b border-border bg-brand/5 px-6 py-4 pr-12">
 					<span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
 						Admin
 					</span>
