@@ -36,6 +36,49 @@ export interface ContainerMatte {
 	cutout: Uint8Array;
 }
 
+/** The transient DO reset — a long request tripping the DO's ~30s storage-op timeout. */
+function isDurableObjectReset(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return /exceeded timeout|to be reset/i.test(message);
+}
+
+/**
+ * POST to the matte container, retrying the transient DO reset. A matte/enhance run holds the
+ * Container DO open across Replicate polling (up to two 120s models), which can trip the DO's
+ * ~30s storage-op timeout and reset it mid-request ("…caused object to be reset"). The reset is
+ * transient and loses only in-memory state, so re-request with a fresh stub — Cloudflare's
+ * recommended remedy — before the caller's throw hands off to the queue's retry / fallback.
+ */
+async function postToContainer(path: string, body: unknown): Promise<Response> {
+	// Only bound in production; the callers check presence before routing here, so this guard
+	// is just for the type + a clear failure.
+	const binding = env.MATTE_CONTAINER;
+	if (!binding) throw new Error("MATTE_CONTAINER binding is not configured");
+	const payload = JSON.stringify(body);
+	const retries = 2;
+	let lastErr: unknown;
+	for (let attempt = 0; attempt <= retries; attempt++) {
+		const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
+		try {
+			return await stub.fetch(`http://matte-container${path}`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: payload,
+			});
+		} catch (err) {
+			// Only the transient reset is worth retrying; a real error should surface now.
+			if (!isDurableObjectReset(err)) throw err;
+			lastErr = err;
+			// Brief backoff so the reset DO can settle before the next attempt.
+			if (attempt < retries)
+				await new Promise((resolve) =>
+					setTimeout(resolve, 300 * (attempt + 1)),
+				);
+		}
+	}
+	throw lastErr;
+}
+
 /**
  * Render one matte in the container and get back the two webp variants. `mode: "ai"` runs the
  * paid path and rejects on failure (the queue decides retry vs. the deterministic fallback,
@@ -47,22 +90,13 @@ export async function renderMatteInContainer(input: {
 	params: ReframeParams;
 	mode: "ai" | "deterministic";
 }): Promise<ContainerMatte> {
-	// Only bound in production; the caller (renderAiMatte / renderDeterministicMatte) checks
-	// presence before routing here, so this guard is just for the type + a clear failure.
-	const binding = env.MATTE_CONTAINER;
-	if (!binding) throw new Error("MATTE_CONTAINER binding is not configured");
-	const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
-	const res = await stub.fetch("http://matte-container/matte", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			capture: bytesToBase64(input.capture),
-			band: input.band,
-			params: input.params,
-			mode: input.mode,
-			// The container has no secret binding; hand it the token only when it needs one.
-			replicateToken: input.mode === "ai" ? env.REPLICATE_API_KEY : undefined,
-		}),
+	const res = await postToContainer("/matte", {
+		capture: bytesToBase64(input.capture),
+		band: input.band,
+		params: input.params,
+		mode: input.mode,
+		// The container has no secret binding; hand it the token only when it needs one.
+		replicateToken: input.mode === "ai" ? env.REPLICATE_API_KEY : undefined,
 	});
 	if (!res.ok) {
 		throw new Error(`matte container ${res.status}: ${await res.text()}`);
@@ -88,16 +122,9 @@ export async function renderMatteInContainer(input: {
 export async function enhanceCoverInContainer(input: {
 	image: Uint8Array;
 }): Promise<Uint8Array> {
-	const binding = env.MATTE_CONTAINER;
-	if (!binding) throw new Error("MATTE_CONTAINER binding is not configured");
-	const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
-	const res = await stub.fetch("http://matte-container/enhance", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			image: bytesToBase64(input.image),
-			replicateToken: env.REPLICATE_API_KEY,
-		}),
+	const res = await postToContainer("/enhance", {
+		image: bytesToBase64(input.image),
+		replicateToken: env.REPLICATE_API_KEY,
 	});
 	if (!res.ok) {
 		throw new Error(`enhance container ${res.status}: ${await res.text()}`);
