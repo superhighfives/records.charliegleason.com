@@ -14,6 +14,7 @@ import { CornerEditor } from "#/components/corner-editor";
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { ProPreview } from "#/components/pro-preview";
 import { RecordForm } from "#/components/record-form";
+import { RecordLoading } from "#/components/spinning-record";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Checkbox } from "#/components/ui/checkbox";
@@ -778,7 +779,11 @@ function RecordDetail() {
 		[navigate],
 	);
 
-	const { data: record } = useQuery({
+	const {
+		data: record,
+		isPending: recordPending,
+		isFetching: recordFetching,
+	} = useQuery({
 		...recordQueryOptions(recordId),
 		// Poll while anything's in flight: the background analysis (`status`) OR the queued
 		// Apply photo job (`professionalJobStatus`). Without the latter the editor would sit
@@ -1069,7 +1074,24 @@ function RecordDetail() {
 	});
 
 	if (!record) {
-		return <p className="text-muted-foreground">Record not found.</p>;
+		// The admin server fns fail soft to `null` when there's no session yet — on
+		// SSR and until Clerk resolves on the client — so the loader caches a null the
+		// authenticated refetch then replaces. Show the spinning record while that's in
+		// flight rather than flashing "not found"; only call it missing once settled.
+		if (recordPending || recordFetching) {
+			return <RecordLoading label="Loading record…" />;
+		}
+		return (
+			<div className="mx-auto max-w-2xl">
+				<Link
+					to="/admin"
+					className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
+				>
+					← Collection
+				</Link>
+				<p className="mt-6 text-muted-foreground">Record not found.</p>
+			</div>
+		);
 	}
 
 	// The edition a value fetch should target: the picked candidate if the admin

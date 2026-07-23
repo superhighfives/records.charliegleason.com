@@ -34,6 +34,7 @@ import { DuplicateBadge } from "#/components/duplicate-badge";
 import { GenerationFailedBadge } from "#/components/generation-failed-badge";
 import { MatteFallbackBadge } from "#/components/matte-fallback-badge";
 import { RecordPanel } from "#/components/record-panel";
+import { RecordLoading } from "#/components/spinning-record";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Checkbox } from "#/components/ui/checkbox";
@@ -531,7 +532,7 @@ export const Route = createFileRoute("/admin/")({
 });
 
 function AdminRecords() {
-	const { data } = useSuspenseQuery(recordsQueryOptions);
+	const { data, isFetching } = useSuspenseQuery(recordsQueryOptions);
 	// Ids still in the collection, so a record whose `duplicateOf` points at a
 	// since-deleted original stops claiming to be a duplicate. Memoised so the
 	// derived `columns` below keep a stable identity between renders.
@@ -964,6 +965,14 @@ function AdminRecords() {
 		}
 		bulkMutation.mutate({ action, ids: selectedIds });
 	};
+
+	// The list fails soft to `[]` until Clerk resolves the admin session (SSR and the
+	// first client paint), so an empty-but-fetching collection is really "still
+	// loading" — show the spinning record rather than flashing the "No records yet"
+	// empty state before the authenticated refetch lands.
+	if (data.length === 0 && isFetching) {
+		return <RecordLoading label="Loading collection…" />;
+	}
 
 	return (
 		<div className="space-y-4">

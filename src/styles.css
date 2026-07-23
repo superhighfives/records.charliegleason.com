@@ -454,6 +454,33 @@ a {
   }
 }
 
+/*
+ * A record on its spindle. Reused by the loading spinner (a brisk turn, while a
+ * record or the collection is resolving) and the error pages' hero disc (a slow
+ * idle rotation). A dedicated keyframe — not Tailwind's `spin` — so the two
+ * speeds read as the same object turning, and so reduced-motion can hold it still.
+ */
+@keyframes record-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.animate-record-spin {
+  animation: record-spin 1.6s linear infinite;
+}
+
+.animate-record-spin-slow {
+  animation: record-spin 9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-record-spin,
+  .animate-record-spin-slow {
+    animation: none;
+  }
+}
+
 @layer base {
   * {
     @apply border-border;
