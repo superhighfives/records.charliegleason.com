@@ -779,26 +779,23 @@ function RecordDetail() {
 		[navigate],
 	);
 
-	const {
-		data: record,
-		isPending: recordPending,
-		isFetching: recordFetching,
-	} = useQuery({
-		...recordQueryOptions(recordId),
-		// Poll while anything's in flight: the background analysis (`status`) OR the queued
-		// Apply photo job (`professionalJobStatus`). Without the latter the editor would sit
-		// on "Generating…" until a manual refresh — the header queue (own poll) would show
-		// then clear the job while this view stayed stale.
-		refetchInterval: (query) => {
-			const r = query.state.data;
-			const active =
-				r?.status === "pending" ||
-				r?.status === "processing" ||
-				r?.professionalJobStatus === "queued" ||
-				r?.professionalJobStatus === "processing";
-			return active ? 2000 : false;
-		},
-	});
+	const { data: record, isFetchedAfterMount: recordFetchedAfterMount } =
+		useQuery({
+			...recordQueryOptions(recordId),
+			// Poll while anything's in flight: the background analysis (`status`) OR the queued
+			// Apply photo job (`professionalJobStatus`). Without the latter the editor would sit
+			// on "Generating…" until a manual refresh — the header queue (own poll) would show
+			// then clear the job while this view stayed stale.
+			refetchInterval: (query) => {
+				const r = query.state.data;
+				const active =
+					r?.status === "pending" ||
+					r?.status === "processing" ||
+					r?.professionalJobStatus === "queued" ||
+					r?.professionalJobStatus === "processing";
+				return active ? 2000 : false;
+			},
+		});
 
 	// The album (master) is the record's identity. `pickedMaster` is an explicit
 	// choice from the master picker; `unmatchMaster` explicitly clears the album
@@ -1076,9 +1073,12 @@ function RecordDetail() {
 	if (!record) {
 		// The admin server fns fail soft to `null` when there's no session yet — on
 		// SSR and until Clerk resolves on the client — so the loader caches a null the
-		// authenticated refetch then replaces. Show the spinning record while that's in
-		// flight rather than flashing "not found"; only call it missing once settled.
-		if (recordPending || recordFetching) {
+		// authenticated refetch then replaces. Gate on `isFetchedAfterMount` (not the
+		// transient `isFetching`): it's false until a client fetch settles after mount,
+		// so the SSR-hydrated null shows the spinner on the very first paint rather than
+		// a one-frame "not found"; and it stays true afterwards, so a background
+		// refetch-on-focus of a genuinely-missing record won't flip back to the spinner.
+		if (!recordFetchedAfterMount) {
 			return <RecordLoading label="Loading record…" />;
 		}
 		return (

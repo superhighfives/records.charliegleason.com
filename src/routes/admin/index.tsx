@@ -532,7 +532,7 @@ export const Route = createFileRoute("/admin/")({
 });
 
 function AdminRecords() {
-	const { data, isFetching } = useSuspenseQuery(recordsQueryOptions);
+	const { data, isFetchedAfterMount } = useSuspenseQuery(recordsQueryOptions);
 	// Ids still in the collection, so a record whose `duplicateOf` points at a
 	// since-deleted original stops claiming to be a duplicate. Memoised so the
 	// derived `columns` below keep a stable identity between renders.
@@ -967,10 +967,13 @@ function AdminRecords() {
 	};
 
 	// The list fails soft to `[]` until Clerk resolves the admin session (SSR and the
-	// first client paint), so an empty-but-fetching collection is really "still
-	// loading" — show the spinning record rather than flashing the "No records yet"
-	// empty state before the authenticated refetch lands.
-	if (data.length === 0 && isFetching) {
+	// first client paint), so an empty-but-not-yet-fetched collection is really "still
+	// loading". Gate on `isFetchedAfterMount` (not the transient `isFetching`): it's
+	// false until a client fetch settles after mount — so the SSR-hydrated `[]` shows
+	// the spinner on the first paint rather than a one-frame "No records yet" — and it
+	// stays true afterwards, so a refetch-on-focus of a genuinely empty collection
+	// won't flip the empty state back to the spinner.
+	if (data.length === 0 && !isFetchedAfterMount) {
 		return <RecordLoading label="Loading collection…" />;
 	}
 
