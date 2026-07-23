@@ -11,6 +11,11 @@ import { Container, getRandom } from "@cloudflare/containers";
 
 import { base64ToBytes, bytesToBase64 } from "#/lib/image-data";
 import type { ReframeParams } from "#/lib/reframe-params";
+import {
+	isDurableObjectReset,
+	NonRetryableError,
+	withRetry,
+} from "#/lib/retry";
 import type { CornerBand } from "#/lib/sleeve-corners";
 
 /**
@@ -19,6 +24,14 @@ import type { CornerBand } from "#/lib/sleeve-corners";
  * `max_instances` in wrangler.jsonc.
  */
 const MATTE_CONTAINER_INSTANCES = 3;
+
+/**
+ * A DO reset is transient, so retry the container call a couple of times before giving up to the
+ * queue's outer retry / fallback. 3 attempts with a 300ms base → ~300ms then ~600ms of backoff
+ * (via {@link withRetry}'s exponential schedule), matching the earlier hand-rolled loop.
+ */
+const MATTE_CONTAINER_ATTEMPTS = 3;
+const MATTE_CONTAINER_RETRY_BASE_MS = 300;
 
 /** The container Durable Object. Config (image, instance type) lives in wrangler.jsonc. */
 export class MatteContainer extends Container<Cloudflare.Env> {
@@ -36,18 +49,13 @@ export interface ContainerMatte {
 	cutout: Uint8Array;
 }
 
-/** The transient DO reset — a long request tripping the DO's ~30s storage-op timeout. */
-function isDurableObjectReset(err: unknown): boolean {
-	const message = err instanceof Error ? err.message : String(err);
-	return /exceeded timeout|to be reset/i.test(message);
-}
-
 /**
- * POST to the matte container, retrying the transient DO reset. A matte/enhance run holds the
- * Container DO open across Replicate polling (up to two 120s models), which can trip the DO's
- * ~30s storage-op timeout and reset it mid-request ("…caused object to be reset"). The reset is
- * transient and loses only in-memory state, so re-request with a fresh stub — Cloudflare's
- * recommended remedy — before the caller's throw hands off to the queue's retry / fallback.
+ * POST to the matte container, retrying the transient Durable Object reset. A matte/enhance run
+ * holds the Container DO open across Replicate polling (up to two 120s models), which can trip
+ * the DO's ~30s storage-op timeout and reset it mid-request ("…caused object to be reset"). That
+ * reset is transient and loses only in-memory state, so {@link withRetry} re-runs the request
+ * with a fresh stub; any other failure is a {@link NonRetryableError} so it surfaces at once and
+ * lets the caller's throw hand off to the queue's retry / deterministic fallback.
  */
 async function postToContainer(path: string, body: unknown): Promise<Response> {
 	// Only bound in production; the callers check presence before routing here, so this guard
@@ -55,28 +63,28 @@ async function postToContainer(path: string, body: unknown): Promise<Response> {
 	const binding = env.MATTE_CONTAINER;
 	if (!binding) throw new Error("MATTE_CONTAINER binding is not configured");
 	const payload = JSON.stringify(body);
-	const retries = 2;
-	let lastErr: unknown;
-	for (let attempt = 0; attempt <= retries; attempt++) {
-		const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
-		try {
-			return await stub.fetch(`http://matte-container${path}`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: payload,
-			});
-		} catch (err) {
-			// Only the transient reset is worth retrying; a real error should surface now.
-			if (!isDurableObjectReset(err)) throw err;
-			lastErr = err;
-			// Brief backoff so the reset DO can settle before the next attempt.
-			if (attempt < retries)
-				await new Promise((resolve) =>
-					setTimeout(resolve, 300 * (attempt + 1)),
+	return withRetry(
+		async () => {
+			// A fresh stub per attempt: getRandom re-picks an instance, so a reset DO isn't reused.
+			const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
+			try {
+				return await stub.fetch(`http://matte-container${path}`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: payload,
+				});
+			} catch (err) {
+				if (isDurableObjectReset(err)) throw err;
+				throw new NonRetryableError(
+					err instanceof Error ? err.message : String(err),
 				);
-		}
-	}
-	throw lastErr;
+			}
+		},
+		{
+			attempts: MATTE_CONTAINER_ATTEMPTS,
+			baseMs: MATTE_CONTAINER_RETRY_BASE_MS,
+		},
+	);
 }
 
 /**

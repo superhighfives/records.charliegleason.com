@@ -18,6 +18,18 @@ export class NonRetryableError extends Error {
 	}
 }
 
+/**
+ * The transient Cloudflare error where a Durable Object (or D1) storage operation exceeds its
+ * ~30s timeout and the platform resets the object's in-memory state mid-request. Cloudflare's
+ * guidance is to retry it, so a caller keeps {@link withRetry} retrying this while classifying
+ * everything else as {@link NonRetryableError}. Lives here (dependency-free) so it's testable
+ * without importing its Workers-bound caller — same reason as the rest of this module.
+ */
+export function isDurableObjectReset(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return /exceeded timeout|to be reset/i.test(message);
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
