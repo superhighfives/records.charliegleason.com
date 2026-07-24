@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCollectionUI } from "#/components/collection-ui";
+import { FadeImage } from "#/components/fade-image";
 import { RecordPanel } from "#/components/record-panel";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { ThemeToggle } from "#/components/theme-toggle";
@@ -167,11 +168,13 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 											const matte = displayMatteKey(r);
 											const cover = matte ?? displayCoverKey(r);
 											return cover ? (
-												<img
+												<FadeImage
 													src={`/api/photos/${cover}`}
 													alt={`${r.artist} — ${r.title}`}
 													className={cn(
-														"size-full grayscale transition-[filter] duration-500 ease-out group-hover:grayscale-0",
+														// Fade in on load *and* keep the grayscale→colour hover —
+														// one combined transition property so both animate.
+														"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
 														matte ? "object-contain" : "object-cover",
 													)}
 													loading="lazy"

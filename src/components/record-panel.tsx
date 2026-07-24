@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
+import { FadeImage } from "#/components/fade-image";
 import { NotesContent } from "#/components/notes-content";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Button } from "#/components/ui/button";
@@ -326,7 +327,7 @@ export function RecordPanel({
 			<div className="flex-1 overflow-y-auto">
 				<div className="aspect-square">
 					{cover ? (
-						<img
+						<FadeImage
 							src={`/api/photos/${cover}`}
 							alt=""
 							className="block size-full object-cover"
