@@ -9,7 +9,9 @@ import {
 	ExternalLink,
 	Link2,
 	SquarePen,
+	X,
 } from "lucide-react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { NotesContent } from "#/components/notes-content";
@@ -22,9 +24,10 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import type { Record } from "#/db/schema";
-import { displayCoverKey } from "#/lib/cover";
+import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { recordPath } from "#/lib/records-path";
+import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
 
 /**
@@ -136,9 +139,83 @@ function AdminValuation({ record }: { record: PanelRecord }) {
 }
 
 /**
- * The record detail drawer body — a cover + title header, a grid of headline
- * facts, a specifications list, notes, and prev/next paging through the current
- * (filtered) collection. Rendered inside a `<SheetContent>`.
+ * The panel's header artwork: the floating matte (transparent, true-edged sleeve
+ * with a baked shadow) when the record has one, falling back to the square cover
+ * and then a placeholder. Tapping it opens a lightbox of the full cover with the
+ * matte tucked into the bottom-right corner — the same object-on-cover treatment
+ * as the admin record header. Positioning is supplied by the caller via
+ * `className` so it can overhang the header edge.
+ */
+function CoverZoom({
+	coverSrc,
+	matteSrc,
+	className,
+}: {
+	coverSrc: string | null;
+	matteSrc: string | null;
+	className?: string;
+}) {
+	// Matte preferred as the thumbnail; the cover is what the lightbox blows up.
+	const thumbSrc = matteSrc ?? coverSrc;
+	if (!thumbSrc) {
+		return (
+			<div className={className}>
+				<SleevePlaceholder />
+			</div>
+		);
+	}
+	return (
+		<DialogPrimitive.Root>
+			<DialogPrimitive.Trigger asChild>
+				<button
+					type="button"
+					aria-label="View cover"
+					className={cn(
+						"cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+						className,
+					)}
+				>
+					<img
+						src={thumbSrc}
+						alt=""
+						className={cn(
+							"size-full",
+							matteSrc
+								? "object-contain drop-shadow-xl"
+								: "rounded-sm object-cover shadow-lg",
+						)}
+					/>
+				</button>
+			</DialogPrimitive.Trigger>
+			<DialogPrimitive.Portal>
+				<DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+				<DialogPrimitive.Content className="fixed top-1/2 left-1/2 z-50 flex max-h-[90vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 flex-col outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
+					<DialogPrimitive.Title className="sr-only">
+						Cover
+					</DialogPrimitive.Title>
+					<img
+						src={coverSrc ?? thumbSrc}
+						alt="Cover"
+						className="max-h-[90vh] max-w-[90vw] rounded-md object-contain shadow-lg"
+					/>
+					<DialogPrimitive.Close
+						type="button"
+						className="absolute top-2 right-2 rounded-sm bg-background/80 p-1 opacity-80 outline-none ring-offset-background transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+					>
+						<X className="size-4" />
+						<span className="sr-only">Close</span>
+					</DialogPrimitive.Close>
+				</DialogPrimitive.Content>
+			</DialogPrimitive.Portal>
+		</DialogPrimitive.Root>
+	);
+}
+
+/**
+ * The record detail drawer body — a title header with the cover floating at its
+ * right edge, a grid of headline facts, a specifications list, notes, and
+ * prev/next paging through the current (filtered) collection. Rendered inside a
+ * `<SheetContent>`.
  */
 export function RecordPanel({
 	record,
@@ -202,6 +279,8 @@ export function RecordPanel({
 	// Admin drawer falls back to the raw capture so an in-progress record still
 	// shows an image; the public panel shows only an approved photo (else nothing).
 	const cover = displayCoverKey(record, { includeCapture: admin });
+	// The floating matte (only present on approved photos) is the header thumbnail.
+	const matte = displayMatteKey(record);
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
@@ -252,17 +331,20 @@ export function RecordPanel({
 					</Link>
 				</div>
 			</SignedIn>
-			<SheetHeader className="flex-row flex-wrap items-start gap-4 pb-6 pr-10 min-[400px]:flex-nowrap mt-auto border-b border-border">
-				<div className="min-w-0 flex-1">
-					<div className="flex items-start gap-2">
-						<SheetTitle className="min-w-0 font-serif text-lg leading-tight">
-							{record.title}
-						</SheetTitle>
+			{/* The cover floats at the header's right edge and overhangs the bottom
+			    border by ~20px, so the content scrolls up beneath it. The text column
+			    reserves that right gutter (`pr-32`); `min-h` guarantees the header is
+			    tall enough that a bottom-anchored cover never rides up over the close
+			    button when the title is short. */}
+			<SheetHeader className="relative z-10 block min-h-[9.5rem] border-b border-border">
+				<div className="min-w-0 pr-40">
+					<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
+						{record.title}{" "}
 						<button
 							type="button"
 							onClick={copyLink}
 							aria-label="Copy link to this record"
-							className="mt-1 shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+							className="ml-0.5 inline-flex -translate-y-px items-center align-middle text-muted-foreground transition-colors hover:text-foreground"
 						>
 							{copied === "link" ? (
 								<Check className="size-3.5" />
@@ -270,8 +352,8 @@ export function RecordPanel({
 								<Link2 className="size-3.5" />
 							)}
 						</button>
-					</div>
-					<SheetDescription className="font-serif">
+					</SheetTitle>
+					<SheetDescription className="font-serif text-pretty">
 						{record.artist}
 						{record.year ? ` · ${record.year}` : ""}
 					</SheetDescription>
@@ -321,66 +403,65 @@ export function RecordPanel({
 						</div>
 					)}
 				</div>
+				<CoverZoom
+					coverSrc={cover ? `/api/photos/${cover}` : null}
+					matteSrc={matte ? `/api/photos/${matte}` : null}
+					className="absolute right-5 -bottom-2.5 z-10 aspect-square w-36"
+				/>
 			</SheetHeader>
 
 			<div className="flex-1 overflow-y-auto">
-				<div className="aspect-square">
-					{cover ? (
-						<img
-							src={`/api/photos/${cover}`}
-							alt=""
-							className="block size-full object-cover"
-						/>
-					) : (
-						<SleevePlaceholder />
-					)}
-				</div>
 				<div className="p-6 space-y-6">
 					<div className="grid grid-cols-3 gap-2">
 						<Stat label="Year">{dash(record.year)}</Stat>
 						<Stat label="Format">{dash(record.format)}</Stat>
 						<Stat label="Size">{dash(record.size)}</Stat>
-						<Stat label="Genre">{dash(record.genre)}</Stat>
-						<Stat label="Country">{dash(record.country)}</Stat>
 					</div>
 
 					<div>
-						<h3 className="mb-1 text-sm font-semibold">Specifications</h3>
 						<dl className="divide-y divide-border">
+							<Spec label="Genre">{dash(record.genre)}</Spec>
+							<Spec label="Country">{dash(record.country)}</Spec>
 							<Spec label="Label">{dash(record.label)}</Spec>
 							<Spec label="Added">{dash(added)}</Spec>
+							{record.pitchforkScore != null && (
+								<Spec label="Pitchfork">
+									{record.pitchforkUrl ? (
+										<a
+											href={record.pitchforkUrl}
+											target="_blank"
+											rel="noreferrer"
+											className="font-semibold tabular-nums text-brand hover:text-brand-strong"
+										>
+											{record.pitchforkScore}
+										</a>
+									) : (
+										<span className="font-semibold tabular-nums text-brand">
+											{record.pitchforkScore}
+										</span>
+									)}
+								</Spec>
+							)}
 						</dl>
 					</div>
 
 					{admin && <AdminValuation record={record} />}
 
-					{record.pitchforkScore != null && (
-						<div>
-							<h3 className="mb-1 text-sm font-semibold">Critical reception</h3>
-							<p className="text-sm text-muted-foreground">
-								{record.pitchforkUrl ? (
-									<a
-										href={record.pitchforkUrl}
-										target="_blank"
-										rel="noreferrer"
-										className="font-bold tabular-nums text-brand hover:text-brand-strong"
-									>
-										{record.pitchforkScore}
-									</a>
-								) : (
-									<span className="font-bold tabular-nums text-brand">
-										{record.pitchforkScore}
-									</span>
-								)}{" "}
-								on Pitchfork
-							</p>
-						</div>
-					)}
-
 					{record.notes && (
-						<div>
-							<h3 className="mb-1 text-sm font-semibold">Notes</h3>
-							<NotesContent>{record.notes}</NotesContent>
+						<div className="relative overflow-hidden rounded-lg border border-brand/25 bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent p-5 pt-6">
+							{/* Oversized editorial quotation mark tucked into the corner. */}
+							<span
+								aria-hidden
+								className="pointer-events-none absolute -top-3 right-3 select-none font-serif text-7xl leading-none text-brand/25"
+							>
+								{"”"}
+							</span>
+							<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
+								Notes
+							</h3>
+							<NotesContent className="font-serif text-base leading-relaxed text-pretty text-foreground/90">
+								{record.notes}
+							</NotesContent>
 						</div>
 					)}
 				</div>
