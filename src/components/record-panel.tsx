@@ -476,7 +476,7 @@ export function RecordPanel({
 							<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
 								Notes
 							</h3>
-							<NotesContent className="font-serif text-base leading-relaxed text-pretty text-foreground/90">
+							<NotesContent className="font-notes text-base leading-relaxed text-pretty text-foreground/90">
 								{record.notes}
 							</NotesContent>
 						</div>

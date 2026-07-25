@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500;1,9..144,600;1,9..144,700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500;1,9..144,600;1,9..144,700&family=Schibsted+Grotesk:ital,wght@0,400..900;1,400..900&display=swap");
 @import "tailwindcss";
 @plugin '@tailwindcss/typography';
 
@@ -104,6 +104,9 @@
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
   --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
+  /* Body copy for personal record notes — an expressive grotesque that reads as
+     a hand-written aside rather than UI chrome. */
+  --font-notes: "Schibsted Grotesk", var(--font-sans);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
