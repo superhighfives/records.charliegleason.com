@@ -347,12 +347,20 @@ export function RecordPanel({
 					</Link>
 				</div>
 			</SignedIn>
-			{/* The cover floats at the header's right edge and overhangs the bottom
-			    border by ~20px, so the content scrolls up beneath it. The text column
-			    reserves that right gutter (`pr-32`); `min-h` guarantees the header is
-			    tall enough that a bottom-anchored cover never rides up over the close
-			    button when the title is short. */}
-			<SheetHeader className="relative z-10 block min-h-[9.5rem] border-b border-border">
+			{/* A square hero header: the cover floats at its right edge (overhanging the
+			    bottom border so content scrolls up beneath it), and the same cover —
+			    never the matte — sits full-bleed behind everything, heavily faded, as a
+			    backdrop. Content is bottom-aligned; the text column reserves the right
+			    gutter (`pr-48`) so it clears the floating cover. */}
+			<SheetHeader className="relative z-10 flex aspect-square flex-col justify-end border-b border-border">
+				{cover && (
+					<FadeImage
+						src={`/api/photos/${cover}`}
+						alt=""
+						aria-hidden
+						className="pointer-events-none absolute inset-0 -z-10 size-full object-cover opacity-10"
+					/>
+				)}
 				<div className="min-w-0 pr-48">
 					<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
 						{record.title}{" "}
@@ -405,7 +413,7 @@ export function RecordPanel({
 									<button
 										type="button"
 										onClick={() => copy(record.catno, "catno")}
-										className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-foreground"
+										className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-brand"
 									>
 										{record.catno}
 										{copied === "catno" ? (
@@ -423,7 +431,7 @@ export function RecordPanel({
 					coverSrc={cover ? `/api/photos/${cover}` : null}
 					matteSrc={matte ? `/api/photos/${matte}` : null}
 					onOpenChange={setZoomOpen}
-					className="absolute right-10 top-2 z-10 aspect-square w-44"
+					className="absolute right-10 -bottom-6 z-10 aspect-square w-44"
 				/>
 			</SheetHeader>
 
