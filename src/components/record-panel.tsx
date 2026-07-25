@@ -10,16 +10,14 @@ import {
 	ExternalLink,
 	Link2,
 	SquarePen,
-	X,
 } from "lucide-react";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { FadeImage } from "#/components/fade-image";
 import { NotesContent } from "#/components/notes-content";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
-import { SpinningRecord } from "#/components/spinning-record";
 import { Button } from "#/components/ui/button";
+import { ImageZoom } from "#/components/ui/image-zoom";
 import {
 	SheetDescription,
 	SheetFooter,
@@ -144,10 +142,9 @@ function AdminValuation({ record }: { record: PanelRecord }) {
 /**
  * The panel's header artwork: the floating matte (transparent, true-edged sleeve
  * with a baked shadow) when the record has one, falling back to the square cover
- * and then a placeholder. Tapping it opens a lightbox of the full cover with the
- * matte tucked into the bottom-right corner — the same object-on-cover treatment
- * as the admin record header. Positioning is supplied by the caller via
- * `className` so it can overhang the header edge.
+ * and then a placeholder. Tapping it opens a lightbox of the full cover.
+ * Positioning is supplied by the caller via `className` so it can overhang the
+ * header edge.
  */
 function CoverZoom({
 	coverSrc,
@@ -175,58 +172,23 @@ function CoverZoom({
 		);
 	}
 	return (
-		<DialogPrimitive.Root onOpenChange={onOpenChange}>
-			<DialogPrimitive.Trigger asChild>
-				<button
-					type="button"
-					aria-label="View cover"
-					className={cn(
-						"cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-						className,
-					)}
-				>
-					<img
-						src={thumbSrc}
-						alt=""
-						className={cn(
-							"size-full rotate-3",
-							matteSrc
-								? "object-contain drop-shadow-xl"
-								: "rounded-sm object-cover shadow-lg",
-						)}
-					/>
-				</button>
-			</DialogPrimitive.Trigger>
-			<DialogPrimitive.Portal>
-				<DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-				<DialogPrimitive.Content className="fixed top-1/2 left-1/2 z-50 flex max-h-[90vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 flex-col outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
-					<DialogPrimitive.Title className="sr-only">
-						Cover
-					</DialogPrimitive.Title>
-					{/* Covers are square, so reserve the square up front (90vmin fits both
-					    axes) and spin a loader in it — the cover fades in on top and,
-					    being square-in-square, fully hides the spinner once decoded. */}
-					<div className="relative size-[90vmin]">
-						<SpinningRecord
-							size={48}
-							className="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2"
-						/>
-						<FadeImage
-							src={coverSrc ?? thumbSrc}
-							alt="Cover"
-							className="absolute inset-0 size-full rounded-md object-contain shadow-lg"
-						/>
-					</div>
-					<DialogPrimitive.Close
-						type="button"
-						className="absolute top-2 right-2 rounded-sm bg-background/80 p-1 opacity-80 outline-none ring-offset-background transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-					>
-						<X className="size-4" />
-						<span className="sr-only">Close</span>
-					</DialogPrimitive.Close>
-				</DialogPrimitive.Content>
-			</DialogPrimitive.Portal>
-		</DialogPrimitive.Root>
+		<ImageZoom
+			src={coverSrc ?? thumbSrc}
+			alt="cover"
+			className={className}
+			onOpenChange={onOpenChange}
+		>
+			<img
+				src={thumbSrc}
+				alt=""
+				className={cn(
+					"size-full rotate-3",
+					matteSrc
+						? "object-contain drop-shadow-xl"
+						: "rounded-sm object-cover shadow-lg",
+				)}
+			/>
+		</ImageZoom>
 	);
 }
 

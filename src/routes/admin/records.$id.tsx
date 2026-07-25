@@ -1184,21 +1184,21 @@ function RecordDetail() {
 				    badge sits opposite the Context line. */}
 				<div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-end">
 					{headerPhotoSrc && (
-						<div className="relative w-full shrink-0 sm:w-1/2">
-							<ImageZoom
-								src={headerPhotoSrc}
-								alt="Record photo"
-								className="aspect-square w-full"
-							/>
-							{headerMatteSrc && (
-								<img
-									src={headerMatteSrc}
-									alt=""
-									aria-hidden
-									className="pointer-events-none absolute -bottom-[10px] right-[10px] w-1/4"
-								/>
-							)}
-						</div>
+						<ImageZoom
+							src={headerPhotoSrc}
+							alt="Record photo"
+							className="aspect-square w-full shrink-0 sm:w-1/2"
+							overlay={
+								headerMatteSrc ? (
+									<img
+										src={headerMatteSrc}
+										alt=""
+										aria-hidden
+										className="pointer-events-none absolute -bottom-[10px] right-[10px] w-1/4"
+									/>
+								) : undefined
+							}
+						/>
 					)}
 					<div className="min-w-0 flex-1">
 						{record.artist && (
