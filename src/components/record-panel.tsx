@@ -185,7 +185,7 @@ function CoverZoom({
 						className,
 					)}
 				>
-					<FadeImage
+					<img
 						src={thumbSrc}
 						alt=""
 						className={cn(
@@ -353,7 +353,7 @@ export function RecordPanel({
 			    tall enough that a bottom-anchored cover never rides up over the close
 			    button when the title is short. */}
 			<SheetHeader className="relative z-10 block min-h-[9.5rem] border-b border-border">
-				<div className="min-w-0 pr-40">
+				<div className="min-w-0 pr-48">
 					<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
 						{record.title}{" "}
 						<button
@@ -423,7 +423,7 @@ export function RecordPanel({
 					coverSrc={cover ? `/api/photos/${cover}` : null}
 					matteSrc={matte ? `/api/photos/${matte}` : null}
 					onOpenChange={setZoomOpen}
-					className="absolute right-10 -bottom-4 z-10 aspect-square w-36"
+					className="absolute right-10 top-2 z-10 aspect-square w-44"
 				/>
 			</SheetHeader>
 
