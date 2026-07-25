@@ -152,10 +152,17 @@ function CoverZoom({
 	coverSrc,
 	matteSrc,
 	className,
+	onOpenChange,
 }: {
 	coverSrc: string | null;
 	matteSrc: string | null;
 	className?: string;
+	/**
+	 * Notified when the lightbox opens/closes so the panel can gate its arrow-key
+	 * pager — otherwise an arrow press while the lightbox is open pages to another
+	 * record (which remounts the panel) instead of doing nothing.
+	 */
+	onOpenChange?: (open: boolean) => void;
 }) {
 	// Matte preferred as the thumbnail; the cover is what the lightbox blows up.
 	const thumbSrc = matteSrc ?? coverSrc;
@@ -167,7 +174,7 @@ function CoverZoom({
 		);
 	}
 	return (
-		<DialogPrimitive.Root>
+		<DialogPrimitive.Root onOpenChange={onOpenChange}>
 			<DialogPrimitive.Trigger asChild>
 				<button
 					type="button"
@@ -181,7 +188,7 @@ function CoverZoom({
 						src={thumbSrc}
 						alt=""
 						className={cn(
-							"size-full",
+							"size-full rotate-3",
 							matteSrc
 								? "object-contain drop-shadow-xl"
 								: "rounded-sm object-cover shadow-lg",
@@ -240,6 +247,11 @@ export function RecordPanel({
 	// to another record remounts this component with a fresh state.
 	const [copied, setCopied] = useState<"catno" | "link" | null>(null);
 
+	// The cover lightbox opens its own dialog on top of the panel. While it's open
+	// the arrow-key pager must stand down — otherwise an arrow press pages to
+	// another record (remounting the panel) instead of being handled by the dialog.
+	const [zoomOpen, setZoomOpen] = useState(false);
+
 	const copy = async (
 		text: string | null | undefined,
 		key: "catno" | "link",
@@ -297,10 +309,13 @@ export function RecordPanel({
 	// Cmd/Alt+Arrow for browser back/forward — pass straight through instead of
 	// being hijacked. `ignoreInputs` (on by default for single keys) also skips
 	// events from text fields, so caret movement in the notes editor is safe.
-	useHotkeys([
-		{ hotkey: "ArrowLeft", callback: onPrev },
-		{ hotkey: "ArrowRight", callback: onNext },
-	]);
+	useHotkeys(
+		[
+			{ hotkey: "ArrowLeft", callback: onPrev },
+			{ hotkey: "ArrowRight", callback: onNext },
+		],
+		{ enabled: !zoomOpen },
+	);
 
 	return (
 		<>
@@ -397,7 +412,8 @@ export function RecordPanel({
 				<CoverZoom
 					coverSrc={cover ? `/api/photos/${cover}` : null}
 					matteSrc={matte ? `/api/photos/${matte}` : null}
-					className="absolute right-5 -bottom-2.5 z-10 aspect-square w-36"
+					onOpenChange={setZoomOpen}
+					className="absolute right-5 -bottom-4 z-10 aspect-square w-36"
 				/>
 			</SheetHeader>
 
