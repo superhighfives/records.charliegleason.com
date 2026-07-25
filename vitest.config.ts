@@ -17,7 +17,9 @@ export default defineConfig({
 		},
 	},
 	test: {
+		// Node by default (see above); component tests opt into jsdom per-file with a
+		// `@vitest-environment jsdom` docblock, so lib tests keep the lean node runner.
 		environment: "node",
-		include: ["src/**/*.test.ts"],
+		include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
 	},
 });

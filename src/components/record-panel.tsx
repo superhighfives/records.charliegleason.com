@@ -15,6 +15,7 @@ import {
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { type ReactNode, useEffect, useState } from "react";
 
+import { FadeImage } from "#/components/fade-image";
 import { NotesContent } from "#/components/notes-content";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Button } from "#/components/ui/button";
@@ -176,7 +177,7 @@ function CoverZoom({
 						className,
 					)}
 				>
-					<img
+					<FadeImage
 						src={thumbSrc}
 						alt=""
 						className={cn(
@@ -194,7 +195,7 @@ function CoverZoom({
 					<DialogPrimitive.Title className="sr-only">
 						Cover
 					</DialogPrimitive.Title>
-					<img
+					<FadeImage
 						src={coverSrc ?? thumbSrc}
 						alt="Cover"
 						className="max-h-[90vh] max-w-[90vw] rounded-md object-contain shadow-lg"

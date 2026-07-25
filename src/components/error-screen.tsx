@@ -1,11 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { emojiSrc } from "#/lib/emoji";
+import { cn } from "#/lib/utils";
 
 export function ErrorScreen({
 	emoji,
 	code,
 	heading,
 	message,
+	spin = false,
 }: {
 	/** Percent-encoded emoji glyph, e.g. "%F0%9F%92%BF" for 💿. */
 	emoji: string;
@@ -13,6 +15,8 @@ export function ErrorScreen({
 	code: string;
 	heading: string;
 	message: string;
+	/** Rotate the hero glyph slowly — for the record disc on the 404. */
+	spin?: boolean;
 }) {
 	return (
 		<div className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-4 py-10 text-center sm:px-6">
@@ -22,7 +26,7 @@ export function ErrorScreen({
 				aria-hidden="true"
 				width={72}
 				height={72}
-				className="mb-6 size-18"
+				className={cn("mb-6 size-18", spin && "animate-record-spin-slow")}
 			/>
 			<p className="kicker mb-2">{code}</p>
 			<h1 className="font-serif text-4xl font-semibold tracking-tight sm:text-5xl">

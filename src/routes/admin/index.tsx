@@ -31,9 +31,11 @@ import {
 import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
+import { FadeImage } from "#/components/fade-image";
 import { GenerationFailedBadge } from "#/components/generation-failed-badge";
 import { MatteFallbackBadge } from "#/components/matte-fallback-badge";
 import { RecordPanel } from "#/components/record-panel";
+import { RecordLoading } from "#/components/spinning-record";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Checkbox } from "#/components/ui/checkbox";
@@ -531,7 +533,7 @@ export const Route = createFileRoute("/admin/")({
 });
 
 function AdminRecords() {
-	const { data } = useSuspenseQuery(recordsQueryOptions);
+	const { data, isFetchedAfterMount } = useSuspenseQuery(recordsQueryOptions);
 	// Ids still in the collection, so a record whose `duplicateOf` points at a
 	// since-deleted original stops claiming to be a duplicate. Memoised so the
 	// derived `columns` below keep a stable identity between renders.
@@ -679,7 +681,7 @@ function AdminRecords() {
 							className="block rounded transition-opacity hover:opacity-80"
 						>
 							{key ? (
-								<img
+								<FadeImage
 									src={`/api/photos/${key}`}
 									alt=""
 									loading="lazy"
@@ -965,6 +967,17 @@ function AdminRecords() {
 		bulkMutation.mutate({ action, ids: selectedIds });
 	};
 
+	// The list fails soft to `[]` until Clerk resolves the admin session (SSR and the
+	// first client paint), so an empty-but-not-yet-fetched collection is really "still
+	// loading". Gate on `isFetchedAfterMount` (not the transient `isFetching`): it's
+	// false until a client fetch settles after mount — so the SSR-hydrated `[]` shows
+	// the spinner on the first paint rather than a one-frame "No records yet" — and it
+	// stays true afterwards, so a refetch-on-focus of a genuinely empty collection
+	// won't flip the empty state back to the spinner.
+	if (data.length === 0 && !isFetchedAfterMount) {
+		return <RecordLoading label="Loading collection…" />;
+	}
+
 	return (
 		<div className="space-y-4">
 			<div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -1248,7 +1261,7 @@ function AdminRecords() {
 									className="shrink-0 rounded"
 								>
 									{thumb ? (
-										<img
+										<FadeImage
 											src={`/api/photos/${thumb}`}
 											alt=""
 											loading="lazy"
