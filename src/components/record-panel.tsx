@@ -18,6 +18,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { FadeImage } from "#/components/fade-image";
 import { NotesContent } from "#/components/notes-content";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
+import { SpinningRecord } from "#/components/spinning-record";
 import { Button } from "#/components/ui/button";
 import {
 	SheetDescription,
@@ -202,11 +203,20 @@ function CoverZoom({
 					<DialogPrimitive.Title className="sr-only">
 						Cover
 					</DialogPrimitive.Title>
-					<FadeImage
-						src={coverSrc ?? thumbSrc}
-						alt="Cover"
-						className="max-h-[90vh] max-w-[90vw] rounded-md object-contain shadow-lg"
-					/>
+					{/* Covers are square, so reserve the square up front (90vmin fits both
+					    axes) and spin a loader in it — the cover fades in on top and,
+					    being square-in-square, fully hides the spinner once decoded. */}
+					<div className="relative size-[90vmin]">
+						<SpinningRecord
+							size={48}
+							className="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2"
+						/>
+						<FadeImage
+							src={coverSrc ?? thumbSrc}
+							alt="Cover"
+							className="absolute inset-0 size-full rounded-md object-contain shadow-lg"
+						/>
+					</div>
 					<DialogPrimitive.Close
 						type="button"
 						className="absolute top-2 right-2 rounded-sm bg-background/80 p-1 opacity-80 outline-none ring-offset-background transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -413,7 +423,7 @@ export function RecordPanel({
 					coverSrc={cover ? `/api/photos/${cover}` : null}
 					matteSrc={matte ? `/api/photos/${matte}` : null}
 					onOpenChange={setZoomOpen}
-					className="absolute right-5 -bottom-4 z-10 aspect-square w-36"
+					className="absolute right-10 -bottom-4 z-10 aspect-square w-36"
 				/>
 			</SheetHeader>
 
