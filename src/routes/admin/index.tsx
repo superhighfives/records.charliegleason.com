@@ -141,6 +141,24 @@ const FACET_GROUPS: Array<{
 		],
 	},
 	{
+		key: "notes",
+		label: "Notes",
+		options: [
+			// Admin-authored notes are stored as nullable text; an all-whitespace value
+			// counts as empty (matching the record form's trim-min-1 validation).
+			{
+				token: "hasNotes",
+				label: "Has notes",
+				test: (r) => (r.notes?.trim() ?? "") !== "",
+			},
+			{
+				token: "noNotes",
+				label: "No notes",
+				test: (r) => (r.notes?.trim() ?? "") === "",
+			},
+		],
+	},
+	{
 		key: "release",
 		label: "Release",
 		options: [
