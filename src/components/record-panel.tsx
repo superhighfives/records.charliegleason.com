@@ -1,4 +1,5 @@
 import { SignedIn } from "@clerk/clerk-react";
+import { useHotkeys } from "@tanstack/react-hotkeys";
 import { Link } from "@tanstack/react-router";
 import {
 	BadgeCheck,
@@ -291,25 +292,14 @@ export function RecordPanel({
 		: null;
 
 	// Arrow keys page through the collection (Escape is handled by the Sheet).
-	// Ignore keys aimed at a text field / editable element so we don't hijack
-	// caret movement, and only swallow the event when we actually page.
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-			const el = e.target as HTMLElement | null;
-			if (
-				el?.isContentEditable ||
-				el?.closest("input, textarea, select, [contenteditable='true']")
-			) {
-				return;
-			}
-			e.preventDefault();
-			if (e.key === "ArrowLeft") onPrev();
-			else onNext();
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [onPrev, onNext]);
+	// useHotkeys matches the *bare* arrows only, so modified combos — notably
+	// Cmd/Alt+Arrow for browser back/forward — pass straight through instead of
+	// being hijacked. `ignoreInputs` (on by default for single keys) also skips
+	// events from text fields, so caret movement in the notes editor is safe.
+	useHotkeys([
+		{ hotkey: "ArrowLeft", callback: onPrev },
+		{ hotkey: "ArrowRight", callback: onNext },
+	]);
 
 	return (
 		<>
