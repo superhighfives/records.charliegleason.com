@@ -1,4 +1,5 @@
 import { SignedIn } from "@clerk/clerk-react";
+import { useHotkeys } from "@tanstack/react-hotkeys";
 import { Link } from "@tanstack/react-router";
 import {
 	BadgeCheck,
@@ -16,6 +17,7 @@ import { FadeImage } from "#/components/fade-image";
 import { NotesContent } from "#/components/notes-content";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Button } from "#/components/ui/button";
+import { ImageZoom } from "#/components/ui/image-zoom";
 import {
 	SheetDescription,
 	SheetFooter,
@@ -23,9 +25,10 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import type { Record } from "#/db/schema";
-import { displayCoverKey } from "#/lib/cover";
+import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { recordPath } from "#/lib/records-path";
+import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
 
 /**
@@ -137,9 +140,63 @@ function AdminValuation({ record }: { record: PanelRecord }) {
 }
 
 /**
- * The record detail drawer body — a cover + title header, a grid of headline
- * facts, a specifications list, notes, and prev/next paging through the current
- * (filtered) collection. Rendered inside a `<SheetContent>`.
+ * The panel's header artwork: the floating matte (transparent, true-edged sleeve
+ * with a baked shadow) when the record has one, falling back to the square cover
+ * and then a placeholder. Tapping it opens a lightbox of the full cover.
+ * Positioning is supplied by the caller via `className` so it can overhang the
+ * header edge.
+ */
+function CoverZoom({
+	coverSrc,
+	matteSrc,
+	className,
+	onOpenChange,
+}: {
+	coverSrc: string | null;
+	matteSrc: string | null;
+	className?: string;
+	/**
+	 * Notified when the lightbox opens/closes so the panel can gate its arrow-key
+	 * pager — otherwise an arrow press while the lightbox is open pages to another
+	 * record (which remounts the panel) instead of doing nothing.
+	 */
+	onOpenChange?: (open: boolean) => void;
+}) {
+	// Matte preferred as the thumbnail; the cover is what the lightbox blows up.
+	const thumbSrc = matteSrc ?? coverSrc;
+	if (!thumbSrc) {
+		return (
+			<div className={className}>
+				<SleevePlaceholder />
+			</div>
+		);
+	}
+	return (
+		<ImageZoom
+			src={coverSrc ?? thumbSrc}
+			alt="cover"
+			className={className}
+			onOpenChange={onOpenChange}
+		>
+			<img
+				src={thumbSrc}
+				alt=""
+				className={cn(
+					"size-full rotate-3",
+					matteSrc
+						? "object-contain drop-shadow-xl"
+						: "rounded-sm object-cover shadow-lg",
+				)}
+			/>
+		</ImageZoom>
+	);
+}
+
+/**
+ * The record detail drawer body — a title header with the cover floating at its
+ * right edge, a grid of headline facts, a specifications list, notes, and
+ * prev/next paging through the current (filtered) collection. Rendered inside a
+ * `<SheetContent>`.
  */
 export function RecordPanel({
 	record,
@@ -161,6 +218,11 @@ export function RecordPanel({
 	// Resets on its own; the panel is keyed by record id at the call site, so paging
 	// to another record remounts this component with a fresh state.
 	const [copied, setCopied] = useState<"catno" | "link" | null>(null);
+
+	// The cover lightbox opens its own dialog on top of the panel. While it's open
+	// the arrow-key pager must stand down — otherwise an arrow press pages to
+	// another record (remounting the panel) instead of being handled by the dialog.
+	const [zoomOpen, setZoomOpen] = useState(false);
 
 	const copy = async (
 		text: string | null | undefined,
@@ -203,6 +265,8 @@ export function RecordPanel({
 	// Admin drawer falls back to the raw capture so an in-progress record still
 	// shows an image; the public panel shows only an approved photo (else nothing).
 	const cover = displayCoverKey(record, { includeCapture: admin });
+	// The floating matte (only present on approved photos) is the header thumbnail.
+	const matte = displayMatteKey(record);
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
@@ -213,25 +277,17 @@ export function RecordPanel({
 		: null;
 
 	// Arrow keys page through the collection (Escape is handled by the Sheet).
-	// Ignore keys aimed at a text field / editable element so we don't hijack
-	// caret movement, and only swallow the event when we actually page.
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-			const el = e.target as HTMLElement | null;
-			if (
-				el?.isContentEditable ||
-				el?.closest("input, textarea, select, [contenteditable='true']")
-			) {
-				return;
-			}
-			e.preventDefault();
-			if (e.key === "ArrowLeft") onPrev();
-			else onNext();
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [onPrev, onNext]);
+	// useHotkeys matches the *bare* arrows only, so modified combos — notably
+	// Cmd/Alt+Arrow for browser back/forward — pass straight through instead of
+	// being hijacked. `ignoreInputs` (on by default for single keys) also skips
+	// events from text fields, so caret movement in the notes editor is safe.
+	useHotkeys(
+		[
+			{ hotkey: "ArrowLeft", callback: onPrev },
+			{ hotkey: "ArrowRight", callback: onNext },
+		],
+		{ enabled: !zoomOpen },
+	);
 
 	return (
 		<>
@@ -253,17 +309,28 @@ export function RecordPanel({
 					</Link>
 				</div>
 			</SignedIn>
-			<SheetHeader className="flex-row flex-wrap items-start gap-4 pb-6 pr-10 min-[400px]:flex-nowrap mt-auto border-b border-border">
-				<div className="min-w-0 flex-1">
-					<div className="flex items-start gap-2">
-						<SheetTitle className="min-w-0 font-serif text-lg leading-tight">
-							{record.title}
-						</SheetTitle>
+			{/* A square hero header: the cover floats at its right edge (overhanging the
+			    bottom border so content scrolls up beneath it), and the same cover —
+			    never the matte — sits full-bleed behind everything, heavily faded, as a
+			    backdrop. Content is bottom-aligned; the text column reserves the right
+			    gutter (`pr-48`) so it clears the floating cover. */}
+			<SheetHeader className="relative z-10 flex aspect-square flex-col justify-end border-b border-border">
+				{cover && (
+					<FadeImage
+						src={`/api/photos/${cover}`}
+						alt=""
+						aria-hidden
+						className="pointer-events-none absolute inset-0 -z-10 size-full object-cover opacity-10"
+					/>
+				)}
+				<div className="min-w-0 pr-48">
+					<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
+						{record.title}{" "}
 						<button
 							type="button"
 							onClick={copyLink}
 							aria-label="Copy link to this record"
-							className="mt-1 shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+							className="ml-0.5 inline-flex -translate-y-px items-center align-middle text-muted-foreground transition-colors hover:text-foreground"
 						>
 							{copied === "link" ? (
 								<Check className="size-3.5" />
@@ -271,8 +338,8 @@ export function RecordPanel({
 								<Link2 className="size-3.5" />
 							)}
 						</button>
-					</div>
-					<SheetDescription className="font-serif">
+					</SheetTitle>
+					<SheetDescription className="font-serif text-pretty">
 						{record.artist}
 						{record.year ? ` · ${record.year}` : ""}
 					</SheetDescription>
@@ -308,7 +375,7 @@ export function RecordPanel({
 									<button
 										type="button"
 										onClick={() => copy(record.catno, "catno")}
-										className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-foreground"
+										className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-brand"
 									>
 										{record.catno}
 										{copied === "catno" ? (
@@ -322,66 +389,66 @@ export function RecordPanel({
 						</div>
 					)}
 				</div>
+				<CoverZoom
+					coverSrc={cover ? `/api/photos/${cover}` : null}
+					matteSrc={matte ? `/api/photos/${matte}` : null}
+					onOpenChange={setZoomOpen}
+					className="absolute right-10 -bottom-6 z-10 aspect-square w-44"
+				/>
 			</SheetHeader>
 
 			<div className="flex-1 overflow-y-auto">
-				<div className="aspect-square">
-					{cover ? (
-						<FadeImage
-							src={`/api/photos/${cover}`}
-							alt=""
-							className="block size-full object-cover"
-						/>
-					) : (
-						<SleevePlaceholder />
-					)}
-				</div>
 				<div className="p-6 space-y-6">
 					<div className="grid grid-cols-3 gap-2">
 						<Stat label="Year">{dash(record.year)}</Stat>
 						<Stat label="Format">{dash(record.format)}</Stat>
 						<Stat label="Size">{dash(record.size)}</Stat>
-						<Stat label="Genre">{dash(record.genre)}</Stat>
-						<Stat label="Country">{dash(record.country)}</Stat>
 					</div>
 
 					<div>
-						<h3 className="mb-1 text-sm font-semibold">Specifications</h3>
 						<dl className="divide-y divide-border">
+							<Spec label="Genre">{dash(record.genre)}</Spec>
+							<Spec label="Country">{dash(record.country)}</Spec>
 							<Spec label="Label">{dash(record.label)}</Spec>
 							<Spec label="Added">{dash(added)}</Spec>
+							{record.pitchforkScore != null && (
+								<Spec label="Pitchfork">
+									{record.pitchforkUrl ? (
+										<a
+											href={record.pitchforkUrl}
+											target="_blank"
+											rel="noreferrer"
+											className="font-semibold tabular-nums text-brand hover:text-brand-strong"
+										>
+											{record.pitchforkScore}
+										</a>
+									) : (
+										<span className="font-semibold tabular-nums text-brand">
+											{record.pitchforkScore}
+										</span>
+									)}
+								</Spec>
+							)}
 						</dl>
 					</div>
 
 					{admin && <AdminValuation record={record} />}
 
-					{record.pitchforkScore != null && (
-						<div>
-							<h3 className="mb-1 text-sm font-semibold">Critical reception</h3>
-							<p className="text-sm text-muted-foreground">
-								{record.pitchforkUrl ? (
-									<a
-										href={record.pitchforkUrl}
-										target="_blank"
-										rel="noreferrer"
-										className="font-bold tabular-nums text-brand hover:text-brand-strong"
-									>
-										{record.pitchforkScore}
-									</a>
-								) : (
-									<span className="font-bold tabular-nums text-brand">
-										{record.pitchforkScore}
-									</span>
-								)}{" "}
-								on Pitchfork
-							</p>
-						</div>
-					)}
-
 					{record.notes && (
-						<div>
-							<h3 className="mb-1 text-sm font-semibold">Notes</h3>
-							<NotesContent>{record.notes}</NotesContent>
+						<div className="relative overflow-hidden rounded-lg border border-brand/25 bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent p-5 pt-6">
+							{/* Oversized editorial quotation mark tucked into the corner. */}
+							<span
+								aria-hidden
+								className="pointer-events-none absolute -top-3 right-3 select-none font-serif text-7xl leading-none text-brand/25"
+							>
+								{"”"}
+							</span>
+							<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
+								Notes
+							</h3>
+							<NotesContent className="font-notes text-base leading-relaxed text-pretty text-foreground/90">
+								{record.notes}
+							</NotesContent>
 						</div>
 					)}
 				</div>
