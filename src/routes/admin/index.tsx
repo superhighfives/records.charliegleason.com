@@ -31,6 +31,7 @@ import {
 import { toast } from "sonner";
 
 import { DuplicateBadge } from "#/components/duplicate-badge";
+import { FadeImage } from "#/components/fade-image";
 import { GenerationFailedBadge } from "#/components/generation-failed-badge";
 import { MatteFallbackBadge } from "#/components/matte-fallback-badge";
 import { RecordPanel } from "#/components/record-panel";
@@ -680,7 +681,7 @@ function AdminRecords() {
 							className="block rounded transition-opacity hover:opacity-80"
 						>
 							{key ? (
-								<img
+								<FadeImage
 									src={`/api/photos/${key}`}
 									alt=""
 									loading="lazy"
@@ -1260,7 +1261,7 @@ function AdminRecords() {
 									className="shrink-0 rounded"
 								>
 									{thumb ? (
-										<img
+										<FadeImage
 											src={`/api/photos/${thumb}`}
 											alt=""
 											loading="lazy"
