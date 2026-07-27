@@ -306,8 +306,8 @@ export function RecordPanel({
 		let collapse = 1;
 		let raf = 0;
 		// `--hero` runs 0 (at the top) → 1 (once pinned); the backdrop reads it to
-		// dissolve down as the hero collapses, so the pinned band keeps only a whisper
-		// of the cover. Written straight onto the node, so scrolling never re-renders.
+		// fade out as the hero collapses, so the pinned band is just the title and
+		// matte. Written straight onto the node, so scrolling never re-renders.
 		const paint = () => {
 			raf = 0;
 			el.style.setProperty(
@@ -360,10 +360,10 @@ export function RecordPanel({
 			    cover (never the matte) heavily faded as a backdrop, the title copy at
 			    its bottom edge, and the matte floating over that edge. It sticks with a
 			    negative `top` (set in the effect above) so the empty top scrolls away
-			    and only the bottom band — title, matte and a slice of faded backdrop —
-			    stays pinned while the specs and notes scroll beneath. `bg-background`
-			    hides that content behind the faded band, and the backdrop dissolves
-			    down via `--hero` as it collapses. */}
+			    and only the bottom band — title and matte — stays pinned while the
+			    specs and notes scroll beneath. `bg-background` hides that content
+			    behind the band, and the backdrop fades out via `--hero` as it
+			    collapses, leaving just the title and matte once pinned. */}
 			<div ref={scrollRef} className="relative flex-1 overflow-y-auto">
 				<div
 					ref={headerRef}
@@ -373,7 +373,7 @@ export function RecordPanel({
 						<div
 							aria-hidden
 							className="pointer-events-none absolute inset-0 -z-10"
-							style={{ opacity: "calc(1 - var(--hero, 0) * 0.55)" }}
+							style={{ opacity: "calc(1 - var(--hero, 0))" }}
 						>
 							<FadeImage
 								src={`/api/photos/${cover}`}
