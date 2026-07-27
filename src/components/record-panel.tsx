@@ -302,14 +302,38 @@ export function RecordPanel({
 		const header = headerRef.current;
 		const bar = barRef.current;
 		if (!el || !header || !bar) return;
-		const apply = () => {
-			header.style.top = `${Math.round(bar.offsetHeight - header.offsetHeight)}px`;
+		// Distance the header travels before it pins (the empty top of the square).
+		let collapse = 1;
+		let raf = 0;
+		// `--hero` runs 0 (at the top) → 1 (once pinned); the backdrop reads it to
+		// dissolve down as the hero collapses, so the pinned band keeps only a whisper
+		// of the cover. Written straight onto the node, so scrolling never re-renders.
+		const paint = () => {
+			raf = 0;
+			el.style.setProperty(
+				"--hero",
+				String(Math.min(1, Math.max(0, el.scrollTop / collapse))),
+			);
 		};
-		apply();
-		const ro = new ResizeObserver(apply);
+		const measure = () => {
+			const top = Math.round(bar.offsetHeight - header.offsetHeight);
+			header.style.top = `${top}px`;
+			collapse = Math.max(1, -top);
+			paint();
+		};
+		const onScroll = () => {
+			if (!raf) raf = requestAnimationFrame(paint);
+		};
+		measure();
+		const ro = new ResizeObserver(measure);
 		ro.observe(el);
 		ro.observe(bar);
-		return () => ro.disconnect();
+		el.addEventListener("scroll", onScroll, { passive: true });
+		return () => {
+			ro.disconnect();
+			el.removeEventListener("scroll", onScroll);
+			if (raf) cancelAnimationFrame(raf);
+		};
 	}, []);
 
 	return (
@@ -338,19 +362,25 @@ export function RecordPanel({
 			    negative `top` (set in the effect above) so the empty top scrolls away
 			    and only the bottom band — title, matte and a slice of faded backdrop —
 			    stays pinned while the specs and notes scroll beneath. `bg-background`
-			    hides that content behind the faded band. */}
+			    hides that content behind the faded band, and the backdrop dissolves
+			    down via `--hero` as it collapses. */}
 			<div ref={scrollRef} className="relative flex-1 overflow-y-auto">
 				<div
 					ref={headerRef}
 					className="sticky z-10 flex aspect-square flex-col justify-end bg-background"
 				>
 					{cover && (
-						<FadeImage
-							src={`/api/photos/${cover}`}
-							alt=""
+						<div
 							aria-hidden
-							className="pointer-events-none absolute inset-0 -z-10 size-full object-cover opacity-10"
-						/>
+							className="pointer-events-none absolute inset-0 -z-10"
+							style={{ opacity: "calc(1 - var(--hero, 0) * 0.55)" }}
+						>
+							<FadeImage
+								src={`/api/photos/${cover}`}
+								alt=""
+								className="size-full object-cover opacity-10"
+							/>
+						</div>
 					)}
 					<div ref={barRef} className="relative min-w-0 p-6 pr-52">
 						<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
