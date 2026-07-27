@@ -11,7 +11,7 @@ import {
 	Link2,
 	SquarePen,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { FadeImage } from "#/components/fade-image";
 import { NotesContent } from "#/components/notes-content";
@@ -21,7 +21,6 @@ import { ImageZoom } from "#/components/ui/image-zoom";
 import {
 	SheetDescription,
 	SheetFooter,
-	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
 import type { Record } from "#/db/schema";
@@ -289,6 +288,61 @@ export function RecordPanel({
 		{ enabled: !zoomOpen },
 	);
 
+	// The header is a square cover hero with the title copy pinned to its bottom
+	// edge. It sticks with a negative `top` so the empty top of the square scrolls
+	// away and only the bottom band — the title and matte — stays fixed. That offset
+	// is (title height − hero height); both depend on layout (panel width, title
+	// length), so it's measured here and kept current with a ResizeObserver rather
+	// than hard-coded.
+	const scrollRef = useRef<HTMLDivElement>(null);
+	const headerRef = useRef<HTMLDivElement>(null);
+	const barRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const el = scrollRef.current;
+		const header = headerRef.current;
+		const bar = barRef.current;
+		if (!el || !header || !bar) return;
+		// Distance the header travels before it pins (the empty top of the square).
+		let collapse = 1;
+		let raf = 0;
+		// `--hero` runs 0 (at the top) → 1 (once pinned); the backdrop reads it to
+		// fade out as the hero collapses, so the pinned band is just the title and
+		// matte. Written straight onto the node, so scrolling never re-renders.
+		const paint = () => {
+			raf = 0;
+			el.style.setProperty(
+				"--hero",
+				String(Math.min(1, Math.max(0, el.scrollTop / collapse))),
+			);
+		};
+		const measure = () => {
+			// Clamp to ≤ 0: if the title band is taller than the square (a long title
+			// in the narrow column left by the cover gutter on a full-width sheet), a
+			// positive `top` would push the header *down* instead of pinning it — there
+			// is simply no empty top to collapse, so it sticks flush at 0.
+			const top = Math.min(
+				0,
+				Math.round(bar.offsetHeight - header.offsetHeight),
+			);
+			header.style.top = `${top}px`;
+			collapse = Math.max(1, -top);
+			paint();
+		};
+		const onScroll = () => {
+			if (!raf) raf = requestAnimationFrame(paint);
+		};
+		measure();
+		const ro = new ResizeObserver(measure);
+		ro.observe(el);
+		ro.observe(bar);
+		el.addEventListener("scroll", onScroll, { passive: true });
+		return () => {
+			ro.disconnect();
+			el.removeEventListener("scroll", onScroll);
+			if (raf) cancelAnimationFrame(raf);
+		};
+	}, []);
+
 	return (
 		<>
 			{/* Admin-only jump to the full editor. Clerk's `SignedIn` renders nothing
@@ -309,95 +363,106 @@ export function RecordPanel({
 					</Link>
 				</div>
 			</SignedIn>
-			{/* A square hero header: the cover floats at its right edge (overhanging the
-			    bottom border so content scrolls up beneath it), and the same cover —
-			    never the matte — sits full-bleed behind everything, heavily faded, as a
-			    backdrop. Content is bottom-aligned; the text column reserves the right
-			    gutter (`pr-48`) so it clears the floating cover. */}
-			<SheetHeader className="relative z-10 flex aspect-square flex-col justify-end border-b border-border">
-				{cover && (
-					<FadeImage
-						src={`/api/photos/${cover}`}
-						alt=""
-						aria-hidden
-						className="pointer-events-none absolute inset-0 -z-10 size-full object-cover opacity-10"
-					/>
-				)}
-				<div className="min-w-0 pr-48">
-					<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
-						{record.title}{" "}
-						<button
-							type="button"
-							onClick={copyLink}
-							aria-label="Copy link to this record"
-							className="ml-0.5 inline-flex -translate-y-px items-center align-middle text-muted-foreground transition-colors hover:text-foreground"
+			{/* The panel scrolls in one column. The header is a square cover hero: the
+			    cover (never the matte) heavily faded as a backdrop, the title copy at
+			    its bottom edge, and the matte floating over that edge. It sticks with a
+			    negative `top` (set in the effect above) so the empty top scrolls away
+			    and only the bottom band — title and matte — stays pinned while the
+			    specs and notes scroll beneath. `bg-background` hides that content
+			    behind the band, and the backdrop fades out via `--hero` as it
+			    collapses, leaving just the title and matte once pinned. */}
+			<div ref={scrollRef} className="relative flex-1 overflow-y-auto">
+				<div
+					ref={headerRef}
+					className="sticky z-10 flex aspect-square flex-col justify-end bg-background"
+				>
+					{cover && (
+						<div
+							aria-hidden
+							className="pointer-events-none absolute inset-0 -z-10"
+							style={{ opacity: "calc(1 - var(--hero, 0))" }}
 						>
-							{copied === "link" ? (
-								<Check className="size-3.5" />
-							) : (
-								<Link2 className="size-3.5" />
-							)}
-						</button>
-					</SheetTitle>
-					<SheetDescription className="font-serif text-pretty">
-						{record.artist}
-						{record.year ? ` · ${record.year}` : ""}
-					</SheetDescription>
-					{admin && record.discogsId && (
-						<span className="mt-1 inline-flex items-center gap-1 rounded-full bg-brand/15 px-2 py-0.5 text-xs font-medium text-brand-strong">
-							<BadgeCheck className="size-3.5" />
-							Release pinned
-						</span>
-					)}
-					{(discogsHref || record.catno) && (
-						<div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
-							{discogsHref && (
-								<div className="space-y-0.5">
-									<p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-										Discogs
-									</p>
-									<a
-										href={discogsHref}
-										target="_blank"
-										rel="noreferrer"
-										className="inline-flex items-center gap-1.5 text-sm font-medium tabular-nums hover:text-brand"
-									>
-										{discogsId ? `#${discogsId}` : "View on Discogs"}
-										<ExternalLink className="size-3 text-muted-foreground" />
-									</a>
-								</div>
-							)}
-							{record.catno && (
-								<div className="space-y-0.5">
-									<p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-										Catalog
-									</p>
-									<button
-										type="button"
-										onClick={() => copy(record.catno, "catno")}
-										className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-brand"
-									>
-										{record.catno}
-										{copied === "catno" ? (
-											<Check className="size-3" />
-										) : (
-											<Copy className="size-3 text-muted-foreground" />
-										)}
-									</button>
-								</div>
-							)}
+							<FadeImage
+								src={`/api/photos/${cover}`}
+								alt=""
+								className="size-full object-cover opacity-10"
+							/>
 						</div>
 					)}
+					<div ref={barRef} className="relative min-w-0 p-6 pr-52">
+						<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
+							{record.title}{" "}
+							<button
+								type="button"
+								onClick={copyLink}
+								aria-label="Copy link to this record"
+								className="ml-0.5 inline-flex -translate-y-px items-center align-middle text-muted-foreground transition-colors hover:text-foreground"
+							>
+								{copied === "link" ? (
+									<Check className="size-3.5" />
+								) : (
+									<Link2 className="size-3.5" />
+								)}
+							</button>
+						</SheetTitle>
+						<SheetDescription className="font-serif text-pretty">
+							{record.artist}
+							{record.year ? ` · ${record.year}` : ""}
+						</SheetDescription>
+						{admin && record.discogsId && (
+							<span className="mt-1 inline-flex items-center gap-1 rounded-full bg-brand/15 px-2 py-0.5 text-xs font-medium text-brand-strong">
+								<BadgeCheck className="size-3.5" />
+								Release pinned
+							</span>
+						)}
+						{(discogsHref || record.catno) && (
+							<div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+								{discogsHref && (
+									<div className="space-y-0.5">
+										<p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+											Discogs
+										</p>
+										<a
+											href={discogsHref}
+											target="_blank"
+											rel="noreferrer"
+											className="inline-flex items-center gap-1.5 text-sm font-medium tabular-nums hover:text-brand"
+										>
+											{discogsId ? `#${discogsId}` : "View on Discogs"}
+											<ExternalLink className="size-3 text-muted-foreground" />
+										</a>
+									</div>
+								)}
+								{record.catno && (
+									<div className="space-y-0.5">
+										<p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+											Catalog
+										</p>
+										<button
+											type="button"
+											onClick={() => copy(record.catno, "catno")}
+											className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-brand"
+										>
+											{record.catno}
+											{copied === "catno" ? (
+												<Check className="size-3" />
+											) : (
+												<Copy className="size-3 text-muted-foreground" />
+											)}
+										</button>
+									</div>
+								)}
+							</div>
+						)}
+					</div>
+					<CoverZoom
+						coverSrc={cover ? `/api/photos/${cover}` : null}
+						matteSrc={matte ? `/api/photos/${matte}` : null}
+						onOpenChange={setZoomOpen}
+						className="absolute right-8 -bottom-6 z-10 aspect-square w-44"
+					/>
 				</div>
-				<CoverZoom
-					coverSrc={cover ? `/api/photos/${cover}` : null}
-					matteSrc={matte ? `/api/photos/${matte}` : null}
-					onOpenChange={setZoomOpen}
-					className="absolute right-10 -bottom-6 z-10 aspect-square w-44"
-				/>
-			</SheetHeader>
 
-			<div className="flex-1 overflow-y-auto">
 				<div className="p-6 space-y-6">
 					<div className="grid grid-cols-3 gap-2">
 						<Stat label="Year">{dash(record.year)}</Stat>
