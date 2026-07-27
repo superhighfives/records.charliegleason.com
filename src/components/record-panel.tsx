@@ -290,10 +290,10 @@ export function RecordPanel({
 
 	// The header is a square cover hero with the title copy pinned to its bottom
 	// edge. It sticks with a negative `top` so the empty top of the square scrolls
-	// away and only the bottom band — title, matte and a slice of faded backdrop —
-	// stays fixed. That offset is (title height − hero height); both depend on
-	// layout (panel width, title length), so it's measured here and kept current
-	// with a ResizeObserver rather than hard-coded.
+	// away and only the bottom band — the title and matte — stays fixed. That offset
+	// is (title height − hero height); both depend on layout (panel width, title
+	// length), so it's measured here and kept current with a ResizeObserver rather
+	// than hard-coded.
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const headerRef = useRef<HTMLDivElement>(null);
 	const barRef = useRef<HTMLDivElement>(null);
@@ -316,7 +316,14 @@ export function RecordPanel({
 			);
 		};
 		const measure = () => {
-			const top = Math.round(bar.offsetHeight - header.offsetHeight);
+			// Clamp to ≤ 0: if the title band is taller than the square (a long title
+			// in the narrow column left by the cover gutter on a full-width sheet), a
+			// positive `top` would push the header *down* instead of pinning it — there
+			// is simply no empty top to collapse, so it sticks flush at 0.
+			const top = Math.min(
+				0,
+				Math.round(bar.offsetHeight - header.offsetHeight),
+			);
 			header.style.top = `${top}px`;
 			collapse = Math.max(1, -top);
 			paint();
