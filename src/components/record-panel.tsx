@@ -389,7 +389,10 @@ export function RecordPanel({
 							/>
 						</div>
 					)}
-					<div ref={barRef} className="relative min-w-0 p-6 pr-52">
+					<div
+						ref={barRef}
+						className="relative min-w-0 p-6 pr-52 before:content-[''] before:h-px before:w-full before:absolute before:bottom-0 before:left-0 before:bg-muted before:opacity-[calc(var(--hero,0))]"
+					>
 						<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
 							{record.title}{" "}
 							<button
