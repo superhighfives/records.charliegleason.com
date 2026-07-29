@@ -462,9 +462,22 @@ export function RecordPanel({
 						coverSrc={cover ? `/api/photos/${cover}` : null}
 						matteSrc={matte ? `/api/photos/${matte}` : null}
 						onOpenChange={setZoomOpen}
-						className="absolute right-8 -bottom-6 z-10 aspect-square w-44"
+						className="absolute right-8 -bottom-8 z-10 aspect-square w-44"
 					/>
 				</div>
+
+				{record.notes && (
+					<div className="p-2 border-b">
+						<div className="relative overflow-hidden rounded-lg border border-brand/50 border-l-brand/80 bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent shadow-lg shadow-brand/10 p-4">
+							<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
+								Notes
+							</h3>
+							<NotesContent className="font-mono text-sm leading-relaxed text-pretty text-foreground/90">
+								{record.notes}
+							</NotesContent>
+						</div>
+					</div>
+				)}
 
 				<div className="p-6 space-y-6">
 					<div className="grid grid-cols-3 gap-2">
@@ -501,24 +514,6 @@ export function RecordPanel({
 					</div>
 
 					{admin && <AdminValuation record={record} />}
-
-					{record.notes && (
-						<div className="relative overflow-hidden rounded-lg border border-brand/25 bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent p-5 pt-6">
-							{/* Oversized editorial quotation mark tucked into the corner. */}
-							<span
-								aria-hidden
-								className="pointer-events-none absolute -top-3 right-3 select-none font-serif text-7xl leading-none text-brand/25"
-							>
-								{"”"}
-							</span>
-							<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
-								Notes
-							</h3>
-							<NotesContent className="font-notes text-base leading-relaxed text-pretty text-foreground/90">
-								{record.notes}
-							</NotesContent>
-						</div>
-					)}
 				</div>
 			</div>
 
