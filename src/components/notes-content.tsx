@@ -35,7 +35,7 @@ export function NotesContent({ children, className }: NotesContentProps) {
 	return (
 		<div
 			className={cn(
-				"space-y-2 text-sm text-muted-foreground [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-4 [&_strong]:font-semibold [&_strong]:text-foreground [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mt-0.5 [&_blockquote]:relative [&_blockquote]:pl-4 [&_blockquote]:text-yellow-700 dark:[&_blockquote]:text-yellow-400 [&_blockquote]:before:absolute [&_blockquote]:before:inset-y-0 [&_blockquote]:before:left-0 [&_blockquote]:before:w-0.5 [&_blockquote]:before:rounded-full [&_blockquote]:before:bg-brand/25 [&_blockquote]:before:content-['']",
+				"notes-content space-y-2 text-sm text-muted-foreground [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-4 [&_strong]:font-semibold [&_strong]:text-foreground [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mt-0.5 [&_blockquote]:relative [&_blockquote]:pl-4 [&_blockquote]:text-yellow-700 dark:[&_blockquote]:text-yellow-400 [&_blockquote]:before:absolute [&_blockquote]:before:inset-y-0 [&_blockquote]:before:left-0 [&_blockquote]:before:content-['']",
 				className,
 			)}
 		>

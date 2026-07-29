@@ -207,6 +207,17 @@ pre code {
   color: #f5f5f5;
 }
 
+/* Note blockquotes get a hand-drawn wavy rule down their left edge instead of a
+   straight bar — a vertical sine wave (period 12px) tiled with repeat-y. The
+   curve's slope matches at the tile's top and bottom edges, so it tiles seamlessly. */
+.notes-content blockquote::before {
+  width: 6px;
+  opacity: 0.6;
+  background-repeat: repeat-y;
+  background-position: left top;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='6'%20height='12'%20viewBox='0%200%206%2012'%3E%3Cpath%20d='M3%200%20Q5%203%203%206%20Q1%209%203%2012'%20fill='none'%20stroke='%23eab308'%20stroke-width='1.5'%20stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
 .page-wrap {
   width: min(1080px, calc(100% - 2rem));
   margin-inline: auto;
