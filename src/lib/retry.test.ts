@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { isDurableObjectReset, NonRetryableError, withRetry } from "./retry";
+import {
+	isTransientContainerReset,
+	NonRetryableError,
+	withRetry,
+} from "./retry";
 
 // baseMs: 0 → no real backoff waiting, so the exhaustion test doesn't sleep.
 const opts = { attempts: 3, baseMs: 0 };
@@ -50,36 +54,53 @@ describe("withRetry", () => {
 	});
 });
 
-describe("isDurableObjectReset", () => {
+describe("isTransientContainerReset", () => {
 	it("matches the DO storage-timeout reset error (full platform message)", () => {
 		const err = new Error(
 			"Durable Object storage operation exceeded timeout which caused object to be reset.",
 		);
-		expect(isDurableObjectReset(err)).toBe(true);
+		expect(isTransientContainerReset(err)).toBe(true);
 	});
 
 	it("matches either half of the message, and non-Error values", () => {
-		expect(isDurableObjectReset(new Error("… object to be reset"))).toBe(true);
-		expect(isDurableObjectReset("storage operation exceeded timeout")).toBe(
+		expect(isTransientContainerReset(new Error("… object to be reset"))).toBe(
 			true,
 		);
+		expect(
+			isTransientContainerReset("storage operation exceeded timeout"),
+		).toBe(true);
+	});
+
+	it("matches the code-update DO reset and the container-rollout exit (the mass-fail signals)", () => {
+		expect(
+			isTransientContainerReset(
+				new Error("Durable Object reset because its code was updated."),
+			),
+		).toBe(true);
+		expect(
+			isTransientContainerReset(
+				new Error(
+					"Container error: Error: Runtime signalled the container to exit due to a new version.",
+				),
+			),
+		).toBe(true);
 	});
 
 	it("is false for unrelated failures — so only the reset is retried", () => {
-		expect(isDurableObjectReset(new Error("matte container 500: boom"))).toBe(
-			false,
-		);
-		expect(isDurableObjectReset(new Error("Network connection lost."))).toBe(
-			false,
-		);
-		expect(isDurableObjectReset(null)).toBe(false);
+		expect(
+			isTransientContainerReset(new Error("matte container 500: boom")),
+		).toBe(false);
+		expect(
+			isTransientContainerReset(new Error("Network connection lost.")),
+		).toBe(false);
+		expect(isTransientContainerReset(null)).toBe(false);
 	});
 
 	it("drives withRetry: retries a reset, fails fast on anything else", async () => {
 		// Mirrors postToContainer's classifier — the reset stays retryable, everything
 		// else is wrapped NonRetryableError so it surfaces at once.
 		const wrap = (err: unknown) => {
-			if (isDurableObjectReset(err)) throw err;
+			if (isTransientContainerReset(err)) throw err;
 			throw new NonRetryableError(
 				err instanceof Error ? err.message : String(err),
 			);

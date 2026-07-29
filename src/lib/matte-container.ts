@@ -12,7 +12,7 @@ import { Container, getRandom } from "@cloudflare/containers";
 import { base64ToBytes, bytesToBase64 } from "#/lib/image-data";
 import type { ReframeParams } from "#/lib/reframe-params";
 import {
-	isDurableObjectReset,
+	isTransientContainerReset,
 	NonRetryableError,
 	withRetry,
 } from "#/lib/retry";
@@ -50,12 +50,14 @@ export interface ContainerMatte {
 }
 
 /**
- * POST to the matte container, retrying the transient Durable Object reset. A matte/enhance run
+ * POST to the matte container, retrying the transient container-DO resets. A matte/enhance run
  * holds the Container DO open across Replicate polling (up to two 120s models), which can trip
- * the DO's ~30s storage-op timeout and reset it mid-request ("…caused object to be reset"). That
- * reset is transient and loses only in-memory state, so {@link withRetry} re-runs the request
- * with a fresh stub; any other failure is a {@link NonRetryableError} so it surfaces at once and
- * lets the caller's throw hand off to the queue's retry / deterministic fallback.
+ * the DO's ~30s storage-op timeout and reset it mid-request ("…caused object to be reset"); the
+ * same call also loses its instance to a code-update DO reset or a platform container rollout
+ * ("…container to exit due to a new version"). All are transient and lose only in-memory state,
+ * so {@link isTransientContainerReset} keeps {@link withRetry} re-running the request with a
+ * fresh stub (getRandom re-picks a live instance); any other failure is a {@link NonRetryableError}
+ * so it surfaces at once and lets the caller's throw hand off to the queue's retry / fallback.
  */
 async function postToContainer(path: string, body: unknown): Promise<Response> {
 	// Only bound in production; the callers check presence before routing here, so this guard
@@ -74,7 +76,7 @@ async function postToContainer(path: string, body: unknown): Promise<Response> {
 					body: payload,
 				});
 			} catch (err) {
-				if (isDurableObjectReset(err)) throw err;
+				if (isTransientContainerReset(err)) throw err;
 				throw new NonRetryableError(
 					err instanceof Error ? err.message : String(err),
 				);

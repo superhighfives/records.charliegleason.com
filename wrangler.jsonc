@@ -93,7 +93,16 @@
 			"image": "./containers/matte/Dockerfile",
 			"image_build_context": ".",
 			"instance_type": "standard-1",
-			"max_instances": 3
+			"max_instances": 3,
+			// Give active instances time to drain in-flight /enhance and /matte requests
+			// before a rollout (platform- or deploy-triggered) shuts them down. Default is
+			// 0 — a hard mid-request kill — which is what mass-failed a batch of Apply jobs
+			// when the platform rolled the container to a new version: every in-flight
+			// enhance died uncatchably (no catch, no Sentry) and the reaper burned its
+			// retries against the flapping instances. A run holds the DO across Replicate
+			// polling (up to two ~120s models + the webp encode), so 300s covers the worst
+			// case and lets a roll drain instead of hard-kill.
+			"rollout_active_grace_period": 300
 		}
 	],
 	"durable_objects": {
