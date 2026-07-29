@@ -34,6 +34,7 @@ import { DuplicateBadge } from "#/components/duplicate-badge";
 import { FadeImage } from "#/components/fade-image";
 import { GenerationFailedBadge } from "#/components/generation-failed-badge";
 import { MatteFallbackBadge } from "#/components/matte-fallback-badge";
+import { MatteStaleBadge } from "#/components/matte-stale-badge";
 import { RecordPanel } from "#/components/record-panel";
 import { RecordLoading } from "#/components/spinning-record";
 import { StatusBadge } from "#/components/status-badge";
@@ -806,6 +807,13 @@ function AdminRecords() {
 						{row.original.professionalAlphaSource === "deterministic" && (
 							<MatteFallbackBadge />
 						)}
+						{/* A Magic (AI) matte survives from an earlier completed Apply even
+							    when the latest job failed — flag that it may be out of date
+							    rather than letting the "Magic matte" filter imply it's current. */}
+						{row.original.professionalAlphaSource === "ai" &&
+							row.original.professionalJobStatus === "failed" && (
+								<MatteStaleBadge />
+							)}
 						<StatusError record={row.original} />
 					</Link>
 				),
@@ -1321,6 +1329,10 @@ function AdminRecords() {
 													Pitchfork {r.pitchforkScore}
 												</span>
 											)}
+											{r.professionalAlphaSource === "ai" &&
+												r.professionalJobStatus === "failed" && (
+													<MatteStaleBadge />
+												)}
 											<StatusError record={r} />
 										</div>
 									</div>
