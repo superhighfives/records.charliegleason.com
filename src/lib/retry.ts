@@ -19,15 +19,26 @@ export class NonRetryableError extends Error {
 }
 
 /**
- * The transient Cloudflare error where a Durable Object (or D1) storage operation exceeds its
- * ~30s timeout and the platform resets the object's in-memory state mid-request. Cloudflare's
- * guidance is to retry it, so a caller keeps {@link withRetry} retrying this while classifying
- * everything else as {@link NonRetryableError}. Lives here (dependency-free) so it's testable
- * without importing its Workers-bound caller — same reason as the rest of this module.
+ * A transient Cloudflare error from a container-fronting Durable Object that a retry with a
+ * fresh stub recovers. Three shapes, all of which lose only in-memory state and which
+ * Cloudflare's guidance is to retry:
+ *   - a DO storage op exceeds its ~30s timeout and the platform resets the object mid-request
+ *     ("…storage operation exceeded timeout which caused object to be reset");
+ *   - the DO is reset because its code was updated ("Durable Object reset because its code was
+ *     updated") — a Worker version change landing mid-request;
+ *   - during a container rollout the runtime signals the active instance to exit ("Runtime
+ *     signalled the container to exit due to a new version") — a platform-initiated instance
+ *     replacement, which with no drain grace kills the in-flight request outright.
+ * A caller keeps {@link withRetry} retrying these (getRandom re-picks a fresh instance/stub)
+ * while classifying everything else as {@link NonRetryableError}. Lives here (dependency-free)
+ * so it's testable without importing its Workers-bound caller — same reason as the rest of
+ * this module.
  */
-export function isDurableObjectReset(err: unknown): boolean {
+export function isTransientContainerReset(err: unknown): boolean {
 	const message = err instanceof Error ? err.message : String(err);
-	return /exceeded timeout|to be reset/i.test(message);
+	return /exceeded timeout|to be reset|code was updated|the container to exit/i.test(
+		message,
+	);
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

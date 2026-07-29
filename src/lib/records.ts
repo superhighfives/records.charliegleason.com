@@ -493,10 +493,23 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		// skip the remaining rows' sends. The row is already flipped to queued/pending, so
 		// the next poll re-reaps and re-sends it; we just log so the miss isn't silent.
 		for (const { id, outcome } of reaped) {
-			if (outcome !== "retry") continue;
 			const wasAnalyzing = rows.find((r) => r.id === id)?.status;
 			const analyzing =
 				wasAnalyzing === "pending" || wasAnalyzing === "processing";
+			// A terminally-failed reap is otherwise invisible to Sentry: the job died by an
+			// uncatchable isolate/container teardown (an OOM, or a container rollout with no
+			// drain grace), so no catch block ever ran to report it — the reaper is the only
+			// place that observes the job gave up. Surface it here so a burst shows up as an
+			// alert, not just rows behind the admin `?f=genFailed` filter. captureMessage (not
+			// Exception): there's no error object — the failure was the *absence* of a
+			// completion, not a throw.
+			if (outcome === "fail") {
+				Sentry.captureMessage(
+					`[reaper] ${analyzing ? "analyze" : "professional"} job for record ${id} terminally failed after ${MAX_AUTO_RETRIES} auto-retries (worker terminated mid-job)`,
+					"error",
+				);
+				continue;
+			}
 			try {
 				await (analyzing ? enqueueAnalyze(id) : enqueueProfessional(id));
 			} catch (err) {
