@@ -807,9 +807,9 @@ function AdminRecords() {
 						{row.original.professionalAlphaSource === "deterministic" && (
 							<MatteFallbackBadge />
 						)}
-						{/* A Magic (AI) matte survives from an earlier Apply even when the
-							    latest job failed — flag that it predates the failed cover rather
-							    than letting the "Magic matte" filter imply it's current. */}
+						{/* A Magic (AI) matte survives from an earlier completed Apply even
+							    when the latest job failed — flag that it may be out of date
+							    rather than letting the "Magic matte" filter imply it's current. */}
 						{row.original.professionalAlphaSource === "ai" &&
 							row.original.professionalJobStatus === "failed" && (
 								<MatteStaleBadge />
