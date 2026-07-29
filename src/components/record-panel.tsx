@@ -468,7 +468,7 @@ export function RecordPanel({
 
 				{record.notes && (
 					<div className="p-2 border-b">
-						<div className="relative overflow-hidden rounded-lg border border-brand/50 border-l-brand/80 bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent shadow-lg shadow-brand/10 p-4">
+						<div className="relative overflow-hidden rounded-lg border border-brand/50 bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent p-4">
 							<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
 								Notes
 							</h3>
