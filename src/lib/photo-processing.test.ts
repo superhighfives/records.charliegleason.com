@@ -205,6 +205,70 @@ describe("detectSleeveCorners", () => {
 		const img = rectOnBg(30, [40, 40, 40], [200, 200, 200], [4, 4, 26, 26]);
 		expect(detectSleeveCorners(img)).toBeNull();
 	});
+
+	/** A `size` image: uniform `bg` with a solid `fg` convex quad (pixel corners). */
+	function quadOnBg(
+		size: number,
+		bg: [number, number, number],
+		fg: [number, number, number],
+		quad: [Corners[number], Corners[number], Corners[number], Corners[number]],
+	): RgbaImage {
+		const data = new Uint8ClampedArray(size * size * 4);
+		// Same sign-of-cross point-in-convex-polygon test the pixel pipeline uses.
+		const inside = (px: number, py: number) => {
+			let sign = 0;
+			for (let e = 0; e < 4; e++) {
+				const [ax, ay] = quad[e];
+				const [bx, by] = quad[(e + 1) % 4];
+				const cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+				if (cross === 0) continue;
+				const s = cross > 0 ? 1 : -1;
+				if (sign === 0) sign = s;
+				else if (s !== sign) return false;
+			}
+			return true;
+		};
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const [r, g, b] = inside(x, y) ? fg : bg;
+				const i = (y * size + x) * 4;
+				data[i] = r;
+				data[i + 1] = g;
+				data[i + 2] = b;
+				data[i + 3] = 255;
+			}
+		return { data, width: size, height: size };
+	}
+
+	it("recovers a tilted (non-axis-aligned) sleeve quad", () => {
+		// A sleeve rotated/keystoned on the table: the top edge slopes up to the right and
+		// the sides lean. Each border still sits within the outer search band.
+		const img = quadOnBg(
+			400,
+			[40, 40, 40],
+			[200, 200, 200],
+			[
+				[44, 52], // TL
+				[360, 30], // TR
+				[372, 356], // BR
+				[30, 348], // BL
+			],
+		);
+		const c = detectSleeveCorners(img);
+		if (!c) throw new Error("expected a detection");
+		const [tl, tr, br, bl] = c;
+		// Corners land near the true quad (within a couple of percent of the frame).
+		expect(tl[0]).toBeCloseTo(44 / 399, 1);
+		expect(tl[1]).toBeCloseTo(52 / 399, 1);
+		expect(tr[0]).toBeCloseTo(360 / 399, 1);
+		expect(tr[1]).toBeCloseTo(30 / 399, 1);
+		expect(br[1]).toBeCloseTo(356 / 399, 1);
+		expect(bl[0]).toBeCloseTo(30 / 399, 1);
+		// The recovered quad is genuinely tilted, not the old axis-aligned box: the top
+		// edge rises to the right (TR above TL) and the bottom drops to the right.
+		expect(tr[1]).toBeLessThan(tl[1]);
+		expect(br[1]).toBeGreaterThan(bl[1]);
+	});
 });
 
 describe("reframeFromCorners", () => {

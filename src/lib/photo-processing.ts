@@ -13,7 +13,7 @@
  * bright one come out consistent and neutral without desaturating the artwork.
  */
 
-import type { NormalizedCorners } from "#/lib/sleeve-corners";
+import type { NormalizedCorner, NormalizedCorners } from "#/lib/sleeve-corners";
 
 export interface RgbaImage {
 	data: Uint8ClampedArray;
@@ -171,20 +171,62 @@ export function warpToSquare(
 
 // ---------- sleeve detection (best-effort seed) ----------
 
+/** Median of a numeric array (mutates by sorting a copy); NaN for an empty array. */
+function median(xs: number[]): number {
+	if (xs.length === 0) return Number.NaN;
+	const s = [...xs].sort((a, b) => a - b);
+	const m = s.length >> 1;
+	return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
 /**
- * Best-effort seed for the corner editor: find the sleeve's axis-aligned bounding box so a
- * freshly captured record opens roughly pre-cropped. Returns normalised corners (TL,TR,BR,
- * BL, 0..1), or `null` for a degenerate result — the caller then falls back to the
- * full-frame default and the admin drags the handles by hand.
+ * Robustly fit a line `v = a·u + b` to `[u, v]` points via Theil–Sen: the slope is the
+ * median of pairwise slopes and the intercept the median of `v − a·u`. Unlike least
+ * squares it shrugs off the scattered outliers a per-scanline edge search throws off
+ * (an occluded border, an internal artwork edge that briefly out-gradients the true one),
+ * which is exactly what {@link detectSleeveCorners} needs. `null` if under two points or
+ * every point shares one `u` (a vertical set in this parametrisation — no defined slope).
+ */
+function theilSen(
+	points: Array<[number, number]>,
+): { a: number; b: number } | null {
+	if (points.length < 2) return null;
+	const slopes: number[] = [];
+	for (let i = 0; i < points.length; i++) {
+		for (let j = i + 1; j < points.length; j++) {
+			const du = points[j][0] - points[i][0];
+			if (du === 0) continue;
+			slopes.push((points[j][1] - points[i][1]) / du);
+		}
+	}
+	if (slopes.length === 0) return null;
+	const a = median(slopes);
+	const b = median(points.map(([u, v]) => v - a * u));
+	return { a, b };
+}
+
+/**
+ * Best-effort seed for the corner editor: find the sleeve's four corners so a freshly
+ * captured record opens roughly pre-cropped. Returns normalised corners (TL,TR,BR,BL,
+ * 0..1), or `null` for a degenerate result — the caller then falls back to the full-frame
+ * default and the admin drags the handles by hand.
+ *
+ * Unlike the old scalar-per-side version this fits a real QUADRILATERAL, so a sleeve shot
+ * at a slight angle (rotated on the table, or keystoned by a tilted phone) opens correctly
+ * de-skewed instead of boxed by an axis-aligned rectangle — the homography warp downstream
+ * already handles an arbitrary quad.
  *
  * Works off EDGES, not colour: the sleeve sits on wood and nearly fills the frame, so its
- * four straight borders are the strongest full-width/height luminance transitions near the
- * frame. We build row- and column-gradient profiles and take the strongest peak within the
- * outer band on each side — which is robust to worn/tan sleeve edges and low-contrast
- * artwork (where a colour-difference approach picks up the wrong pixels), and the outer-band
- * limit keeps it from latching onto strong *internal* artwork edges (a tree, a horizon).
- * No perspective — the admin nudges the handles for keystone. Pure and cheap (strided), so
- * it runs on the Worker straight off the capture we already decode for the reframe.
+ * four straight borders are the strongest luminance transitions near the frame. For each
+ * side we scan inward from the frame within an outer band and, on every scanline, take the
+ * position of the strongest gradient — one candidate edge point per scanline. A robust
+ * Theil–Sen line fit through those points gives that side's line; because each side is
+ * fitted independently the result can tilt and keystone. The robust fit and a per-side
+ * gradient threshold reject scanlines where the border is worn/occluded or an internal
+ * artwork edge (a tree, a horizon) briefly wins, and the outer-band limit keeps the search
+ * off deep internal edges entirely. Intersecting the four fitted lines yields the corners.
+ * Pure and cheap (strided), so it runs on the Worker straight off the capture we already
+ * decode for the reframe.
  */
 export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 	const { data, width, height } = img;
@@ -197,56 +239,110 @@ export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 		return 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
 	};
 
-	// Gradient energy per row/column: rowGrad peaks on horizontal edges (top/bottom of the
-	// sleeve), colGrad on vertical edges (left/right). Summed across the full span, so a
-	// full-width sleeve border dominates a short internal edge.
-	const cols = Math.ceil(width / stride);
-	const rows = Math.ceil(height / stride);
-	const rowGrad = new Float64Array(rows);
-	const colGrad = new Float64Array(cols);
-	for (let y = stride, ry = 1; y < height; y += stride, ry++) {
-		for (let x = 0; x < width; x += stride) {
-			rowGrad[ry] += Math.abs(lum(x, y) - lum(x, y - stride));
-		}
-	}
-	for (let x = stride, cx = 1; x < width; x += stride, cx++) {
-		for (let y = 0; y < height; y += stride) {
-			colGrad[cx] += Math.abs(lum(x, y) - lum(x - stride, y));
-		}
-	}
+	// Fraction of each axis searched inward from the frame for that side's border. Wider
+	// than a straight box would need so a tilted edge — closer to the frame at one end,
+	// further at the other — stays within the search band along its whole length.
+	const BAND = 0.18;
+	// Keep a scanline's edge pick only if its gradient is at least this fraction of the
+	// strongest pick on that side. Drops flat/occluded scanlines and weak internal-artwork
+	// picks before the fit, so a handful of strong true-edge points aren't outvoted.
+	const KEEP_FRAC = 0.35;
+	// A side must yield edge picks on at least this fraction of its scanlines, else the fit
+	// isn't trustworthy and we bail to the full-frame default.
+	const MIN_INLIER_FRAC = 0.3;
 
-	// The sleeve edge on each side is the strongest gradient within the outer BAND of that
-	// axis (these captures are tightly framed, so an edge is always near the frame; the band
-	// also excludes deeper internal artwork edges).
-	const BAND = 0.12;
-	const argmax = (arr: Float64Array, loF: number, hiF: number): number => {
-		const lo = Math.max(1, Math.floor(arr.length * loF));
-		const hi = Math.min(arr.length, Math.ceil(arr.length * hiF));
-		let bi = lo;
-		let bv = -1;
-		for (let k = lo; k < hi; k++) {
-			if (arr[k] > bv) {
-				bv = arr[k];
-				bi = k;
+	// Collect one edge point per scanline for a side, keeping only confident picks. For a
+	// vertical side (left/right) we walk rows and scan x across [lo,hi); points are [y, x]
+	// to fit x = a·y + b. For a horizontal side we walk columns and scan y; points are
+	// [x, y] to fit y = a·x + b. `n` is the scanline count, for the inlier check.
+	const collect = (
+		vertical: boolean,
+		lo: number,
+		hi: number,
+	): { points: Array<[number, number]>; n: number } => {
+		const along = vertical ? height : width;
+		const raw: Array<[number, number, number]> = []; // [u, v, gradient]
+		let maxGrad = 0;
+		for (let u = 0; u < along; u += stride) {
+			let bestV = -1;
+			let bestG = -1;
+			for (let v = Math.max(stride, lo); v < hi; v += stride) {
+				const g = vertical
+					? Math.abs(lum(v, u) - lum(v - stride, u))
+					: Math.abs(lum(u, v) - lum(u, v - stride));
+				if (g > bestG) {
+					bestG = g;
+					bestV = v;
+				}
+			}
+			if (bestV >= 0) {
+				raw.push([u, bestV, bestG]);
+				if (bestG > maxGrad) maxGrad = bestG;
 			}
 		}
-		return bi;
+		const cutoff = maxGrad * KEEP_FRAC;
+		const points = raw
+			.filter(([, , g]) => g >= cutoff)
+			.map(([u, v]) => [u, v] as [number, number]);
+		return { points, n: Math.ceil(along / stride) };
 	};
 
-	const left = argmax(colGrad, 0, BAND) / cols;
-	const right = argmax(colGrad, 1 - BAND, 1) / cols;
-	const top = argmax(rowGrad, 0, BAND) / rows;
-	const bottom = argmax(rowGrad, 1 - BAND, 1) / rows;
+	const leftS = collect(true, 0, width * BAND);
+	const rightS = collect(true, width * (1 - BAND), width);
+	const topS = collect(false, 0, height * BAND);
+	const bottomS = collect(false, height * (1 - BAND), height);
 
-	// Reject an implausible box (edges collapsed together) — not a confident detection.
-	if (right - left < 0.4 || bottom - top < 0.4) return null;
+	// Every side needs enough confident picks, or we don't trust the quad.
+	for (const s of [leftS, rightS, topS, bottomS]) {
+		if (s.points.length < Math.max(4, s.n * MIN_INLIER_FRAC)) return null;
+	}
 
-	return [
-		[left, top],
-		[right, top],
-		[right, bottom],
-		[left, bottom],
+	const left = theilSen(leftS.points);
+	const right = theilSen(rightS.points);
+	const top = theilSen(topS.points);
+	const bottom = theilSen(bottomS.points);
+	if (!left || !right || !top || !bottom) return null;
+
+	// Two points on each fitted line, in pixel space. Vertical sides are x = a·y + b
+	// (sampled at y = 0 and y = height-1); horizontal sides are y = a·x + b.
+	const H = height - 1;
+	const W = width - 1;
+	const vLine = (l: { a: number; b: number }): [Corner, Corner] => [
+		[l.b, 0],
+		[l.a * H + l.b, H],
 	];
+	const hLine = (l: { a: number; b: number }): [Corner, Corner] => [
+		[0, l.b],
+		[W, l.a * W + l.b],
+	];
+	const [lp1, lp2] = vLine(left);
+	const [rp1, rp2] = vLine(right);
+	const [tp1, tp2] = hLine(top);
+	const [bp1, bp2] = hLine(bottom);
+
+	// Adjacent sides intersect at the corners: left∩top = TL, and so on clockwise.
+	const tl = lineIntersect(lp1, lp2, tp1, tp2);
+	const tr = lineIntersect(rp1, rp2, tp1, tp2);
+	const br = lineIntersect(rp1, rp2, bp1, bp2);
+	const bl = lineIntersect(lp1, lp2, bp1, bp2);
+
+	const norm = (p: Corner): NormalizedCorner => [
+		Math.min(1, Math.max(0, p[0] / W)),
+		Math.min(1, Math.max(0, p[1] / H)),
+	];
+	const corners: NormalizedCorners = [norm(tl), norm(tr), norm(br), norm(bl)];
+
+	// Reject an implausible quad: collapsed onto too small a region, or with corners out of
+	// clockwise order (a broken fit crossing the sides) — not a confident detection.
+	const xs = corners.map(([x]) => x);
+	const ys = corners.map(([, y]) => y);
+	if (Math.max(...xs) - Math.min(...xs) < 0.4) return null;
+	if (Math.max(...ys) - Math.min(...ys) < 0.4) return null;
+	const [TL, TR, BR, BL] = corners;
+	if (TL[0] >= TR[0] || BL[0] >= BR[0]) return null; // top/bottom edges not left→right
+	if (TL[1] >= BL[1] || TR[1] >= BR[1]) return null; // left/right edges not top→bottom
+
+	return corners;
 }
 
 // ---------- framing ----------
