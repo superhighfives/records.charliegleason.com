@@ -214,7 +214,7 @@ describe("detectSleeveCorners", () => {
 		quad: [Corners[number], Corners[number], Corners[number], Corners[number]],
 	): RgbaImage {
 		const data = new Uint8ClampedArray(size * size * 4);
-		// Same sign-of-cross point-in-convex-polygon test the pixel pipeline uses.
+		// Sign-of-cross point-in-convex-polygon test (as in sleeve-corners' insideQuadNorm).
 		const inside = (px: number, py: number) => {
 			let sign = 0;
 			for (let e = 0; e < 4; e++) {

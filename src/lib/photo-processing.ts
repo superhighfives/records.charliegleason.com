@@ -206,6 +206,20 @@ function theilSen(
 }
 
 /**
+ * Evenly thin `arr` down to at most `max` items (deterministically — same input, same
+ * output, so tests stay stable). Theil–Sen is O(n²) in the point count, so this caps the
+ * work per side: a well-spread subsample of a few hundred edge points fits the same line
+ * as every scanline would, and the median-of-slopes robustness doesn't need the rest.
+ */
+function subsample<T>(arr: T[], max: number): T[] {
+	if (arr.length <= max) return arr;
+	const out: T[] = [];
+	for (let i = 0; i < max; i++)
+		out.push(arr[Math.floor((i * arr.length) / max)]);
+	return out;
+}
+
+/**
  * Best-effort seed for the corner editor: find the sleeve's four corners so a freshly
  * captured record opens roughly pre-cropped. Returns normalised corners (TL,TR,BR,BL,
  * 0..1), or `null` for a degenerate result — the caller then falls back to the full-frame
@@ -225,7 +239,8 @@ function theilSen(
  * gradient threshold reject scanlines where the border is worn/occluded or an internal
  * artwork edge (a tree, a horizon) briefly wins, and the outer-band limit keeps the search
  * off deep internal edges entirely. Intersecting the four fitted lines yields the corners.
- * Pure and cheap (strided), so it runs on the Worker straight off the capture we already
+ * Pure and bounded — strided sampling plus a cap on the points fed to the O(n²) line fit
+ * (see `MAX_FIT_POINTS`) — so it runs on the Worker straight off the capture we already
  * decode for the reframe.
  */
 export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
@@ -250,6 +265,11 @@ export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 	// A side must yield edge picks on at least this fraction of its scanlines, else the fit
 	// isn't trustworthy and we bail to the full-frame default.
 	const MIN_INLIER_FRAC = 0.3;
+	// Cap on the edge points handed to the O(n²) Theil–Sen fit per side. Bounds the cost on
+	// tall/wide captures (where the scanline count runs into the thousands) to a few hundred
+	// well-spread points, which fit the same line. The inlier check below still runs on the
+	// full count, so thinning for the fit doesn't weaken the confidence gate.
+	const MAX_FIT_POINTS = 256;
 
 	// Collect one edge point per scanline for a side, keeping only confident picks. For a
 	// vertical side (left/right) we walk rows and scan x across [lo,hi); points are [y, x]
@@ -297,10 +317,12 @@ export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 		if (s.points.length < Math.max(4, s.n * MIN_INLIER_FRAC)) return null;
 	}
 
-	const left = theilSen(leftS.points);
-	const right = theilSen(rightS.points);
-	const top = theilSen(topS.points);
-	const bottom = theilSen(bottomS.points);
+	// Thin each side to a bounded, well-spread subset for the O(n²) fit — the inlier check
+	// above already vetted the full point count.
+	const left = theilSen(subsample(leftS.points, MAX_FIT_POINTS));
+	const right = theilSen(subsample(rightS.points, MAX_FIT_POINTS));
+	const top = theilSen(subsample(topS.points, MAX_FIT_POINTS));
+	const bottom = theilSen(subsample(bottomS.points, MAX_FIT_POINTS));
 	if (!left || !right || !top || !bottom) return null;
 
 	// Two points on each fitted line, in pixel space. Vertical sides are x = a·y + b
