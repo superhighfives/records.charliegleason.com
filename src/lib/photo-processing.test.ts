@@ -201,9 +201,117 @@ describe("detectSleeveCorners", () => {
 		expect(bl[1]).toBeCloseTo(0.92, 1); // bottom
 	});
 
+	/** A `w`×`h` image: uniform `bg` with a solid `fg` rectangle in [x0,x1)×[y0,y1). */
+	function rectImg(
+		w: number,
+		h: number,
+		bg: [number, number, number],
+		fg: [number, number, number],
+		box: [number, number, number, number],
+	): RgbaImage {
+		const data = new Uint8ClampedArray(w * h * 4);
+		const [x0, y0, x1, y1] = box;
+		for (let y = 0; y < h; y++)
+			for (let x = 0; x < w; x++) {
+				const inside = x >= x0 && x < x1 && y >= y0 && y < y1;
+				const [r, g, b] = inside ? fg : bg;
+				const i = (y * w + x) * 4;
+				data[i] = r;
+				data[i + 1] = g;
+				data[i + 2] = b;
+				data[i + 3] = 255;
+			}
+		return { data, width: w, height: h };
+	}
+
+	it("detects on a real-world size whose band boundary isn't a whole pixel", () => {
+		// Regression: the right/bottom scan starts at size*(1-BAND), which for most capture
+		// sizes isn't an integer. A fractional buffer index reads as NaN, which used to make
+		// those two sides collect zero points and bail the whole detector to null on every
+		// non-400²-aligned capture. 513×389 lands both boundaries off a whole pixel.
+		const img = rectImg(
+			513,
+			389,
+			[40, 40, 40],
+			[200, 200, 200],
+			[41, 31, 472, 358], // ~8%/92% on each axis
+		);
+		const c = detectSleeveCorners(img);
+		if (!c) throw new Error("expected a detection, not null");
+		const [tl, tr, , bl] = c;
+		expect(tl[0]).toBeCloseTo(0.08, 1); // left
+		expect(tr[0]).toBeCloseTo(0.92, 1); // right
+		expect(tl[1]).toBeCloseTo(0.08, 1); // top
+		expect(bl[1]).toBeCloseTo(0.92, 1); // bottom
+	});
+
 	it("returns null for an image too small to detect", () => {
 		const img = rectOnBg(30, [40, 40, 40], [200, 200, 200], [4, 4, 26, 26]);
 		expect(detectSleeveCorners(img)).toBeNull();
+	});
+
+	/** A `size` image: uniform `bg` with a solid `fg` convex quad (pixel corners). */
+	function quadOnBg(
+		size: number,
+		bg: [number, number, number],
+		fg: [number, number, number],
+		quad: [Corners[number], Corners[number], Corners[number], Corners[number]],
+	): RgbaImage {
+		const data = new Uint8ClampedArray(size * size * 4);
+		// Sign-of-cross point-in-convex-polygon test (as in sleeve-corners' insideQuadNorm).
+		const inside = (px: number, py: number) => {
+			let sign = 0;
+			for (let e = 0; e < 4; e++) {
+				const [ax, ay] = quad[e];
+				const [bx, by] = quad[(e + 1) % 4];
+				const cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+				if (cross === 0) continue;
+				const s = cross > 0 ? 1 : -1;
+				if (sign === 0) sign = s;
+				else if (s !== sign) return false;
+			}
+			return true;
+		};
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const [r, g, b] = inside(x, y) ? fg : bg;
+				const i = (y * size + x) * 4;
+				data[i] = r;
+				data[i + 1] = g;
+				data[i + 2] = b;
+				data[i + 3] = 255;
+			}
+		return { data, width: size, height: size };
+	}
+
+	it("recovers a tilted (non-axis-aligned) sleeve quad", () => {
+		// A sleeve rotated/keystoned on the table: the top edge slopes up to the right and
+		// the sides lean. Each border still sits within the outer search band.
+		const img = quadOnBg(
+			400,
+			[40, 40, 40],
+			[200, 200, 200],
+			[
+				[44, 52], // TL
+				[360, 30], // TR
+				[372, 356], // BR
+				[30, 348], // BL
+			],
+		);
+		const c = detectSleeveCorners(img);
+		if (!c) throw new Error("expected a detection");
+		const [tl, tr, br, bl] = c;
+		// Corners land near the true quad (within a couple of percent of the frame).
+		expect(tl[0]).toBeCloseTo(44 / 399, 1);
+		expect(tl[1]).toBeCloseTo(52 / 399, 1);
+		expect(tr[0]).toBeCloseTo(360 / 399, 1);
+		expect(tr[1]).toBeCloseTo(30 / 399, 1);
+		expect(br[1]).toBeCloseTo(356 / 399, 1);
+		expect(bl[0]).toBeCloseTo(30 / 399, 1);
+		// The recovered quad is genuinely tilted, not the old axis-aligned box: the top
+		// edge rises to the right (TR above TL) and the bottom drops to the right.
+		expect(tr[1]).toBeLessThan(tl[1]);
+		expect(br[1]).toBeGreaterThan(bl[1]);
 	});
 });
 
