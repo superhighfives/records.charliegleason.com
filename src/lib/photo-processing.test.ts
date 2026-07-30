@@ -201,6 +201,50 @@ describe("detectSleeveCorners", () => {
 		expect(bl[1]).toBeCloseTo(0.92, 1); // bottom
 	});
 
+	/** A `w`×`h` image: uniform `bg` with a solid `fg` rectangle in [x0,x1)×[y0,y1). */
+	function rectImg(
+		w: number,
+		h: number,
+		bg: [number, number, number],
+		fg: [number, number, number],
+		box: [number, number, number, number],
+	): RgbaImage {
+		const data = new Uint8ClampedArray(w * h * 4);
+		const [x0, y0, x1, y1] = box;
+		for (let y = 0; y < h; y++)
+			for (let x = 0; x < w; x++) {
+				const inside = x >= x0 && x < x1 && y >= y0 && y < y1;
+				const [r, g, b] = inside ? fg : bg;
+				const i = (y * w + x) * 4;
+				data[i] = r;
+				data[i + 1] = g;
+				data[i + 2] = b;
+				data[i + 3] = 255;
+			}
+		return { data, width: w, height: h };
+	}
+
+	it("detects on a real-world size whose band boundary isn't a whole pixel", () => {
+		// Regression: the right/bottom scan starts at size*(1-BAND), which for most capture
+		// sizes isn't an integer. A fractional buffer index reads as NaN, which used to make
+		// those two sides collect zero points and bail the whole detector to null on every
+		// non-400²-aligned capture. 513×389 lands both boundaries off a whole pixel.
+		const img = rectImg(
+			513,
+			389,
+			[40, 40, 40],
+			[200, 200, 200],
+			[41, 31, 472, 358], // ~8%/92% on each axis
+		);
+		const c = detectSleeveCorners(img);
+		if (!c) throw new Error("expected a detection, not null");
+		const [tl, tr, , bl] = c;
+		expect(tl[0]).toBeCloseTo(0.08, 1); // left
+		expect(tr[0]).toBeCloseTo(0.92, 1); // right
+		expect(tl[1]).toBeCloseTo(0.08, 1); // top
+		expect(bl[1]).toBeCloseTo(0.92, 1); // bottom
+	});
+
 	it("returns null for an image too small to detect", () => {
 		const img = rectOnBg(30, [40, 40, 40], [200, 200, 200], [4, 4, 26, 26]);
 		expect(detectSleeveCorners(img)).toBeNull();

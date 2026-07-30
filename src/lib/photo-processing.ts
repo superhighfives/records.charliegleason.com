@@ -283,10 +283,17 @@ export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 		const along = vertical ? height : width;
 		const raw: Array<[number, number, number]> = []; // [u, v, gradient]
 		let maxGrad = 0;
+		// Snap the scan start onto the stride grid so `v` stays an integer. The right/bottom
+		// sides pass `lo = size * (1 - BAND)`, rarely a whole number; adding the integer
+		// `stride` never clears the fraction, and a fractional index into the RGBA buffer
+		// reads back as `undefined` → NaN — which silently zeroes the gradient search for
+		// those sides and bails the whole detector to null on any capture whose size doesn't
+		// happen to make that boundary land on a whole pixel.
+		const vStart = Math.max(stride, Math.ceil(lo / stride) * stride);
 		for (let u = 0; u < along; u += stride) {
 			let bestV = -1;
 			let bestG = -1;
-			for (let v = Math.max(stride, lo); v < hi; v += stride) {
+			for (let v = vStart; v < hi; v += stride) {
 				const g = vertical
 					? Math.abs(lum(v, u) - lum(v - stride, u))
 					: Math.abs(lum(u, v) - lum(u, v - stride));
