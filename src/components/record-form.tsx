@@ -1,6 +1,7 @@
 import { useForm } from "@tanstack/react-form";
 import { useState } from "react";
 
+import { ColorCombobox } from "#/components/color-combobox";
 import { NotesContent } from "#/components/notes-content";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -91,6 +92,18 @@ export function RecordForm({
 					)}
 				</form.Field>
 			))}
+
+			<form.Field name="colorId">
+				{(field) => (
+					<div className="space-y-1.5">
+						<Label htmlFor={field.name}>Color</Label>
+						<ColorCombobox
+							value={field.state.value}
+							onChange={field.handleChange}
+						/>
+					</div>
+				)}
+			</form.Field>
 
 			<form.Field name="notes">
 				{(field) => (

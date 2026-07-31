@@ -1,3 +1,4 @@
+import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -348,6 +349,7 @@ function toForm(
 		catno: picked?.catno ?? record.catno ?? "",
 		country: picked?.country ?? record.country ?? "",
 		genre: picked?.genre ?? pickedMaster?.genre ?? record.genre ?? "",
+		colorId: record.colorId?.toString() ?? "",
 		pitchforkScore: record.pitchforkScore?.toString() ?? "",
 		notes: record.notes ?? "",
 		manualValue: record.manualValue?.toString() ?? "",
@@ -2337,32 +2339,32 @@ function RecordEditorHost() {
 
 	// ← / → page through the collection, so you can blitz through setting mattes from
 	// the keyboard — including from inside the editor, where the crop handles and tone
-	// sliders own the arrows only while they're focused. A control that consumed the key
-	// (slider, crop handle) will have called preventDefault by the time this bubbles to
-	// the window; ignore those, and any key aimed at a text field, so we never hijack
-	// caret movement or a value nudge.
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+	// sliders own the arrows only while they're focused. useHotkeys matches the *bare*
+	// arrows only, so modified combos — notably Cmd/Alt+Arrow for browser back/forward —
+	// pass straight through instead of being hijacked. `preventDefault: false` here
+	// (paired with the `e.defaultPrevented` check below) lets a control that already
+	// consumed the key win: a crop handle or Radix slider thumb calls preventDefault
+	// on its own keydown before this bubbles to document. `ignoreInputs` only knows
+	// about real input-like elements, not the role='slider' thumb, so that's checked
+	// explicitly too.
+	const handleArrow = useCallback(
+		(e: KeyboardEvent, target: (typeof ordered)[number] | null) => {
 			if (e.defaultPrevented) return;
-			if (e.metaKey || e.ctrlKey || e.altKey) return;
 			const el = e.target as HTMLElement | null;
-			if (
-				el?.isContentEditable ||
-				el?.closest(
-					"input, textarea, select, [contenteditable='true'], [role='slider']",
-				)
-			) {
-				return;
-			}
-			const target = e.key === "ArrowLeft" ? prevRecord : nextRecord;
+			if (el?.closest("[role='slider']")) return;
 			if (!target) return;
 			e.preventDefault();
 			goToRecord(target.id, Boolean(editParam));
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [prevRecord, nextRecord, editParam, goToRecord]);
+		},
+		[editParam, goToRecord],
+	);
+	useHotkeys(
+		[
+			{ hotkey: "ArrowLeft", callback: (e) => handleArrow(e, prevRecord) },
+			{ hotkey: "ArrowRight", callback: (e) => handleArrow(e, nextRecord) },
+		],
+		{ preventDefault: false },
+	);
 
 	const inFlight =
 		record?.status === "pending" || record?.status === "processing";

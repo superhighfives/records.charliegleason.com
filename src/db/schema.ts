@@ -2,6 +2,23 @@ import { sql } from "drizzle-orm";
 import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
+ * A reusable vinyl color chip (e.g. "Black", "Clear", "Red/Blue Splatter"),
+ * picked/created from the admin color combobox. `name` is the display value
+ * and the dedup key — the combobox upserts on it so re-typing an existing
+ * color attaches the same chip rather than minting a duplicate.
+ */
+export const colors = sqliteTable("colors", {
+	id: integer("id").primaryKey({ autoIncrement: true }),
+	name: text("name").notNull().unique(),
+	createdAt: integer("created_at", { mode: "timestamp" }).default(
+		sql`(unixepoch())`,
+	),
+});
+
+export type Color = typeof colors.$inferSelect;
+export type NewColor = typeof colors.$inferInsert;
+
+/**
  * A vinyl record in the collection.
  *
  * Core fields (artist/title/year/...) are populated by the AI photo flow and
@@ -21,6 +38,9 @@ export const records = sqliteTable("records", {
 	// Physical size of the disc — e.g. '12"', '10"', '7"'. Parsed from Discogs.
 	size: text("size"),
 	genre: text("genre"),
+	// Vinyl color chip — see `colors` above. Manual-only (Discogs enrichment
+	// never touches this), so it's never nulled by a refresh/re-match.
+	colorId: integer("color_id").references(() => colors.id),
 
 	// Enrichment
 	pitchforkScore: real("pitchfork_score"), // via the-fork.vercel.app
