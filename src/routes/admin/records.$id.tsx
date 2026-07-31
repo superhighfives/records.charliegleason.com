@@ -54,6 +54,7 @@ import {
 	searchReleasesFromBrowser,
 } from "#/lib/discogs-browser";
 import { parseMasterId, parseReleaseId } from "#/lib/discogs-shared";
+import { likelyDuplicateOf } from "#/lib/duplicates";
 import { orderRecordsForReview } from "#/lib/record-order";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
@@ -801,6 +802,7 @@ function CopyPickerRow({
 function CopyManager({
 	record,
 	allRecords,
+	suggestedPrimaryId,
 	onLink,
 	onUnlink,
 	linkPending,
@@ -808,6 +810,13 @@ function CopyManager({
 }: {
 	record: Record;
 	allRecords: Record[];
+	/**
+	 * The live-detected record this one likely duplicates (see `likelyDuplicateOf`),
+	 * or null. Drives whether the standalone "Own two of this?" prompt shows at all —
+	 * we only nudge a link when there's an actual candidate — and pins it in the
+	 * picker. Null on a record with no duplicate sibling: the prompt stays hidden.
+	 */
+	suggestedPrimaryId: number | null;
 	onLink: (targetId: number) => void;
 	onUnlink: () => void;
 	linkPending: boolean;
@@ -833,10 +842,11 @@ function CopyManager({
 		.filter(
 			(r) => q === "" || `${r.title} ${r.artist}`.toLowerCase().includes(q),
 		);
-	const suggestedId =
-		record.duplicateOf != null &&
-		candidates.some((r) => r.id === record.duplicateOf)
-			? record.duplicateOf
+	const suggestedId = suggestedPrimaryId;
+	// The likely-duplicate record itself, for the prompt copy (names what it matches).
+	const suggested =
+		suggestedId != null
+			? (allRecords.find((r) => r.id === suggestedId) ?? null)
 			: null;
 	const ordered = suggestedId
 		? [
@@ -850,6 +860,10 @@ function CopyManager({
 		setSearch("");
 		onLink(targetId);
 	};
+
+	// Nothing to show for a plain standalone record with no duplicate sibling — the
+	// copy affordance only appears once it's a copy, has copies, or looks like a dup.
+	if (primary == null && copies.length === 0 && suggested == null) return null;
 
 	return (
 		<div className="rounded-md border border-border p-3">
@@ -910,10 +924,15 @@ function CopyManager({
 					</p>
 				</div>
 			) : (
-				// Standalone — offer to mark it as a copy of another record.
+				// Looks like a duplicate — offer to link it as a copy of the match. Only
+				// reached when `suggested` is set (guarded above), so we can name it.
 				<div className="flex flex-wrap items-center justify-between gap-2 text-sm">
 					<span className="text-muted-foreground">
-						Own two of this? Link it as a copy so the collection shows one tile.
+						Looks like a copy of{" "}
+						<span className="font-medium text-foreground">
+							{suggested?.title || "another record"}
+						</span>
+						. Own two? Link it so the collection shows one tile.
 					</span>
 					<Button
 						type="button"
@@ -1025,6 +1044,16 @@ function RecordDetail() {
 				return active ? 2000 : false;
 			},
 		});
+
+	// Live "is this a likely duplicate?" signal, recomputed against the current
+	// collection rather than trusting the stored `duplicateOf` flag (which analysis
+	// only sets on the newer row, never on manual/unmatched records). Drives the
+	// Duplicate badge, the warning banner, and the copy-link prompt uniformly — the
+	// id it points at is the record this one likely duplicates, or null for none.
+	const duplicateId = useMemo(
+		() => (record ? likelyDuplicateOf(record, allRecords ?? []) : null),
+		[record, allRecords],
+	);
 
 	// The album (master) is the record's identity. `pickedMaster` is an explicit
 	// choice from the master picker; `unmatchMaster` explicitly clears the album
@@ -1479,7 +1508,7 @@ function RecordDetail() {
 								<span />
 							)}
 							<div className="flex flex-wrap items-center gap-1">
-								{record.duplicateOf != null && <DuplicateBadge />}
+								{duplicateId != null && <DuplicateBadge />}
 								{/* Unmatched (no album) supersedes the plain "Unpublished" status. */}
 								{record.status === "review" && !record.masterId ? (
 									<UnmatchedBadge />
@@ -1500,16 +1529,17 @@ function RecordDetail() {
 				</div>
 			</div>
 
-			{/* Flagged by analysis as already in the collection — link to the original.
-			    Suppressed once the record is intentionally linked as a copy (`copyOf`
+			{/* Looks like it's already in the collection (live detection — same master /
+			    release / artist+title as another record) — link to that record.
+			    Suppressed once this record is intentionally linked as a copy (`copyOf`
 			    set): the CopyManager below already states the relationship, so the
 			    "possible accidental duplicate" warning is just noise. */}
-			{record.duplicateOf != null && record.copyOf == null && (
+			{duplicateId != null && record.copyOf == null && (
 				<div className="flex items-center gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-200">
 					<span>This release looks like it’s already in your collection.</span>
 					<Link
 						to="/admin/records/$id"
-						params={{ id: String(record.duplicateOf) }}
+						params={{ id: String(duplicateId) }}
 						className="font-medium underline underline-offset-4"
 					>
 						View the original
@@ -1523,6 +1553,7 @@ function RecordDetail() {
 			<CopyManager
 				record={record}
 				allRecords={allRecords ?? []}
+				suggestedPrimaryId={duplicateId}
 				onLink={(targetId) => link.mutate(targetId)}
 				onUnlink={() => unlink.mutate()}
 				linkPending={link.isPending}

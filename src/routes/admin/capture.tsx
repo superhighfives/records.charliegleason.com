@@ -8,6 +8,7 @@ import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { likelyDuplicateOf } from "#/lib/duplicates";
 import { type ProcessedImage, squareDownscale } from "#/lib/image-resize";
 import { captureRecord } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
@@ -28,6 +29,12 @@ function SessionItem({ id }: { id: number }) {
 			return status === "pending" || status === "processing" ? 2000 : false;
 		},
 	});
+	// Live duplicate signal — same criteria as the list/detail badges (a same
+	// master/release/name sibling in the collection), not the stored `duplicateOf`.
+	const { data: allRecords } = useQuery(recordsQueryOptions);
+	const duplicateId = record
+		? likelyDuplicateOf(record, allRecords ?? [])
+		: null;
 
 	const key = record?.coverImageKey ?? record?.capturePhotoKey;
 	// Until the analysis fills in a name, show a muted placeholder.
@@ -60,7 +67,7 @@ function SessionItem({ id }: { id: number }) {
 				>
 					{label}
 				</span>
-				{record?.duplicateOf != null && <DuplicateBadge className="shrink-0" />}
+				{duplicateId != null && <DuplicateBadge className="shrink-0" />}
 				<StatusBadge
 					status={record?.status ?? "pending"}
 					className="shrink-0"

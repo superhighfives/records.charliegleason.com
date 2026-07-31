@@ -57,6 +57,7 @@ import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import { displayCoverKey } from "#/lib/cover";
+import { duplicateRecordIds } from "#/lib/duplicates";
 import { orderRecordsForReview } from "#/lib/record-order";
 import {
 	deleteRecord,
@@ -79,7 +80,7 @@ declare module "@tanstack/react-table" {
 	}
 }
 
-type FacetTest = (r: Record, liveIds: Set<number>) => boolean;
+type FacetTest = (r: Record, duplicateIds: Set<number>) => boolean;
 interface FacetOption {
 	token: string;
 	label: string;
@@ -240,7 +241,7 @@ const FLAG_FACETS: FacetOption[] = [
 	{
 		token: "duplicate",
 		label: "Duplicate",
-		test: (r, live) => r.duplicateOf != null && live.has(r.duplicateOf),
+		test: (r, duplicateIds) => duplicateIds.has(r.id),
 	},
 ];
 
@@ -291,9 +292,9 @@ function parseFacetTokens(raw: unknown): string[] {
 function matchesFacets(
 	r: Record,
 	active: string[],
-	liveIds: Set<number>,
+	duplicateIds: Set<number>,
 ): boolean {
-	return active.every((t) => TOKEN_INFO[t].option.test(r, liveIds));
+	return active.every((t) => TOKEN_INFO[t].option.test(r, duplicateIds));
 }
 
 /** How many records an option would show, honouring the *other* groups' active facets. */
@@ -302,13 +303,13 @@ function facetCount(
 	active: string[],
 	option: FacetOption,
 	groupKey: string,
-	liveIds: Set<number>,
+	duplicateIds: Set<number>,
 ): number {
 	const others = active.filter((t) => TOKEN_INFO[t].groupKey !== groupKey);
 	return rows.filter(
 		(r) =>
-			others.every((t) => TOKEN_INFO[t].option.test(r, liveIds)) &&
-			option.test(r, liveIds),
+			others.every((t) => TOKEN_INFO[t].option.test(r, duplicateIds)) &&
+			option.test(r, duplicateIds),
 	).length;
 }
 
@@ -498,20 +499,20 @@ function SegmentedFilter({
 	group,
 	active,
 	rows,
-	liveIds,
+	duplicateIds,
 	onToggle,
 }: {
 	group: { key: string; options: FacetOption[] };
 	active: string[];
 	rows: Record[];
-	liveIds: Set<number>;
+	duplicateIds: Set<number>;
 	onToggle: (token: string) => void;
 }) {
 	return (
 		<div className="inline-flex shrink-0 items-stretch overflow-hidden rounded-full border">
 			{group.options.map((opt, i) => {
 				const isActive = active.includes(opt.token);
-				const count = facetCount(rows, active, opt, group.key, liveIds);
+				const count = facetCount(rows, active, opt, group.key, duplicateIds);
 				return (
 					<Fragment key={opt.token}>
 						{i > 0 && (
@@ -553,10 +554,12 @@ export const Route = createFileRoute("/admin/")({
 
 function AdminRecords() {
 	const { data, isFetchedAfterMount } = useSuspenseQuery(recordsQueryOptions);
-	// Ids still in the collection, so a record whose `duplicateOf` points at a
-	// since-deleted original stops claiming to be a duplicate. Memoised so the
-	// derived `columns` below keep a stable identity between renders.
-	const liveIds = useMemo(() => new Set(data.map((r) => r.id)), [data]);
+	// Record ids that look like a duplicate of another record in the *current*
+	// collection (same master / release / artist+title — see `duplicateRecordIds`),
+	// so the badge + `duplicate` filter reflect live state rather than the stored
+	// `duplicateOf` flag (which analysis only sets on the newer row). Linked copies
+	// are excluded. Memoised so the derived `columns` keep a stable identity.
+	const duplicateIds = useMemo(() => duplicateRecordIds(data), [data]);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const searchRef = useRef<HTMLInputElement>(null);
@@ -799,8 +802,7 @@ function AdminRecords() {
 						) : (
 							<StatusBadge status={row.original.status} />
 						)}
-						{row.original.duplicateOf != null &&
-							liveIds.has(row.original.duplicateOf) && <DuplicateBadge />}
+						{duplicateIds.has(row.original.id) && <DuplicateBadge />}
 						{row.original.professionalJobStatus === "failed" && (
 							<GenerationFailedBadge />
 						)}
@@ -861,7 +863,7 @@ function AdminRecords() {
 				),
 			},
 		],
-		[liveIds, deleteMutation.mutate],
+		[duplicateIds, deleteMutation.mutate],
 	);
 
 	// Filter, then float the records that still need attention to the top
@@ -869,9 +871,9 @@ function AdminRecords() {
 	const rows = useMemo(
 		() =>
 			orderRecordsForReview(
-				data.filter((r) => matchesFacets(r, activeFacets, liveIds)),
+				data.filter((r) => matchesFacets(r, activeFacets, duplicateIds)),
 			),
-		[data, activeFacets, liveIds],
+		[data, activeFacets, duplicateIds],
 	);
 
 	const table = useReactTable({
@@ -1078,7 +1080,7 @@ function AdminRecords() {
 										group={group}
 										active={activeFacets}
 										rows={data}
-										liveIds={liveIds}
+										duplicateIds={duplicateIds}
 										onToggle={toggleFilter}
 									/>
 								</div>
@@ -1095,7 +1097,7 @@ function AdminRecords() {
 											activeFacets,
 											flag,
 											flag.token,
-											liveIds,
+											duplicateIds,
 										);
 										const color = FLAG_COLORS[flag.token];
 										return (
@@ -1317,7 +1319,7 @@ function AdminRecords() {
 											) : (
 												<StatusBadge status={r.status} />
 											)}
-											{r.duplicateOf != null && <DuplicateBadge />}
+											{duplicateIds.has(r.id) && <DuplicateBadge />}
 											{r.professionalJobStatus === "failed" && (
 												<GenerationFailedBadge />
 											)}

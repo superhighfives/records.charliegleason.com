@@ -1,9 +1,11 @@
 import { cn } from "#/lib/utils";
 
 /**
- * Shown when the background analysis decided a record already exists in the
- * collection (see `duplicateOf` on the row). Sits alongside the StatusBadge so a
- * freshly captured sleeve announces itself as a dupe without opening the record.
+ * Shown when a record looks like a duplicate of another one currently in the
+ * collection — a live check against the whole collection (same Discogs master /
+ * release / artist+title; see `likelyDuplicateOf`), not the stored `duplicateOf`
+ * flag. Sits alongside the StatusBadge so a freshly captured sleeve announces
+ * itself as a dupe without opening the record.
  */
 export function DuplicateBadge({ className }: { className?: string }) {
 	return (

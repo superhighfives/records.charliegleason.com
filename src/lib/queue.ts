@@ -4,7 +4,7 @@ import { eq, ne } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
-import { analyzeCapture, findDuplicateOf } from "#/lib/analyze";
+import { analyzeCapture } from "#/lib/analyze";
 import {
 	type AnalyzeMessage,
 	chunk,
@@ -18,6 +18,7 @@ import {
 	getReleaseValue,
 	searchMasters,
 } from "#/lib/discogs";
+import { findDuplicateOf } from "#/lib/duplicates";
 import {
 	type CoverStageResult,
 	commitProfessionalMatte,
