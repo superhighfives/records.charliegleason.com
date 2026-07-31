@@ -16,7 +16,8 @@ import { NonRetryableError, withRetry } from "#/lib/retry";
  * Generate (or regenerate) a color's reference vinyl texture — a flat material swatch
  * for the given color name — via Replicate, and cache it in R2. Runs in the
  * "color-texture" queue consumer (see `queue.ts`), triggered automatically when a
- * genuinely-new color is created (`createColor`) and manually via `regenerateColorTexture`.
+ * genuinely-new color is created (`createColor`, `createRecord`, `captureRecord` —
+ * all via `getOrCreateColor`) and manually via `regenerateColorTexture`.
  *
  * The swatch is deliberately not a full disc render: `VinylDisc` (the frontend
  * component) composites this texture with procedural grooves + a punched spindle

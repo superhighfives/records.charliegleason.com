@@ -105,8 +105,9 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 
 /**
  * Enqueue a color for its reference vinyl texture to be (re)generated via Replicate.
- * Fired automatically on genuinely-new colors (see `createColor`), and manually from
- * the "regenerate" affordance in the color combobox.
+ * Fired automatically on genuinely-new colors (see `getOrCreateColor`, used by
+ * `createColor`, `createRecord`, and `captureRecord`), and manually from the
+ * "regenerate" affordance in the color combobox.
  */
 export async function enqueueColorTexture(colorId: number): Promise<void> {
 	await analyzeQueue().send({ mode: "color-texture", colorId });
