@@ -482,7 +482,12 @@ export function RecordPanel({
 							// reveals on a `.group` hover, in the collection grid); this
 							// static thumbnail has no hover, so it opts into a small
 							// permanent peek instead — see `.vinyl-peek--static` in styles.css.
-							className="vinyl-peek--static"
+							// Inset a bit (twMerge overrides the base `inset-0`): the matte
+							// thumbnail's own visible sleeve doesn't fill its whole square (it
+							// has a margin for the drop shadow), so a full-bleed disc reads as
+							// overflowing past the visible artwork rather than peeking from
+							// behind it.
+							className="vinyl-peek--static inset-[12%]"
 							colorName={record.colorName}
 							textureImageKey={record.colorTextureImageKey}
 							textureStatus={record.colorTextureStatus}

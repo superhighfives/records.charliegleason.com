@@ -290,18 +290,21 @@ a {
  * behind `.cover-lift` in both DOM order and z-index, same-sized as the tile —
  * fully hidden at rest, directly behind the (opaque) cover. `--vinyl-stack-index`
  * fans extra discs (a 2×LP/3×LP) with a little rotation per layer back from the
- * front. On hover the whole stack slides out sideways — `--vinyl-scale` (bigger
- * for a 12", smaller for a 7"|10") sets how far — using a PERCENTAGE translate
- * (of the disc's own width) rather than a fixed px reveal, so it scales cleanly
- * with the tile regardless of grid column count / viewport width.
+ * front. On hover the whole stack slides out sideways a modest ~10% of its own
+ * width — `--vinyl-scale` (bigger for a 12", smaller for a 7"|10") scales that —
+ * using a PERCENTAGE translate rather than a fixed px reveal, so it scales
+ * cleanly with the tile regardless of grid column count / viewport width. Kept
+ * deliberately small: this overflow isn't clipped by anything (no `.cv-auto` on
+ * the tile — see below), so a bigger reveal on the grid's last column would slide
+ * past the page's own right edge and force a horizontal scrollbar.
  *
- * This overflow needs to clear the cover's box by roughly half the disc's width
- * (see the reference image), which ruled out `.cv-auto`'s `content-visibility`
- * paint containment on the tile — no reserved-padding trick stays small enough to
- * cover that swing without permanently shrinking every cover. Removed instead of
- * papered over (see the `.cv-auto` git history for the previous approach); this
- * app's collection is small enough that its scroll-perf win wasn't worth fighting
- * the containment for the reveal this needs.
+ * This can't be clipped back to the tile's box with `.cv-auto`'s
+ * `content-visibility` paint containment (as the resting-peek design once was) —
+ * a reserved-padding trick has to permanently shrink the cover to buy that room,
+ * and even a ~10% reveal needs more of it than looks good at rest. Removed
+ * instead of papered over (see the `.cv-auto` git history for the previous
+ * approach); this app's collection is small enough that its scroll-perf win
+ * wasn't worth fighting the containment for the reveal this needs.
  */
 .vinyl-peek {
   z-index: 0;
@@ -314,7 +317,7 @@ a {
 
 .group:hover .vinyl-disc {
   transform: translateX(
-      calc(48% * var(--vinyl-scale, 1) - 4% * var(--vinyl-stack-index, 0))
+      calc(10% * var(--vinyl-scale, 1) - 1% * var(--vinyl-stack-index, 0))
     )
     rotate(calc(6deg - 3deg * var(--vinyl-stack-index, 0)));
 }
