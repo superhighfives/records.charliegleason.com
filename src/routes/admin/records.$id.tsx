@@ -3,9 +3,12 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
 	ChevronLeft,
 	ChevronRight,
+	Copy,
 	ExternalLink,
 	Info,
 	Loader2,
+	Search,
+	Unlink,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -60,6 +63,7 @@ import {
 	fetchRecordValue,
 	getDiscogsMasterVersions,
 	getDiscogsRelease,
+	linkCopy,
 	lookupDiscogsMaster,
 	lookupDiscogsRelease,
 	previewReleaseValue,
@@ -70,6 +74,7 @@ import {
 	retryProfessionalMatte,
 	searchDiscogs,
 	searchDiscogsMasters,
+	unlinkCopy,
 	unpublishRecord,
 } from "#/lib/records";
 import { recordPath } from "#/lib/records-path";
@@ -745,6 +750,230 @@ function MasterPicker({
 	);
 }
 
+/** One line in the copy picker — a record you can mark the current one as a copy of. */
+function CopyPickerRow({
+	record,
+	suggested,
+	onPick,
+	disabled,
+}: {
+	record: Record;
+	suggested?: boolean;
+	onPick: () => void;
+	disabled: boolean;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onPick}
+			disabled={disabled}
+			className="flex w-full items-baseline justify-between gap-3 rounded-md px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
+		>
+			<span className="min-w-0">
+				<span className="font-medium">{record.title || "Untitled"}</span>
+				<span className="text-muted-foreground"> · {record.artist}</span>
+			</span>
+			<span className="flex shrink-0 items-center gap-2">
+				{suggested && (
+					<span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-medium text-orange-800 dark:bg-orange-950/50 dark:text-orange-200">
+						Possible duplicate
+					</span>
+				)}
+				{record.year && (
+					<span className="text-xs tabular-nums text-muted-foreground">
+						{record.year}
+					</span>
+				)}
+			</span>
+		</button>
+	);
+}
+
+/**
+ * The "I own two copies" control on a record's admin page. Distinct from the
+ * auto-detected `duplicateOf` warning: this is the collector *intentionally*
+ * linking a record as a physical copy of a chosen PRIMARY. Renders one of three
+ * states — a secondary copy (shows its primary + Unlink), a primary with copies
+ * (shows the count + links to the other copies), or a standalone record (a "Mark
+ * as a copy of…" picker over the collection). `onLink` sets the current record's
+ * `copyOf`; the primary case is managed from each copy's own page.
+ */
+function CopyManager({
+	record,
+	allRecords,
+	onLink,
+	onUnlink,
+	linkPending,
+	unlinkPending,
+}: {
+	record: Record;
+	allRecords: Record[];
+	onLink: (targetId: number) => void;
+	onUnlink: () => void;
+	linkPending: boolean;
+	unlinkPending: boolean;
+}) {
+	const [pickerOpen, setPickerOpen] = useState(false);
+	const [search, setSearch] = useState("");
+
+	// The primary this record is a copy of (secondary state), and the copies linked
+	// to this record (primary state) — mutually exclusive by the one-level invariant.
+	const primary =
+		record.copyOf != null
+			? (allRecords.find((r) => r.id === record.copyOf) ?? null)
+			: null;
+	const copies = allRecords.filter((r) => r.copyOf === record.id);
+
+	// Records eligible to be a primary: not this record, and not themselves a copy
+	// (link to the primary, not a secondary). The auto-detected duplicate — a strong
+	// candidate — is pinned to the top of the (optionally filtered) list.
+	const q = search.trim().toLowerCase();
+	const candidates = allRecords
+		.filter((r) => r.id !== record.id && r.copyOf == null)
+		.filter(
+			(r) => q === "" || `${r.title} ${r.artist}`.toLowerCase().includes(q),
+		);
+	const suggestedId =
+		record.duplicateOf != null &&
+		candidates.some((r) => r.id === record.duplicateOf)
+			? record.duplicateOf
+			: null;
+	const ordered = suggestedId
+		? [
+				...candidates.filter((r) => r.id === suggestedId),
+				...candidates.filter((r) => r.id !== suggestedId),
+			]
+		: candidates;
+
+	const pick = (targetId: number) => {
+		setPickerOpen(false);
+		setSearch("");
+		onLink(targetId);
+	};
+
+	return (
+		<div className="rounded-md border border-border p-3">
+			{primary ? (
+				// Secondary copy — collapsed off the public collection into its primary.
+				<div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+					<span className="flex items-center gap-1.5 text-muted-foreground">
+						<Copy className="size-3.5" />
+						Copy of{" "}
+						<Link
+							to="/admin/records/$id"
+							params={{ id: String(primary.id) }}
+							className="font-medium text-foreground underline underline-offset-4"
+						>
+							{primary.title || "Untitled"}
+						</Link>
+						<span className="text-muted-foreground">· {primary.artist}</span>
+					</span>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={onUnlink}
+						disabled={unlinkPending}
+					>
+						{unlinkPending ? (
+							<Loader2 className="size-3.5 animate-spin" />
+						) : (
+							<Unlink className="size-3.5" />
+						)}
+						Unlink
+					</Button>
+				</div>
+			) : copies.length > 0 ? (
+				// Primary — the shown record; its copies are hidden and counted here.
+				<div className="space-y-1.5 text-sm">
+					<p className="flex items-center gap-1.5 font-medium">
+						<Copy className="size-3.5" />
+						{copies.length + 1} copies owned
+					</p>
+					<p className="text-muted-foreground">
+						This is the primary. Other{" "}
+						{copies.length === 1 ? "copy is" : "copies are"} hidden from the
+						public collection:{" "}
+						{copies.map((c, i) => (
+							<span key={c.id}>
+								{i > 0 && ", "}
+								<Link
+									to="/admin/records/$id"
+									params={{ id: String(c.id) }}
+									className="underline underline-offset-4"
+								>
+									#{c.id}
+								</Link>
+							</span>
+						))}
+						. Unlink from each copy’s own page.
+					</p>
+				</div>
+			) : (
+				// Standalone — offer to mark it as a copy of another record.
+				<div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+					<span className="text-muted-foreground">
+						Own two of this? Link it as a copy so the collection shows one tile.
+					</span>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => setPickerOpen(true)}
+						disabled={linkPending}
+					>
+						{linkPending ? (
+							<Loader2 className="size-3.5 animate-spin" />
+						) : (
+							<Copy className="size-3.5" />
+						)}
+						Mark as a copy of…
+					</Button>
+				</div>
+			)}
+
+			<Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+				<DialogContent className="max-w-lg">
+					<DialogHeader>
+						<DialogTitle>Mark as a copy of…</DialogTitle>
+						<DialogDescription>
+							Pick the record this is a duplicate copy of. It becomes the
+							primary and this record drops off the public collection.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="relative">
+						<Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							autoFocus
+							value={search}
+							onChange={(e) => setSearch(e.target.value)}
+							placeholder="Search by title or artist…"
+							className="pl-8"
+						/>
+					</div>
+					<div className="max-h-80 overflow-y-auto">
+						{ordered.length === 0 ? (
+							<p className="px-3 py-6 text-center text-sm text-muted-foreground">
+								No records to link to.
+							</p>
+						) : (
+							ordered.map((r) => (
+								<CopyPickerRow
+									key={r.id}
+									record={r}
+									suggested={r.id === suggestedId}
+									onPick={() => pick(r.id)}
+									disabled={linkPending}
+								/>
+							))
+						)}
+					</div>
+				</DialogContent>
+			</Dialog>
+		</div>
+	);
+}
+
 function RecordDetail() {
 	const { id } = Route.useParams();
 	const recordId = Number(id);
@@ -991,6 +1220,34 @@ function RecordDetail() {
 	const retry = useMutation({
 		mutationFn: () => reprocessRecord({ data: recordId }),
 		onSuccess: invalidate,
+	});
+
+	// Link this record as an intentional duplicate copy of a chosen primary (drops
+	// it off the public collection into the primary's count), or unlink it back to
+	// standalone. See CopyManager / linkCopy.
+	const link = useMutation({
+		mutationFn: (copyOf: number) =>
+			linkCopy({ data: { id: recordId, copyOf } }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			toast.success("Linked as a copy.");
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't link the copy.",
+			),
+	});
+	const unlink = useMutation({
+		mutationFn: () => unlinkCopy({ data: recordId }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			toast.success("Copy unlinked.");
+		},
+		onError: () => toast.error("Couldn't unlink the copy."),
 	});
 
 	// Permanently remove the record, then head back to the collection. Mirrors the
@@ -1256,6 +1513,18 @@ function RecordDetail() {
 					</Link>
 				</div>
 			)}
+
+			{/* Intentional "I own two copies" linking — collapses a genuine duplicate
+			    into one public tile with a copies count. Distinct from the auto
+			    duplicate warning above. */}
+			<CopyManager
+				record={record}
+				allRecords={allRecords ?? []}
+				onLink={(targetId) => link.mutate(targetId)}
+				onUnlink={() => unlink.mutate()}
+				linkPending={link.isPending}
+				unlinkPending={unlink.isPending}
+			/>
 
 			{/* Two actions on the capture: swap the source photo, or open the crop/
 			    tone editor. The image itself is shown (bottom-aligned) in the header. */}

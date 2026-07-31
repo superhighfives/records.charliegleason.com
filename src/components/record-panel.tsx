@@ -36,7 +36,11 @@ import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
  * `admin` to surface the private valuation fields, which are optional here so
  * both shapes fit.
  */
-export type PanelRecord = PublicRecord &
+export type PanelRecord = Omit<PublicRecord, "copies"> &
+	// `copies` (physical copies owned) is derived on the public list; the admin drawer
+	// passes a raw row without it, so it's optional here — the "Copies" line only shows
+	// when it's ≥ 2 anyway.
+	Partial<Pick<PublicRecord, "copies">> &
 	Partial<
 		Pick<
 			Record,
@@ -492,6 +496,9 @@ export function RecordPanel({
 							<Spec label="Country">{dash(record.country)}</Spec>
 							<Spec label="Label">{dash(record.label)}</Spec>
 							<Spec label="Added">{dash(added)}</Spec>
+							{record.copies != null && record.copies > 1 && (
+								<Spec label="Copies">{record.copies} copies</Spec>
+							)}
 							{record.pitchforkScore != null && (
 								<Spec label="Pitchfork">
 									{record.pitchforkUrl ? (

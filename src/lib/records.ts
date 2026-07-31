@@ -1,7 +1,16 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn } from "@tanstack/react-start";
-import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
+import {
+	and,
+	count,
+	desc,
+	eq,
+	inArray,
+	isNotNull,
+	isNull,
+	or,
+} from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record as RecordRow, records } from "#/db/schema";
@@ -97,11 +106,25 @@ const ADMIN_ONLY_FIELDS = [
 	"professionalAlphaSource",
 ] as const;
 
-/** The public shape of a record — the full row minus the admin-only fields. */
-export type PublicRecord = Omit<RecordRow, (typeof ADMIN_ONLY_FIELDS)[number]>;
+/**
+ * The public shape of a record — the full row minus the admin-only fields, plus a
+ * derived `copies` count (how many physical copies of this album the collector
+ * owns: 1 for a normal record, ≥2 when secondary copies are linked to it via
+ * `copyOf`). Secondary copies themselves are never in the public list.
+ */
+export type PublicRecord = Omit<
+	RecordRow,
+	(typeof ADMIN_ONLY_FIELDS)[number]
+> & {
+	copies: number;
+};
 
-/** Drop the admin-only fields from a row so it's safe to return publicly. */
-export function toPublicRecord(row: RecordRow): PublicRecord {
+/**
+ * Drop the admin-only fields from a row so it's safe to return publicly. `copies`
+ * is the number of physical copies owned (default 1); `listPublicRecords` passes
+ * the real count for a primary that has linked secondary copies.
+ */
+export function toPublicRecord(row: RecordRow, copies = 1): PublicRecord {
 	const {
 		capturePhotoKey: _capture,
 		manualValue: _manual,
@@ -120,6 +143,7 @@ export function toPublicRecord(row: RecordRow): PublicRecord {
 	const approved = rest.professionalStatus === "approved";
 	return {
 		...rest,
+		copies,
 		// Only expose the professional image + matte once approved. `/api/photos/$`
 		// serves any R2 key by passthrough, so leaking a `ready` (unreviewed) key
 		// here would make the generation publicly fetchable and bypass the review gate.
@@ -152,15 +176,35 @@ export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
 	Sentry.startSpan({ name: "listPublicRecords" }, async () => {
 		const db = getDb(env.DB);
-		// Public = published AND has an album (master). The master requirement is
-		// defence-in-depth for the publish gate: even if a row slipped to `complete`
-		// without one, it never surfaces publicly without an album identity.
+		// Count linked secondary copies per primary across the WHOLE table — a copy is
+		// counted even if it isn't itself published (an unmatched/review duplicate still
+		// means the collector owns two), and it never appears in the public list itself.
+		// `copyOf IS NOT NULL` scopes this to just the copies, so it's a small aggregate.
+		const copyCounts = await db
+			.select({ copyOf: records.copyOf, count: count() })
+			.from(records)
+			.where(isNotNull(records.copyOf))
+			.groupBy(records.copyOf);
+		const copiesByPrimary = new Map(copyCounts.map((r) => [r.copyOf, r.count]));
+		// Public = published AND has an album (master), AND is not itself a secondary
+		// copy (those are represented by the primary's count, not their own tile). The
+		// master requirement is defence-in-depth for the publish gate: even if a row
+		// slipped to `complete` without one, it never surfaces publicly without an album.
 		const rows = await db
 			.select()
 			.from(records)
-			.where(and(eq(records.status, "complete"), isNotNull(records.masterId)))
+			.where(
+				and(
+					eq(records.status, "complete"),
+					isNotNull(records.masterId),
+					isNull(records.copyOf),
+				),
+			)
 			.orderBy(desc(records.createdAt));
-		return rows.map(toPublicRecord);
+		// `copies` = the primary itself (1) plus any secondaries pointing at it.
+		return rows.map((row) =>
+			toPublicRecord(row, 1 + (copiesByPrimary.get(row.id) ?? 0)),
+		);
 	}),
 );
 
@@ -1279,6 +1323,80 @@ export const updateRecord = createServerFn({ method: "POST" })
 		}),
 	);
 
+/**
+ * Link a record as an intentional duplicate copy of another — the admin "I own two
+ * copies" action. Sets the current record's `copyOf` to the PRIMARY it's a copy of,
+ * so it drops off the public collection and instead bumps the primary's "copies"
+ * count. Keeps everything one level deep: linking to a record that is itself a copy
+ * attaches to *its* primary, and if this record was itself a primary (had copies
+ * pointing at it), those copies are reparented onto the new primary so none dangle.
+ * Rejects self-links and the mirror link (A→B when B is already a copy of A).
+ * Returns the updated (now-secondary) row, or null if it vanished.
+ */
+export const linkCopy = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((input: { id: number; copyOf: number }) => ({
+		id: input.id,
+		copyOf: input.copyOf,
+	}))
+	.handler(({ data: { id, copyOf } }) =>
+		Sentry.startSpan({ name: "linkCopy" }, async () => {
+			const db = getDb(env.DB);
+			if (id === copyOf) {
+				throw new Error("A record can't be a copy of itself.");
+			}
+			const [target] = await db
+				.select({ id: records.id, copyOf: records.copyOf })
+				.from(records)
+				.where(eq(records.id, copyOf))
+				.limit(1);
+			if (!target) throw new Error("The record to link to no longer exists.");
+			// Resolve to the root primary: linking to a secondary attaches to ITS
+			// primary, so copies never chain more than one level deep.
+			const primaryId = target.copyOf ?? target.id;
+			if (primaryId === id) {
+				// The target is already a copy of this record — linking the other way
+				// would form a cycle. Unlink it first if you meant to flip the primary.
+				throw new Error(
+					"Those records are already linked the other way around.",
+				);
+			}
+			const now = new Date();
+			// If this record was itself a primary, reparent its copies onto the new
+			// primary so nothing points at a row that's now a secondary.
+			await db
+				.update(records)
+				.set({ copyOf: primaryId, updatedAt: now })
+				.where(eq(records.copyOf, id));
+			const [row] = await db
+				.update(records)
+				.set({ copyOf: primaryId, updatedAt: now })
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Unlink a copy — the inverse of {@link linkCopy}. Clears `copyOf`, promoting the
+ * record back to a standalone entry (it reappears in the public collection if it's
+ * otherwise publishable). Returns the updated row, or null if it's gone.
+ */
+export const unlinkCopy = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((id: number) => id)
+	.handler(({ data: id }) =>
+		Sentry.startSpan({ name: "unlinkCopy" }, async () => {
+			const db = getDb(env.DB);
+			const [row] = await db
+				.update(records)
+				.set({ copyOf: null, updatedAt: new Date() })
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
+		}),
+	);
+
 /** Full Discogs release details for the expanded (accordion) candidate view. */
 export const getDiscogsRelease = createServerFn({ method: "GET" })
 	.middleware([authMiddleware])
@@ -1427,12 +1545,20 @@ export const deleteRecord = createServerFn({ method: "POST" })
 				if (keys.length > 0) await env.PHOTOS.delete(keys);
 			}
 			await db.delete(records).where(eq(records.id, id));
+			const now = new Date();
 			// Clear the dangling reference on any record flagged as a duplicate of
 			// the one we just removed, so it stops showing the "Duplicate" badge.
 			await db
 				.update(records)
-				.set({ duplicateOf: null, updatedAt: new Date() })
+				.set({ duplicateOf: null, updatedAt: now })
 				.where(eq(records.duplicateOf, id));
+			// Same for intentional copies: deleting a primary promotes its linked
+			// copies back to standalone (they reappear publicly) rather than pointing
+			// at a row that no longer exists.
+			await db
+				.update(records)
+				.set({ copyOf: null, updatedAt: now })
+				.where(eq(records.copyOf, id));
 			return { id };
 		}),
 	);
@@ -1461,6 +1587,12 @@ export const deleteRecords = createServerFn({ method: "POST" })
 					.update(records)
 					.set({ duplicateOf: null, updatedAt: now })
 					.where(inArray(records.duplicateOf, batch));
+				// Promote copies of any deleted primary back to standalone (mirrors
+				// the single deleteRecord's `copyOf` cleanup).
+				await db
+					.update(records)
+					.set({ copyOf: null, updatedAt: now })
+					.where(inArray(records.copyOf, batch));
 			}
 			return { count: ids.length };
 		}),
