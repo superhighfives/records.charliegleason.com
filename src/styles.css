@@ -316,8 +316,17 @@ a {
 }
 
 .group:hover .vinyl-disc {
+  /* min(10%, 14px): a percentage alone scales with the tile, but on a wide
+     desktop grid 10% of a ~230px tile (~23px) can clear the page's own side
+     padding on the last column and force a horizontal scrollbar. Capping to a
+     small fixed px keeps the reveal bounded everywhere, at the cost of it being
+     the min() (not 10%) on any tile bigger than ~140px — i.e. always, in
+     practice, which is fine: a small consistent peek is the goal. */
   transform: translateX(
-      calc(10% * var(--vinyl-scale, 1) - 1% * var(--vinyl-stack-index, 0))
+      calc(
+        min(10%, 14px) * var(--vinyl-scale, 1) - 1px *
+          var(--vinyl-stack-index, 0)
+      )
     )
     rotate(calc(6deg - 3deg * var(--vinyl-stack-index, 0)));
 }
@@ -330,8 +339,12 @@ a {
  * never fires.
  */
 .vinyl-peek--static .vinyl-disc {
+  /* The wrapper's own `inset-[12%]` (see record-panel.tsx, ~21px on the 176px
+     box) already eats most of a small translate before the disc's edge even
+     reaches the wrapper's own bounds — this needs to clear THAT first, then
+     travel a bit further to actually read as peeking past the artwork. */
   transform: translate(
-      calc(6px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
+      calc(26px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
       calc(2px * var(--vinyl-stack-index, 0))
     )
     rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
