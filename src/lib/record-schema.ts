@@ -108,7 +108,7 @@ export const emptyRecordForm: RecordFormValues = {
 	year: "",
 	label: "",
 	format: "LP",
-	size: "",
+	size: '12"',
 	catno: "",
 	country: "",
 	genre: "",
