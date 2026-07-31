@@ -161,6 +161,14 @@ const FACET_GROUPS: Array<{
 		],
 	},
 	{
+		key: "color",
+		label: "Color",
+		options: [
+			{ token: "hasColor", label: "Has color", test: (r) => r.colorId != null },
+			{ token: "noColor", label: "No color", test: (r) => r.colorId == null },
+		],
+	},
+	{
 		key: "release",
 		label: "Release",
 		options: [
