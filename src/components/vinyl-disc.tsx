@@ -73,12 +73,15 @@ export function VinylDisc({
 
 	return (
 		<div
-			// A deliberate square (not `inset-0` of the wrapper) — the wrapper is
-			// wider than tall (it reserves peek room as right padding, see
-			// collection-view.tsx), so stretching to fill it would squash the
-			// circle. `aspect-square` + `inset-y-0` instead matches the cover's own
-			// (shrunk) box exactly; the hover/rest translate slides it right into
-			// the reserved padding.
+			// `inset-y-0 left-0` (NOT `inset-0`) + `aspect-square`: the wrapper
+			// (`.vinyl-peek-reserve` in collection-view.tsx) reserves peek room as
+			// right/top padding, so it's wider than the cover is tall. `inset-0`
+			// pins all four edges — width AND height both already fixed by the
+			// (non-square) padding box, so `aspect-square` has nothing left to do
+			// and the circle gets squashed/clipped. Leaving `right` unset lets
+			// `aspect-square` derive the width FROM the height, matching the
+			// cover's own (shrunk) square box exactly; the hover/rest translate
+			// then slides it into the reserved padding.
 			className={cn(
 				"vinyl-peek pointer-events-none absolute inset-y-0 left-0 aspect-square",
 				className,

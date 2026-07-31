@@ -160,12 +160,12 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 								onClick={() => openRecord(r)}
 								className="w-full cursor-pointer space-y-2 text-left"
 							>
-								{/* pr-4/pt-3 reserve the vinyl peek's width/height: `.cv-auto`
-								    gives this tile paint containment, so the disc's up-and-out
-								    hover translate needs the cover shrunk to make room rather
-								    than expanding past the box (see the `.vinyl-peek` comment in
-								    styles.css). */}
-								<div className="relative pr-4 pt-3">
+								{/* `.vinyl-peek-reserve` reserves the vinyl peek's width/height as
+								    padding (shrinking the cover): `.cv-auto` gives this tile paint
+								    containment, so the disc's up-and-out hover translate needs the
+								    room made rather than expanding past the box — see the
+								    `.vinyl-peek`/`.vinyl-peek-reserve` comment in styles.css. */}
+								<div className="relative vinyl-peek-reserve">
 									<VinylDisc
 										colorName={r.colorName}
 										textureImageKey={r.colorTextureImageKey}

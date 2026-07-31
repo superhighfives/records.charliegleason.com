@@ -298,19 +298,29 @@ a {
  *
  * Unlike the cover's vertical lift, this overflow can't be "free" — `.cv-auto`'s
  * `content-visibility: auto` gives the tile paint containment, which clips
- * anything drawn past the `<li>`'s own box. The grid caller (`collection-view`)
- * reserves the peek's worth of space as right + top padding on the tile
- * (shrinking the cover, not expanding the tile) so the disc's translated
- * position — sideways at rest, up-and-out on hover — stays inside that box; keep
- * the hover max here under that reserve or it clips again.
+ * anything drawn past the `<li>`'s own box. `.vinyl-peek-reserve` (applied by the
+ * grid caller, `collection-view`) reserves that space as right + top padding on
+ * the tile (shrinking the cover, not expanding the tile) via `--vinyl-reserve` —
+ * the translate distances below are fractions of that SAME variable rather than
+ * separate hardcoded px, so a padding change and a transform change can't drift
+ * out of sync and reintroduce clipping (as happened once already).
  */
+.vinyl-peek-reserve {
+  --vinyl-reserve: 20px;
+  padding-right: var(--vinyl-reserve);
+  padding-top: var(--vinyl-reserve);
+}
+
 .vinyl-peek {
   z-index: 0;
 }
 
 .vinyl-disc {
   transform: translate(
-      calc(6px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
+      calc(
+        var(--vinyl-reserve, 20px) * 0.3 * var(--vinyl-scale, 1) - 3px *
+          var(--vinyl-stack-index, 0)
+      ),
       calc(2px * var(--vinyl-stack-index, 0))
     )
     rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
@@ -319,8 +329,14 @@ a {
 
 .group:hover .vinyl-disc {
   transform: translate(
-      calc(14px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
-      calc(-10px * var(--vinyl-scale, 1) + 3px * var(--vinyl-stack-index, 0))
+      calc(
+        var(--vinyl-reserve, 20px) * 0.8 * var(--vinyl-scale, 1) - 3px *
+          var(--vinyl-stack-index, 0)
+      ),
+      calc(
+        var(--vinyl-reserve, 20px) * -0.7 * var(--vinyl-scale, 1) + 3px *
+          var(--vinyl-stack-index, 0)
+      )
     )
     rotate(calc(14deg - 3deg * var(--vinyl-stack-index, 0)));
 }
