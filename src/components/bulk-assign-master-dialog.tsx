@@ -11,6 +11,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
+import { ImageZoom } from "#/components/ui/image-zoom";
 import { Input } from "#/components/ui/input";
 import {
 	Popover,
@@ -18,6 +19,7 @@ import {
 	PopoverTrigger,
 } from "#/components/ui/popover";
 import type { Record } from "#/db/schema";
+import { displayCoverKey } from "#/lib/cover";
 import { searchMastersFromBrowser } from "#/lib/discogs-browser";
 import type { DiscogsMasterCandidate } from "#/lib/discogs-shared";
 import { assignRecordMaster, searchDiscogsMasters } from "#/lib/records";
@@ -151,8 +153,19 @@ function BulkAssignRow({
 		onError: () => toast.error("Couldn't assign a master."),
 	});
 
+	const coverKey = displayCoverKey(record, { includeCapture: true });
+
 	return (
 		<li className="flex items-center gap-2 p-2">
+			{coverKey ? (
+				<ImageZoom
+					src={`/api/photos/${coverKey}`}
+					alt={`${record.artist} — ${record.title}`}
+					className="size-10 shrink-0"
+				/>
+			) : (
+				<div className="size-10 shrink-0 rounded-md border bg-muted" />
+			)}
 			<div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
 				<Input
 					value={q.artist}
