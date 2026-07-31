@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { SearchIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "#/components/ui/button";
 import {
@@ -137,12 +138,17 @@ function BulkAssignRow({
 					masterUrl: candidate.masterUrl,
 				},
 			}),
-		onSuccess: async () => {
+		onSuccess: async (row) => {
+			if (!row) {
+				toast.error("Couldn't assign a master — the record vanished.");
+				return;
+			}
 			await queryClient.invalidateQueries({
 				queryKey: recordsQueryOptions.queryKey,
 			});
 			setPopoverOpen(false);
 		},
+		onError: () => toast.error("Couldn't assign a master."),
 	});
 
 	return (
