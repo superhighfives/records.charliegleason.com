@@ -61,6 +61,7 @@
     "dotenv-cli": "^11.0.0",
     "drizzle-kit": "^0.31.9",
     "drizzle-orm": "^0.45.1",
+    "fflate": "^0.8.3",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.577.0",
     "radix-ui": "^1.6.0",
