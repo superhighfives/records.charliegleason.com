@@ -172,14 +172,19 @@ export const records = sqliteTable("records", {
 	captureContext: text("capture_context"), // optional collector hint, used by the analysis
 	candidatesJson: text("candidates_json"), // JSON Array<DiscogsCandidate> the consumer found
 
+	// Vestigial — nothing reads or writes this any more. Possible-duplicate detection
+	// is now computed live from the collection (`#/lib/duplicates`) instead of stored
+	// on the row. Kept as a nullable column (not dropped here) so this "stop using it"
+	// change never has to remove something the currently-deployed build still selects;
+	// a follow-up migration drops it once this is live (expand/contract).
+	duplicateOf: integer("duplicate_of"),
+
 	// Intentional multiple copies — records the collector *knowingly* owns two (or
 	// more) physical copies of. Set manually in admin: on a secondary copy this holds
 	// the id of the PRIMARY record it's a copy of; a primary/standalone record is null.
 	// Secondaries are hidden from the public collection and instead bump the primary's
 	// "copies" count. One level deep only — a primary never itself has `copyOf` set.
 	// Cleared as a back-reference on delete, promoting orphaned copies back to standalone.
-	// (Distinct from possible-duplicate *detection*, which is computed live from the
-	// collection in `#/lib/duplicates` rather than stored on the row.)
 	copyOf: integer("copy_of"),
 
 	createdAt: integer("created_at", { mode: "timestamp" }).default(

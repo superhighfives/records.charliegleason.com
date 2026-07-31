@@ -1,1 +1,0 @@
-ALTER TABLE `records` DROP COLUMN `duplicate_of`;
