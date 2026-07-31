@@ -556,9 +556,8 @@ function AdminRecords() {
 	const { data, isFetchedAfterMount } = useSuspenseQuery(recordsQueryOptions);
 	// Record ids that look like a duplicate of another record in the *current*
 	// collection (same master / release / artist+title — see `duplicateRecordIds`),
-	// so the badge + `duplicate` filter reflect live state rather than the stored
-	// `duplicateOf` flag (which analysis only sets on the newer row). Linked copies
-	// are excluded. Memoised so the derived `columns` keep a stable identity.
+	// so the badge + `duplicate` filter reflect live state. Linked copies are
+	// excluded. Memoised so the derived `columns` keep a stable identity.
 	const duplicateIds = useMemo(() => duplicateRecordIds(data), [data]);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();

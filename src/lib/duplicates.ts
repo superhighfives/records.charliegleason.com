@@ -81,9 +81,8 @@ export function findDuplicateOf(
  * of a duplicate pair resolve to each other (each returns the earliest sibling), so
  * the affordance shows whichever record you're on. Only considers records that
  * aren't themselves linked copies (`copyOf` set) — a copy is already resolved, and
- * the real target is its primary. Unlike the stored `duplicateOf` flag (written only
- * by photo analysis, on the newer row), this recomputes against the current
- * collection, so manual/unmatched records and both siblings are covered.
+ * the real target is its primary. Recomputed against the current collection on every
+ * read, so manual/unmatched records and both siblings of a pair are covered.
  */
 export function likelyDuplicateOf(
 	record: DuplicateCandidate,

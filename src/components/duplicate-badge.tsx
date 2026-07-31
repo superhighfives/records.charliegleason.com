@@ -3,9 +3,8 @@ import { cn } from "#/lib/utils";
 /**
  * Shown when a record looks like a duplicate of another one currently in the
  * collection — a live check against the whole collection (same Discogs master /
- * release / artist+title; see `likelyDuplicateOf`), not the stored `duplicateOf`
- * flag. Sits alongside the StatusBadge so a freshly captured sleeve announces
- * itself as a dupe without opening the record.
+ * release / artist+title; see `likelyDuplicateOf`). Sits alongside the StatusBadge
+ * so a freshly captured sleeve announces itself as a dupe without opening the record.
  */
 export function DuplicateBadge({ className }: { className?: string }) {
 	return (

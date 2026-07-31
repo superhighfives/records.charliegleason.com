@@ -172,19 +172,14 @@ export const records = sqliteTable("records", {
 	captureContext: text("capture_context"), // optional collector hint, used by the analysis
 	candidatesJson: text("candidates_json"), // JSON Array<DiscogsCandidate> the consumer found
 
-	// Duplicate detection. After analysis identifies a record, the queue consumer
-	// checks it against the rest of the collection; if it already owns the same
-	// release this holds the id of the earlier record it duplicates (else null).
-	duplicateOf: integer("duplicate_of"),
-
 	// Intentional multiple copies — records the collector *knowingly* owns two (or
-	// more) physical copies of. Set manually in admin (distinct from the auto
-	// `duplicateOf` warning above): on a secondary copy this holds the id of the
-	// PRIMARY record it's a copy of; a primary/standalone record is null. Secondaries
-	// are hidden from the public collection and instead bump the primary's "copies"
-	// count. One level deep only — a primary never itself has `copyOf` set. Cleared
-	// as a back-reference on delete (mirrors `duplicateOf`), promoting orphaned
-	// copies back to standalone.
+	// more) physical copies of. Set manually in admin: on a secondary copy this holds
+	// the id of the PRIMARY record it's a copy of; a primary/standalone record is null.
+	// Secondaries are hidden from the public collection and instead bump the primary's
+	// "copies" count. One level deep only — a primary never itself has `copyOf` set.
+	// Cleared as a back-reference on delete, promoting orphaned copies back to standalone.
+	// (Distinct from possible-duplicate *detection*, which is computed live from the
+	// collection in `#/lib/duplicates` rather than stored on the row.)
 	copyOf: integer("copy_of"),
 
 	createdAt: integer("created_at", { mode: "timestamp" }).default(

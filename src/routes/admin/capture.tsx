@@ -29,8 +29,8 @@ function SessionItem({ id }: { id: number }) {
 			return status === "pending" || status === "processing" ? 2000 : false;
 		},
 	});
-	// Live duplicate signal — same criteria as the list/detail badges (a same
-	// master/release/name sibling in the collection), not the stored `duplicateOf`.
+	// Live duplicate signal — same criteria as the list/detail badges: a same
+	// master/release/name sibling in the current collection.
 	const { data: allRecords } = useQuery(recordsQueryOptions);
 	const duplicateId = record
 		? likelyDuplicateOf(record, allRecords ?? [])

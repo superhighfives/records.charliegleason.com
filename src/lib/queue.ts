@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { eq, ne } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
@@ -18,7 +18,6 @@ import {
 	getReleaseValue,
 	searchMasters,
 } from "#/lib/discogs";
-import { findDuplicateOf } from "#/lib/duplicates";
 import {
 	type CoverStageResult,
 	commitProfessionalMatte,
@@ -616,29 +615,6 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			});
 		}
 
-		// Flag the record if the collection already holds this album. Compared
-		// against every other row (the capture itself is excluded by id), matching
-		// on Discogs master first, then release, then normalized artist + title.
-		const others = await db
-			.select({
-				id: records.id,
-				artist: records.artist,
-				title: records.title,
-				masterId: records.masterId,
-				discogsId: records.discogsId,
-			})
-			.from(records)
-			.where(ne(records.id, recordId));
-		const duplicateOf = findDuplicateOf(
-			{
-				artist: result.artist,
-				title: result.title,
-				masterId: result.masterId,
-				discogsId: result.discogsId,
-			},
-			others,
-		);
-
 		await db
 			.update(records)
 			.set({
@@ -660,7 +636,6 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				coverImageKey: result.coverImageKey,
 				confidence: result.confidence,
 				candidatesJson: JSON.stringify(result.candidates),
-				duplicateOf,
 				status: "review",
 				error: null,
 				// Analysis landed — clear the progress marker + the reaper's auto-retry budget.

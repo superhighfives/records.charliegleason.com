@@ -792,8 +792,8 @@ function CopyPickerRow({
 
 /**
  * The "I own two copies" control on a record's admin page. Distinct from the
- * auto-detected `duplicateOf` warning: this is the collector *intentionally*
- * linking a record as a physical copy of a chosen PRIMARY. Renders one of three
+ * live possible-duplicate *detection* (`likelyDuplicateOf`): this is the collector
+ * *intentionally* linking a record as a physical copy of a chosen PRIMARY. Renders one of three
  * states — a secondary copy (shows its primary + Unlink), a primary with copies
  * (shows the count + links to the other copies), or a standalone record (a "Mark
  * as a copy of…" picker over the collection). `onLink` sets the current record's
@@ -1046,10 +1046,10 @@ function RecordDetail() {
 		});
 
 	// Live "is this a likely duplicate?" signal, recomputed against the current
-	// collection rather than trusting the stored `duplicateOf` flag (which analysis
-	// only sets on the newer row, never on manual/unmatched records). Drives the
-	// Duplicate badge, the warning banner, and the copy-link prompt uniformly — the
-	// id it points at is the record this one likely duplicates, or null for none.
+	// collection (covers manual/unmatched records and both siblings of a pair).
+	// Drives the Duplicate badge, the warning banner, and the copy-link prompt
+	// uniformly — the id it points at is the record this one likely duplicates, or
+	// null for none.
 	const duplicateId = useMemo(
 		() => (record ? likelyDuplicateOf(record, allRecords ?? []) : null),
 		[record, allRecords],
@@ -1280,8 +1280,8 @@ function RecordDetail() {
 	});
 
 	// Permanently remove the record, then head back to the collection. Mirrors the
-	// list's delete (see admin/index) — the server also clears any dangling
-	// `duplicateOf` back-references pointing at this row.
+	// list's delete (see admin/index) — the server also clears any dangling `copyOf`
+	// back-references, promoting this record's copies back to standalone.
 	const remove = useMutation({
 		mutationFn: () => deleteRecord({ data: recordId }),
 		onSuccess: async () => {
