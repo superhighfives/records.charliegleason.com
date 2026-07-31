@@ -2306,6 +2306,7 @@ function RecordEditorHost() {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
 			if (e.defaultPrevented) return;
+			if (e.metaKey || e.ctrlKey || e.altKey) return;
 			const el = e.target as HTMLElement | null;
 			if (
 				el?.isContentEditable ||
