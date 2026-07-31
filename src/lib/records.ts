@@ -22,6 +22,7 @@ import {
 } from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
+import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
 import { displayCoverKey } from "#/lib/cover";
 import {
 	getMasterCandidate,
@@ -647,10 +648,17 @@ export const createRecord = createServerFn({ method: "POST" })
 				coverImageKey = await sourceCoverFromDiscogs(rest.discogsId);
 			}
 
+			// Vinyl color is manual-only (see `records.colorId`), so this is the one
+			// place it's ever set automatically — a one-time default at creation,
+			// never touched again by a refresh/re-match.
+			const colorId =
+				rest.colorId ?? (await getOrCreateColor(DEFAULT_COLOR_NAME)).id;
+
 			const [row] = await db
 				.insert(records)
 				.values({
 					...rest,
+					colorId,
 					coverImageKey,
 					coverIsUpload,
 					source: source ?? "manual",
@@ -699,6 +707,11 @@ export const captureRecord = createServerFn({ method: "POST" })
 				data.mediaType,
 			);
 
+			// Vinyl color is manual-only (see `records.colorId`) and the analyze
+			// pipeline never sets it, so default it here at creation — same as
+			// `createRecord` — rather than leaving every captured record uncolored.
+			const { id: colorId } = await getOrCreateColor(DEFAULT_COLOR_NAME);
+
 			const [row] = await db
 				.insert(records)
 				.values({
@@ -707,6 +720,7 @@ export const captureRecord = createServerFn({ method: "POST" })
 					format: "LP",
 					source: "photo",
 					status: "pending",
+					colorId,
 					capturePhotoKey,
 					captureContext: data.context?.trim() || null,
 				})
