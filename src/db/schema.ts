@@ -177,6 +177,16 @@ export const records = sqliteTable("records", {
 	// release this holds the id of the earlier record it duplicates (else null).
 	duplicateOf: integer("duplicate_of"),
 
+	// Intentional multiple copies — records the collector *knowingly* owns two (or
+	// more) physical copies of. Set manually in admin (distinct from the auto
+	// `duplicateOf` warning above): on a secondary copy this holds the id of the
+	// PRIMARY record it's a copy of; a primary/standalone record is null. Secondaries
+	// are hidden from the public collection and instead bump the primary's "copies"
+	// count. One level deep only — a primary never itself has `copyOf` set. Cleared
+	// as a back-reference on delete (mirrors `duplicateOf`), promoting orphaned
+	// copies back to standalone.
+	copyOf: integer("copy_of"),
+
 	createdAt: integer("created_at", { mode: "timestamp" }).default(
 		sql`(unixepoch())`,
 	),

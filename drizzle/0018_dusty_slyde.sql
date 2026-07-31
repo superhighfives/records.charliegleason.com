@@ -1,0 +1,1 @@
+ALTER TABLE `records` ADD `copy_of` integer;
