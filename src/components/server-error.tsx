@@ -7,7 +7,7 @@ export function ServerError() {
 			emoji="%F0%9F%AB%A0"
 			code="Error 500"
 			heading="Something's warped"
-			message="A server error knocked the needle off the groove. This one's on us — try again in a moment."
+			message="A server error knocked the needle off the groove. This one's on me — try again in a moment."
 		/>
 	);
 }
