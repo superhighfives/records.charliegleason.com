@@ -16,6 +16,7 @@ export const recordInputSchema = z.object({
 	catno: z.string().trim().min(1).nullable(),
 	country: z.string().trim().min(1).nullable(),
 	genre: z.string().trim().min(1).nullable(),
+	colorId: z.number().int().nullable(),
 	pitchforkScore: z.number().min(0).max(10).nullable(),
 	notes: z.string().trim().min(1).nullable(),
 	// Admin valuation field: `manualValue` is a hand-entered confirmed value that
@@ -74,6 +75,7 @@ export type RecordFormValues = {
 	catno: string;
 	country: string;
 	genre: string;
+	colorId: string;
 	pitchforkScore: string;
 	notes: string;
 	manualValue: string;
@@ -97,6 +99,7 @@ export const recordFormSchema = z.object({
 	catno: z.string(),
 	country: z.string(),
 	genre: z.string(),
+	colorId: z.string(),
 	pitchforkScore: numericString,
 	notes: z.string(),
 	manualValue: numericString,
@@ -112,6 +115,7 @@ export const emptyRecordForm: RecordFormValues = {
 	catno: "",
 	country: "",
 	genre: "",
+	colorId: "",
 	pitchforkScore: "",
 	notes: "",
 	manualValue: "",
@@ -138,6 +142,7 @@ export function formValuesToInput(v: RecordFormValues): RecordInput {
 		catno: optional(v.catno),
 		country: optional(v.country),
 		genre: optional(v.genre),
+		colorId: optionalNumber(v.colorId),
 		pitchforkScore: optionalNumber(v.pitchforkScore),
 		notes: optional(v.notes),
 		manualValue: optionalNumber(v.manualValue),
@@ -155,6 +160,7 @@ export function recordToFormValues(r: Record): RecordFormValues {
 		catno: r.catno ?? "",
 		country: r.country ?? "",
 		genre: r.genre ?? "",
+		colorId: r.colorId?.toString() ?? "",
 		pitchforkScore: r.pitchforkScore?.toString() ?? "",
 		notes: r.notes ?? "",
 		manualValue: r.manualValue?.toString() ?? "",
