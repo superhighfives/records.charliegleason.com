@@ -287,6 +287,51 @@ a {
 }
 
 /*
+ * The vinyl disc(s) peeking out from behind a cover tile (see `VinylDisc`). Sits
+ * behind `.cover-lift` in both DOM order and z-index, same-sized as the tile, and
+ * nudged right by `--vinyl-scale` (bigger for a 12", smaller for a 7"|10") so only
+ * a sliver clears the cover's own clipped edge at rest. `--vinyl-stack-index`
+ * fans out extra discs (a 2×LP/3×LP) with a little extra rotation + offset per
+ * layer back from the front. On hover the whole stack rotates further and slides
+ * up and out (not just sideways — a record pulled from its sleeve rises as it
+ * clears the top edge), same easing as the cover lift.
+ *
+ * Unlike the cover's vertical lift, this overflow can't be "free" — `.cv-auto`'s
+ * `content-visibility: auto` gives the tile paint containment, which clips
+ * anything drawn past the `<li>`'s own box. The grid caller (`collection-view`)
+ * reserves the peek's worth of space as right + top padding on the tile
+ * (shrinking the cover, not expanding the tile) so the disc's translated
+ * position — sideways at rest, up-and-out on hover — stays inside that box; keep
+ * the hover max here under that reserve or it clips again.
+ */
+.vinyl-peek {
+  z-index: 0;
+}
+
+.vinyl-disc {
+  transform: translate(
+      calc(6px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
+      calc(2px * var(--vinyl-stack-index, 0))
+    )
+    rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
+  transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.group:hover .vinyl-disc {
+  transform: translate(
+      calc(14px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
+      calc(-10px * var(--vinyl-scale, 1) + 3px * var(--vinyl-stack-index, 0))
+    )
+    rotate(calc(14deg - 3deg * var(--vinyl-stack-index, 0)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vinyl-disc {
+    transition: none;
+  }
+}
+
+/*
  * Skip rendering (and animating the grain on) tiles scrolled off-screen. Cheap
  * insurance for a large collection: the browser only paints tiles near the
  * viewport. `auto` remembers each tile's real size once rendered, falling back

@@ -18,6 +18,7 @@ import {
 	mapReleaseSearchResult,
 	masterDetailToCandidate,
 	masterFields,
+	parseDiscCount,
 	parseMasterId,
 	parseReleaseId,
 	parseSizeAndType,
@@ -126,6 +127,7 @@ export interface DiscogsReleaseDetail {
 	catno: string | null;
 	size: string | null; // parsed from `formats`, e.g. '12"'
 	type: string | null; // parsed from `formats` — LP / EP / Single
+	discCount: number; // number of discs, e.g. 2 for a 2×LP — parsed from format qty
 	formats: string | null; // detailed, e.g. "2×LP, Album, Reissue, 180g, Gatefold"
 	country: string | null;
 	released: string | null;
@@ -169,6 +171,7 @@ export async function getReleaseDetail(
 		catno: cleanCatno(firstLabel?.catno),
 		size,
 		type,
+		discCount: parseDiscCount(Array.isArray(d.formats) ? d.formats : null),
 		formats: Array.isArray(d.formats)
 			? d.formats.map(formatLine).filter(Boolean).join(" / ") || null
 			: null,
@@ -274,6 +277,7 @@ export async function getMasterVersions(
 				format: formatLine || (isVinylVersion(v) ? "Vinyl" : null),
 				size,
 				type,
+				discCount: parseDiscCount(formatLine),
 				country: v.country ? String(v.country) : null,
 				catno: cleanCatno(v.catno),
 				discogsUrl: `https://www.discogs.com/release/${v.id}`,

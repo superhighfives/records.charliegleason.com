@@ -9,6 +9,7 @@ import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import { VinylDisc } from "#/components/vinyl-disc";
 import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import { emojiSrc } from "#/lib/emoji";
 import { recordIdParam } from "#/lib/records-path";
@@ -159,30 +160,44 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 								onClick={() => openRecord(r)}
 								className="w-full cursor-pointer space-y-2 text-left"
 							>
-								<div className="cover-lift">
-									<div className="album-card grain aspect-square overflow-hidden">
-										{(() => {
-											// Prefer the floating matte (transparent, true edges) when the
-											// record has one; its baked shadow + margin read as an object
-											// on the card. Fall back to the square cover otherwise.
-											const matte = displayMatteKey(r);
-											const cover = matte ?? displayCoverKey(r);
-											return cover ? (
-												<FadeImage
-													src={`/api/photos/${cover}`}
-													alt={`${r.artist} — ${r.title}`}
-													className={cn(
-														// Fade in on load *and* keep the grayscale→colour hover —
-														// one combined transition property so both animate.
-														"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
-														matte ? "object-contain" : "object-cover",
-													)}
-													loading="lazy"
-												/>
-											) : (
-												<SleevePlaceholder />
-											);
-										})()}
+								{/* pr-4/pt-3 reserve the vinyl peek's width/height: `.cv-auto`
+								    gives this tile paint containment, so the disc's up-and-out
+								    hover translate needs the cover shrunk to make room rather
+								    than expanding past the box (see the `.vinyl-peek` comment in
+								    styles.css). */}
+								<div className="relative pr-4 pt-3">
+									<VinylDisc
+										colorName={r.colorName}
+										textureImageKey={r.colorTextureImageKey}
+										textureStatus={r.colorTextureStatus}
+										size={r.size}
+										discCount={r.discCount}
+									/>
+									<div className="cover-lift">
+										<div className="album-card grain aspect-square overflow-hidden">
+											{(() => {
+												// Prefer the floating matte (transparent, true edges) when the
+												// record has one; its baked shadow + margin read as an object
+												// on the card. Fall back to the square cover otherwise.
+												const matte = displayMatteKey(r);
+												const cover = matte ?? displayCoverKey(r);
+												return cover ? (
+													<FadeImage
+														src={`/api/photos/${cover}`}
+														alt={`${r.artist} — ${r.title}`}
+														className={cn(
+															// Fade in on load *and* keep the grayscale→colour hover —
+															// one combined transition property so both animate.
+															"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
+															matte ? "object-contain" : "object-cover",
+														)}
+														loading="lazy"
+													/>
+												) : (
+													<SleevePlaceholder />
+												);
+											})()}
+										</div>
 									</div>
 								</div>
 								<div className="text-sm leading-snug">

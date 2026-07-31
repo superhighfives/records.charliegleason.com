@@ -23,6 +23,7 @@ import {
 	SheetFooter,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { VinylDisc } from "#/components/vinyl-disc";
 import type { Record } from "#/db/schema";
 import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
@@ -36,11 +37,22 @@ import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
  * `admin` to surface the private valuation fields, which are optional here so
  * both shapes fit.
  */
-export type PanelRecord = Omit<PublicRecord, "copies"> &
+export type PanelRecord = Omit<
+	PublicRecord,
+	"copies" | "colorName" | "colorTextureImageKey" | "colorTextureStatus"
+> &
 	// `copies` (physical copies owned) is derived on the public list; the admin drawer
 	// passes a raw row without it, so it's optional here — the "Copies" line only shows
 	// when it's ≥ 2 anyway.
 	Partial<Pick<PublicRecord, "copies">> &
+	// The color chip's joined name/texture (see `listPublicRecords`) — likewise
+	// optional, since the admin drawer passes a raw `records` row with only `colorId`.
+	Partial<
+		Pick<
+			PublicRecord,
+			"colorName" | "colorTextureImageKey" | "colorTextureStatus"
+		>
+	> &
 	Partial<
 		Pick<
 			Record,
@@ -462,12 +474,23 @@ export function RecordPanel({
 							</div>
 						)}
 					</div>
-					<CoverZoom
-						coverSrc={cover ? `/api/photos/${cover}` : null}
-						matteSrc={matte ? `/api/photos/${matte}` : null}
-						onOpenChange={setZoomOpen}
-						className="absolute right-8 -bottom-8 z-10 aspect-square w-44"
-					/>
+					{/* No `group` here (unlike the grid tile) — the detail view's disc stays
+				    at rest, no hover slide-out. */}
+					<div className="absolute right-8 -bottom-8 z-10 aspect-square w-44">
+						<VinylDisc
+							colorName={record.colorName}
+							textureImageKey={record.colorTextureImageKey}
+							textureStatus={record.colorTextureStatus}
+							size={record.size}
+							discCount={record.discCount}
+						/>
+						<CoverZoom
+							coverSrc={cover ? `/api/photos/${cover}` : null}
+							matteSrc={matte ? `/api/photos/${matte}` : null}
+							onOpenChange={setZoomOpen}
+							className="relative size-full"
+						/>
+					</div>
 				</div>
 
 				{record.notes && (

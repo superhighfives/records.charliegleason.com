@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckIcon, XIcon } from "lucide-react";
+import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -10,7 +10,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
-import { createColor } from "#/lib/colors";
+import { createColor, regenerateColorTexture } from "#/lib/colors";
 import { colorsQueryOptions } from "#/lib/colors-queries";
 import { cn } from "#/lib/utils";
 
@@ -43,6 +43,14 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 			setOpen(false);
 		},
 		onError: () => toast.error("Couldn't create the color."),
+	});
+
+	const regenerateMutation = useMutation({
+		mutationFn: (colorId: number) =>
+			regenerateColorTexture({ data: { colorId } }),
+		onSuccess: () =>
+			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey }),
+		onError: () => toast.error("Couldn't regenerate the texture."),
 	});
 
 	const trimmedQuery = query.trim();
@@ -87,26 +95,62 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 					/>
 					<div className="max-h-48 space-y-1 overflow-y-auto">
 						{filtered.map((c) => (
-							<button
+							<div
 								key={c.id}
-								type="button"
-								onClick={() => {
-									onChange(c.id.toString());
-									setQuery("");
-									setOpen(false);
-								}}
 								className={cn(
-									"flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent",
+									"group flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent",
 									c.id.toString() === value && "bg-accent",
 								)}
 							>
-								<span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium">
-									{c.name}
-								</span>
-								{c.id.toString() === value && (
-									<CheckIcon className="size-4 text-muted-foreground" />
-								)}
-							</button>
+								<button
+									type="button"
+									onClick={() => {
+										onChange(c.id.toString());
+										setQuery("");
+										setOpen(false);
+									}}
+									className="flex flex-1 items-center gap-1.5 text-left"
+								>
+									<span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium">
+										{c.name}
+									</span>
+									{c.textureStatus === "failed" && (
+										<span className="text-xs text-destructive">
+											texture failed
+										</span>
+									)}
+								</button>
+								<div className="flex items-center gap-1">
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										aria-label={`Regenerate ${c.name} texture`}
+										className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+										disabled={
+											regenerateMutation.isPending ||
+											c.textureStatus === "queued" ||
+											c.textureStatus === "processing"
+										}
+										onClick={(e) => {
+											e.stopPropagation();
+											regenerateMutation.mutate(c.id);
+										}}
+									>
+										<RefreshCwIcon
+											className={cn(
+												"size-3.5",
+												(c.textureStatus === "queued" ||
+													c.textureStatus === "processing") &&
+													"animate-spin",
+											)}
+										/>
+									</Button>
+									{c.id.toString() === value && (
+										<CheckIcon className="size-4 text-muted-foreground" />
+									)}
+								</div>
+							</div>
 						))}
 						{filtered.length === 0 && !trimmedQuery && (
 							<p className="px-2 py-1.5 text-sm text-muted-foreground">

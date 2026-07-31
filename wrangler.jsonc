@@ -48,9 +48,10 @@
 	"ai": {
 		"binding": "AI"
 	},
-	// Queues — background record analysis. Capturing a record enqueues its id; the
-	// consumer (src/server.ts → handleAnalyzeBatch) runs the AI pipeline. One record
-	// per message, retried up to 3× before going to the dead-letter queue.
+	// Queues — background record analysis, and (via the same queue, keyed off
+	// message.body.mode) color vinyl-texture generation. The consumer
+	// (src/server.ts → handleAnalyzeBatch) dispatches each message by mode. One
+	// message per record/color, retried up to 3× before going to the dead-letter queue.
 	// Provision once: `wrangler queues create records-analyze` and
 	// `wrangler queues create records-analyze-dlq`.
 	"queues": {

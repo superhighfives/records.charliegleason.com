@@ -31,6 +31,7 @@ const TEXT_FIELDS = [
 	{ name: "label", label: "Label", placeholder: "R&S Records" },
 	{ name: "format", label: "Format", placeholder: "LP" },
 	{ name: "size", label: "Size", placeholder: '12"' },
+	{ name: "discCount", label: "Disc count", placeholder: "1" },
 	{ name: "catno", label: "Catalog number", placeholder: "R&S 92016" },
 	{ name: "country", label: "Country", placeholder: "UK" },
 	{ name: "genre", label: "Genre", placeholder: "Electronic" },
