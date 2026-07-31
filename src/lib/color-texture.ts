@@ -88,11 +88,15 @@ export async function generateColorTexture(colorId: number): Promise<void> {
 			.where(eq(colors.id, colorId));
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
+		// Best-effort status write; if this also fails there's nothing more we can
+		// do here, but log it so a wedged "processing" color isn't invisible.
 		await db
 			.update(colors)
 			.set({ textureStatus: "failed", textureError: detail })
 			.where(eq(colors.id, colorId))
-			.catch(() => {});
+			.catch((writeErr) => {
+				console.error("Failed to record color texture failure", writeErr);
+			});
 		throw err;
 	}
 }
