@@ -1,11 +1,12 @@
 import { cn } from "#/lib/utils";
 
 /**
- * The physical disc(s) peeking out from behind a cover tile — see `.vinyl-peek` in
- * `styles.css` for the hover rotate/slide-out. Deliberately never reveals the
- * center label/spindle hole (it sits behind the sleeve at rest and the hover slide
- * isn't far enough to expose it either), so unlike `SleevePlaceholder` this only
- * draws the outer disc body + groove rings — no label, no spindle.
+ * The physical disc(s) sitting behind a cover tile, fully hidden at rest — see
+ * `.vinyl-peek` in `styles.css` for the hover slide-out (sideways, in the
+ * collection grid) and `.vinyl-peek--static` (a small permanent peek, for the
+ * record detail panel, which has no hover). Deliberately never reveals the
+ * center label/spindle hole even at full reveal, so unlike `SleevePlaceholder`
+ * this only draws the outer disc body + groove rings — no label, no spindle.
  *
  * The color/material comes from an AI-generated reference texture (one swatch per
  * `colors` row, cached in R2 — see `color-texture.ts`), tiled in as an SVG pattern
@@ -73,17 +74,8 @@ export function VinylDisc({
 
 	return (
 		<div
-			// `inset-y-0 left-0` (NOT `inset-0`) + `aspect-square`: the wrapper
-			// (`.vinyl-peek-reserve` in collection-view.tsx) reserves peek room as
-			// right/top padding, so it's wider than the cover is tall. `inset-0`
-			// pins all four edges — width AND height both already fixed by the
-			// (non-square) padding box, so `aspect-square` has nothing left to do
-			// and the circle gets squashed/clipped. Leaving `right` unset lets
-			// `aspect-square` derive the width FROM the height, matching the
-			// cover's own (shrunk) square box exactly; the hover/rest translate
-			// then slides it into the reserved padding.
 			className={cn(
-				"vinyl-peek pointer-events-none absolute inset-y-0 left-0 aspect-square",
+				"vinyl-peek pointer-events-none absolute inset-0",
 				className,
 			)}
 			style={{ "--vinyl-scale": scale } as React.CSSProperties}

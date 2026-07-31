@@ -154,18 +154,13 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			) : (
 				<ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4">
 					{filtered.map((r) => (
-						<li key={r.id} className="group cv-auto">
+						<li key={r.id} className="group">
 							<button
 								type="button"
 								onClick={() => openRecord(r)}
 								className="w-full cursor-pointer space-y-2 text-left"
 							>
-								{/* `.vinyl-peek-reserve` reserves the vinyl peek's width/height as
-								    padding (shrinking the cover): `.cv-auto` gives this tile paint
-								    containment, so the disc's up-and-out hover translate needs the
-								    room made rather than expanding past the box — see the
-								    `.vinyl-peek`/`.vinyl-peek-reserve` comment in styles.css. */}
-								<div className="relative vinyl-peek-reserve">
+								<div className="relative">
 									<VinylDisc
 										colorName={r.colorName}
 										textureImageKey={r.colorTextureImageKey}

@@ -475,9 +475,14 @@ export function RecordPanel({
 						)}
 					</div>
 					{/* No `group` here (unlike the grid tile) — the detail view's disc stays
-				    at rest, no hover slide-out. */}
+					    at rest, no hover slide-out. */}
 					<div className="absolute right-8 -bottom-8 z-10 aspect-square w-44">
 						<VinylDisc
+							// The default `.vinyl-disc` rest state is fully hidden (it only
+							// reveals on a `.group` hover, in the collection grid); this
+							// static thumbnail has no hover, so it opts into a small
+							// permanent peek instead — see `.vinyl-peek--static` in styles.css.
+							className="vinyl-peek--static"
 							colorName={record.colorName}
 							textureImageKey={record.colorTextureImageKey}
 							textureStatus={record.colorTextureStatus}
