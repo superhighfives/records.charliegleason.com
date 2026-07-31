@@ -1331,6 +1331,31 @@ export const updateRecord = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Set a record's album (master) directly, without going through the full editor
+ * form — the bulk "assign masters" admin flow picks a Discogs master per row and
+ * needs to persist just that, not the whole {@link recordInputSchema}. Mirrors
+ * {@link linkCopy}'s narrow-field update. Returns the updated row, or null if the
+ * record vanished mid-session.
+ */
+export const assignRecordMaster = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(
+		(input: { id: number; masterId: string; masterUrl: string | null }) =>
+			input,
+	)
+	.handler(({ data: { id, masterId, masterUrl } }) =>
+		Sentry.startSpan({ name: "assignRecordMaster" }, async () => {
+			const db = getDb(env.DB);
+			const [row] = await db
+				.update(records)
+				.set({ masterId, masterUrl, updatedAt: new Date() })
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
+		}),
+	);
+
+/**
  * Link a record as an intentional duplicate copy of another — the admin "I own two
  * copies" action. Sets the current record's `copyOf` to the PRIMARY it's a copy of,
  * so it drops off the public collection and instead bumps the primary's "copies"

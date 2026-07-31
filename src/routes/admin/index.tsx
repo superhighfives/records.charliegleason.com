@@ -30,6 +30,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 
+import { BulkAssignMasterDialog } from "#/components/bulk-assign-master-dialog";
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { FadeImage } from "#/components/fade-image";
 import { GenerationFailedBadge } from "#/components/generation-failed-badge";
@@ -593,6 +594,13 @@ function AdminRecords() {
 	const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 	// Quick-view drawer, tracked by record id so paging/re-sorting can't desync it.
 	const [previewId, setPreviewId] = useState<number | null>(null);
+	// Bulk "assign masters" modal — works through every record still missing an
+	// album, independent of the current tab/search filter.
+	const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+	const unmatchedRecords = useMemo(
+		() => data.filter((r) => r.masterId == null),
+		[data],
+	);
 
 	// Collection value totals (USD). `total` sums every record's effective value
 	// (manual if set, else the Discogs guess); `confirmedTotal` counts only records
@@ -1130,6 +1138,20 @@ function AdminRecords() {
 						</PopoverContent>
 					</Popover>
 
+					{unmatchedRecords.length > 0 && (
+						<Button
+							type="button"
+							variant="outline"
+							className="flex-1 md:flex-none"
+							onClick={() => setBulkAssignOpen(true)}
+						>
+							Assign masters
+							<span className="rounded-full bg-foreground px-1.5 text-xs tabular-nums text-background">
+								{unmatchedRecords.length}
+							</span>
+						</Button>
+					)}
+
 					{/* Split primary action: "Capture record" is the common path; the caret
 					    tucks the rarer "Add manually" behind a dropdown. */}
 					<div className="flex flex-1 md:flex-none">
@@ -1444,6 +1466,12 @@ function AdminRecords() {
 					)}
 				</SheetContent>
 			</Sheet>
+
+			<BulkAssignMasterDialog
+				open={bulkAssignOpen}
+				onOpenChange={setBulkAssignOpen}
+				records={unmatchedRecords}
+			/>
 		</div>
 	);
 }
