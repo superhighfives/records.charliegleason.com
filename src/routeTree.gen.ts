@@ -20,6 +20,7 @@ import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
 import { Route as ApiDiscogsCoverIdRouteImport } from './routes/api/discogs-cover.$id'
 import { Route as ApiCronDigestRouteImport } from './routes/api/cron.digest'
+import { Route as ApiAdminBackupRouteImport } from './routes/api/admin/backup'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdRouteImport } from './routes/admin/records.$id'
 
@@ -78,6 +79,11 @@ const ApiCronDigestRoute = ApiCronDigestRouteImport.update({
   path: '/api/cron/digest',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminBackupRoute = ApiAdminBackupRouteImport.update({
+  id: '/api/admin/backup',
+  path: '/api/admin/backup',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRecordsNewRoute = AdminRecordsNewRouteImport.update({
   id: '/records/new',
   path: '/records/new',
@@ -100,6 +106,7 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof AdminIndexRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/admin/backup': typeof ApiAdminBackupRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
@@ -114,6 +121,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminIndexRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/admin/backup': typeof ApiAdminBackupRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
@@ -130,6 +138,7 @@ export interface FileRoutesById {
   '/admin/': typeof AdminIndexRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
+  '/api/admin/backup': typeof ApiAdminBackupRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
@@ -147,6 +156,7 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/admin/records/$id'
     | '/admin/records/new'
+    | '/api/admin/backup'
     | '/api/cron/digest'
     | '/api/discogs-cover/$id'
     | '/api/photos/$'
@@ -161,6 +171,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/admin/records/$id'
     | '/admin/records/new'
+    | '/api/admin/backup'
     | '/api/cron/digest'
     | '/api/discogs-cover/$id'
     | '/api/photos/$'
@@ -176,6 +187,7 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/admin/records/$id'
     | '/admin/records/new'
+    | '/api/admin/backup'
     | '/api/cron/digest'
     | '/api/discogs-cover/$id'
     | '/api/photos/$'
@@ -188,6 +200,7 @@ export interface RootRouteChildren {
   R500Route: typeof R500Route
   ApiRecordsRoute: typeof ApiRecordsRoute
   RecordsIdRoute: typeof RecordsIdRoute
+  ApiAdminBackupRoute: typeof ApiAdminBackupRoute
   ApiCronDigestRoute: typeof ApiCronDigestRoute
   ApiDiscogsCoverIdRoute: typeof ApiDiscogsCoverIdRoute
   ApiPhotosSplatRoute: typeof ApiPhotosSplatRoute
@@ -272,6 +285,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCronDigestRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/backup': {
+      id: '/api/admin/backup'
+      path: '/api/admin/backup'
+      fullPath: '/api/admin/backup'
+      preLoaderRoute: typeof ApiAdminBackupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/records/new': {
       id: '/admin/records/new'
       path: '/records/new'
@@ -314,6 +334,7 @@ const rootRouteChildren: RootRouteChildren = {
   R500Route: R500Route,
   ApiRecordsRoute: ApiRecordsRoute,
   RecordsIdRoute: RecordsIdRoute,
+  ApiAdminBackupRoute: ApiAdminBackupRoute,
   ApiCronDigestRoute: ApiCronDigestRoute,
   ApiDiscogsCoverIdRoute: ApiDiscogsCoverIdRoute,
   ApiPhotosSplatRoute: ApiPhotosSplatRoute,
