@@ -67,7 +67,9 @@ function SessionItem({ id }: { id: number }) {
 				>
 					{label}
 				</span>
-				{duplicateId != null && <DuplicateBadge className="shrink-0" />}
+				{record?.copyOf == null && duplicateId != null && (
+					<DuplicateBadge className="shrink-0" />
+				)}
 				<StatusBadge
 					status={record?.status ?? "pending"}
 					className="shrink-0"

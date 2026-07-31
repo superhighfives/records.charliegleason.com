@@ -1508,7 +1508,12 @@ function RecordDetail() {
 								<span />
 							)}
 							<div className="flex flex-wrap items-center gap-1">
-								{duplicateId != null && <DuplicateBadge />}
+								{/* Only an unresolved record warns — a linked copy (`copyOf` set)
+								    is already handled, so it carries no "possible duplicate" flag
+								    (mirrors the list's `duplicateRecordIds`, which skips copies). */}
+								{record.copyOf == null && duplicateId != null && (
+									<DuplicateBadge />
+								)}
 								{/* Unmatched (no album) supersedes the plain "Unpublished" status. */}
 								{record.status === "review" && !record.masterId ? (
 									<UnmatchedBadge />
