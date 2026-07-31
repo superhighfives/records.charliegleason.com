@@ -170,49 +170,49 @@ export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 );
 
 /**
- * Shared query behind every public-facing records surface (homepage server fn,
- * `/api/records` JSON API) — only published (`complete`) records with an album,
- * excluding secondary copies, each annotated with its linked-copies count.
- */
-export async function fetchPublicRecords(): Promise<PublicRecord[]> {
-	const db = getDb(env.DB);
-	// Count linked secondary copies per primary across the WHOLE table — a copy is
-	// counted even if it isn't itself published (an unmatched/review duplicate still
-	// means the collector owns two), and it never appears in the public list itself.
-	// `copyOf IS NOT NULL` scopes this to just the copies, so it's a small aggregate.
-	const copyCounts = await db
-		.select({ copyOf: records.copyOf, count: count() })
-		.from(records)
-		.where(isNotNull(records.copyOf))
-		.groupBy(records.copyOf);
-	const copiesByPrimary = new Map(copyCounts.map((r) => [r.copyOf, r.count]));
-	// Public = published AND has an album (master), AND is not itself a secondary
-	// copy (those are represented by the primary's count, not their own tile). The
-	// master requirement is defence-in-depth for the publish gate: even if a row
-	// slipped to `complete` without one, it never surfaces publicly without an album.
-	const rows = await db
-		.select()
-		.from(records)
-		.where(
-			and(
-				eq(records.status, "complete"),
-				isNotNull(records.masterId),
-				isNull(records.copyOf),
-			),
-		)
-		.orderBy(desc(records.createdAt));
-	// `copies` = the primary itself (1) plus any secondaries pointing at it.
-	return rows.map((row) =>
-		toPublicRecord(row, 1 + (copiesByPrimary.get(row.id) ?? 0)),
-	);
-}
-
-/**
  * Public list for the homepage — only published (`complete`) records, and omits
  * the admin-only iPhone capture key. In-flight / failed captures stay private.
+ * Also the single source for the `/api/records` JSON route, which just calls this
+ * (rather than re-running the query) so the copy-exclusion + counts never drift.
+ *
+ * NB: the query lives inside this `createServerFn` handler on purpose. `records.ts`
+ * is reachable from client code (via `records-queries.ts`), and only server-fn
+ * handler bodies get the `cloudflare:workers` (`env`) import stripped from the
+ * client bundle — a plain exported helper touching `env` breaks the client build.
  */
 export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
-	Sentry.startSpan({ name: "listPublicRecords" }, () => fetchPublicRecords()),
+	Sentry.startSpan({ name: "listPublicRecords" }, async () => {
+		const db = getDb(env.DB);
+		// Count linked secondary copies per primary across the WHOLE table — a copy is
+		// counted even if it isn't itself published (an unmatched/review duplicate still
+		// means the collector owns two), and it never appears in the public list itself.
+		// `copyOf IS NOT NULL` scopes this to just the copies, so it's a small aggregate.
+		const copyCounts = await db
+			.select({ copyOf: records.copyOf, count: count() })
+			.from(records)
+			.where(isNotNull(records.copyOf))
+			.groupBy(records.copyOf);
+		const copiesByPrimary = new Map(copyCounts.map((r) => [r.copyOf, r.count]));
+		// Public = published AND has an album (master), AND is not itself a secondary
+		// copy (those are represented by the primary's count, not their own tile). The
+		// master requirement is defence-in-depth for the publish gate: even if a row
+		// slipped to `complete` without one, it never surfaces publicly without an album.
+		const rows = await db
+			.select()
+			.from(records)
+			.where(
+				and(
+					eq(records.status, "complete"),
+					isNotNull(records.masterId),
+					isNull(records.copyOf),
+				),
+			)
+			.orderBy(desc(records.createdAt));
+		// `copies` = the primary itself (1) plus any secondaries pointing at it.
+		return rows.map((row) =>
+			toPublicRecord(row, 1 + (copiesByPrimary.get(row.id) ?? 0)),
+		);
+	}),
 );
 
 export const getRecord = createServerFn({ method: "GET" })

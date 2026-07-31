@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { json } from "@tanstack/react-start";
 
-import { fetchPublicRecords } from "#/lib/records";
+import { listPublicRecords } from "#/lib/records";
 
 /**
  * Public, read-only JSON API for the collection.
@@ -13,9 +13,10 @@ export const Route = createFileRoute("/api/records")({
 	server: {
 		handlers: {
 			GET: async () => {
-				// Same query as listPublicRecords — excludes secondary copies and
-				// includes each primary's linked-copies count.
-				const publicRows = await fetchPublicRecords();
+				// Delegate to the homepage server fn — one source of truth for the public
+				// query (published + has-album, secondary copies excluded, copies count
+				// annotated), so the JSON API can never drift from what the site shows.
+				const publicRows = await listPublicRecords();
 
 				return json(
 					{ records: publicRows, count: publicRows.length },
