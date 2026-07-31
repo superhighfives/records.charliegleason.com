@@ -34,6 +34,8 @@ name: Preview
 #   VITE_CLERK_PUBLISHABLE_KEY_PREVIEW           — Clerk pk_test_… (client, dev instance)
 #   PREVIEW_CLERK_SECRET_KEY                     — Clerk sk_test_… (server, dev instance)
 #   DISCOGS_TOKEN, LASTFM_API_KEY                — reuse the prod values (read-only lookups)
+#   REPLICATE_API_KEY                            — Apply pipeline (ESRGAN enhance + AI matte);
+#                                                  reuse prod, or a low-cap token for preview
 #   VITE_SENTRY_DSN / VITE_SENTRY_ORG / VITE_SENTRY_PROJECT / SENTRY_AUTH_TOKEN
 #   Optional (skipped if unset): SERPAPI_KEY, CRON_SECRET
 on:
@@ -171,13 +173,17 @@ jobs:
           CLERK_SECRET_KEY: ${{ secrets.PREVIEW_CLERK_SECRET_KEY }}
           DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          # Apply pipeline (ESRGAN enhance + AI matte) calls Replicate directly —
+          # needed even in preview, where the matte container is dropped and the
+          # in-Worker matte/enhance run instead.
+          REPLICATE_API_KEY: ${{ secrets.REPLICATE_API_KEY }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           node -e '
             const keys = [
               "CLERK_SECRET_KEY", "DISCOGS_TOKEN", "LASTFM_API_KEY",
-              "SERPAPI_KEY", "CRON_SECRET",
+              "REPLICATE_API_KEY", "SERPAPI_KEY", "CRON_SECRET",
             ];
             const out = {};
             for (const k of keys) {
@@ -218,9 +224,11 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
 
-  # On PR close (merged or not), delete the Worker then its Queue. Deleting the
-  # Worker first releases the queue consumer so the queue can be removed. All
-  # best-effort — a missing resource shouldn't fail the job.
+  # On PR close (merged or not), tear down the per-PR resources. Order matters and
+  # `wrangler delete --force` does NOT release the queue consumer on its own
+  # (fails with code 10064), so we explicitly remove the consumer first, then the
+  # Worker, then the (now-unreferenced) Queue. All best-effort — a missing resource
+  # shouldn't fail the job.
   cleanup:
     if: >-
       github.event.action == 'closed'
@@ -236,6 +244,14 @@ jobs:
           bun-version: latest
 
       - run: bun install --frozen-lockfile
+
+      # Release the consumer link first — `wrangler delete` won't (code 10064).
+      - name: Remove queue consumer
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler queues consumer remove records-analyze-pr-${PR} records-pr-${PR}
 
       - name: Delete preview Worker
         continue-on-error: true
