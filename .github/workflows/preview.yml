@@ -1,25 +1,48 @@
 name: Preview
 
-# Per-PR preview of the app. Each PR is uploaded as a *version* of the shared
-# `records-preview` Worker and gets its own stable Cloudflare preview URL
-# (https://pr-<number>-records-preview.<subdomain>.workers.dev) via
-# `wrangler versions upload --preview-alias`. Because `versions upload` only
-# mints the workers.dev preview URL and never changes the version served on a
-# route, PRs no longer evict each other — each keeps its own live URL.
+# Per-PR preview deploy. Each PR gets its OWN ephemeral Worker
+# (`records-pr-<n>`) via a plain `wrangler deploy` against a rewritten config —
+# not `wrangler versions upload` against one shared preview Worker. The old
+# shared-Worker model needed a single `records-preview` D1 that every PR mutated,
+# which drifted whenever two PRs (or a rebuilt migration) touched the same schema
+# object. A standalone per-PR Worker sidesteps that whole class of problem.
 #
-# Worker versions share the parent Worker's bindings, so every preview reads the
-# one isolated `records-preview` D1 — a snapshot of production refreshed nightly
-# by preview-db-refresh.yml, never the live production database. Captures made
-# while reviewing stay in that shared preview DB. R2 (cover photos) is shared
-# with production. Any migrations a PR adds are applied to the preview DB so
-# schema-changing PRs still work. See SETUP.md → "PR previews".
+# Shared vs isolated (mirrors the sibling repos' preview model):
+#   • D1 + R2 are SHARED with PRODUCTION. Consequence: this job does NOT run D1
+#     migrations, so a PR that adds a migration will hit runtime errors on its
+#     preview until it merges and the prod deploy applies the migration (the PR
+#     comment warns about this). It also means captures/edits made while
+#     reviewing a preview write to your REAL collection — previews are for
+#     eyeballing behaviour, not throwaway data.
+#   • Each PR gets its OWN analyze Queue (`records-analyze-pr-<n>`), so its Worker
+#     registers a consumer without fighting production's single consumer — the
+#     background analysis pipeline works on the preview.
+#   • The matte CONTAINER + its Durable Object are DROPPED in preview (building a
+#     Docker image per PR is slow/expensive, and `deploy` would try to). With no
+#     MATTE_CONTAINER binding the Apply pipeline falls back to the in-Worker matte
+#     render (see renderAiMatte / renderDeterministicMatte) — same as the old
+#     preview did.
+#   • Cron (weekly digest), custom routes, and email are dropped — preview serves
+#     only on its workers.dev URL and sends no mail.
+#   • Secrets are set per-PR from repo secrets (below), test-mode where it matters.
+#
+# The Worker + its Queue are torn down when the PR closes (cleanup job).
+#
+# Required repo secrets (add these — they used to live only on the prod Worker):
+#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID  — as in deploy.yml, plus
+#                                                  Queues:Edit + Workers Scripts:Edit
+#   VITE_CLERK_PUBLISHABLE_KEY_PREVIEW           — Clerk pk_test_… (client, dev instance)
+#   PREVIEW_CLERK_SECRET_KEY                     — Clerk sk_test_… (server, dev instance)
+#   DISCOGS_TOKEN, LASTFM_API_KEY                — reuse the prod values (read-only lookups)
+#   VITE_SENTRY_DSN / VITE_SENTRY_ORG / VITE_SENTRY_PROJECT / SENTRY_AUTH_TOKEN
+#   Optional (skipped if unset): SERPAPI_KEY, CRON_SECRET
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, closed]
 
-# Cancel superseded builds for the SAME PR only — different PRs keep their own
-# preview URL and no longer cancel each other.
+# A PR with rapid pushes only needs the latest preview — cancel older runs for
+# the SAME PR. Different PRs keep their own Worker and never cancel each other.
 concurrency:
   group: preview-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -29,10 +52,14 @@ permissions:
   pull-requests: write
 
 jobs:
-  preview:
-    # Skip forks — they don't have access to the repo/account secrets.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+  deploy:
+    # Skip forks (no secret access) and the close event (that's cleanup's job).
+    if: >-
+      github.event.action != 'closed'
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    env:
+      PR: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v5
 
@@ -42,89 +69,128 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # Same build-time vars as Deploy, except Clerk: previews use a Clerk
-      # *development* instance, which works on any origin (incl. *.workers.dev).
-      # A production instance would need the preview URL as a satellite domain
-      # with DNS you can't add to workers.dev. Set VITE_CLERK_PUBLISHABLE_KEY_PREVIEW
-      # (pk_test_…) in repo secrets, and the preview Worker's CLERK_SECRET_KEY to the
-      # matching sk_test_… (wrangler secret put CLERK_SECRET_KEY --env preview).
-      #
-      # CLOUDFLARE_ENV selects the wrangler environment at BUILD time — the
-      # @cloudflare/vite-plugin bakes it into the generated deploy config. Without
-      # it the build defaults to the top-level (production!) config and a later
-      # `wrangler versions upload` can't override it.
-      - name: Build
-        run: bun run build
+      # Per-PR analyze Queue so this PR's Worker registers its own consumer
+      # instead of colliding with production's. Idempotent — `|| true` so a re-run
+      # on an existing queue is a no-op.
+      - name: Ensure per-PR queue exists
         env:
-          CLOUDFLARE_ENV: preview
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler queues create records-analyze-pr-${PR} 2>&1 || true
+
+      # Rewrite wrangler.jsonc in place (ephemeral CI checkout, never committed):
+      # unique Worker name, per-PR queue, prod D1/R2 kept, and everything a per-PR
+      # ephemeral Worker shouldn't carry (routes, container/DO, cron, email)
+      # stripped. The build (below) reads this rewritten config via the vite plugin.
+      - name: Rewrite wrangler config for preview
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const pr = context.payload.pull_request.number;
+            const path = 'wrangler.jsonc';
+            const raw = fs.readFileSync(path, 'utf8');
+            // Strip // comments and trailing commas so JSON.parse accepts JSONC.
+            const stripped = raw
+              .replace(/^\s*\/\/.*$/gm, '')
+              .replace(/,\s*([}\]])/g, '$1');
+            const config = JSON.parse(stripped);
+
+            config.name = `records-pr-${pr}`;
+            // Serve on the workers.dev URL only. Dropping routes is critical —
+            // otherwise this per-PR Worker would try to claim the production custom
+            // domain (records.charliegleason.com).
+            delete config.routes;
+            config.workers_dev = true;
+            // Mark it the preview env so runtime Sentry stays disabled (src/server.ts).
+            config.vars = { ENVIRONMENT: 'preview' };
+
+            // Per-PR queue name for both producer + consumer; drop the DLQ (a
+            // second per-PR queue to manage for no preview value).
+            const q = `records-analyze-pr-${pr}`;
+            if (config.queues?.producers) {
+              config.queues.producers = config.queues.producers.map((p) => ({ ...p, queue: q }));
+            }
+            if (config.queues?.consumers) {
+              config.queues.consumers = config.queues.consumers.map(
+                ({ dead_letter_queue, ...c }) => ({ ...c, queue: q })
+              );
+            }
+
+            // Drop the matte container + its DO — preview falls back to the
+            // in-Worker matte. `migrations: []` (empty, not removed) mirrors the
+            // old env.preview, which proved a `wrangler deploy` succeeds with the
+            // MatteContainer class exported but unbound + no DO migration. Also drop
+            // the weekly cron and email; a preview serves HTTP only.
+            delete config.containers;
+            delete config.durable_objects;
+            config.migrations = [];
+            delete config.triggers;
+            delete config.send_email;
+            // The named preview env is obsolete under this model.
+            delete config.env;
+
+            fs.writeFileSync(path, JSON.stringify(config, null, 2));
+
+      # Build against the rewritten top-level config (no CLOUDFLARE_ENV — that
+      # selected the now-removed env.preview block). Preview uses a Clerk *dev*
+      # instance (pk_test_/sk_test_), which works on any origin incl. workers.dev.
+      - name: Build
+        env:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY_PREVIEW }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           VITE_SENTRY_ORG: ${{ secrets.VITE_SENTRY_ORG }}
           VITE_SENTRY_PROJECT: ${{ secrets.VITE_SENTRY_PROJECT }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: bun run build
 
-      # Top up the shared preview DB with any migrations this PR adds, so
-      # schema-changing PRs render. Idempotent: `migrations apply` runs only the
-      # migrations missing from the preview DB's d1_migrations table (a no-op for
-      # non-schema PRs). The full production clone happens nightly
-      # (preview-db-refresh.yml); this never touches production D1.
-      - name: Apply PR migrations to preview database
+      - name: Deploy preview Worker
+        id: deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bunx wrangler d1 migrations apply records-preview --remote --env preview
-
-      # Upload this PR's build as a new version of the preview Worker and give it
-      # a stable per-PR alias URL. `versions upload` does NOT promote the version
-      # to any route, so previews never overwrite each other. CLOUDFLARE_ENV keeps
-      # wrangler aligned with the preview build output the vite plugin generated.
-      - name: Upload preview version
-        id: upload
-        env:
-          CLOUDFLARE_ENV: preview
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          bunx wrangler versions upload \
-            --preview-alias "pr-${{ github.event.pull_request.number }}" \
-            2>&1 | tee /tmp/upload.log
-          # `|| true` so a no-match grep doesn't trip `set -e` before the
-          # explicit check below can print a useful message.
-          url=$(grep -oiE 'https://pr-[0-9a-z.-]+\.workers\.dev' /tmp/upload.log | head -1 || true)
+          bunx wrangler deploy 2>&1 | tee /tmp/deploy.log
+          # `|| true` so a no-match grep doesn't trip `set -e` before the check.
+          url=$(grep -oiE "https://records-pr-${PR}\.[a-z0-9-]+\.workers\.dev" /tmp/deploy.log | head -1 || true)
           if [ -z "$url" ]; then
-            echo "The version uploaded but no preview URL was minted." >&2
-            echo "Enable version preview URLs for the records-preview Worker:" >&2
-            echo "claim a workers.dev subdomain on the account and turn Preview" >&2
-            echo "URLs on once (a dashboard toggle / one 'wrangler versions" >&2
-            echo "deploy' — versions upload can't flip this non-versioned" >&2
-            echo "setting). See SETUP.md -> PR previews." >&2
+            echo "Deploy succeeded but no workers.dev URL was found in the output." >&2
+            echo "Confirm a workers.dev subdomain is claimed on the account." >&2
             exit 1
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
-      # Also promote this build to the preview Worker's ACTIVE deployment. The
-      # per-PR alias URL above only serves HTTP requests; queue consumers (and
-      # crons) always run whatever version is *deployed*, never a preview alias. So
-      # without this, queued work — notably the professional-photo background matte
-      # — would run stale code on every preview. Deploying here points the shared
-      # preview consumer at THIS PR's code.
-      #
-      # Trade-off (accepted): whichever PR built most recently owns the shared
-      # preview queue consumer until the next build supersedes it. Fine for a
-      # preview env. Safe because `env.preview` pins `routes: []`, so this never
-      # serves on a production domain, and preview crons are empty.
-      - name: Deploy preview Worker (so the queue consumer runs this PR)
+      # Set the per-PR Worker's runtime secrets. `secret bulk` targets the Worker
+      # named in the rewritten wrangler.jsonc. Empty/unset values are dropped, so
+      # optional integrations can be left unconfigured.
+      - name: Push preview secrets
         env:
-          CLOUDFLARE_ENV: preview
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bunx wrangler deploy --env preview
+          CLERK_SECRET_KEY: ${{ secrets.PREVIEW_CLERK_SECRET_KEY }}
+          DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          node -e '
+            const keys = [
+              "CLERK_SECRET_KEY", "DISCOGS_TOKEN", "LASTFM_API_KEY",
+              "SERPAPI_KEY", "CRON_SECRET",
+            ];
+            const out = {};
+            for (const k of keys) {
+              const v = process.env[k];
+              if (v !== undefined && v !== "") out[k] = v;
+            }
+            process.stdout.write(JSON.stringify(out));
+          ' | bunx wrangler secret bulk
 
       - name: Comment preview URL on the PR
         uses: actions/github-script@v7
         env:
-          PREVIEW_URL: ${{ steps.upload.outputs.url }}
+          PREVIEW_URL: ${{ steps.deploy.outputs.url }}
         with:
           script: |
             const url = process.env.PREVIEW_URL;
@@ -134,10 +200,9 @@ jobs:
 
             **${url}**
 
-            Per-PR version of the \`records-preview\` Worker. Reads the shared,
-            isolated preview database (a nightly snapshot of production with this
-            PR's migrations applied) and the shared production R2 bucket. Captures
-            made here won't touch production data.
+            Ephemeral per-PR Worker (\`records-pr-${context.payload.pull_request.number}\`) on a Clerk **dev** instance. Shares production **D1 / R2**, so captures and edits you make here write to your **real** collection. Torn down when this PR closes.
+
+            > ⚠️ D1 migrations are *not* applied to previews — a PR that adds a migration will error here until it merges.
 
             _Updated for ${context.sha.slice(0, 7)}._`;
 
@@ -148,11 +213,40 @@ jobs:
             });
             const existing = comments.find((c) => c.body?.includes(marker));
             if (existing) {
-              await github.rest.issues.updateComment({
-                owner, repo, comment_id: existing.id, body,
-              });
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
             } else {
-              await github.rest.issues.createComment({
-                owner, repo, issue_number, body,
-              });
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+  # On PR close (merged or not), delete the Worker then its Queue. Deleting the
+  # Worker first releases the queue consumer so the queue can be removed. All
+  # best-effort — a missing resource shouldn't fail the job.
+  cleanup:
+    if: >-
+      github.event.action == 'closed'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Delete preview Worker
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler delete --name records-pr-${PR} --force
+
+      - name: Delete preview queue
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler queues delete records-analyze-pr-${PR}

@@ -129,94 +129,10 @@
 			"name": "EMAIL",
 			"remote": true
 		}
-	],
-	// PR preview environment — the shared `records-preview` Worker. Each PR is
-	// uploaded as a *version* of this Worker by CI (.github/workflows/preview.yml)
-	// and served on its own Cloudflare preview URL
-	// (pr-<n>-records-preview.<subdomain>.workers.dev), so PRs no longer overwrite
-	// each other. Versions share these bindings, so all previews read the one
-	// `records-preview` D1 — refreshed nightly from production by
-	// preview-db-refresh.yml — which stays isolated from the live production DB.
-	// R2 is shared with production. There is no custom domain, cron or email.
-	// Bindings are NOT inherited by named environments, so everything is repeated.
-	//
-	// One-time setup (needs your Cloudflare account — see SETUP.md):
-	//   wrangler d1 create records-preview            # paste the id below
-	//   wrangler queues create records-analyze-preview
-	//   wrangler queues create records-analyze-preview-dlq
-	//   wrangler secret put CLERK_SECRET_KEY --env preview   # + DISCOGS_TOKEN, LASTFM_API_KEY
-	"env": {
-		"preview": {
-			// `routes` and `triggers` ARE inherited by environments, so both are
-			// overridden here. `routes: []` is critical: without it preview inherits
-			// the production route and a `wrangler deploy --env preview` would
-			// reassign records.charliegleason.com (production!) to this Worker. It's
-			// empty because per-PR previews are served on version preview URLs
-			// (see `preview_urls` below), not a custom domain. The empty crons
-			// disable the inherited weekly digest in preview. `send_email` is
-			// intentionally omitted (not inherited) — preview never sends mail.
-			"routes": [],
-			// Enable Cloudflare version preview URLs so CI's
-			// `wrangler versions upload --preview-alias pr-<n>` mints a stable
-			// per-PR URL (pr-<n>-records-preview.<subdomain>.workers.dev). Requires
-			// a workers.dev subdomain claimed on the account.
-			"preview_urls": true,
-			"triggers": {
-				"crons": []
-			},
-			// `vars` is non-inheritable, so restate it — marks this the preview deploy
-			// so Sentry stays disabled (src/server.ts). No matte container here on purpose:
-			// preview ships via `wrangler versions upload`, which can't apply the container's
-			// Durable Object migration (only a non-versioned `deploy` can). With no
-			// MATTE_CONTAINER binding, the Apply pipeline falls back to the in-Worker matte
-			// render in preview (see renderAiMatte / renderDeterministicMatte).
-			"vars": {
-				"ENVIRONMENT": "preview"
-			},
-			// Migrations ARE inherited by named environments (unlike bindings), so the
-			// top-level MatteContainer DO migration would otherwise ride along — and preview's
-			// `versions upload` can't apply DO migrations (code 10211). Override to empty: no
-			// container DO in preview, so the matte falls back to the in-Worker render.
-			"migrations": [],
-			"d1_databases": [
-				{
-					"binding": "DB",
-					"database_name": "records-preview",
-					"database_id": "1de59465-de47-45bc-b5a0-5fdb56b24f10",
-					"migrations_dir": "drizzle",
-					"remote": true
-				}
-			],
-			"r2_buckets": [
-				{
-					"binding": "PHOTOS",
-					"bucket_name": "records-photos",
-					"remote": true
-				}
-			],
-			"ai": {
-				"binding": "AI"
-			},
-			"images": {
-				"binding": "IMAGES"
-			},
-			"queues": {
-				"producers": [
-					{
-						"binding": "ANALYZE_QUEUE",
-						"queue": "records-analyze-preview"
-					}
-				],
-				"consumers": [
-					{
-						"queue": "records-analyze-preview",
-						"max_batch_size": 1,
-						"max_batch_timeout": 5,
-						"max_retries": 3,
-						"dead_letter_queue": "records-analyze-preview-dlq"
-					}
-				]
-			}
-		}
-	}
+	]
+	// No `env.preview` block: PR previews are ephemeral per-PR Workers
+	// (`records-pr-<n>`), deployed by .github/workflows/preview.yml, which rewrites
+	// THIS top-level config at CI time (unique name, per-PR queue, prod D1/R2,
+	// container/DO/cron/email stripped). See that workflow's header for the model
+	// and the required repo secrets.
 }
