@@ -1500,8 +1500,11 @@ function RecordDetail() {
 				</div>
 			</div>
 
-			{/* Flagged by analysis as already in the collection — link to the original. */}
-			{record.duplicateOf != null && (
+			{/* Flagged by analysis as already in the collection — link to the original.
+			    Suppressed once the record is intentionally linked as a copy (`copyOf`
+			    set): the CopyManager below already states the relationship, so the
+			    "possible accidental duplicate" warning is just noise. */}
+			{record.duplicateOf != null && record.copyOf == null && (
 				<div className="flex items-center gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-200">
 					<span>This release looks like it’s already in your collection.</span>
 					<Link
