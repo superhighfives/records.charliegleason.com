@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckIcon, XIcon } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -41,6 +42,7 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 			setQuery("");
 			setOpen(false);
 		},
+		onError: () => toast.error("Couldn't create the color."),
 	});
 
 	const trimmedQuery = query.trim();
