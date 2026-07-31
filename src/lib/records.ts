@@ -1552,19 +1552,11 @@ export const deleteRecord = createServerFn({ method: "POST" })
 				if (keys.length > 0) await env.PHOTOS.delete(keys);
 			}
 			await db.delete(records).where(eq(records.id, id));
-			const now = new Date();
-			// Clear the dangling reference on any record flagged as a duplicate of
-			// the one we just removed, so it stops showing the "Duplicate" badge.
+			// Deleting a primary promotes its linked copies back to standalone (they
+			// reappear publicly) rather than pointing at a row that no longer exists.
 			await db
 				.update(records)
-				.set({ duplicateOf: null, updatedAt: now })
-				.where(eq(records.duplicateOf, id));
-			// Same for intentional copies: deleting a primary promotes its linked
-			// copies back to standalone (they reappear publicly) rather than pointing
-			// at a row that no longer exists.
-			await db
-				.update(records)
-				.set({ copyOf: null, updatedAt: now })
+				.set({ copyOf: null, updatedAt: new Date() })
 				.where(eq(records.copyOf, id));
 			return { id };
 		}),
@@ -1575,8 +1567,9 @@ const idList = (ids: number[]) => ids;
 
 /**
  * Bulk delete. Removes every selected record in one statement and clears the
- * `duplicateOf` back-references in a second, rather than issuing a request per
- * row from the client. Returns how many ids were targeted.
+ * `copyOf` back-references in a second (promoting orphaned copies to standalone),
+ * rather than issuing a request per row from the client. Returns how many ids were
+ * targeted.
  */
 export const deleteRecords = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -1590,12 +1583,7 @@ export const deleteRecords = createServerFn({ method: "POST" })
 			const now = new Date();
 			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
 				await db.delete(records).where(inArray(records.id, batch));
-				await db
-					.update(records)
-					.set({ duplicateOf: null, updatedAt: now })
-					.where(inArray(records.duplicateOf, batch));
-				// Promote copies of any deleted primary back to standalone (mirrors
-				// the single deleteRecord's `copyOf` cleanup).
+				// Promote copies of any deleted primary back to standalone.
 				await db
 					.update(records)
 					.set({ copyOf: null, updatedAt: now })

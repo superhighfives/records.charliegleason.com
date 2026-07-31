@@ -9,7 +9,6 @@ import {
 } from "#/lib/discogs";
 import { bytesToBase64 } from "#/lib/image-data";
 import { sourceCoverFromDiscogs } from "#/lib/images";
-import { foldDiacritics } from "#/lib/records-path";
 import { getPitchforkScore } from "#/lib/the-fork";
 
 /**
@@ -50,71 +49,6 @@ interface Extraction {
 	title: string;
 	year: number | null;
 	confidence: number;
-}
-
-/**
- * Normalize a name for loose comparison: fold diacritics to their base letter
- * (ö → o, so "Björk" matches a plain "Bjork"), lowercase, then collapse runs of
- * punctuation/whitespace to single spaces.
- */
-function normalizeName(value: string | null | undefined): string {
-	return foldDiacritics(value)
-		.replace(/[^a-z0-9]+/g, " ")
-		.trim();
-}
-
-/**
- * Decide whether an identified record already exists in the collection. Matches
- * on Discogs master (same album) first, then a specific release (same pressing),
- * then a normalized artist + title comparison so a re-photographed sleeve still
- * gets flagged even when Discogs didn't resolve. Returns the id of the existing
- * record it duplicates, or null. Pure: the caller supplies the rows to check
- * against (the record being analyzed must be excluded by the caller).
- */
-export function findDuplicateOf(
-	target: {
-		artist: string;
-		title: string;
-		masterId: string | null;
-		discogsId: string | null;
-	},
-	existing: Array<
-		Pick<Record, "id" | "artist" | "title" | "masterId" | "discogsId">
-	>,
-): number | null {
-	const artist = normalizeName(target.artist);
-	const title = normalizeName(target.title);
-	const masterId = target.masterId?.trim() || null;
-	const discogsId = target.discogsId?.trim() || null;
-
-	// A blank identification can't meaningfully match anything.
-	if (!masterId && !discogsId && (!artist || !title)) return null;
-
-	// The caller's rows are unordered, so track the smallest id in each bucket to
-	// keep the result deterministic and point at the earliest record. Match strength:
-	// same album (master) > same pressing (release) > name-only.
-	let masterMatch: number | null = null;
-	let releaseMatch: number | null = null;
-	let nameMatch: number | null = null;
-	for (const row of existing) {
-		if (masterId && row.masterId?.trim() === masterId) {
-			if (masterMatch === null || row.id < masterMatch) masterMatch = row.id;
-			continue;
-		}
-		if (discogsId && row.discogsId?.trim() === discogsId) {
-			if (releaseMatch === null || row.id < releaseMatch) releaseMatch = row.id;
-			continue;
-		}
-		if (
-			artist &&
-			title &&
-			normalizeName(row.artist) === artist &&
-			normalizeName(row.title) === title
-		) {
-			if (nameMatch === null || row.id < nameMatch) nameMatch = row.id;
-		}
-	}
-	return masterMatch ?? releaseMatch ?? nameMatch;
 }
 
 const EXTRACT_TOOL = {
