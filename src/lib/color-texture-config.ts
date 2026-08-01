@@ -12,10 +12,12 @@
 export const COLOR_TEXTURE_MODEL = "black-forest-labs/flux-schnell";
 
 // A flat material swatch, not a full disc render — VinylDisc composites this with
-// procedural grooves/spindle hole, so it only needs to read as a seamless-ish patch
-// of the color/material at a middling resolution (it's tiled behind grooves, never
-// shown edge-to-edge at full size).
-export const COLOR_TEXTURE_SIZE = 512;
+// procedural grooves/spindle hole, so it doesn't need to be huge, but 1024 gives a
+// bit of headroom for the swatch to be zoomed/cropped in VinylDisc's pattern fill
+// without visibly softening. Square: both the Replicate generation (aspect_ratio
+// "1:1" in color-texture.ts) and a manual upload (color-texture-upload.ts) are
+// cropped/resized to exactly this via the Images binding.
+export const COLOR_TEXTURE_SIZE = 1024;
 
 /**
  * Build the generation prompt from a color's display name (e.g. "Black",

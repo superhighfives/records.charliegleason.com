@@ -7,6 +7,8 @@ import { z } from "zod";
 import { getDb } from "#/db";
 import { type Color, colors } from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
+import { storeColorTextureUpload } from "#/lib/color-texture-upload";
+import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
 import { enqueueColorTexture } from "#/lib/queue";
 
 /** New records without an explicit color default to this chip — see `records.ts`. */
@@ -86,4 +88,31 @@ export const regenerateColorTexture = createServerFn({ method: "POST" })
 				.where(eq(colors.id, colorId));
 			await enqueueColorTexture(colorId);
 		}),
+	);
+
+/**
+ * Upload a color's reference vinyl texture directly, in place of the
+ * AI-generated one — the combobox's upload affordance. Same storage shape as a
+ * generated texture (see `color-texture-upload.ts`), so `VinylDisc` can't tell
+ * the difference; this just skips the Replicate round-trip entirely.
+ */
+export const uploadColorTexture = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => {
+		const d = (data ?? {}) as Record<string, unknown>;
+		if (typeof d.colorId !== "number") {
+			throw new Error("colorId must be a number");
+		}
+		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
+			throw new Error("imageBase64 must be a non-empty string");
+		}
+		return { colorId: d.colorId, imageBase64: d.imageBase64 };
+	})
+	.handler(({ data: { colorId, imageBase64 } }) =>
+		Sentry.startSpan({ name: "uploadColorTexture" }, () =>
+			storeColorTextureUpload(
+				colorId,
+				base64ToBytes(stripDataUrl(imageBase64)),
+			),
+		),
 	);

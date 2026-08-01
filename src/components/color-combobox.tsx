@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import { useState } from "react";
+import { CheckIcon, RefreshCwIcon, UploadIcon, XIcon } from "lucide-react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "#/components/ui/button";
@@ -10,9 +10,23 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
-import { createColor, regenerateColorTexture } from "#/lib/colors";
+import {
+	createColor,
+	regenerateColorTexture,
+	uploadColorTexture,
+} from "#/lib/colors";
 import { colorsQueryOptions } from "#/lib/colors-queries";
 import { cn } from "#/lib/utils";
+
+/** Same read-to-data-URL helper used by the other upload flows (records.$id.tsx, capture.tsx). */
+function readFileAsDataUrl(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => resolve(reader.result as string);
+		reader.onerror = () => reject(reader.error);
+		reader.readAsDataURL(file);
+	});
+}
 
 interface ColorComboboxProps {
 	/** Selected color id, as a string (form values are all strings) — "" = none. */
@@ -29,6 +43,11 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const queryClient = useQueryClient();
+	const uploadInputRef = useRef<HTMLInputElement>(null);
+	// Which color's upload button was clicked — one shared hidden file input
+	// (only one file dialog can be open at a time anyway) needs to know where
+	// the chosen file goes once `onChange` fires.
+	const [uploadTargetId, setUploadTargetId] = useState<number | null>(null);
 
 	const { data: colors = [] } = useQuery(colorsQueryOptions);
 	const selected = colors.find((c) => c.id.toString() === value);
@@ -52,6 +71,27 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey }),
 		onError: () => toast.error("Couldn't regenerate the texture."),
 	});
+
+	const uploadMutation = useMutation({
+		mutationFn: ({
+			colorId,
+			imageBase64,
+		}: {
+			colorId: number;
+			imageBase64: string;
+		}) => uploadColorTexture({ data: { colorId, imageBase64 } }),
+		onSuccess: () =>
+			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey }),
+		onError: () => toast.error("Couldn't upload the texture."),
+	});
+
+	const handleUploadFile = async (file: File | undefined) => {
+		if (!file || uploadTargetId == null) return;
+		const colorId = uploadTargetId;
+		setUploadTargetId(null);
+		const imageBase64 = await readFileAsDataUrl(file);
+		uploadMutation.mutate({ colorId, imageBase64 });
+	};
 
 	const trimmedQuery = query.trim();
 	const filtered = colors.filter((c) =>
@@ -125,6 +165,21 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 										type="button"
 										variant="ghost"
 										size="icon-sm"
+										aria-label={`Upload ${c.name} texture`}
+										className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+										disabled={uploadMutation.isPending}
+										onClick={(e) => {
+											e.stopPropagation();
+											setUploadTargetId(c.id);
+											uploadInputRef.current?.click();
+										}}
+									>
+										<UploadIcon className="size-3.5" />
+									</Button>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
 										aria-label={`Regenerate ${c.name} texture`}
 										className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
 										disabled={
@@ -185,6 +240,16 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 					<XIcon className="size-4" />
 				</Button>
 			)}
+			<input
+				ref={uploadInputRef}
+				type="file"
+				accept="image/*"
+				className="hidden"
+				onChange={(e) => {
+					handleUploadFile(e.target.files?.[0]);
+					e.target.value = "";
+				}}
+			/>
 		</div>
 	);
 }
