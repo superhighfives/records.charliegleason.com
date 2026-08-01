@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { PencilIcon, RedoIcon, SearchIcon, XIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "#/components/ui/button";
@@ -42,10 +42,11 @@ function errText(error: unknown, fallback: string): string {
 
 /**
  * Bulk "assign the album (master)" flow for records still missing one. Works
- * through the unmatched list in batches of {@link BATCH_SIZE}: each row
- * auto-searches Discogs on mount and offers the matches in a dropdown, or the
- * row can be skipped. Picks are staged locally and only persisted when Save
- * is pressed, which assigns the whole batch and slides the next batch in.
+ * through the unmatched list in batches of {@link BATCH_SIZE}: rows auto-search
+ * Discogs one at a time (queued, to avoid a burst of concurrent requests) and
+ * offer the matches in a dropdown, or the row can be skipped. Picks are staged
+ * locally and only persisted when Save is pressed, which assigns the whole
+ * batch and slides the next batch in.
  */
 export function BulkAssignMasterDialog({
 	open,
@@ -64,21 +65,29 @@ export function BulkAssignMasterDialog({
 	const [selections, setSelections] = useState<
 		Map<number, DiscogsMasterCandidate>
 	>(new Map());
+	// Auto-search walks the batch one row at a time — each row runs its search
+	// and reports back before the next one starts, rather than firing all ten
+	// at once and inviting a Discogs 429.
+	const [autoSearchedIds, setAutoSearchedIds] = useState<Set<number>>(
+		new Set(),
+	);
 	useEffect(() => {
 		if (open) {
 			setSkipped(new Set());
 			setSelections(new Map());
+			setAutoSearchedIds(new Set());
 		}
 	}, [open]);
 
 	const remaining = records.filter((r) => !skipped.has(r.id));
 	const batch = remaining.slice(0, BATCH_SIZE);
 	const done = records.length > 0 && remaining.length === 0;
+	const autoSearchId = batch.find((r) => !autoSearchedIds.has(r.id))?.id;
 
 	const saveBatch = useMutation({
 		mutationFn: async () => {
 			const toAssign = batch.filter((r) => selections.has(r.id));
-			return Promise.all(
+			const outcomes = await Promise.allSettled(
 				toAssign.map((r) => {
 					// biome-ignore lint/style/noNonNullAssertion: filtered by selections.has above
 					const candidate = selections.get(r.id)!;
@@ -91,12 +100,18 @@ export function BulkAssignMasterDialog({
 					});
 				}),
 			);
+			return toAssign.map((r, i) => ({ id: r.id, outcome: outcomes[i] }));
 		},
-		onSuccess: async (rows) => {
+		onSuccess: async (results) => {
 			await queryClient.invalidateQueries({
 				queryKey: recordsQueryOptions.queryKey,
 			});
-			const vanished = rows.filter((row) => row === null).length;
+			const vanished = results.filter(
+				(r) => r.outcome.status === "fulfilled" && r.outcome.value === null,
+			).length;
+			const failed = results.filter(
+				(r) => r.outcome.status === "rejected",
+			).length;
 			if (vanished > 0) {
 				toast.error(
 					vanished === 1
@@ -104,10 +119,27 @@ export function BulkAssignMasterDialog({
 						: `${vanished} records vanished before they could be saved.`,
 				);
 			}
-			// Only the rows just assigned leave the pool (the refetch above drops
-			// them from `unmatchedRecords`) — anything left without a pick stays put
-			// and reappears in the next batch rather than being silently dropped.
-			setSelections(new Map());
+			if (failed > 0) {
+				toast.error(
+					failed === 1
+						? "One record couldn't be saved. Try again."
+						: `${failed} records couldn't be saved. Try again.`,
+				);
+			}
+			// Only the rows that actually saved (or vanished) leave the pool —
+			// anything that errored stays selected so Save can be retried without
+			// re-picking, and anything left without a pick stays put and
+			// reappears in the next batch rather than being silently dropped.
+			const failedIds = new Set(
+				results.filter((r) => r.outcome.status === "rejected").map((r) => r.id),
+			);
+			setSelections((s) => {
+				const next = new Map(s);
+				for (const id of s.keys()) {
+					if (!failedIds.has(id)) next.delete(id);
+				}
+				return next;
+			});
 		},
 		onError: () => toast.error("Couldn't save this batch."),
 	});
@@ -135,6 +167,10 @@ export function BulkAssignMasterDialog({
 								key={record.id}
 								record={record}
 								selected={selections.get(record.id)}
+								autoSearch={record.id === autoSearchId}
+								onAutoSearchDone={() =>
+									setAutoSearchedIds((s) => new Set(s).add(record.id))
+								}
 								onSelect={(candidate) =>
 									setSelections((s) => {
 										const next = new Map(s);
@@ -175,11 +211,15 @@ export function BulkAssignMasterDialog({
 function BulkAssignRow({
 	record,
 	selected,
+	autoSearch,
+	onAutoSearchDone,
 	onSelect,
 	onSkip,
 }: {
 	record: Record;
 	selected: DiscogsMasterCandidate | undefined;
+	autoSearch: boolean;
+	onAutoSearchDone: () => void;
 	onSelect: (candidate: DiscogsMasterCandidate | undefined) => void;
 	onSkip: () => void;
 }) {
@@ -208,6 +248,9 @@ function BulkAssignRow({
 			setResults(candidates);
 			onSelect(undefined);
 		},
+		onSettled: () => {
+			if (autoSearch) onAutoSearchDone();
+		},
 	});
 	// Same clean-IP fallback as the editor's MasterPicker — the Worker's shared
 	// egress IP is what Discogs actually rate-limits.
@@ -219,12 +262,17 @@ function BulkAssignRow({
 		},
 	});
 
-	// Kick off a search as soon as the row mounts, since there's no more
-	// manual "Search albums" button to trigger it.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
+	// It's this row's turn in the queue — fire the search itself, once, as
+	// soon as the row mounts (there's no more manual "Search albums" button to
+	// trigger it otherwise).
+	const hasAutoSearched = useRef(false);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fire once when this row's turn comes up, not on every query/search.mutate identity change
 	useEffect(() => {
-		search.mutate(query);
-	}, []);
+		if (autoSearch && !hasAutoSearched.current) {
+			hasAutoSearched.current = true;
+			search.mutate(query);
+		}
+	}, [autoSearch]);
 
 	function runSearch(q: Query) {
 		setQuery(q);
