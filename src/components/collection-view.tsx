@@ -91,12 +91,17 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			openRecord(null, { replace: true });
 	}, [selectedId, selectedIndex, openRecord]);
 
-	// Read the slide-in intent at the open edge and consume it once open, so paging
-	// and unrelated re-renders don't retrigger it. Radix only runs the enter
-	// transition on the closed→open edge, so a render-phase read is sufficient.
+	// Read the slide-in intent at the open edge only, so paging (which also sets
+	// the flag, via `openRecord`, while `open` stays true throughout) doesn't
+	// retrigger it. `wasOpenRef` tracks whether the *previous* commit was open,
+	// so `enterAnimation` is true only on the actual closed→open transition —
+	// unlike gating on `open` alone, this stays correct even though the flag
+	// keeps getting set to `true` by paging in between.
 	const open = selected != null;
-	const enterAnimation = open && animateOpenRef.current;
+	const wasOpenRef = useRef(false);
+	const enterAnimation = open && !wasOpenRef.current && animateOpenRef.current;
 	useEffect(() => {
+		wasOpenRef.current = open;
 		if (open) animateOpenRef.current = false;
 	}, [open, animateOpenRef]);
 

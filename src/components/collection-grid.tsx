@@ -20,14 +20,18 @@ function readColumns(): number {
 }
 
 function useColumns(): number {
-	const [cols, setCols] = useState(readColumns);
+	// Starts at the SSR default (4) on both server and client so the first
+	// client paint matches the server-rendered markup; the real value (which
+	// may differ on narrow viewports) is only read once mounted, in the effect
+	// below.
+	const [cols, setCols] = useState(4);
 	useEffect(() => {
 		const md = window.matchMedia("(min-width: 768px)");
 		const sm = window.matchMedia("(min-width: 640px)");
 		const update = () => setCols(readColumns());
+		update();
 		md.addEventListener("change", update);
 		sm.addEventListener("change", update);
-		update();
 		return () => {
 			md.removeEventListener("change", update);
 			sm.removeEventListener("change", update);
