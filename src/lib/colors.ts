@@ -169,6 +169,8 @@ export const deleteColor = createServerFn({ method: "POST" })
 				.set({ colorId: black.id })
 				.where(eq(records.colorId, colorId));
 
+			// Best-effort cleanup of the texture; the color row is deleted
+			// regardless, so worst case is an orphaned R2 object.
 			if (color.textureImageKey) {
 				await env.PHOTOS.delete(color.textureImageKey).catch(() => {});
 			}
