@@ -56,10 +56,11 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * One cover tile: the peeking vinyl disc behind a lift-on-hover cover, plus the
+ * One cover tile: the peeking vinyl disc behind the cover, plus the
  * title/artist/score. `.group` drives the hover states (grayscale→colour, the
- * disc slide-out, the lift). The disc deliberately overflows the tile sideways,
- * so nothing wrapping a tile may clip overflow.
+ * disc slide-out, and the title "branding" itself with the record's own vinyl
+ * texture — see `hasTexture` below). The disc deliberately overflows the tile
+ * sideways, so nothing wrapping a tile may clip overflow.
  */
 function RecordTile({
 	record,
@@ -70,6 +71,15 @@ function RecordTile({
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
+	// Same source of truth the peeking disc and the color-combobox swatch use
+	// (see VinylDisc / ColorSwatch) — when the record's chip has a generated
+	// texture, the title "brands" itself with that same material on hover
+	// instead of the old yellow cover-lift bar. No distinct hex is ever
+	// stored per color, so records without a ready texture just keep the
+	// default (untinted) title on hover, same as the disc's plain-color
+	// fallback.
+	const hasTexture =
+		record.colorTextureStatus === "ready" && !!record.colorTextureImageKey;
 	return (
 		<div className="group">
 			<button
@@ -85,29 +95,39 @@ function RecordTile({
 						size={record.size}
 						discCount={record.discCount}
 					/>
-					<div className="cover-lift">
-						<div className="album-card grain aspect-square overflow-hidden">
-							{cover ? (
-								<FadeImage
-									src={`/api/photos/${cover}`}
-									alt={`${record.artist} — ${record.title}`}
-									className={cn(
-										// Fade in on load *and* keep the grayscale→colour hover —
-										// one combined transition property so both animate.
-										"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
-										matte ? "object-contain" : "object-cover",
-									)}
-									loading="lazy"
-								/>
-							) : (
-								<SleevePlaceholder />
-							)}
-						</div>
+					<div className="album-card grain aspect-square overflow-hidden">
+						{cover ? (
+							<FadeImage
+								src={`/api/photos/${cover}`}
+								alt={`${record.artist} — ${record.title}`}
+								className={cn(
+									// Fade in on load *and* keep the grayscale→colour hover —
+									// one combined transition property so both animate.
+									"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
+									matte ? "object-contain" : "object-cover",
+								)}
+								loading="lazy"
+							/>
+						) : (
+							<SleevePlaceholder />
+						)}
 					</div>
 				</div>
 				<div className="text-sm leading-snug">
 					<p
-						className="truncate font-serif text-base font-medium"
+						className={cn(
+							"truncate font-serif text-base font-medium transition-colors duration-300 ease-out",
+							hasTexture && "bg-clip-text group-hover:text-transparent",
+						)}
+						style={
+							hasTexture
+								? {
+										backgroundImage: `url(/api/photos/${record.colorTextureImageKey})`,
+										backgroundSize: "cover",
+										backgroundPosition: "center",
+									}
+								: undefined
+						}
 						title={record.title ?? undefined}
 					>
 						{record.title}

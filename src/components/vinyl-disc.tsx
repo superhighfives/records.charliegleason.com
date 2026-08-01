@@ -16,8 +16,7 @@ import { cn } from "#/lib/utils";
  * color of its own), composited on top with `mix-blend-mode: overlay` so the same
  * groove geometry reads consistently across every color, rather than baking
  * grooves into each generated texture (which would drift — a fresh generation per
- * color name, no shared geometry). Currently placeholder art generated from
- * `clear-vinyl-overlay.svg`; swap the files at these paths for the real renders.
+ * color name, no shared geometry).
  */
 
 /** Relative disc diameter by physical size — a 7" record reads smaller than a 12". */
