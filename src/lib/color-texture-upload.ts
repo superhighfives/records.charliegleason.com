@@ -38,6 +38,7 @@ export async function storeColorTextureUpload(
 		httpMetadata: { contentType: "image/webp" },
 	});
 
+	// Best-effort cleanup of the previous texture, being replaced by this upload.
 	if (color.textureImageKey) {
 		await env.PHOTOS.delete(color.textureImageKey).catch(() => {});
 	}
