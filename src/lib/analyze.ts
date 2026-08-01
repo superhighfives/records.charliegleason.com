@@ -7,6 +7,7 @@ import {
 	getMasterDetail,
 	searchMasters,
 } from "#/lib/discogs";
+import { parseDiscCount, parseSizeAndType } from "#/lib/discogs-shared";
 import { bytesToBase64 } from "#/lib/image-data";
 import { sourceCoverFromDiscogs } from "#/lib/images";
 import { getPitchforkScore } from "#/lib/the-fork";
@@ -28,8 +29,9 @@ export interface AnalysisResult {
 	title: string;
 	year: number | null;
 	label: string | null;
-	format: string | null; // release type — LP / EP / Single (from Discogs)
-	size: string | null; // physical size — e.g. '12"' (from Discogs)
+	format: string | null; // release type — LP / EP / Single (from Discogs, else the capture context)
+	size: string | null; // physical size — e.g. '12"' (from Discogs, else the capture context)
+	discCount: number; // number of discs — from the capture context (e.g. "2×LP"); Discogs pressing data overrides once pinned
 	catno: string | null; // catalog number (from Discogs)
 	country: string | null; // pressing country (from Discogs)
 	genre: string | null;
@@ -306,14 +308,22 @@ export async function analyzeCapture(
 		? await sourceCoverFromDiscogs(coverReleaseId)
 		: null;
 
+	// No pressing is pinned yet, so fall back to whatever the collector's own
+	// capture-context hint implies (e.g. "2×LP, 12\"") rather than leaving the
+	// physical fields empty — pinning a release later overrides these.
+	const { size: contextSize, type: contextFormat } = parseSizeAndType(context);
+	const contextDiscCount = parseDiscCount(context);
+
 	return {
 		artist: detail?.artist || best?.artist || extraction.artist,
 		title: detail?.title || best?.title || extraction.title,
 		year: detail?.year ?? best?.year ?? extraction.year,
-		// Pressing-specific fields stay empty until the collector pins a release.
+		// Pressing-specific fields stay empty (beyond the context guess) until the
+		// collector pins a release.
 		label: null,
-		format: null,
-		size: null,
+		format: contextFormat,
+		size: contextSize,
+		discCount: contextDiscCount,
 		catno: null,
 		country: null,
 		genre: detail?.genre ?? best?.genre ?? null,

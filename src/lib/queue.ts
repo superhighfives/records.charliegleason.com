@@ -683,6 +683,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				label: result.label,
 				format: result.format ?? "LP",
 				size: result.size,
+				discCount: result.discCount,
 				catno: result.catno,
 				country: result.country,
 				genre: result.genre,
