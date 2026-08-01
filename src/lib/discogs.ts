@@ -49,11 +49,30 @@ const BASE = DISCOGS_API_BASE;
 const USER_AGENT =
 	"RecordsCharlieGleasonCom/1.0 +https://records.charliegleason.com";
 
-function headers() {
+function headers(): Record<string, string> {
+	if (env.DISCOGS_PROXY_URL) {
+		return { "X-Proxy-Secret": env.DISCOGS_PROXY_SECRET ?? "" };
+	}
 	return {
 		"User-Agent": USER_AGENT,
 		Authorization: `Discogs token=${env.DISCOGS_TOKEN}`,
 	};
+}
+
+/**
+ * Retarget a Discogs API URL at the Fly proxy (fly/discogs-proxy) when one's
+ * configured, keeping the path + query intact. The proxy holds the real
+ * DISCOGS_TOKEN and calls api.discogs.com from its own dedicated egress IP —
+ * this is what routes around Discogs rate-limiting the Worker's shared
+ * Cloudflare IP pool. Falls through to the original URL when unconfigured.
+ */
+function proxied(url: string | URL): string | URL {
+	if (!env.DISCOGS_PROXY_URL) return url;
+	const original = new URL(url);
+	const target = new URL(env.DISCOGS_PROXY_URL);
+	target.pathname = original.pathname;
+	target.search = original.search;
+	return target;
 }
 
 /** HTTP statuses worth another try — transient rate-limit / upstream blips. */
@@ -94,7 +113,7 @@ async function discogsFetch(url: string | URL): Promise<Response> {
 		const last = attempt === MAX_FETCH_ATTEMPTS;
 		let res: Response;
 		try {
-			res = await fetch(url, { headers: headers() });
+			res = await fetch(proxied(url), { headers: headers() });
 		} catch (err) {
 			// Network-level failure — transient too. Rethrow on the last attempt so
 			// callers see a real error (not an empty result they'd treat as no-match).

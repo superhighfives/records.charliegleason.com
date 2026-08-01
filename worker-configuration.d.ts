@@ -16,6 +16,12 @@ interface __BaseEnv_Env {
 	SENTRY_AUTH_TOKEN: string;
 	AI_GATEWAY_NAME: string;
 	DISCOGS_TOKEN: string;
+	// Optional Fly.io Discogs proxy (see fly/discogs-proxy) — routes discogsFetch
+	// through a dedicated egress IP when Discogs rate-limits the Worker's shared
+	// Cloudflare pool. Unset in preview/dev: discogsFetch falls back to calling
+	// api.discogs.com directly.
+	DISCOGS_PROXY_URL?: string;
+	DISCOGS_PROXY_SECRET?: string;
 	SERPAPI_KEY: string;
 	REPLICATE_API_KEY: string;
 	LASTFM_API_KEY: string;
