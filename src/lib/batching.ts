@@ -55,8 +55,21 @@ export interface ColorTextureMessage {
 	colorId: number;
 }
 
+/**
+ * A `colors`-keyed message that re-extracts a color's title-gradient palette from
+ * its *existing* stored texture — no Replicate call. Backfills palettes onto
+ * colors whose texture predates the palette column (see `backfillColorPalettes`).
+ */
+export interface ColorPaletteMessage {
+	mode: "color-palette";
+	colorId: number;
+}
+
 /** Message enqueued for the analyze consumer. Re-exported from `#/lib/queue`. */
-export type AnalyzeMessage = AnalyzeRecordMessage | ColorTextureMessage;
+export type AnalyzeMessage =
+	| AnalyzeRecordMessage
+	| ColorTextureMessage
+	| ColorPaletteMessage;
 
 /**
  * Chunk size for bulk `inArray(id, ids)` queries. Kept comfortably under D1's

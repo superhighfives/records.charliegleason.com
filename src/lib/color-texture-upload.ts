@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { colors } from "#/db/schema";
+import { paletteJsonFromTexture } from "#/lib/color-texture";
 import { COLOR_TEXTURE_SIZE } from "#/lib/color-texture-config";
 import { blobStream } from "#/lib/professional";
 
@@ -38,6 +39,9 @@ export async function storeColorTextureUpload(
 		httpMetadata: { contentType: "image/webp" },
 	});
 
+	// Sample the title-gradient palette from the same bytes we just stored.
+	const palette = paletteJsonFromTexture(new Uint8Array(webp));
+
 	// Best-effort cleanup of the previous texture, being replaced by this upload.
 	if (color.textureImageKey) {
 		await env.PHOTOS.delete(color.textureImageKey).catch(() => {});
@@ -45,6 +49,11 @@ export async function storeColorTextureUpload(
 
 	await db
 		.update(colors)
-		.set({ textureImageKey: key, textureStatus: "ready", textureError: null })
+		.set({
+			textureImageKey: key,
+			textureStatus: "ready",
+			textureError: null,
+			palette,
+		})
 		.where(eq(colors.id, colorId));
 }

@@ -39,18 +39,26 @@ import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
  */
 export type PanelRecord = Omit<
 	PublicRecord,
-	"copies" | "colorName" | "colorTextureImageKey" | "colorTextureStatus"
+	| "copies"
+	| "colorName"
+	| "colorTextureImageKey"
+	| "colorTextureStatus"
+	| "colorPalette"
 > &
 	// `copies` (physical copies owned) is derived on the public list; the admin drawer
 	// passes a raw row without it, so it's optional here — the "Copies" line only shows
 	// when it's ≥ 2 anyway.
 	Partial<Pick<PublicRecord, "copies">> &
-	// The color chip's joined name/texture (see `listPublicRecords`) — likewise
-	// optional, since the admin drawer passes a raw `records` row with only `colorId`.
+	// The color chip's joined name/texture/palette (see `listPublicRecords`) —
+	// likewise optional, since the admin drawer passes a raw `records` row with
+	// only `colorId`.
 	Partial<
 		Pick<
 			PublicRecord,
-			"colorName" | "colorTextureImageKey" | "colorTextureStatus"
+			| "colorName"
+			| "colorTextureImageKey"
+			| "colorTextureStatus"
+			| "colorPalette"
 		>
 	> &
 	Partial<

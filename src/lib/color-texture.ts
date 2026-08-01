@@ -3,14 +3,58 @@ import { eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { colors } from "#/db/schema";
+import { extractPalette } from "#/lib/color-palette";
 import {
 	COLOR_TEXTURE_MODEL,
 	COLOR_TEXTURE_SIZE,
 	colorTexturePrompt,
 } from "#/lib/color-texture-config";
-import { blobStream } from "#/lib/professional";
+import { blobStream, decodeRgba } from "#/lib/professional";
 import { firstOutputUrl, runVersion } from "#/lib/replicate";
 import { NonRetryableError, withRetry } from "#/lib/retry";
+
+/**
+ * Sample a title-gradient palette from encoded texture bytes (see
+ * `color-palette.ts`), returned as JSON for the `colors.palette` column.
+ * Best-effort: a decode/extract failure returns null so it can never fail the
+ * texture job it rides along with — the title just stays untinted until a later
+ * regeneration or backfill fills it in.
+ */
+export function paletteJsonFromTexture(bytes: Uint8Array): string | null {
+	try {
+		const palette = extractPalette(decodeRgba(bytes));
+		return palette ? JSON.stringify(palette) : null;
+	} catch (err) {
+		console.error("Color palette extraction failed", err);
+		return null;
+	}
+}
+
+/**
+ * Backfill (or refresh) just the palette for a color that already has a stored
+ * texture, WITHOUT re-running Replicate — decode the existing R2 object and
+ * re-extract. Drives the `color-palette` queue job (see `queue.ts` /
+ * `backfillColorPalettes`); a no-op for a color with no ready texture.
+ */
+export async function extractStoredColorPalette(
+	colorId: number,
+): Promise<void> {
+	const db = getDb(env.DB);
+	const [color] = await db
+		.select()
+		.from(colors)
+		.where(eq(colors.id, colorId))
+		.limit(1);
+	if (!color?.textureImageKey) return;
+
+	const object = await env.PHOTOS.get(color.textureImageKey);
+	if (!object) return; // texture object vanished — leave the palette as-is
+	const bytes = new Uint8Array(await object.arrayBuffer());
+	const palette = paletteJsonFromTexture(bytes);
+	if (!palette) return; // extraction failed; don't clobber an existing palette
+
+	await db.update(colors).set({ palette }).where(eq(colors.id, colorId));
+}
 
 /**
  * Generate (or regenerate) a color's reference vinyl texture — a flat material swatch
@@ -78,6 +122,9 @@ export async function generateColorTexture(colorId: number): Promise<void> {
 			httpMetadata: { contentType: "image/webp" },
 		});
 
+		// Sample the title-gradient palette from the same bytes we just stored.
+		const palette = paletteJsonFromTexture(new Uint8Array(webp));
+
 		// Best-effort cleanup of the previous texture, if this is a regeneration.
 		if (color.textureImageKey) {
 			await env.PHOTOS.delete(color.textureImageKey).catch(() => {});
@@ -85,7 +132,12 @@ export async function generateColorTexture(colorId: number): Promise<void> {
 
 		await db
 			.update(colors)
-			.set({ textureImageKey: key, textureStatus: "ready", textureError: null })
+			.set({
+				textureImageKey: key,
+				textureStatus: "ready",
+				textureError: null,
+				palette,
+			})
 			.where(eq(colors.id, colorId));
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
