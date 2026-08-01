@@ -16,6 +16,13 @@ SET
     WHEN capture_context LIKE '%12"%' THEN '12"'
     WHEN capture_context LIKE '%10"%' THEN '10"'
     WHEN capture_context LIKE '%7"%' THEN '7"'
+    -- No explicit size token but an LP/vinyl mention (including the "Single LP"
+    -- preset, which is a one-disc LP) — mirrors the runtime fallback in
+    -- src/lib/discogs-shared.ts (parseSizeAndType), which also defaults to 12"
+    -- here. A bare "single" with no "LP" doesn't match either LIKE, so it's
+    -- correctly left alone.
+    WHEN capture_context LIKE '%LP%' OR capture_context LIKE '%vinyl%'
+      THEN '12"'
     ELSE size
   END,
   disc_count = CASE

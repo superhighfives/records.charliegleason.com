@@ -7,6 +7,7 @@ import {
 	mapReleaseSearchResult,
 	masterDetailToCandidate,
 	parseDiscCount,
+	parseSizeAndType,
 } from "./discogs-shared";
 
 describe("mapReleaseSearchResult", () => {
@@ -140,6 +141,16 @@ describe("parseDiscCount", () => {
 		// rather than the format (`2xLP`) — parseDiscCount doesn't parse that
 		// shape today, so it defaults to 1 rather than misreading it.
 		expect(parseDiscCount('2×12", 45 RPM, EP')).toBe(1);
+	});
+});
+
+describe("parseSizeAndType", () => {
+	it("treats the 'Single LP' capture preset as a one-disc LP, not a 7\" single", () => {
+		expect(parseSizeAndType("Single LP")).toEqual({ size: '12"', type: "LP" });
+	});
+
+	it("still reads a bare 'single' as a Single", () => {
+		expect(parseSizeAndType("single")).toEqual({ size: null, type: "Single" });
 	});
 });
 
