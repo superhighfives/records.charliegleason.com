@@ -204,72 +204,53 @@ production Clerk instance, and add `records.charliegleason.com` under **Domains*
 
 ## 7. PR previews
 
-Each pull request gets its **own** live preview URL — `pr-<number>-records-preview.<subdomain>.workers.dev`
-— so PRs no longer overwrite each other. `.github/workflows/preview.yml` uploads
-the PR's build as a *version* of the shared `records-preview` Worker with
-`wrangler versions upload --preview-alias pr-<number>`, which mints a stable
-Cloudflare preview URL without promoting it to any route. The workflow posts (and
-updates) the URL as a PR comment.
+Each pull request gets its **own** ephemeral Worker — `records-pr-<number>`,
+served on `https://records-pr-<number>.<subdomain>.workers.dev`.
+`.github/workflows/preview.yml` rewrites `wrangler.jsonc` in the CI checkout
+(unique Worker name, per-PR queue, prod bindings kept, everything a throwaway
+Worker shouldn't carry stripped) and runs a plain `wrangler deploy`. This is a
+standalone per-PR Worker, **not** `wrangler versions upload` against a shared
+Worker — the old shared-`records-preview`-Worker model let PRs mutate one another's
+D1, so it's gone. The workflow posts (and updates) the URL as a PR comment, and a
+`cleanup` job tears the Worker + its queue down when the PR closes.
 
-Worker versions share the parent Worker's bindings, so all previews read the one
-`records-preview` D1 and reuse the production R2 bucket. That preview DB is a
-snapshot of production, **refreshed nightly** by `.github/workflows/preview-db-refresh.yml`
-(export production → reset → import → apply migrations) — so it stays current but
-isolated: captures made while reviewing never touch production data. Because the
-DB is shared across open previews, the clone runs on a schedule instead of per PR;
-the Preview workflow only tops it up with any migrations the PR adds
-(`wrangler d1 migrations apply`, a no-op for non-schema PRs). You can also trigger
-a rebuild on demand from the Actions tab (**Preview DB refresh** → Run workflow).
+**D1 and R2 are shared with production.** Previews bind the real `records` D1 and
+`records-photos` R2 — there is no separate preview database. Two consequences:
 
-> `env.preview` sets `routes: []` (previews are served on version preview URLs,
-> and the empty array stops preview from inheriting the production route — a
-> `wrangler deploy --env preview` would otherwise reassign
-> `records.charliegleason.com`), enables `preview_urls`, and overrides the
-> inherited `triggers` with empty crons (no digest in preview).
+- **Migrations are _not_ applied to previews.** A PR that adds a migration will
+  hit runtime errors on its preview until it merges and the prod deploy applies it
+  (`db:migrate`, via `deploy.yml`). The PR comment warns about this.
+- **Captures and edits made while reviewing a preview write to your real
+  collection.** Previews are for eyeballing behaviour, not throwaway data.
 
-One-time provisioning (needs the Cloudflare account; CI fails until it's done):
+What the CI rewrite changes vs. production config:
 
-```bash
-bunx wrangler d1 create records-preview        # → paste id into wrangler.jsonc env.preview
-bunx wrangler queues create records-analyze-preview
-bunx wrangler queues create records-analyze-preview-dlq
+- **Name/routes:** renamed to `records-pr-<n>`, `routes` dropped and `workers_dev`
+  forced on — otherwise the per-PR Worker would try to claim
+  `records.charliegleason.com`. `vars.ENVIRONMENT` is set to `preview` (gates off
+  runtime Sentry in `src/server.ts`).
+- **Queue:** each PR gets its own `records-analyze-pr-<n>` (created idempotently by
+  the workflow) for both producer and consumer, so it doesn't fight production's
+  single consumer; the DLQ is dropped.
+- **Dropped entirely:** the matte container + its Durable Object (preview falls
+  back to the in-Worker matte render), the weekly cron/digest, custom email, and
+  the obsolete named `env` block.
 
-# Runtime secrets are per-Worker — set them on the preview Worker too. Use the
-# Clerk *development* keys here (sk_test_…) to match the build key below:
-bunx wrangler secret put CLERK_SECRET_KEY --env preview
-bunx wrangler secret put DISCOGS_TOKEN --env preview
-```
+**Clerk.** A production instance (`pk_live_…`) can't authorize the `*.workers.dev`
+preview hosts, so the preview build uses a Clerk **development** instance, which
+works on any origin. Set repo secret **`VITE_CLERK_PUBLISHABLE_KEY_PREVIEW`** to
+the dev `pk_test_…` key and **`PREVIEW_CLERK_SECRET_KEY`** to the matching
+`sk_test_…` (the workflow pushes it to the per-PR Worker). Dev instances show a
+"development mode" banner — fine for review.
 
-Then paste the new `database_id` into the `env.preview.d1_databases` block in
-`wrangler.jsonc` (it ships with a `REPLACE_WITH_…` placeholder). Version preview
-URLs need a **workers.dev subdomain claimed on the account** (Cloudflare dashboard
-→ Workers & Pages → Subdomain) — that's what `pr-<n>-records-preview.<subdomain>.workers.dev`
-hangs off — **and Preview URLs enabled on the `records-preview` Worker**. Whether
-Preview URLs are on is *non-versioned* settings, so `wrangler versions upload`
-(what CI runs) can't turn them on: flip them once via the dashboard
-(records-preview → Settings → enable Preview URLs) or a single `wrangler versions
-deploy`. Until then the Preview workflow fails with "no preview URL was minted"
-— the version uploads fine, but no `pr-<n>-…` URL comes back.
-
-> Migrating from the old single-domain preview? The former
-> `preview.records.charliegleason.com` custom domain is no longer used and can be
-> removed from the Cloudflare dashboard (Workers & Pages → records-preview →
-> Domains & Routes). `env.preview.routes` is now `[]`, so nothing recreates it.
-
-**Clerk.** A production instance (`pk_live_…`) can't authorize the preview hosts —
-extra domains on a production instance are *satellite domains* needing their own
-DNS/code, which you can't add to `*.workers.dev`. Instead the preview build uses a
-Clerk **development** instance, which works on any origin — a good fit here since
-every PR has a different `pr-<n>-…` URL. Set repo secret
-**`VITE_CLERK_PUBLISHABLE_KEY_PREVIEW`** to the dev `pk_test_…` key, and the
-preview Worker's `CLERK_SECRET_KEY` (above) to the matching `sk_test_…`. (Dev
-instances show a "development mode" banner — fine for review.)
-
-New migrations need no workflow changes. The Preview workflow's "Apply PR
-migrations to preview database" step runs `wrangler d1 migrations apply` on every
-PR build, applying only the migrations the PR adds on top of the shared preview DB
-— a no-op for non-schema PRs. The nightly **Preview DB refresh** rebuilds the DB
-from a fresh production export, resetting any accumulated schema drift.
+One-time account setup: claim a **workers.dev subdomain** (Cloudflare dashboard →
+Workers & Pages → Subdomain) — that's what `records-pr-<n>.<subdomain>.workers.dev`
+hangs off. No `records-preview` D1 or queue to pre-create; the per-PR queue is made
+by the workflow. Required repo secrets (beyond `CLOUDFLARE_API_TOKEN` /
+`CLOUDFLARE_ACCOUNT_ID`, whose token also needs Queues:Edit + Workers Scripts:Edit):
+`VITE_CLERK_PUBLISHABLE_KEY_PREVIEW`, `PREVIEW_CLERK_SECRET_KEY`, `DISCOGS_TOKEN`,
+`LASTFM_API_KEY`, `REPLICATE_API_KEY`, the `VITE_SENTRY_*` / `SENTRY_AUTH_TOKEN`
+set, and optionally `SERPAPI_KEY` / `CRON_SECRET`.
 
 ---
 
