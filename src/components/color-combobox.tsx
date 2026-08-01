@@ -43,6 +43,35 @@ interface ColorComboboxProps {
 }
 
 /**
+ * Small round preview of a color chip's reference texture — the same image
+ * `VinylDisc` tiles onto the disc itself. Falls back to a plain muted circle
+ * while the texture is still generating (or failed/missing).
+ */
+function ColorSwatch({
+	color,
+	className,
+}: {
+	color: { textureImageKey?: string | null; textureStatus?: string | null };
+	className?: string;
+}) {
+	const ready = color.textureStatus === "ready" && !!color.textureImageKey;
+	return (
+		<span
+			aria-hidden="true"
+			className={cn(
+				"inline-block shrink-0 rounded-full border bg-muted bg-cover bg-center",
+				className,
+			)}
+			style={
+				ready
+					? { backgroundImage: `url(/api/photos/${color.textureImageKey})` }
+					: undefined
+			}
+		/>
+	);
+}
+
+/**
  * Vinyl color chip picker. Pick an existing chip or type a new name to create +
  * attach it in one step (upserted server-side, so re-typing an existing name
  * just attaches the same chip rather than duplicating it).
@@ -149,7 +178,8 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 						className="justify-start font-normal"
 					>
 						{selected ? (
-							<span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium">
+							<span className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium">
+								<ColorSwatch color={selected} className="size-3" />
 								{selected.name}
 							</span>
 						) : (
@@ -188,7 +218,8 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 									}}
 									className="flex flex-1 items-center gap-1.5 text-left"
 								>
-									<span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium">
+									<span className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium">
+										<ColorSwatch color={c} className="size-3" />
 										{c.name}
 									</span>
 									{c.textureStatus === "failed" && (

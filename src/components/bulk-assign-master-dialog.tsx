@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { SearchIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { PencilIcon, RedoIcon, SearchIcon, XIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "#/components/ui/button";
@@ -8,16 +8,19 @@ import {
 	Dialog,
 	DialogContent,
 	DialogDescription,
+	DialogFooter,
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { ImageZoom } from "#/components/ui/image-zoom";
 import { Input } from "#/components/ui/input";
 import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "#/components/ui/popover";
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "#/components/ui/select";
 import type { Record } from "#/db/schema";
 import { displayCoverKey } from "#/lib/cover";
 import { searchMastersFromBrowser } from "#/lib/discogs-browser";
@@ -30,41 +33,19 @@ import { recordsQueryOptions } from "#/lib/records-queries";
 // enough that the "next 10" swap reads as steady progress.
 const BATCH_SIZE = 10;
 
+type Query = { artist: string; title: string };
+
 /** An error's message, or a fallback when it isn't an `Error`. */
 function errText(error: unknown, fallback: string): string {
 	return error instanceof Error ? error.message : fallback;
 }
 
-/** Case/whitespace-insensitive equality for auto-match comparisons. */
-function looseEquals(a: string, b: string): boolean {
-	return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
-/**
- * The single result to auto-assign, if any: the one unambiguous exact
- * artist+title match, whether it's the only candidate returned or the one
- * exact match among several. Anything less certain (no match, multiple exact
- * matches, or a lone result that doesn't actually match) is left for the
- * user to pick by hand.
- */
-function autoMatch(
-	results: Array<DiscogsMasterCandidate>,
-	artist: string,
-	title: string,
-): DiscogsMasterCandidate | null {
-	const exact = results.filter(
-		(m) => looseEquals(m.artist, artist) && looseEquals(m.title, title),
-	);
-	return exact.length === 1 ? exact[0] : null;
-}
-
 /**
  * Bulk "assign the album (master)" flow for records still missing one. Works
- * through the unmatched list in batches of {@link BATCH_SIZE}: search or skip
- * each row, and once every row in the batch is resolved the next batch takes
- * its place automatically (no manual "next" step). Reuses the same Discogs
- * master search as the single-record editor's `MasterPicker` — just a
- * compact, per-row popover instead of a full panel.
+ * through the unmatched list in batches of {@link BATCH_SIZE}: each row
+ * auto-searches Discogs on mount and offers the matches in a dropdown, or the
+ * row can be skipped. Picks are staged locally and only persisted when Save
+ * is pressed, which assigns the whole batch and slides the next batch in.
  */
 export function BulkAssignMasterDialog({
 	open,
@@ -75,29 +56,61 @@ export function BulkAssignMasterDialog({
 	onOpenChange: (open: boolean) => void;
 	records: Array<Record>;
 }) {
+	const queryClient = useQueryClient();
+
 	// Skipped rows are session-only — they drop out of the current pass but
 	// aren't persisted, so reopening the dialog offers them again.
 	const [skipped, setSkipped] = useState<Set<number>>(new Set());
+	const [selections, setSelections] = useState<
+		Map<number, DiscogsMasterCandidate>
+	>(new Map());
 	useEffect(() => {
-		if (open) setSkipped(new Set());
+		if (open) {
+			setSkipped(new Set());
+			setSelections(new Map());
+		}
 	}, [open]);
 
 	const remaining = records.filter((r) => !skipped.has(r.id));
 	const batch = remaining.slice(0, BATCH_SIZE);
 	const done = records.length > 0 && remaining.length === 0;
 
-	// Auto-search walks the batch one row at a time — each row runs its search
-	// and reports back before the next one starts, rather than firing all ten
-	// at once and inviting a Discogs 429. A row leaving the batch (skipped or
-	// auto-assigned) counts as "done" for free, since it just drops out of
-	// `batch` below.
-	const [autoSearchedIds, setAutoSearchedIds] = useState<Set<number>>(
-		new Set(),
-	);
-	useEffect(() => {
-		if (open) setAutoSearchedIds(new Set());
-	}, [open]);
-	const autoSearchId = batch.find((r) => !autoSearchedIds.has(r.id))?.id;
+	const saveBatch = useMutation({
+		mutationFn: async () => {
+			const toAssign = batch.filter((r) => selections.has(r.id));
+			return Promise.all(
+				toAssign.map((r) => {
+					// biome-ignore lint/style/noNonNullAssertion: filtered by selections.has above
+					const candidate = selections.get(r.id)!;
+					return assignRecordMaster({
+						data: {
+							id: r.id,
+							masterId: candidate.masterId,
+							masterUrl: candidate.masterUrl,
+						},
+					});
+				}),
+			);
+		},
+		onSuccess: async (rows) => {
+			await queryClient.invalidateQueries({
+				queryKey: recordsQueryOptions.queryKey,
+			});
+			const vanished = rows.filter((row) => row === null).length;
+			if (vanished > 0) {
+				toast.error(
+					vanished === 1
+						? "One record vanished before it could be saved."
+						: `${vanished} records vanished before they could be saved.`,
+				);
+			}
+			// Only the rows just assigned leave the pool (the refetch above drops
+			// them from `unmatchedRecords`) — anything left without a pick stays put
+			// and reappears in the next batch rather than being silently dropped.
+			setSelections(new Map());
+		},
+		onError: () => toast.error("Couldn't save this batch."),
+	});
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -105,8 +118,7 @@ export function BulkAssignMasterDialog({
 				<DialogHeader>
 					<DialogTitle>Assign masters</DialogTitle>
 					<DialogDescription>
-						Search Discogs for each record's album and pick a match, or skip it
-						for now.{" "}
+						Pick each record's album match, or skip it for now.{" "}
 						{remaining.length > 0 &&
 							`${remaining.length} unmatched ${remaining.length === 1 ? "record" : "records"} left.`}
 					</DialogDescription>
@@ -122,14 +134,38 @@ export function BulkAssignMasterDialog({
 							<BulkAssignRow
 								key={record.id}
 								record={record}
-								autoSearch={record.id === autoSearchId}
-								onAutoSearchDone={() =>
-									setAutoSearchedIds((s) => new Set(s).add(record.id))
+								selected={selections.get(record.id)}
+								onSelect={(candidate) =>
+									setSelections((s) => {
+										const next = new Map(s);
+										if (candidate) next.set(record.id, candidate);
+										else next.delete(record.id);
+										return next;
+									})
 								}
-								onSkip={() => setSkipped((s) => new Set(s).add(record.id))}
+								onSkip={() => {
+									setSkipped((s) => new Set(s).add(record.id));
+									setSelections((s) => {
+										const next = new Map(s);
+										next.delete(record.id);
+										return next;
+									});
+								}}
 							/>
 						))}
 					</ul>
+				)}
+
+				{!done && (
+					<DialogFooter>
+						<Button
+							type="button"
+							onClick={() => saveBatch.mutate()}
+							disabled={selections.size === 0 || saveBatch.isPending}
+						>
+							{saveBatch.isPending ? "Saving…" : "Save"}
+						</Button>
+					</DialogFooter>
 				)}
 			</DialogContent>
 		</Dialog>
@@ -138,24 +174,27 @@ export function BulkAssignMasterDialog({
 
 function BulkAssignRow({
 	record,
-	autoSearch,
-	onAutoSearchDone,
+	selected,
+	onSelect,
 	onSkip,
 }: {
 	record: Record;
-	autoSearch: boolean;
-	onAutoSearchDone: () => void;
+	selected: DiscogsMasterCandidate | undefined;
+	onSelect: (candidate: DiscogsMasterCandidate | undefined) => void;
 	onSkip: () => void;
 }) {
-	const queryClient = useQueryClient();
-	const [popoverOpen, setPopoverOpen] = useState(false);
-	const [q, setQ] = useState({ artist: record.artist, title: record.title });
+	const [mode, setMode] = useState<"select" | "edit">("select");
+	const [query, setQuery] = useState<Query>({
+		artist: record.artist,
+		title: record.title,
+	});
+	const [draft, setDraft] = useState<Query>(query);
 	const [results, setResults] = useState<Array<DiscogsMasterCandidate> | null>(
 		null,
 	);
 
 	const search = useMutation({
-		mutationFn: () =>
+		mutationFn: (q: Query) =>
 			searchDiscogsMasters({
 				data: {
 					artist: q.artist,
@@ -167,181 +206,196 @@ function BulkAssignRow({
 			}),
 		onSuccess: (candidates) => {
 			setResults(candidates);
-			const match = autoMatch(candidates, q.artist, q.title);
-			if (match) assign.mutate(match);
-		},
-		onSettled: () => {
-			if (autoSearch) onAutoSearchDone();
+			onSelect(undefined);
 		},
 	});
 	// Same clean-IP fallback as the editor's MasterPicker — the Worker's shared
 	// egress IP is what Discogs actually rate-limits.
 	const browserSearch = useMutation({
-		mutationFn: () =>
-			searchMastersFromBrowser({ artist: q.artist, title: q.title }),
-		onSuccess: setResults,
-	});
-
-	const assign = useMutation({
-		mutationFn: (candidate: DiscogsMasterCandidate) =>
-			assignRecordMaster({
-				data: {
-					id: record.id,
-					masterId: candidate.masterId,
-					masterUrl: candidate.masterUrl,
-				},
-			}),
-		onSuccess: async (row) => {
-			if (!row) {
-				toast.error("Couldn't assign a master — the record vanished.");
-				return;
-			}
-			await queryClient.invalidateQueries({
-				queryKey: recordsQueryOptions.queryKey,
-			});
-			setPopoverOpen(false);
+		mutationFn: (q: Query) => searchMastersFromBrowser(q),
+		onSuccess: (candidates) => {
+			setResults(candidates);
+			onSelect(undefined);
 		},
-		onError: () => toast.error("Couldn't assign a master."),
 	});
 
-	// It's this row's turn in the queue — fire the search itself, once. A
-	// single/exact match assigns automatically (see `search`'s onSuccess);
-	// anything more ambiguous just leaves `results` populated for the popover.
-	const hasAutoSearched = useRef(false);
+	// Kick off a search as soon as the row mounts, since there's no more
+	// manual "Search albums" button to trigger it.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
 	useEffect(() => {
-		if (autoSearch && !hasAutoSearched.current) {
-			hasAutoSearched.current = true;
-			search.mutate();
-		}
-	}, [autoSearch, search.mutate]);
+		search.mutate(query);
+	}, []);
+
+	function runSearch(q: Query) {
+		setQuery(q);
+		setResults(null);
+		search.mutate(q);
+		setMode("select");
+	}
 
 	const coverKey = displayCoverKey(record, { includeCapture: true });
+	const busy = search.isPending || browserSearch.isPending;
 
 	return (
-		<li className="flex items-center gap-2 p-2">
-			{coverKey ? (
-				<ImageZoom
-					src={`/api/photos/${coverKey}`}
-					alt={`${record.artist} — ${record.title}`}
-					className="size-10 shrink-0"
-				/>
-			) : (
-				<div className="size-10 shrink-0 rounded-md border bg-muted" />
-			)}
-			<div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
-				<Input
-					value={q.artist}
-					onChange={(e) => setQ((s) => ({ ...s, artist: e.target.value }))}
-					placeholder="Artist"
-					className="text-sm"
-				/>
-				<Input
-					value={q.title}
-					onChange={(e) => setQ((s) => ({ ...s, title: e.target.value }))}
-					placeholder="Title"
-					className="text-sm"
-				/>
-			</div>
+		<li className="flex flex-col gap-1 p-2">
+			<div className="flex items-center gap-2">
+				{coverKey ? (
+					<ImageZoom
+						src={`/api/photos/${coverKey}`}
+						alt={`${record.artist} — ${record.title}`}
+						className="size-10 shrink-0"
+					/>
+				) : (
+					<div className="size-10 shrink-0 rounded-md border bg-muted" />
+				)}
 
-			<Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
-				<PopoverTrigger asChild>
-					<Button
-						type="button"
-						variant="outline"
-						size="icon-sm"
-						aria-label="Search Discogs"
-						disabled={assign.isPending}
-						onClick={() => {
-							if (!results) search.mutate();
-						}}
-					>
-						<SearchIcon className="size-4" />
-					</Button>
-				</PopoverTrigger>
-				<PopoverContent align="end" className="w-80 space-y-2 p-2">
-					<div className="flex justify-end">
+				{mode === "edit" ? (
+					<>
+						<div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
+							<Input
+								value={draft.artist}
+								onChange={(e) =>
+									setDraft((d) => ({ ...d, artist: e.target.value }))
+								}
+								placeholder="Artist"
+								className="text-sm"
+							/>
+							<Input
+								value={draft.title}
+								onChange={(e) =>
+									setDraft((d) => ({ ...d, title: e.target.value }))
+								}
+								placeholder="Title"
+								className="text-sm"
+							/>
+						</div>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon-sm"
+							aria-label="Cancel"
+							onClick={() => {
+								setDraft(query);
+								setMode("select");
+							}}
+						>
+							<XIcon className="size-4" />
+						</Button>
 						<Button
 							type="button"
 							variant="outline"
-							size="xs"
-							disabled={search.isPending}
-							onClick={() => search.mutate()}
+							size="icon-sm"
+							aria-label="Search Discogs"
+							disabled={busy}
+							onClick={() => runSearch(draft)}
 						>
-							{search.isPending ? "Searching…" : "Search albums"}
+							<SearchIcon className="size-4" />
 						</Button>
-					</div>
-
-					{search.isError && (
-						<div className="space-y-1" role="alert">
-							<p className="text-xs text-red-600">
-								{errText(search.error, "Search failed. Try again.")}
-							</p>
-							<Button
-								type="button"
-								variant="outline"
-								size="xs"
-								disabled={browserSearch.isPending}
-								onClick={() => browserSearch.mutate()}
+					</>
+				) : (
+					<>
+						<Select
+							value={selected ? String(selected.masterId) : undefined}
+							onValueChange={(value) =>
+								onSelect(results?.find((m) => String(m.masterId) === value))
+							}
+							disabled={busy || !results || results.length === 0}
+						>
+							<SelectTrigger
+								className="w-0 min-w-0 flex-1 overflow-hidden"
+								size="sm"
 							>
-								{browserSearch.isPending ? "Searching…" : "Search from browser"}
-							</Button>
-							{browserSearch.isError && (
-								<p className="text-xs text-red-600">
-									{errText(
-										browserSearch.error,
-										"Browser search failed. Try again.",
-									)}
-								</p>
-							)}
-						</div>
-					)}
-
-					{results && results.length > 0 && (
-						<ul className="max-h-64 divide-y overflow-y-auto rounded-md border">
-							{results.map((m) => (
-								<li key={m.masterId}>
-									<button
-										type="button"
-										disabled={assign.isPending}
-										onClick={() => assign.mutate(m)}
-										className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-accent"
-									>
-										{m.thumb ? (
-											<img
-												src={m.thumb}
-												alt=""
-												className="size-8 shrink-0 rounded object-cover"
-											/>
-										) : (
-											<div className="size-8 shrink-0 rounded bg-muted" />
-										)}
-										<span className="min-w-0 flex-1 truncate">
-											<span className="font-medium">{m.artist}</span> —{" "}
-											{m.title}
-											{m.year ? ` (${m.year})` : ""}
+								<SelectValue
+									placeholder={
+										busy
+											? "Searching…"
+											: results && results.length === 0
+												? "No albums found"
+												: "Choose an album"
+									}
+								>
+									{selected && (
+										<span
+											className="min-w-0 truncate"
+											title={`${selected.artist} — ${selected.title}${selected.year ? ` (${selected.year})` : ""}`}
+										>
+											{selected.artist} — {selected.title}
+											{selected.year ? ` (${selected.year})` : ""}
 										</span>
-									</button>
-								</li>
-							))}
-						</ul>
-					)}
-					{search.isSuccess && results?.length === 0 && (
-						<p className="text-xs text-muted-foreground" aria-live="polite">
-							No albums found. Try adjusting the artist/title above.
+									)}
+								</SelectValue>
+							</SelectTrigger>
+							<SelectContent position="popper">
+								{results?.map((m) => {
+									const label = `${m.artist} — ${m.title}${m.year ? ` (${m.year})` : ""}`;
+									return (
+										<SelectItem key={m.masterId} value={String(m.masterId)}>
+											<span className="flex min-w-0 items-center gap-2">
+												{m.thumb ? (
+													<img
+														src={m.thumb}
+														alt=""
+														className="size-6 shrink-0 rounded object-cover"
+													/>
+												) : (
+													<div className="size-6 shrink-0 rounded bg-muted" />
+												)}
+												<span className="min-w-0 truncate" title={label}>
+													{label}
+												</span>
+											</span>
+										</SelectItem>
+									);
+								})}
+							</SelectContent>
+						</Select>
+						<Button
+							type="button"
+							variant="outline"
+							size="icon-sm"
+							aria-label="Edit search"
+							disabled={search.isPending}
+							onClick={() => setMode("edit")}
+						>
+							<PencilIcon className="size-4" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon-sm"
+							aria-label="Skip"
+							onClick={onSkip}
+						>
+							<RedoIcon className="size-4" />
+						</Button>
+					</>
+				)}
+			</div>
+
+			{search.isError && (
+				<div className="flex items-center gap-2 pl-12" role="alert">
+					<p className="text-xs text-red-600">
+						{errText(search.error, "Search failed. Try again.")}
+					</p>
+					<Button
+						type="button"
+						variant="outline"
+						size="xs"
+						disabled={browserSearch.isPending}
+						onClick={() => browserSearch.mutate(query)}
+					>
+						{browserSearch.isPending ? "Searching…" : "Search from browser"}
+					</Button>
+					{browserSearch.isError && (
+						<p className="text-xs text-red-600">
+							{errText(
+								browserSearch.error,
+								"Browser search failed. Try again.",
+							)}
 						</p>
 					)}
-				</PopoverContent>
-			</Popover>
-
-			<Button
-				type="button"
-				variant="ghost"
-				size="sm"
-				disabled={assign.isPending}
-				onClick={onSkip}
-			>
-				Skip
-			</Button>
+				</div>
+			)}
 		</li>
 	);
 }
