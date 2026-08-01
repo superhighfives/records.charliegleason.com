@@ -102,6 +102,9 @@ export function parseSizeAndType(
 
 	let type: string | null = null;
 	if (/\bEP\b/i.test(text)) type = "EP";
+	// "Single LP" (the capture-context preset) means a one-disc LP, not a 7"
+	// single — check it before the bare "single" branch below.
+	else if (/\bsingle\s+lp\b/i.test(text)) type = "LP";
 	else if (/\bmaxi-single\b/i.test(text) || /\bsingle\b/i.test(text))
 		type = "Single";
 	else if (/\bLP\b/i.test(text) || /\balbum\b/i.test(text)) type = "LP";
