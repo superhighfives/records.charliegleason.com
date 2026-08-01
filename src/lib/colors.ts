@@ -1,11 +1,11 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
-import { asc, eq } from "drizzle-orm";
+import { asc, count, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 
 import { getDb } from "#/db";
-import { type Color, colors } from "#/db/schema";
+import { type Color, colors, records } from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { storeColorTextureUpload } from "#/lib/color-texture-upload";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
@@ -48,12 +48,28 @@ export const getOrCreateColor = createServerOnlyFn(
 	},
 );
 
-/** All vinyl color chips, for the admin combobox's suggestion list. */
+/**
+ * All vinyl color chips, for the admin combobox's suggestion list — each with
+ * `recordCount`, the number of records currently using it, so the "delete"
+ * confirm dialog can warn how many will be reset to {@link DEFAULT_COLOR_NAME}.
+ */
 export const listColors = createServerFn({ method: "GET" }).handler(() =>
 	Sentry.startSpan({ name: "listColors" }, async () => {
 		if (!(await getAdminSession())) return [];
 		const db = getDb(env.DB);
-		return db.select().from(colors).orderBy(asc(colors.name));
+		const [rows, usage] = await Promise.all([
+			db.select().from(colors).orderBy(asc(colors.name)),
+			db
+				.select({ colorId: records.colorId, count: count() })
+				.from(records)
+				.where(isNotNull(records.colorId))
+				.groupBy(records.colorId),
+		]);
+		const usageById = new Map(usage.map((u) => [u.colorId, u.count]));
+		return rows.map((r) => ({
+			...r,
+			recordCount: usageById.get(r.id) ?? 0,
+		}));
 	}),
 );
 
@@ -115,4 +131,51 @@ export const uploadColorTexture = createServerFn({ method: "POST" })
 				base64ToBytes(stripDataUrl(imageBase64)),
 			),
 		),
+	);
+
+/**
+ * Delete a color chip. Every record using it is reassigned to
+ * {@link DEFAULT_COLOR_NAME} first (rather than left dangling on a colorId that
+ * no longer exists) — the combobox confirms this with the user, showing
+ * `recordCount` from `listColors`, before calling this. Refuses to delete
+ * `DEFAULT_COLOR_NAME` itself: it's the fallback every reassignment (including
+ * this one, for any OTHER color) targets, so deleting it would leave nothing to
+ * reassign to.
+ */
+export const deleteColor = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) =>
+		z.object({ colorId: z.number().int() }).parse(data),
+	)
+	.handler(({ data: { colorId } }) =>
+		Sentry.startSpan({ name: "deleteColor" }, async () => {
+			const db = getDb(env.DB);
+			const [color] = await db
+				.select()
+				.from(colors)
+				.where(eq(colors.id, colorId))
+				.limit(1);
+			if (!color) return; // already gone
+
+			if (color.name === DEFAULT_COLOR_NAME) {
+				throw new Error(
+					`"${DEFAULT_COLOR_NAME}" can't be deleted — it's the default every other color's records reset to.`,
+				);
+			}
+
+			const black = await getOrCreateColor(DEFAULT_COLOR_NAME);
+			await db
+				.update(records)
+				.set({ colorId: black.id })
+				.where(eq(records.colorId, colorId));
+
+			if (color.textureImageKey) {
+				await env.PHOTOS.delete(color.textureImageKey).catch(() => {});
+			}
+			await db.delete(colors).where(eq(colors.id, colorId));
+
+			// So a caller currently pointed at the deleted color (e.g. the record
+			// form it was just picked from) can update its own selection in place.
+			return { blackId: black.id };
+		}),
 	);

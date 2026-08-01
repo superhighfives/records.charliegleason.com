@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckIcon, RefreshCwIcon, UploadIcon, XIcon } from "lucide-react";
+import {
+	CheckIcon,
+	RefreshCwIcon,
+	TrashIcon,
+	UploadIcon,
+	XIcon,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -12,6 +18,8 @@ import {
 } from "#/components/ui/popover";
 import {
 	createColor,
+	DEFAULT_COLOR_NAME,
+	deleteColor,
 	regenerateColorTexture,
 	uploadColorTexture,
 } from "#/lib/colors";
@@ -91,6 +99,35 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 		setUploadTargetId(null);
 		const imageBase64 = await readFileAsDataUrl(file);
 		uploadMutation.mutate({ colorId, imageBase64 });
+	};
+
+	const deleteMutation = useMutation({
+		mutationFn: (colorId: number) => deleteColor({ data: { colorId } }),
+		onSuccess: (result, colorId) => {
+			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey });
+			// The deleted color's records (including this field, if it was showing
+			// the deleted color) were just reassigned to Black server-side — reflect
+			// that here rather than leaving the field pointed at a gone colorId.
+			if (result && colorId.toString() === value) {
+				onChange(result.blackId.toString());
+			}
+		},
+		onError: (err: Error) =>
+			toast.error(err.message || "Couldn't delete the color."),
+	});
+
+	const handleDelete = (c: {
+		id: number;
+		name: string;
+		recordCount: number;
+	}) => {
+		const usage =
+			c.recordCount > 0
+				? ` ${c.recordCount} record${c.recordCount === 1 ? "" : "s"} using it will be reset to "${DEFAULT_COLOR_NAME}".`
+				: "";
+		if (confirm(`Delete "${c.name}"?${usage}`)) {
+			deleteMutation.mutate(c.id);
+		}
 	};
 
 	const trimmedQuery = query.trim();
@@ -201,6 +238,22 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 											)}
 										/>
 									</Button>
+									{c.name !== DEFAULT_COLOR_NAME && (
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											aria-label={`Delete ${c.name}`}
+											className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-destructive"
+											disabled={deleteMutation.isPending}
+											onClick={(e) => {
+												e.stopPropagation();
+												handleDelete(c);
+											}}
+										>
+											<TrashIcon className="size-3.5" />
+										</Button>
+									)}
 									{c.id.toString() === value && (
 										<CheckIcon className="size-4 text-muted-foreground" />
 									)}
