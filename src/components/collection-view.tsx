@@ -2,19 +2,15 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import { CollectionGrid } from "#/components/collection-grid";
 import { useCollectionUI } from "#/components/collection-ui";
-import { FadeImage } from "#/components/fade-image";
 import { RecordPanel } from "#/components/record-panel";
-import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
-import { VinylDisc } from "#/components/vinyl-disc";
-import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import { emojiSrc } from "#/lib/emoji";
 import { recordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
-import { cn } from "#/lib/utils";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
 const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
@@ -155,73 +151,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			) : filtered.length === 0 ? (
 				<p className="text-muted-foreground">No records match “{search}”.</p>
 			) : (
-				<ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4">
-					{filtered.map((r) => (
-						<li key={r.id} className="group">
-							<button
-								type="button"
-								onClick={() => openRecord(r)}
-								className="w-full cursor-pointer space-y-2 text-left"
-							>
-								<div className="relative">
-									<VinylDisc
-										colorName={r.colorName}
-										textureImageKey={r.colorTextureImageKey}
-										textureStatus={r.colorTextureStatus}
-										size={r.size}
-										discCount={r.discCount}
-									/>
-									<div className="cover-lift">
-										<div className="album-card grain aspect-square overflow-hidden">
-											{(() => {
-												// Prefer the floating matte (transparent, true edges) when the
-												// record has one; its baked shadow + margin read as an object
-												// on the card. Fall back to the square cover otherwise.
-												const matte = displayMatteKey(r);
-												const cover = matte ?? displayCoverKey(r);
-												return cover ? (
-													<FadeImage
-														src={`/api/photos/${cover}`}
-														alt={`${r.artist} — ${r.title}`}
-														className={cn(
-															// Fade in on load *and* keep the grayscale→colour hover —
-															// one combined transition property so both animate.
-															"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
-															matte ? "object-contain" : "object-cover",
-														)}
-														loading="lazy"
-													/>
-												) : (
-													<SleevePlaceholder />
-												);
-											})()}
-										</div>
-									</div>
-								</div>
-								<div className="text-sm leading-snug">
-									<p
-										className="truncate font-serif text-base font-medium"
-										title={r.title ?? undefined}
-									>
-										{r.title}
-									</p>
-									<p className="truncate font-serif text-muted-foreground">
-										{r.artist}
-										{r.year ? ` · ${r.year}` : ""}
-									</p>
-									{r.pitchforkScore != null && (
-										<p className="mt-1 text-xs font-bold text-brand-strong tabular-nums">
-											{r.pitchforkScore}
-											<span className="ml-1 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-												on Pitchfork
-											</span>
-										</p>
-									)}
-								</div>
-							</button>
-						</li>
-					))}
-				</ul>
+				<CollectionGrid records={filtered} onOpen={openRecord} />
 			)}
 
 			<Sheet
