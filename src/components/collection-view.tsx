@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useCollectionUI } from "#/components/collection-ui";
 import { FadeImage } from "#/components/fade-image";
@@ -32,16 +32,10 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 
 	// Whether the open drawer should slide in. True only when this open was an
-	// in-app action — `openRecord` sets the flag before navigating. Direct
-	// navigation / SSR leaves it false, so the drawer appears in place instead of
-	// looking like a spurious transition on load. Captured once per mount (the
-	// route swap that opens a record remounts this view) and cleared after — the
-	// clear stays in an effect so the initializer is a pure read (Strict Mode /
-	// concurrent rendering may invoke it twice).
-	const [animateOpen] = useState(() => animateOpenRef.current);
-	useEffect(() => {
-		animateOpenRef.current = false;
-	}, [animateOpenRef]);
+	// in-app action — `openRecord` sets the flag before navigating; a direct-nav /
+	// SSR open leaves it false so the drawer appears in place. This view no longer
+	// remounts on open (the `_collection` layout keeps it mounted), so the intent
+	// is read at the open edge rather than captured per mount.
 
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
@@ -100,6 +94,15 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 		if (selectedId != null && selectedIndex === -1)
 			openRecord(null, { replace: true });
 	}, [selectedId, selectedIndex, openRecord]);
+
+	// Read the slide-in intent at the open edge and consume it once open, so paging
+	// and unrelated re-renders don't retrigger it. Radix only runs the enter
+	// transition on the closed→open edge, so a render-phase read is sufficient.
+	const open = selected != null;
+	const enterAnimation = open && animateOpenRef.current;
+	useEffect(() => {
+		if (open) animateOpenRef.current = false;
+	}, [open, animateOpenRef]);
 
 	return (
 		<div className="w-full mx-auto max-w-5xl px-4 py-10 sm:px-6">
@@ -222,14 +225,14 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			)}
 
 			<Sheet
-				open={selected != null}
-				onOpenChange={(open) => {
+				open={open}
+				onOpenChange={(next) => {
 					// Replace, not push: opening pushed one entry, so closing collapses it
 					// away rather than leaving a stale "back reopens the drawer" entry.
-					if (!open) openRecord(null, { replace: true });
+					if (!next) openRecord(null, { replace: true });
 				}}
 			>
-				<SheetContent className="p-0" enterAnimation={animateOpen}>
+				<SheetContent className="p-0" enterAnimation={enterAnimation}>
 					{shown && (
 						<RecordPanel
 							key={shown.record.id}

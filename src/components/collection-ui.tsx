@@ -16,16 +16,17 @@ interface CollectionUI {
 	 * Whether the next record drawer to open should slide in. A record opened by
 	 * an in-app action (click/paging) animates; one that's already open on first
 	 * paint (direct navigation / SSR) appears instantly. `openRecord` sets this
-	 * before navigating, and `CollectionView` reads + clears it on mount.
+	 * before navigating, and `CollectionView` reads + consumes it at the open edge.
 	 */
 	animateOpenRef: MutableRefObject<boolean>;
 }
 
 /**
- * Collection UI state that must outlive the `/` ↔ `/records/$id` route swap
- * (which remounts `CollectionView`). Held in a provider mounted above the router
- * outlet (see __root.tsx): the text filter survives opening/closing a record,
- * and the open-animation intent survives the navigation that triggers the open.
+ * Collection UI state for the grid. The `_collection` layout keeps one
+ * `CollectionView` mounted across the `/` ↔ `/records/$id` navigation, so this
+ * provider (mounted above the router outlet in __root.tsx) mainly carries the
+ * open-animation intent across the navigation that triggers an open; it also
+ * holds the text filter above the outlet.
  */
 const CollectionUIContext = createContext<CollectionUI | null>(null);
 
