@@ -37,7 +37,10 @@ name: Preview
 #   REPLICATE_API_KEY                            — Apply pipeline (ESRGAN enhance + AI matte);
 #                                                  reuse prod, or a low-cap token for preview
 #   VITE_SENTRY_DSN / VITE_SENTRY_ORG / VITE_SENTRY_PROJECT / SENTRY_AUTH_TOKEN
-#   Optional (skipped if unset): SERPAPI_KEY, CRON_SECRET
+#   Optional (skipped if unset): SERPAPI_KEY, CRON_SECRET, DISCOGS_PROXY_URL,
+#                                 DISCOGS_PROXY_SECRET — Fly.io Discogs proxy
+#                                 (fly/discogs-proxy); omitted, discogsFetch just
+#                                 calls api.discogs.com directly like before
 on:
   pull_request:
     branches: [main]
@@ -179,11 +182,14 @@ jobs:
           REPLICATE_API_KEY: ${{ secrets.REPLICATE_API_KEY }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DISCOGS_PROXY_URL: ${{ secrets.DISCOGS_PROXY_URL }}
+          DISCOGS_PROXY_SECRET: ${{ secrets.DISCOGS_PROXY_SECRET }}
         run: |
           node -e '
             const keys = [
               "CLERK_SECRET_KEY", "DISCOGS_TOKEN", "LASTFM_API_KEY",
               "REPLICATE_API_KEY", "SERPAPI_KEY", "CRON_SECRET",
+              "DISCOGS_PROXY_URL", "DISCOGS_PROXY_SECRET",
             ];
             const out = {};
             for (const k of keys) {
