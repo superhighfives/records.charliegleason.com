@@ -56,7 +56,7 @@ export function FadeImage({
 			alt={alt}
 			src={src}
 			className={cn(
-				"transition-opacity duration-700 ease-out motion-reduce:transition-none",
+				"transition-opacity duration-700 ease-out mask-b-from-50% mask-b-to-100% motion-reduce:transition-none",
 				loaded ? "opacity-100" : "opacity-0",
 				className,
 			)}

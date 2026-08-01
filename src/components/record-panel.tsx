@@ -384,12 +384,16 @@ export function RecordPanel({
 						<div
 							aria-hidden
 							className="pointer-events-none absolute inset-0 -z-10"
-							style={{ opacity: "calc(1 - var(--hero, 0))" }}
+							// The backdrop's faint 10% lives here, not on FadeImage: a
+							// caller `opacity-*` class would clobber FadeImage's own
+							// 0→100 fade toggle. Parent × child opacity multiply, so the
+							// image fades 0 → 0.1 on load, then out as `--hero` pins.
+							style={{ opacity: "calc(0.1 * (1 - var(--hero, 0)))" }}
 						>
 							<FadeImage
 								src={`/api/photos/${cover}`}
 								alt=""
-								className="size-full object-cover opacity-10"
+								className="size-full object-cover"
 							/>
 						</div>
 					)}
@@ -471,19 +475,17 @@ export function RecordPanel({
 				</div>
 
 				{record.notes && (
-					<div className="p-2 border-b">
-						<div className="relative overflow-hidden rounded-lg border border-brand/50 bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent p-4">
-							<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
-								Notes
-							</h3>
-							<NotesContent className="font-mono text-sm leading-relaxed text-pretty text-foreground/90">
-								{record.notes}
-							</NotesContent>
-						</div>
+					<div className="relative overflow-hidden border-t border-brand bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent p-4">
+						<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
+							Notes
+						</h3>
+						<NotesContent className="font-notes leading-relaxed text-pretty text-foreground/90">
+							{record.notes}
+						</NotesContent>
 					</div>
 				)}
 
-				<div className="p-6 space-y-6">
+				<div className="p-6 space-y-6 border-t">
 					<div className="grid grid-cols-3 gap-2">
 						<Stat label="Year">{dash(record.year)}</Stat>
 						<Stat label="Format">{dash(record.format)}</Stat>

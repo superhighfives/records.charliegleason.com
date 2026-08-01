@@ -1,4 +1,3 @@
-import { XIcon } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { type ReactNode, useState } from "react";
 
@@ -88,13 +87,6 @@ function ImageZoom({
 							className="absolute inset-0 size-full rounded-md object-contain shadow-lg"
 						/>
 					</div>
-					<DialogPrimitive.Close
-						type="button"
-						className="absolute top-2 right-2 rounded-sm bg-background/80 p-1 opacity-80 outline-none ring-offset-background transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-					>
-						<XIcon className="size-4" />
-						<span className="sr-only">Close</span>
-					</DialogPrimitive.Close>
 				</DialogPrimitive.Content>
 			</DialogPrimitive.Portal>
 		</DialogPrimitive.Root>
