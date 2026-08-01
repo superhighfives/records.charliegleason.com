@@ -41,9 +41,10 @@ function looseEquals(a: string, b: string): boolean {
 }
 
 /**
- * The single result to auto-assign, if any: either the only candidate
- * returned, or the one unambiguous exact artist+title match among several.
- * Anything less certain (no match, multiple exact matches) is left for the
+ * The single result to auto-assign, if any: the one unambiguous exact
+ * artist+title match, whether it's the only candidate returned or the one
+ * exact match among several. Anything less certain (no match, multiple exact
+ * matches, or a lone result that doesn't actually match) is left for the
  * user to pick by hand.
  */
 function autoMatch(
@@ -51,7 +52,6 @@ function autoMatch(
 	artist: string,
 	title: string,
 ): DiscogsMasterCandidate | null {
-	if (results.length === 1) return results[0];
 	const exact = results.filter(
 		(m) => looseEquals(m.artist, artist) && looseEquals(m.title, title),
 	);

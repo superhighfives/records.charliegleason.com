@@ -33,7 +33,9 @@ Bun.serve({
 			return new Response("method not allowed", { status: 405 });
 		}
 
-		const upstream = new URL(url.pathname + url.search, DISCOGS_BASE);
+		const upstream = new URL(DISCOGS_BASE);
+		upstream.pathname = url.pathname;
+		upstream.search = url.search;
 		const res = await fetch(upstream, {
 			headers: {
 				"User-Agent": USER_AGENT,
