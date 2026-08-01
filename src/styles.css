@@ -254,10 +254,9 @@ a {
 .cover-lift {
   position: relative;
   --lift: 4px;
-  /* Reserve the lift's worth of headroom above the cover. The tile's paint
-   * containment (content-visibility on .cv-auto) clips anything drawn outside
-   * its box, so without this the cover's top edge would be cropped as it rises.
-   * At rest the cover sits --lift down; the hover translate brings it flush. */
+  /* Reserve the lift's worth of headroom above the cover, so the rise doesn't
+   * nudge the tile's own layout box taller on hover. At rest the cover sits
+   * --lift down; the hover translate brings it flush. */
   padding-top: var(--lift);
 }
 
@@ -287,14 +286,74 @@ a {
 }
 
 /*
- * Skip rendering (and animating the grain on) tiles scrolled off-screen. Cheap
- * insurance for a large collection: the browser only paints tiles near the
- * viewport. `auto` remembers each tile's real size once rendered, falling back
- * to ~300px so the scrollbar doesn't jump before first paint.
+ * The vinyl disc(s) peeking out from behind a cover tile (see `VinylDisc`). Sits
+ * behind `.cover-lift` in both DOM order and z-index, same-sized as the tile —
+ * fully hidden at rest, directly behind the (opaque) cover. `--vinyl-stack-index`
+ * fans extra discs (a 2×LP/3×LP) with a little rotation per layer back from the
+ * front. On hover the whole stack slides out sideways a modest ~10% of its own
+ * width — `--vinyl-scale` (bigger for a 12", smaller for a 7"|10") scales that —
+ * using a PERCENTAGE translate rather than a fixed px reveal, so it scales
+ * cleanly with the tile regardless of grid column count / viewport width. Kept
+ * deliberately small: this overflow isn't clipped by anything (no `.cv-auto` on
+ * the tile — see below), so a bigger reveal on the grid's last column would slide
+ * past the page's own right edge and force a horizontal scrollbar.
+ *
+ * This can't be clipped back to the tile's box with `.cv-auto`'s
+ * `content-visibility` paint containment (as the resting-peek design once was) —
+ * a reserved-padding trick has to permanently shrink the cover to buy that room,
+ * and even a ~10% reveal needs more of it than looks good at rest. Removed
+ * instead of papered over (see the `.cv-auto` git history for the previous
+ * approach); this app's collection is small enough that its scroll-perf win
+ * wasn't worth fighting the containment for the reveal this needs.
  */
-.cv-auto {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 300px;
+.vinyl-peek {
+  z-index: 0;
+}
+
+.vinyl-disc {
+  transform: translateX(0) rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
+  transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.group:hover .vinyl-disc {
+  /* min(10%, 14px): a percentage alone scales with the tile, but on a wide
+     desktop grid 10% of a ~230px tile (~23px) can clear the page's own side
+     padding on the last column and force a horizontal scrollbar. Capping to a
+     small fixed px keeps the reveal bounded everywhere, at the cost of it being
+     the min() (not 10%) on any tile bigger than ~140px — i.e. always, in
+     practice, which is fine: a small consistent peek is the goal. */
+  transform: translateX(
+      calc(
+        min(10%, 14px) * var(--vinyl-scale, 1) - 1px *
+          var(--vinyl-stack-index, 0)
+      )
+    )
+    rotate(calc(6deg - 3deg * var(--vinyl-stack-index, 0)));
+}
+
+/*
+ * The record detail panel has no hover affordance for its disc (a static
+ * thumbnail, not a hoverable grid tile — see record-panel.tsx), so instead of
+ * `.vinyl-disc`'s default fully-hidden rest state it gets a small permanent peek,
+ * matching the collection grid's pre-hover art direction on a page where hover
+ * never fires.
+ */
+.vinyl-peek--static .vinyl-disc {
+  /* The wrapper's own `inset-[12%]` (see record-panel.tsx, ~21px on the 176px
+     box) already eats most of a small translate before the disc's edge even
+     reaches the wrapper's own bounds — this needs to clear THAT first, then
+     travel a bit further to actually read as peeking past the artwork. */
+  transform: translate(
+      calc(26px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
+      calc(2px * var(--vinyl-stack-index, 0))
+    )
+    rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vinyl-disc {
+    transition: none;
+  }
 }
 
 /*
@@ -518,25 +577,5 @@ a {
     box-shadow:
       0 0 0 1px var(--ring),
       0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
-  }
-
-  /*
-   * Cover tiles are wrapped in an `.group` list item that carries
-   * `content-visibility` (→ paint containment), which would clip a ring drawn on
-   * the inner button. Draw it on the list item instead — an element's own shadow
-   * isn't clipped by its own containment — and cancel the (clipped) inner ring.
-   */
-  @supports selector(:has(*)) {
-    .cv-auto:has(:focus-visible) {
-      box-shadow:
-        0 0 0 1px var(--ring),
-        0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
-    }
-    /* Only cancel the inner ring where the wrapper can replace it. Without
-     * `:has()` the wrapper never lights up, so leaving the button's own ring in
-     * place keeps a visible focus indicator. */
-    .cv-auto > button:focus-visible {
-      box-shadow: none;
-    }
   }
 }

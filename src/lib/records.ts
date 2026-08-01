@@ -6,6 +6,7 @@ import {
 	count,
 	desc,
 	eq,
+	getTableColumns,
 	inArray,
 	isNotNull,
 	isNull,
@@ -13,9 +14,15 @@ import {
 } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { type JobStep, type Record as RecordRow, records } from "#/db/schema";
+import {
+	colors,
+	type JobStep,
+	type Record as RecordRow,
+	records,
+} from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
+import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
 import { displayCoverKey } from "#/lib/cover";
 import {
 	getMasterCandidate,
@@ -106,14 +113,22 @@ const ADMIN_ONLY_FIELDS = [
 	"professionalAlphaSource",
 ] as const;
 
+/** A `records` row joined with its `colors` chip — see `listPublicRecords`. */
+type RecordRowWithColor = RecordRow & {
+	colorName: string | null;
+	colorTextureImageKey: string | null;
+	colorTextureStatus: string | null;
+};
+
 /**
  * The public shape of a record — the full row minus the admin-only fields, plus a
  * derived `copies` count (how many physical copies of this album the collector
  * owns: 1 for a normal record, ≥2 when secondary copies are linked to it via
- * `copyOf`). Secondary copies themselves are never in the public list.
+ * `copyOf`), and the joined color chip's name + reference vinyl texture (for
+ * `VinylDisc`). Secondary copies themselves are never in the public list.
  */
 export type PublicRecord = Omit<
-	RecordRow,
+	RecordRowWithColor,
 	(typeof ADMIN_ONLY_FIELDS)[number]
 > & {
 	copies: number;
@@ -124,7 +139,10 @@ export type PublicRecord = Omit<
  * is the number of physical copies owned (default 1); `listPublicRecords` passes
  * the real count for a primary that has linked secondary copies.
  */
-export function toPublicRecord(row: RecordRow, copies = 1): PublicRecord {
+export function toPublicRecord(
+	row: RecordRowWithColor,
+	copies = 1,
+): PublicRecord {
 	const {
 		capturePhotoKey: _capture,
 		manualValue: _manual,
@@ -198,8 +216,14 @@ export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
 		// master requirement is defence-in-depth for the publish gate: even if a row
 		// slipped to `complete` without one, it never surfaces publicly without an album.
 		const rows = await db
-			.select()
+			.select({
+				...getTableColumns(records),
+				colorName: colors.name,
+				colorTextureImageKey: colors.textureImageKey,
+				colorTextureStatus: colors.textureStatus,
+			})
 			.from(records)
+			.leftJoin(colors, eq(records.colorId, colors.id))
 			.where(
 				and(
 					eq(records.status, "complete"),
@@ -624,10 +648,17 @@ export const createRecord = createServerFn({ method: "POST" })
 				coverImageKey = await sourceCoverFromDiscogs(rest.discogsId);
 			}
 
+			// Vinyl color is manual-only (see `records.colorId`), so this is the one
+			// place it's ever set automatically — a one-time default at creation,
+			// never touched again by a refresh/re-match.
+			const colorId =
+				rest.colorId ?? (await getOrCreateColor(DEFAULT_COLOR_NAME)).id;
+
 			const [row] = await db
 				.insert(records)
 				.values({
 					...rest,
+					colorId,
 					coverImageKey,
 					coverIsUpload,
 					source: source ?? "manual",
@@ -676,6 +707,11 @@ export const captureRecord = createServerFn({ method: "POST" })
 				data.mediaType,
 			);
 
+			// Vinyl color is manual-only (see `records.colorId`) and the analyze
+			// pipeline never sets it, so default it here at creation — same as
+			// `createRecord` — rather than leaving every captured record uncolored.
+			const { id: colorId } = await getOrCreateColor(DEFAULT_COLOR_NAME);
+
 			const [row] = await db
 				.insert(records)
 				.values({
@@ -684,6 +720,7 @@ export const captureRecord = createServerFn({ method: "POST" })
 					format: "LP",
 					source: "photo",
 					status: "pending",
+					colorId,
 					capturePhotoKey,
 					captureContext: data.context?.trim() || null,
 				})

@@ -47,6 +47,7 @@ export interface DiscogsCandidate {
 	format: string | null; // e.g. "Vinyl, 2×LP, Album, Reissue" — disambiguates pressings
 	size: string | null; // physical size parsed from format, e.g. '12"'
 	type: string | null; // release type parsed from format — LP / EP / Single
+	discCount: number; // number of discs, e.g. 2 for a 2×LP — parsed from format qty
 	country: string | null;
 	catno: string | null; // catalog number
 	discogsUrl: string;
@@ -108,6 +109,36 @@ export function parseSizeAndType(
 	if (!size && type === "LP" && /\bLP\b|\bvinyl\b/i.test(text)) size = '12"';
 
 	return { size, type };
+}
+
+/**
+ * Extract disc count from Discogs format data — how many physical discs a release
+ * ships as (a "2×LP" gatefold, a "3×LP" box set, etc). Accepts either the raw
+ * `formats[]` array from a `/releases/{id}` payload (objects with `qty`/`name`,
+ * the same shape {@link formatLine} reads), or the flat description text a
+ * `/database/search` result already collapses qty into (e.g. "2xLP" inside the
+ * joined format string). Defaults to 1 when nothing indicates otherwise.
+ */
+export function parseDiscCount(
+	// biome-ignore lint/suspicious/noExplicitAny: untyped Discogs format JSON
+	source: Array<any> | string | null | undefined,
+): number {
+	if (Array.isArray(source) && typeof source[0] === "object" && source[0]) {
+		const qtys = source
+			.filter(
+				(f) =>
+					typeof f?.name !== "string" ||
+					source.length === 1 ||
+					/vinyl/i.test(f.name),
+			)
+			.map((f) => Number.parseInt(String(f?.qty ?? "1"), 10))
+			.filter((n) => Number.isFinite(n) && n > 0);
+		return qtys.length ? Math.max(...qtys) : 1;
+	}
+
+	const text = Array.isArray(source) ? source.join(", ") : (source ?? "");
+	const m = text.match(/(\d{1,2})\s*[x×]\s*(?:LP|EP|"|vinyl)/i);
+	return m ? Number.parseInt(m[1], 10) : 1;
 }
 
 /** Strip Discogs' disambiguation suffix ("Wire (2)" → "Wire"). */
@@ -215,6 +246,7 @@ export function mapReleaseSearchResult(
 		format: formatArr.length ? formatArr.join(", ") : null,
 		size,
 		type,
+		discCount: parseDiscCount(formatArr),
 		country: r.country ? String(r.country) : null,
 		catno: cleanCatno(r.catno),
 		discogsUrl: r.uri ? `https://www.discogs.com${r.uri}` : "",
@@ -265,6 +297,7 @@ export function mapReleaseCandidate(
 			: null,
 		size,
 		type,
+		discCount: parseDiscCount(Array.isArray(d.formats) ? d.formats : null),
 		country: d.country ? String(d.country) : null,
 		catno: cleanCatno(firstLabel?.catno),
 		discogsUrl: uri

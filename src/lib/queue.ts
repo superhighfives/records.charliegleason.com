@@ -7,11 +7,13 @@ import { type JobStep, type Record, records } from "#/db/schema";
 import { analyzeCapture } from "#/lib/analyze";
 import {
 	type AnalyzeMessage,
+	type AnalyzeRecordMessage,
 	chunk,
 	nextMatteAction,
 	QUEUE_BATCH_SIZE,
 	toQueueBatches,
 } from "#/lib/batching";
+import { generateColorTexture } from "#/lib/color-texture";
 import {
 	getMasterDetail,
 	getReleaseDetail,
@@ -102,6 +104,16 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 }
 
 /**
+ * Enqueue a color for its reference vinyl texture to be (re)generated via Replicate.
+ * Fired automatically on genuinely-new colors (see `getOrCreateColor`, used by
+ * `createColor`, `createRecord`, and `captureRecord`), and manually from the
+ * "regenerate" affordance in the color combobox.
+ */
+export async function enqueueColorTexture(colorId: number): Promise<void> {
+	await analyzeQueue().send({ mode: "color-texture", colorId });
+}
+
+/**
  * Enqueue a record for the paid Apply pipeline. Kicks off stage 1 (reframe + enhance);
  * that stage enqueues stage 2 (the Magic matte) itself via {@link enqueueProfessionalMatte},
  * so each memory-heavy step runs in its own isolate.
@@ -179,7 +191,7 @@ export async function enqueueProfessionalMatteFallback(
  */
 async function enqueueBatch(
 	recordIds: number[],
-	mode?: AnalyzeMessage["mode"],
+	mode?: AnalyzeRecordMessage["mode"],
 ): Promise<void> {
 	for (const batch of toQueueBatches(recordIds, mode)) {
 		await analyzeQueue().sendBatch(batch);
@@ -237,6 +249,7 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 				genre: detail.genre ?? record.genre,
 				format: detail.type ?? record.format,
 				size: detail.size ?? record.size,
+				discCount: detail.discCount ?? record.discCount,
 				catno: detail.catno ?? record.catno,
 				country: detail.country ?? record.country,
 				...valueColumns(value),
@@ -350,6 +363,23 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 }
 
 async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
+	// Colors-keyed job — handled entirely separately from the records pipeline below.
+	if (message.body.mode === "color-texture") {
+		const { colorId } = message.body;
+		try {
+			await generateColorTexture(colorId);
+		} catch (err) {
+			console.error(
+				`[queue] color-texture failed for color ${colorId}: ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+			Sentry.captureException(err);
+		}
+		message.ack();
+		return;
+	}
+
 	const { recordId, mode } = message.body;
 	const db = getDb(env.DB);
 

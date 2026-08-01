@@ -8,8 +8,8 @@
  *  - Cloudflare Queues accept at most 100 messages per `sendBatch` call.
  */
 
-/** Message enqueued for the analyze consumer. Re-exported from `#/lib/queue`. */
-export interface AnalyzeMessage {
+/** A `records`-keyed message for the analyze consumer. See {@link AnalyzeMessage}. */
+export interface AnalyzeRecordMessage {
 	recordId: number;
 	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls the
 	// Discogs release for an already-identified record. The paid Apply pipeline is
@@ -45,6 +45,20 @@ export interface AnalyzeMessage {
 }
 
 /**
+ * A `colors`-keyed message — generates (or regenerates) a color's reference vinyl
+ * texture via Replicate. Its own variant (rather than an optional field bolted onto
+ * {@link AnalyzeRecordMessage}) so `recordId` stays required/non-null everywhere it's
+ * actually a record job.
+ */
+export interface ColorTextureMessage {
+	mode: "color-texture";
+	colorId: number;
+}
+
+/** Message enqueued for the analyze consumer. Re-exported from `#/lib/queue`. */
+export type AnalyzeMessage = AnalyzeRecordMessage | ColorTextureMessage;
+
+/**
  * Chunk size for bulk `inArray(id, ids)` queries. Kept comfortably under D1's
  * 100-bound-parameter ceiling so a companion `.set(...)` (whose columns also
  * bind parameters) can't tip an otherwise-legal batch over the limit.
@@ -76,8 +90,8 @@ export function chunk<T>(items: T[], size: number): T[][] {
  */
 export function toQueueBatches(
 	recordIds: number[],
-	mode?: AnalyzeMessage["mode"],
-): Array<Array<{ body: AnalyzeMessage }>> {
+	mode?: AnalyzeRecordMessage["mode"],
+): Array<Array<{ body: AnalyzeRecordMessage }>> {
 	return chunk(recordIds, QUEUE_BATCH_SIZE).map((slice) =>
 		slice.map((recordId) => ({ body: { recordId, mode } })),
 	);

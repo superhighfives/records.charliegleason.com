@@ -148,6 +148,13 @@
       "when": 1785480203561,
       "tag": "0020_calm_luke_cage",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1785531027553,
+      "tag": "0021_flippant_talkback",
+      "breakpoints": true
     }
   ]
 }

@@ -6,6 +6,7 @@ import {
 	mapReleaseCandidate,
 	mapReleaseSearchResult,
 	masterDetailToCandidate,
+	parseDiscCount,
 } from "./discogs-shared";
 
 describe("mapReleaseSearchResult", () => {
@@ -104,6 +105,41 @@ describe("mapReleaseCandidate", () => {
 		expect(c.masterId).toBeNull();
 		// No `uri` → fall back to a canonical release URL built from the id.
 		expect(c.discogsUrl).toBe("https://www.discogs.com/release/2");
+	});
+});
+
+describe("parseDiscCount", () => {
+	it("defaults to 1 for missing or empty input", () => {
+		expect(parseDiscCount(null)).toBe(1);
+		expect(parseDiscCount(undefined)).toBe(1);
+		expect(parseDiscCount("")).toBe(1);
+		expect(parseDiscCount([])).toBe(1);
+	});
+
+	it("reads qty off a formats[] array, vinyl entries only", () => {
+		expect(
+			parseDiscCount([{ name: "Vinyl", qty: "2" }, { name: "Insert" }]),
+		).toBe(2);
+		expect(
+			parseDiscCount([
+				{ name: "Vinyl", qty: "2" },
+				{ name: "Vinyl", qty: "3" },
+			]),
+		).toBe(3);
+		expect(parseDiscCount([{ name: "Box Set", qty: "1" }])).toBe(1);
+	});
+
+	it("parses an 'NxLP'-style joined format string", () => {
+		expect(parseDiscCount("2xLP")).toBe(2);
+		expect(parseDiscCount("2×LP")).toBe(2);
+		expect(parseDiscCount(["Album", "2xLP", "Gatefold"])).toBe(2);
+	});
+
+	it("falls back to 1 when the count is encoded against the size instead", () => {
+		// Discogs sometimes writes the count against the disc size (`2×12"`)
+		// rather than the format (`2xLP`) — parseDiscCount doesn't parse that
+		// shape today, so it defaults to 1 rather than misreading it.
+		expect(parseDiscCount('2×12", 45 RPM, EP')).toBe(1);
 	});
 });
 

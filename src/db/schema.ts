@@ -10,6 +10,15 @@ import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 export const colors = sqliteTable("colors", {
 	id: integer("id").primaryKey({ autoIncrement: true }),
 	name: text("name").notNull().unique(),
+	// AI-generated reference texture for this color's vinyl surface (a flat swatch,
+	// not a full disc render — VinylDisc composites it with procedural grooves/hole).
+	// Generated once per color name via the "color-texture" queue job, cached in R2
+	// under `textures/` and reused by every record with this colorId.
+	textureImageKey: text("texture_image_key"),
+	textureStatus: text("texture_status", {
+		enum: ["idle", "queued", "processing", "ready", "failed"],
+	}).default("idle"),
+	textureError: text("texture_error"),
 	createdAt: integer("created_at", { mode: "timestamp" }).default(
 		sql`(unixepoch())`,
 	),
@@ -37,6 +46,9 @@ export const records = sqliteTable("records", {
 	format: text("format").default("LP"),
 	// Physical size of the disc — e.g. '12"', '10"', '7"'. Parsed from Discogs.
 	size: text("size"),
+	// Number of discs in this release (e.g. a 2xLP). Parsed from Discogs' per-format
+	// `qty` (see parseDiscCount in discogs-shared.ts); manually editable, defaults to 1.
+	discCount: integer("disc_count").default(1),
 	genre: text("genre"),
 	// Vinyl color chip — see `colors` above. Manual-only (Discogs enrichment
 	// never touches this), so it's never nulled by a refresh/re-match.

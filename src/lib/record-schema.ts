@@ -13,6 +13,9 @@ export const recordInputSchema = z.object({
 	label: z.string().trim().min(1).nullable(),
 	format: z.string().trim().min(1),
 	size: z.string().trim().min(1).nullable(),
+	// Number of discs in this release (e.g. 2 for a 2×LP). Always at least 1, unlike
+	// the other physical fields it's never null — a record is always ≥1 disc.
+	discCount: z.number().int().min(1),
 	catno: z.string().trim().min(1).nullable(),
 	country: z.string().trim().min(1).nullable(),
 	genre: z.string().trim().min(1).nullable(),
@@ -72,6 +75,7 @@ export type RecordFormValues = {
 	label: string;
 	format: string;
 	size: string;
+	discCount: string;
 	catno: string;
 	country: string;
 	genre: string;
@@ -96,6 +100,7 @@ export const recordFormSchema = z.object({
 	label: z.string(),
 	format: z.string(),
 	size: z.string(),
+	discCount: numericString,
 	catno: z.string(),
 	country: z.string(),
 	genre: z.string(),
@@ -112,6 +117,7 @@ export const emptyRecordForm: RecordFormValues = {
 	label: "",
 	format: "LP",
 	size: '12"',
+	discCount: "1",
 	catno: "",
 	country: "",
 	genre: "",
@@ -139,6 +145,7 @@ export function formValuesToInput(v: RecordFormValues): RecordInput {
 		label: optional(v.label),
 		format: v.format.trim() || "LP",
 		size: optional(v.size),
+		discCount: Math.max(1, Math.trunc(optionalNumber(v.discCount) ?? 1)),
 		catno: optional(v.catno),
 		country: optional(v.country),
 		genre: optional(v.genre),
@@ -157,6 +164,7 @@ export function recordToFormValues(r: Record): RecordFormValues {
 		label: r.label ?? "",
 		format: r.format ?? "LP",
 		size: r.size ?? "",
+		discCount: (r.discCount ?? 1).toString(),
 		catno: r.catno ?? "",
 		country: r.country ?? "",
 		genre: r.genre ?? "",

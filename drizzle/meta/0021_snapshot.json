@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8ec4f557-8c6e-4e25-8c51-6e52875475da",
-  "prevId": "3461bca3-c2cd-42b2-899e-25a7b1121e3d",
+  "id": "1810d878-736f-4fce-8047-9dce3d6d9289",
+  "prevId": "8ec4f557-8c6e-4e25-8c51-6e52875475da",
   "tables": {
     "colors": {
       "name": "colors",
@@ -19,6 +19,28 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "texture_image_key": {
+          "name": "texture_image_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "texture_status": {
+          "name": "texture_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "'idle'"
+        },
+        "texture_error": {
+          "name": "texture_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "created_at": {
@@ -96,6 +118,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "disc_count": {
+          "name": "disc_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 1
         },
         "genre": {
           "name": "genre",

@@ -346,6 +346,7 @@ function toForm(
 		label: picked?.label ?? record.label ?? "",
 		format: picked?.type ?? record.format ?? "LP",
 		size: picked?.size ?? record.size ?? "",
+		discCount: (picked?.discCount ?? record.discCount ?? 1).toString(),
 		catno: picked?.catno ?? record.catno ?? "",
 		country: picked?.country ?? record.country ?? "",
 		genre: picked?.genre ?? pickedMaster?.genre ?? record.genre ?? "",
