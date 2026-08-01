@@ -393,7 +393,7 @@ export function RecordPanel({
 							<FadeImage
 								src={`/api/photos/${cover}`}
 								alt=""
-								className="size-full object-cover"
+								className="size-full object-cover mask-b-from-50% mask-b-to-100%"
 							/>
 						</div>
 					)}
