@@ -1384,19 +1384,43 @@ export const updateRecord = createServerFn({ method: "POST" })
 export const assignRecordMaster = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator(
-		(input: { id: number; masterId: string; masterUrl: string | null }) =>
-			input,
+		(input: {
+			id: number;
+			masterId: string;
+			masterUrl: string | null;
+			// The picked master's album-level metadata. Optional so older callers keep
+			// working, but the bulk picker always sends it — see the sync note below.
+			artist?: string;
+			title?: string;
+			year?: number | null;
+			genre?: string | null;
+		}) => input,
 	)
-	.handler(({ data: { id, masterId, masterUrl } }) =>
-		Sentry.startSpan({ name: "assignRecordMaster" }, async () => {
-			const db = getDb(env.DB);
-			const [row] = await db
-				.update(records)
-				.set({ masterId, masterUrl, updatedAt: new Date() })
-				.where(eq(records.id, id))
-				.returning();
-			return row ?? null;
-		}),
+	.handler(
+		({ data: { id, masterId, masterUrl, artist, title, year, genre } }) =>
+			Sentry.startSpan({ name: "assignRecordMaster" }, async () => {
+				const db = getDb(env.DB);
+				const [row] = await db
+					.update(records)
+					.set({
+						masterId,
+						masterUrl,
+						// The master IS the record's identity, so sync the album-level fields
+						// to it — otherwise the row keeps whatever capture/analysis guessed and
+						// the editor shows a mismatched album label. Mirrors what the
+						// single-record editor already does via the form (`toForm` prefers the
+						// picked master's fields). Skip artist/title when the candidate carried
+						// a blank so we never overwrite a real value with "".
+						...(artist ? { artist } : {}),
+						...(title ? { title } : {}),
+						...(year !== undefined ? { year } : {}),
+						...(genre !== undefined ? { genre } : {}),
+						updatedAt: new Date(),
+					})
+					.where(eq(records.id, id))
+					.returning();
+				return row ?? null;
+			}),
 	);
 
 /**
