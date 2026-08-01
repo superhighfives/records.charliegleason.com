@@ -1,10 +1,9 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { CollectionView } from "#/components/collection-view";
 import { recordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
-export const Route = createFileRoute("/")({
+export const Route = createFileRoute("/_collection/")({
 	// Back-compat: records used to deep-link as `/?record=<id>`; they now live at
 	// `/records/<id>-<slug>`. Keep validating the old param so shared/bookmarked
 	// links resolve, then redirect them to the canonical path.
@@ -36,9 +35,6 @@ export const Route = createFileRoute("/")({
 	},
 	loader: ({ context }) =>
 		context.queryClient.ensureQueryData(publicRecordsQueryOptions),
-	component: Home,
+	// No component: the `_collection` layout renders the grid. This route only
+	// carries the `/` data loader + the legacy `?record=` redirect.
 });
-
-function Home() {
-	return <CollectionView selectedId={null} />;
-}

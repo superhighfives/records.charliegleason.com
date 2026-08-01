@@ -1,20 +1,16 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import { CollectionGrid } from "#/components/collection-grid";
 import { useCollectionUI } from "#/components/collection-ui";
-import { FadeImage } from "#/components/fade-image";
 import { RecordPanel } from "#/components/record-panel";
-import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
-import { VinylDisc } from "#/components/vinyl-disc";
-import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import { emojiSrc } from "#/lib/emoji";
 import { recordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
-import { cn } from "#/lib/utils";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
 const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
@@ -32,16 +28,10 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 
 	// Whether the open drawer should slide in. True only when this open was an
-	// in-app action — `openRecord` sets the flag before navigating. Direct
-	// navigation / SSR leaves it false, so the drawer appears in place instead of
-	// looking like a spurious transition on load. Captured once per mount (the
-	// route swap that opens a record remounts this view) and cleared after — the
-	// clear stays in an effect so the initializer is a pure read (Strict Mode /
-	// concurrent rendering may invoke it twice).
-	const [animateOpen] = useState(() => animateOpenRef.current);
-	useEffect(() => {
-		animateOpenRef.current = false;
-	}, [animateOpenRef]);
+	// in-app action — `openRecord` sets the flag before navigating; a direct-nav /
+	// SSR open leaves it false so the drawer appears in place. This view no longer
+	// remounts on open (the `_collection` layout keeps it mounted), so the intent
+	// is read at the open edge rather than captured per mount.
 
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
@@ -101,6 +91,20 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			openRecord(null, { replace: true });
 	}, [selectedId, selectedIndex, openRecord]);
 
+	// Read the slide-in intent at the open edge only, so paging (which also sets
+	// the flag, via `openRecord`, while `open` stays true throughout) doesn't
+	// retrigger it. `wasOpenRef` tracks whether the *previous* commit was open,
+	// so `enterAnimation` is true only on the actual closed→open transition —
+	// unlike gating on `open` alone, this stays correct even though the flag
+	// keeps getting set to `true` by paging in between.
+	const open = selected != null;
+	const wasOpenRef = useRef(false);
+	const enterAnimation = open && !wasOpenRef.current && animateOpenRef.current;
+	useEffect(() => {
+		wasOpenRef.current = open;
+		if (open) animateOpenRef.current = false;
+	}, [open, animateOpenRef]);
+
 	return (
 		<div className="w-full mx-auto max-w-5xl px-4 py-10 sm:px-6">
 			<header className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
@@ -152,84 +156,18 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			) : filtered.length === 0 ? (
 				<p className="text-muted-foreground">No records match “{search}”.</p>
 			) : (
-				<ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4">
-					{filtered.map((r) => (
-						<li key={r.id} className="group">
-							<button
-								type="button"
-								onClick={() => openRecord(r)}
-								className="w-full cursor-pointer space-y-2 text-left"
-							>
-								<div className="relative">
-									<VinylDisc
-										colorName={r.colorName}
-										textureImageKey={r.colorTextureImageKey}
-										textureStatus={r.colorTextureStatus}
-										size={r.size}
-										discCount={r.discCount}
-									/>
-									<div className="cover-lift">
-										<div className="album-card grain aspect-square overflow-hidden">
-											{(() => {
-												// Prefer the floating matte (transparent, true edges) when the
-												// record has one; its baked shadow + margin read as an object
-												// on the card. Fall back to the square cover otherwise.
-												const matte = displayMatteKey(r);
-												const cover = matte ?? displayCoverKey(r);
-												return cover ? (
-													<FadeImage
-														src={`/api/photos/${cover}`}
-														alt={`${r.artist} — ${r.title}`}
-														className={cn(
-															// Fade in on load *and* keep the grayscale→colour hover —
-															// one combined transition property so both animate.
-															"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
-															matte ? "object-contain" : "object-cover",
-														)}
-														loading="lazy"
-													/>
-												) : (
-													<SleevePlaceholder />
-												);
-											})()}
-										</div>
-									</div>
-								</div>
-								<div className="text-sm leading-snug">
-									<p
-										className="truncate font-serif text-base font-medium"
-										title={r.title ?? undefined}
-									>
-										{r.title}
-									</p>
-									<p className="truncate font-serif text-muted-foreground">
-										{r.artist}
-										{r.year ? ` · ${r.year}` : ""}
-									</p>
-									{r.pitchforkScore != null && (
-										<p className="mt-1 text-xs font-bold text-brand-strong tabular-nums">
-											{r.pitchforkScore}
-											<span className="ml-1 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-												on Pitchfork
-											</span>
-										</p>
-									)}
-								</div>
-							</button>
-						</li>
-					))}
-				</ul>
+				<CollectionGrid records={filtered} onOpen={openRecord} />
 			)}
 
 			<Sheet
-				open={selected != null}
-				onOpenChange={(open) => {
+				open={open}
+				onOpenChange={(next) => {
 					// Replace, not push: opening pushed one entry, so closing collapses it
 					// away rather than leaving a stale "back reopens the drawer" entry.
-					if (!open) openRecord(null, { replace: true });
+					if (!next) openRecord(null, { replace: true });
 				}}
 			>
-				<SheetContent className="p-0" enterAnimation={animateOpen}>
+				<SheetContent className="p-0" enterAnimation={enterAnimation}>
 					{shown && (
 						<RecordPanel
 							key={shown.record.id}

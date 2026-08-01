@@ -1,16 +1,15 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { CollectionView } from "#/components/collection-view";
 import { parseRecordIdParam, recordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
 /**
  * A public record's page: `/records/<id>-<title-slug>`. The id is authoritative;
  * the slug is decorative, so the loader canonicalises a missing/stale slug and
- * sends an unknown id back to the grid. Renders the same `CollectionView` as `/`
- * with the record drawer open.
+ * sends an unknown id back to the grid. No component: the `_collection` layout
+ * reads the id from the route params and opens the drawer over the shared grid.
  */
-export const Route = createFileRoute("/records/$id")({
+export const Route = createFileRoute("/_collection/records/$id")({
 	loader: async ({ context, params }) => {
 		const data = await context.queryClient.ensureQueryData(
 			publicRecordsQueryOptions,
@@ -23,10 +22,4 @@ export const Route = createFileRoute("/records/$id")({
 			throw redirect({ to: "/records/$id", params: { id: canonical } });
 		return { id: record.id };
 	},
-	component: RecordPage,
 });
-
-function RecordPage() {
-	const { id } = Route.useLoaderData();
-	return <CollectionView selectedId={id} />;
-}

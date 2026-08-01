@@ -27,7 +27,14 @@ import { cn } from "#/lib/utils";
  * that also animates another property can override the transition — e.g. the
  * grid tile passes `transition-[opacity,filter]` to fade in *and* keep its
  * grayscale-on-hover.
+ *
+ * Srcs that have decoded once are remembered for the session in `decodedSrcs`, so
+ * a *remount* of the same image (e.g. the collection grid re-mounting) shows it
+ * instantly at full opacity instead of replaying the fade — which otherwise reads
+ * as the whole grid flickering. A first-ever load still fades in normally.
  */
+const decodedSrcs = new Set<string>();
+
 export function FadeImage({
 	alt,
 	className,
@@ -39,15 +46,27 @@ export function FadeImage({
 	const ref = useRef<HTMLImageElement>(null);
 	// The src we've revealed. Deriving `loaded` from it (rather than storing a
 	// boolean) resets the fade in the same render that the src changes — no flash,
-	// and no stale `true` carried over from the previous image.
-	const [loadedSrc, setLoadedSrc] = useState<string | undefined>(undefined);
+	// and no stale `true` carried over from the previous image. Seeded from the
+	// session-wide decoded set so an already-seen image mounts revealed (no re-fade).
+	const [loadedSrc, setLoadedSrc] = useState<string | undefined>(() =>
+		typeof src === "string" && decodedSrcs.has(src) ? src : undefined,
+	);
 	const loaded = loadedSrc != null && loadedSrc === src;
+
+	const reveal = (value: string | undefined) => {
+		if (typeof value === "string") decodedSrcs.add(value);
+		setLoadedSrc(value);
+	};
 
 	useEffect(() => {
 		// A cached image can already be complete before `onLoad` is wired up (on
 		// mount, or right after a src swap), in which case the event never fires —
-		// reveal it straight away.
-		if (ref.current?.complete) setLoadedSrc(src);
+		// reveal it straight away. Inlined (not via `reveal`) so the effect needs no
+		// unstable-callback dependency.
+		if (ref.current?.complete) {
+			if (typeof src === "string") decodedSrcs.add(src);
+			setLoadedSrc(src);
+		}
 	}, [src]);
 
 	return (
@@ -61,12 +80,12 @@ export function FadeImage({
 				className,
 			)}
 			onLoad={(e) => {
-				setLoadedSrc(src);
+				reveal(src);
 				onLoad?.(e);
 			}}
 			onError={(e) => {
 				// Never leave a broken image stuck invisible.
-				setLoadedSrc(src);
+				reveal(src);
 				onError?.(e);
 			}}
 			{...props}

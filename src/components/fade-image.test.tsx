@@ -107,9 +107,13 @@ describe("FadeImage", () => {
 	});
 
 	it("lets a caller's className override the base transition while keeping the opacity toggle", () => {
+		// A src not touched by any other test — `decodedSrcs` is module-scoped and
+		// persists across tests, so reusing "/api/photos/a" here (already marked
+		// decoded by the "keeps a cached image revealed" test above) would make
+		// this mount revealed and mask the opacity-0 assertion below.
 		const { container } = render(
 			<FadeImage
-				src="/api/photos/a"
+				src="/api/photos/class-merge"
 				alt=""
 				className="size-full transition-[opacity,filter] duration-500"
 			/>,
