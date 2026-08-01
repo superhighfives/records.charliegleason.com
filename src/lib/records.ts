@@ -689,10 +689,16 @@ export const captureRecord = createServerFn({ method: "POST" })
 			typeof d.mediaType === "string" && d.mediaType.startsWith("image/")
 				? d.mediaType
 				: "image/jpeg";
+		const colorId =
+			typeof d.colorId === "string" && d.colorId.trim() !== ""
+				? Number(d.colorId)
+				: undefined;
 		return {
 			imageBase64: d.imageBase64,
 			mediaType,
 			context: typeof d.context === "string" ? d.context : undefined,
+			colorId:
+				colorId != null && Number.isFinite(colorId) ? colorId : undefined,
 		};
 	})
 	.handler(({ data }) =>
@@ -710,7 +716,8 @@ export const captureRecord = createServerFn({ method: "POST" })
 			// Vinyl color is manual-only (see `records.colorId`) and the analyze
 			// pipeline never sets it, so default it here at creation — same as
 			// `createRecord` — rather than leaving every captured record uncolored.
-			const { id: colorId } = await getOrCreateColor(DEFAULT_COLOR_NAME);
+			const colorId =
+				data.colorId ?? (await getOrCreateColor(DEFAULT_COLOR_NAME)).id;
 
 			const [row] = await db
 				.insert(records)

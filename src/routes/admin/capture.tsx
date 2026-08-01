@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Camera, CheckCircle2, Loader2, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { ColorCombobox } from "#/components/color-combobox";
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
@@ -133,6 +134,7 @@ function Capture() {
 	const [preview, setPreview] = useState<string | null>(null);
 	const [mediaType, setMediaType] = useState("image/jpeg");
 	const [context, setContext] = useState("");
+	const [colorId, setColorId] = useState("");
 	const [dragOver, setDragOver] = useState(false);
 	const [reading, setReading] = useState(false);
 	// Records captured in this sitting, newest first — lets you shoot a stack of
@@ -147,6 +149,7 @@ function Capture() {
 			imageBase64: string;
 			mediaType: string;
 			context: string;
+			colorId: string;
 		}) => captureRecord({ data: vars }),
 		onSuccess: async (record) => {
 			await queryClient.invalidateQueries({
@@ -175,6 +178,7 @@ function Capture() {
 	function reset() {
 		setPreview(null);
 		setContext("");
+		setColorId("");
 		capture.reset();
 	}
 
@@ -274,7 +278,12 @@ function Capture() {
 					onSubmit={(e) => {
 						e.preventDefault();
 						if (capture.isPending) return;
-						capture.mutate({ imageBase64: preview, mediaType, context });
+						capture.mutate({
+							imageBase64: preview,
+							mediaType,
+							context,
+							colorId,
+						});
 					}}
 				>
 					<div className="space-y-2">
@@ -319,6 +328,15 @@ function Capture() {
 						</div>
 						<p className="text-xs text-muted-foreground">
 							Used to help Claude read the cover and search Discogs.
+						</p>
+					</div>
+
+					<div className="space-y-1.5">
+						<Label>Color (optional)</Label>
+						<ColorCombobox value={colorId} onChange={setColorId} />
+						<p className="text-xs text-muted-foreground">
+							Leave unset to default to Black — you can change it later from the
+							record's edit page.
 						</p>
 					</div>
 
