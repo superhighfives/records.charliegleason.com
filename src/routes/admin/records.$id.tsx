@@ -1371,7 +1371,7 @@ function RecordDetail() {
 			return <RecordLoading label="Loading record…" />;
 		}
 		return (
-			<div className="mx-auto max-w-2xl">
+			<div className="mx-auto w-full max-w-2xl">
 				<Link
 					to="/admin"
 					className="text-sm text-brand underline underline-offset-4 hover:text-brand-strong"
@@ -1449,7 +1449,7 @@ function RecordDetail() {
 		: null;
 
 	return (
-		<div className="mx-auto max-w-2xl space-y-6">
+		<div className="mx-auto w-full max-w-2xl space-y-6">
 			<div>
 				<div className="flex items-center justify-between gap-2">
 					<Link
