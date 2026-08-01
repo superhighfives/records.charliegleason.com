@@ -40,7 +40,8 @@ export async function storeColorTextureUpload(
 	});
 
 	// Sample the title-gradient palette from the same bytes we just stored.
-	const palette = paletteJsonFromTexture(new Uint8Array(webp));
+	// A failed extraction returns null — don't clobber an existing palette.
+	const palette = paletteJsonFromTexture(new Uint8Array(webp)) ?? color.palette;
 
 	// Best-effort cleanup of the previous texture, being replaced by this upload.
 	if (color.textureImageKey) {
