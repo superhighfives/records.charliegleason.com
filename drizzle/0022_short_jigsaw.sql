@@ -1,0 +1,1 @@
+ALTER TABLE `colors` ADD `palette` text;

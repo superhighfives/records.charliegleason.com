@@ -118,6 +118,7 @@ type RecordRowWithColor = RecordRow & {
 	colorName: string | null;
 	colorTextureImageKey: string | null;
 	colorTextureStatus: string | null;
+	colorPalette: string | null;
 };
 
 /**
@@ -221,6 +222,7 @@ export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
 				colorName: colors.name,
 				colorTextureImageKey: colors.textureImageKey,
 				colorTextureStatus: colors.textureStatus,
+				colorPalette: colors.palette,
 			})
 			.from(records)
 			.leftJoin(colors, eq(records.colorId, colors.id))

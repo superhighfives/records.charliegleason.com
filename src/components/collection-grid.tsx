@@ -1,9 +1,16 @@
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	type CSSProperties,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 import { FadeImage } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { VinylDisc } from "#/components/vinyl-disc";
+import { parseColorPalette } from "#/lib/color-palette";
 import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { cn } from "#/lib/utils";
@@ -59,8 +66,8 @@ function chunk<T>(items: T[], size: number): T[][] {
  * One cover tile: the peeking vinyl disc behind the cover, plus the
  * title/artist/score. `.group` drives the hover states (grayscale→colour, the
  * disc slide-out, and the title "branding" itself with the record's own vinyl
- * texture — see `hasTexture` below). The disc deliberately overflows the tile
- * sideways, so nothing wrapping a tile may clip overflow.
+ * colour — see the palette gradient below). The disc deliberately overflows the
+ * tile sideways, so nothing wrapping a tile may clip overflow.
  */
 function RecordTile({
 	record,
@@ -71,15 +78,17 @@ function RecordTile({
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
-	// Same source of truth the peeking disc and the color-combobox swatch use
-	// (see VinylDisc / ColorSwatch) — when the record's chip has a generated
-	// texture, the title "brands" itself with that same material on hover
-	// instead of the old yellow cover-lift bar. No distinct hex is ever
-	// stored per color, so records without a ready texture just keep the
-	// default (untinted) title on hover, same as the disc's plain-color
-	// fallback.
-	const hasTexture =
-		record.colorTextureStatus === "ready" && !!record.colorTextureImageKey;
+	// On hover the title "brands" itself with the record's own vinyl colour (it
+	// replaced the old yellow cover-lift bar). Rather than clip the photographic
+	// texture into the glyphs — which split a wide title across the texture's own
+	// dark→light sweep and routinely went half-invisible — we clip a controlled
+	// two-stop gradient built from the chip's extracted palette (see
+	// color-palette.ts), with lightness clamped per theme in CSS (`.title-palette`)
+	// so it always reads. Records whose chip has no palette yet keep the default
+	// (untinted) title on hover, same as the peeking disc's plain-colour fallback.
+	const palette = parseColorPalette(record.colorPalette);
+	const paletteFrom = palette?.colors[0];
+	const paletteTo = palette?.colors[1] ?? palette?.colors[0];
 	return (
 		<div className="group">
 			<button
@@ -117,15 +126,15 @@ function RecordTile({
 					<p
 						className={cn(
 							"truncate font-serif text-base font-medium transition-colors duration-300 ease-out",
-							hasTexture && "bg-clip-text group-hover:text-transparent",
+							paletteFrom &&
+								"title-palette bg-clip-text group-hover:text-transparent",
 						)}
 						style={
-							hasTexture
-								? {
-										backgroundImage: `url(/api/photos/${record.colorTextureImageKey})`,
-										backgroundSize: "cover",
-										backgroundPosition: "center",
-									}
+							paletteFrom
+								? ({
+										"--pal-a": paletteFrom,
+										"--pal-b": paletteTo,
+									} as CSSProperties)
 								: undefined
 						}
 						title={record.title ?? undefined}

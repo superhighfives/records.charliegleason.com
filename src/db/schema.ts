@@ -19,6 +19,11 @@ export const colors = sqliteTable("colors", {
 		enum: ["idle", "queued", "processing", "ready", "failed"],
 	}).default("idle"),
 	textureError: text("texture_error"),
+	// Small palette sampled from the texture at generation time (JSON:
+	// { dominant, colors[] } — see color-palette.ts). Drives the album title's
+	// on-hover gradient in the collection grid. Best-effort: null on failed
+	// extraction or legacy rows awaiting backfill (the title just stays untinted).
+	palette: text("palette"),
 	createdAt: integer("created_at", { mode: "timestamp" }).default(
 		sql`(unixepoch())`,
 	),
