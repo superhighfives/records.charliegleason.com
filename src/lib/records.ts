@@ -20,6 +20,7 @@ import {
 	type Record as RecordRow,
 	records,
 } from "#/db/schema";
+import { identifyFromAsin } from "#/lib/asin";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
 import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
@@ -31,8 +32,11 @@ import {
 	getReleaseDetail,
 	getReleaseValue,
 	MAX_PER_PAGE,
+	parseAsin,
+	parseBarcode,
 	parseMasterId,
 	parseReleaseId,
+	searchByBarcode,
 	searchMasters,
 	searchParamsSchema,
 	searchReleases,
@@ -1653,6 +1657,47 @@ export const lookupDiscogsMaster = createServerFn({ method: "POST" })
 			const id = parseMasterId(input);
 			if (!id) return null;
 			return getMasterCandidate(id).catch(() => null);
+		}),
+	);
+
+/**
+ * Look a release up by its printed barcode (UPC/EAN) — the exact-pressing fast
+ * path for the unified search field and the Amazon importer. Validates/normalises
+ * the barcode at the boundary; an unparseable one returns [] rather than erroring.
+ * Genuine Discogs failures propagate so the UI can say why.
+ */
+export const searchDiscogsBarcode = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => {
+		if (typeof data !== "string") throw new Error("Expected a barcode string");
+		return data;
+	})
+	.handler(({ data: input }) =>
+		Sentry.startSpan({ name: "searchDiscogsBarcode" }, () => {
+			const barcode = parseBarcode(input);
+			if (!barcode) return [];
+			return searchByBarcode(barcode, MAX_PER_PAGE);
+		}),
+	);
+
+/**
+ * Resolve an Amazon ASIN to release facts (artist/title + barcode/year/label/…)
+ * via web search, so the search field can accept a pasted ASIN. Returns null for
+ * a non-ASIN input, or when web_search can't identify it — callers fall back to a
+ * keyword search. The barcode in the result feeds `searchDiscogsBarcode` for an
+ * exact match; the rest pre-fill the structured release filters.
+ */
+export const identifyAsin = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) => {
+		if (typeof data !== "string") throw new Error("Expected an ASIN string");
+		return data;
+	})
+	.handler(({ data: input }) =>
+		Sentry.startSpan({ name: "identifyAsin" }, () => {
+			const asin = parseAsin(input);
+			if (!asin) return null;
+			return identifyFromAsin(asin);
 		}),
 	);
 
