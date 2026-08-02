@@ -20,6 +20,16 @@ import {
  */
 const CHECK_BATCH = 50;
 
+/**
+ * Smaller cap for the admin "Check links" button, which awaits the whole run
+ * synchronously in the request (unlike the cron, which fires it in the
+ * background). At {@link THROTTLE_MS} spacing the full {@link CHECK_BATCH} would
+ * take ~110s of masters + releases — long enough to risk a request/gateway
+ * timeout and a bad spinner. Keep the on-demand pass short (both types together
+ * finish in ~30s); repeated clicks walk further through the stalest-first queue.
+ */
+export const MANUAL_CHECK_BATCH = 15;
+
 /** Spacing between Discogs calls to stay under the 60/min authenticated limit. */
 const THROTTLE_MS = 1100;
 
@@ -75,10 +85,14 @@ async function sweep(
  *   - 200 (resolves)       → clear it                   (self-heals a re-link/restore)
  *   - transient/auth error → leave the row untouched    (retries next run, no false flag)
  *
- * Driven by the cron trigger (src/server.ts) or the protected
- * /api/cron/master-check route. Returns a per-run tally per resource type.
+ * Driven by the cron trigger (src/server.ts, full {@link CHECK_BATCH}) or the
+ * protected /api/cron/master-check route; the admin "Check links" button passes
+ * the smaller {@link MANUAL_CHECK_BATCH} since it awaits the run synchronously.
+ * Returns a per-run tally per resource type.
  */
-export async function runLinkHealthCheck(): Promise<LinkHealthResult> {
+export async function runLinkHealthCheck(
+	perTypeLimit: number = CHECK_BATCH,
+): Promise<LinkHealthResult> {
 	return Sentry.startSpan({ name: "runLinkHealthCheck" }, async () => {
 		const db = getDb(env.DB);
 
@@ -89,7 +103,7 @@ export async function runLinkHealthCheck(): Promise<LinkHealthResult> {
 			.from(records)
 			.where(isNotNull(records.masterId))
 			.orderBy(asc(records.masterCheckedAt))
-			.limit(CHECK_BATCH);
+			.limit(perTypeLimit);
 		const masters = await sweep(
 			dueMasters,
 			checkMasterLiveness,
@@ -105,7 +119,7 @@ export async function runLinkHealthCheck(): Promise<LinkHealthResult> {
 			.from(records)
 			.where(isNotNull(records.discogsId))
 			.orderBy(asc(records.releaseCheckedAt))
-			.limit(CHECK_BATCH);
+			.limit(perTypeLimit);
 		// Pause between passes so the boundary doesn't fire two calls back-to-back
 		// against the rate limit.
 		if (masters.checked && dueReleases.length) await sleep(THROTTLE_MS);

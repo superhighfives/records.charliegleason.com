@@ -4,6 +4,7 @@ import {
 	buildMasterSearchUrl,
 	buildSearchUrl,
 	checkMasterLiveness,
+	checkReleaseLiveness,
 	parseMasterId,
 	parseReleaseId,
 	parseSizeAndType,
@@ -403,6 +404,40 @@ describe("checkMasterLiveness", () => {
 		const promise = checkMasterLiveness("98765");
 		await vi.runAllTimersAsync();
 		await expect(promise).resolves.toBe("inconclusive");
+	});
+});
+
+describe("checkReleaseLiveness", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it("returns 'live' when the release resolves (200)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, { status: 200 })),
+		);
+		await expect(checkReleaseLiveness("30268103")).resolves.toBe("live");
+	});
+
+	it("returns 'gone' on 404 (release deleted or merged on Discogs)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, { status: 404 })),
+		);
+		await expect(checkReleaseLiveness("30268103")).resolves.toBe("gone");
+	});
+
+	it("hits the releases endpoint, not masters", async () => {
+		const fetchMock = vi.fn(
+			async (_url: string | URL) => new Response(null, { status: 200 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await checkReleaseLiveness("30268103");
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+			"/releases/30268103",
+		);
 	});
 });
 
