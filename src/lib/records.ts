@@ -1413,8 +1413,8 @@ export const assignRecordMaster = createServerFn({ method: "POST" })
 						// a blank so we never overwrite a real value with "".
 						...(artist ? { artist } : {}),
 						...(title ? { title } : {}),
-						...(year !== undefined ? { year } : {}),
-						...(genre !== undefined ? { genre } : {}),
+						...(year != null ? { year } : {}),
+						...(genre != null ? { genre } : {}),
 						updatedAt: new Date(),
 					})
 					.where(eq(records.id, id))

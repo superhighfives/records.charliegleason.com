@@ -149,8 +149,8 @@ for (const [i, r] of rows.entries()) {
 	const set = {};
 	if (next.artist && next.artist !== r.artist) set.artist = next.artist;
 	if (next.title && next.title !== r.title) set.title = next.title;
-	if (next.year !== (r.year ?? null)) set.year = next.year;
-	if ((next.genre ?? null) !== (r.genre ?? null)) set.genre = next.genre;
+	if (next.year != null && next.year !== (r.year ?? null)) set.year = next.year;
+	if (next.genre != null && next.genre !== (r.genre ?? null)) set.genre = next.genre;
 
 	if (Object.keys(set).length === 0) {
 		unchanged++;
