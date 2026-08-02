@@ -9,6 +9,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { useDiscogsSearch } from "#/components/discogs-search-field";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -32,75 +33,18 @@ import {
 import type { Record } from "#/db/schema";
 import { displayCoverKey } from "#/lib/cover";
 import {
-	searchMastersFromBrowser,
-	searchReleasesFromBrowser,
-} from "#/lib/discogs-browser";
-import type {
-	DiscogsCandidate,
-	DiscogsMasterCandidate,
-} from "#/lib/discogs-shared";
-import {
-	assignRecordIdentity,
-	searchDiscogs,
-	searchDiscogsMasters,
-} from "#/lib/records";
+	type Candidate,
+	candidateDetail,
+	candidateLabel,
+	groupCandidates,
+} from "#/lib/discogs-candidate";
+import { assignRecordIdentity } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
 // How many unmatched records to work through per pass — small enough that a
 // stretch of good matches doesn't feel endless, and the batch clears fast
 // enough that the "next 10" swap reads as steady progress.
 const BATCH_SIZE = 10;
-
-type Query = { artist: string; title: string };
-
-/**
- * A pickable identity for a record — either a Discogs master (album) or a release
- * (specific pressing). The row searches both, because a master search alone misses
- * albums Discogs files under an odd master title (e.g. "Led Zeppelin IV", whose
- * canonical master is untitled), whereas the pressings surface reliably. `key` is a
- * kind-prefixed unique id so masters and releases can't collide in the picker.
- */
-type Candidate =
-	| { kind: "master"; key: string; data: DiscogsMasterCandidate }
-	| { kind: "release"; key: string; data: DiscogsCandidate };
-
-const toMaster = (m: DiscogsMasterCandidate): Candidate => ({
-	kind: "master",
-	key: `m:${m.masterId}`,
-	data: m,
-});
-const toRelease = (r: DiscogsCandidate): Candidate => ({
-	kind: "release",
-	key: `r:${r.discogsId}`,
-	data: r,
-});
-
-/** "Artist — Title (Year)" headline, shared by masters and releases. */
-function candidateLabel(c: Candidate): string {
-	const { artist, title, year } = c.data;
-	return `${artist} — ${title}${year ? ` (${year})` : ""}`;
-}
-
-/**
- * The distinguishing detail line — what tells two same-titled options apart. For a
- * master that's mostly the genre; for a release it's the pressing specifics
- * (format, size, country, label, catalog number) that make one pressing not
- * another. Empty parts are dropped.
- */
-function candidateDetail(c: Candidate): string {
-	if (c.kind === "master") {
-		return [c.data.genre].filter(Boolean).join(" · ");
-	}
-	const r = c.data;
-	return [r.type ?? r.format, r.size, r.country, r.label, r.catno]
-		.filter(Boolean)
-		.join(" · ");
-}
-
-/** An error's message, or a fallback when it isn't an `Error`. */
-function errText(error: unknown, fallback: string): string {
-	return error instanceof Error ? error.message : fallback;
-}
 
 /**
  * The save-payload for a pick — a master sets the album link; a release sets the
@@ -134,8 +78,10 @@ function assignArgs(c: Candidate, id: number) {
  * banner's Fix button). Works through the list in batches of {@link BATCH_SIZE}:
  * rows auto-search Discogs one at a time (queued, to avoid a burst of concurrent
  * requests) — masters *and* releases — and offer the matches grouped in a dropdown,
- * or the row can be skipped. Picks are staged locally and only persisted on Save,
- * which assigns the whole batch and slides the next batch in.
+ * or the row can be skipped. Each row's search is the shared unified field, so a
+ * row can also be re-queried with a Discogs URL, an Amazon ASIN, or a barcode.
+ * Picks are staged locally and only persisted on Save, which assigns the whole
+ * batch and slides the next batch in.
  */
 export function BulkAssignMasterDialog({
 	open,
@@ -304,24 +250,6 @@ export function BulkAssignMasterDialog({
 	);
 }
 
-/**
- * Fetch masters + releases for a query, tag each with its kind, and merge. If one
- * search fails but the other succeeds we keep what we got; only a total failure
- * throws (so the row surfaces the browser-IP fallback).
- */
-async function searchBoth(
-	q: Query,
-	masters: (q: Query) => Promise<Array<DiscogsMasterCandidate>>,
-	releases: (q: Query) => Promise<Array<DiscogsCandidate>>,
-): Promise<Array<Candidate>> {
-	const [m, r] = await Promise.allSettled([masters(q), releases(q)]);
-	if (m.status === "rejected" && r.status === "rejected") throw m.reason;
-	return [
-		...(m.status === "fulfilled" ? m.value.map(toMaster) : []),
-		...(r.status === "fulfilled" ? r.value.map(toRelease) : []),
-	];
-}
-
 function BulkAssignRow({
 	record,
 	selected,
@@ -337,92 +265,38 @@ function BulkAssignRow({
 	onSelect: (candidate: Candidate | undefined) => void;
 	onSkip: () => void;
 }) {
-	const [mode, setMode] = useState<"select" | "edit">("select");
-	const [query, setQuery] = useState<Query>({
-		artist: record.artist,
-		title: record.title,
-	});
-	const [draft, setDraft] = useState<Query>(query);
-	const [results, setResults] = useState<Array<Candidate> | null>(null);
-
-	const search = useMutation({
-		mutationFn: (q: Query) =>
-			searchBoth(
-				q,
-				(p) =>
-					searchDiscogsMasters({
-						data: {
-							artist: p.artist,
-							title: p.title,
-							country: "",
-							year: "",
-							q: "",
-						},
-					}),
-				(p) =>
-					searchDiscogs({
-						data: {
-							artist: p.artist,
-							title: p.title,
-							country: "",
-							year: "",
-							q: "",
-						},
-					}),
-			),
-		onSuccess: (candidates) => {
-			setResults(candidates);
-			onSelect(undefined);
-		},
+	const [editing, setEditing] = useState(false);
+	const search = useDiscogsSearch({
+		// Seed the single field with the record's own artist/title as the keyword
+		// query; the auto-search below fires it. Editing replaces it wholesale, so a
+		// row can be re-queried with a URL / ASIN / barcode too.
+		initialInput: `${record.artist} ${record.title}`.trim(),
+		onResults: () => onSelect(undefined),
 		onSettled: () => {
 			if (autoSearch) onAutoSearchDone();
 		},
 	});
-	// Same clean-IP fallback as the editor's pickers — the Worker's shared egress
-	// IP is what Discogs actually rate-limits, so re-run both from the browser.
-	const browserSearch = useMutation({
-		mutationFn: (q: Query) =>
-			searchBoth(
-				q,
-				(p) => searchMastersFromBrowser(p),
-				(p) =>
-					searchReleasesFromBrowser({
-						artist: p.artist,
-						title: p.title,
-						country: "",
-						year: "",
-						q: "",
-					}),
-			),
-		onSuccess: (candidates) => {
-			setResults(candidates);
-			onSelect(undefined);
-		},
-	});
 
-	// It's this row's turn in the queue — fire the search itself, once, as
-	// soon as the row mounts (there's no more manual "Search albums" button to
-	// trigger it otherwise).
+	// It's this row's turn in the queue — fire the search itself, once, as soon as
+	// the row's turn comes up (there's no manual "Search" button to trigger it).
 	const hasAutoSearched = useRef(false);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fire once when this row's turn comes up, not on every query/search.mutate identity change
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fire once when this row's turn comes up, not on every search identity change
 	useEffect(() => {
 		if (autoSearch && !hasAutoSearched.current) {
 			hasAutoSearched.current = true;
-			search.mutate(query);
+			search.run();
 		}
 	}, [autoSearch]);
 
-	function runSearch(q: Query) {
-		setQuery(q);
-		setResults(null);
-		search.mutate(q);
-		setMode("select");
-	}
-
 	const coverKey = displayCoverKey(record, { includeCapture: true });
-	const busy = search.isPending || browserSearch.isPending;
-	const masters = results?.filter((c) => c.kind === "master") ?? [];
-	const releases = results?.filter((c) => c.kind === "release") ?? [];
+	const busy = search.pending || search.browserPending;
+	const { masters, releases } = groupCandidates(search.results ?? []);
+
+	function submitEdit() {
+		if (busy) return;
+		search.run();
+		setEditing(false);
+	}
 
 	return (
 		<li className="flex flex-col gap-1 p-2">
@@ -437,35 +311,26 @@ function BulkAssignRow({
 					<div className="size-10 shrink-0 rounded-md border bg-muted" />
 				)}
 
-				{mode === "edit" ? (
+				{editing ? (
 					<>
-						<div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
-							<Input
-								value={draft.artist}
-								onChange={(e) =>
-									setDraft((d) => ({ ...d, artist: e.target.value }))
+						<Input
+							value={search.input}
+							onChange={(e) => search.setInput(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									submitEdit();
 								}
-								placeholder="Artist"
-								className="text-sm"
-							/>
-							<Input
-								value={draft.title}
-								onChange={(e) =>
-									setDraft((d) => ({ ...d, title: e.target.value }))
-								}
-								placeholder="Title"
-								className="text-sm"
-							/>
-						</div>
+							}}
+							placeholder="Artist and title, Discogs link, barcode, or ASIN"
+							className="min-w-0 flex-1 text-sm"
+						/>
 						<Button
 							type="button"
 							variant="ghost"
 							size="icon-sm"
 							aria-label="Cancel"
-							onClick={() => {
-								setDraft(query);
-								setMode("select");
-							}}
+							onClick={() => setEditing(false)}
 						>
 							<XIcon className="size-4" />
 						</Button>
@@ -475,7 +340,7 @@ function BulkAssignRow({
 							size="icon-sm"
 							aria-label="Search Discogs"
 							disabled={busy}
-							onClick={() => runSearch(draft)}
+							onClick={submitEdit}
 						>
 							<SearchIcon className="size-4" />
 						</Button>
@@ -485,9 +350,9 @@ function BulkAssignRow({
 						<Select
 							value={selected?.key}
 							onValueChange={(value) =>
-								onSelect(results?.find((c) => c.key === value))
+								onSelect(search.results?.find((c) => c.key === value))
 							}
-							disabled={busy || !results || results.length === 0}
+							disabled={busy || !search.results || search.results.length === 0}
 						>
 							<SelectTrigger
 								className="w-0 min-w-0 flex-1 overflow-hidden"
@@ -497,7 +362,7 @@ function BulkAssignRow({
 									placeholder={
 										busy
 											? "Searching…"
-											: results && results.length === 0
+											: search.results && search.results.length === 0
 												? "No matches found"
 												: "Choose an album or pressing"
 									}
@@ -539,8 +404,8 @@ function BulkAssignRow({
 							variant="outline"
 							size="icon-sm"
 							aria-label="Edit search"
-							disabled={search.isPending}
-							onClick={() => setMode("edit")}
+							disabled={search.pending}
+							onClick={() => setEditing(true)}
 						>
 							<PencilIcon className="size-4" />
 						</Button>
@@ -557,28 +422,23 @@ function BulkAssignRow({
 				)}
 			</div>
 
-			{search.isError && (
+			{/* ASIN identification / empty-result notes surface here. */}
+			{search.notice && (
+				<p className="pl-12 text-xs text-muted-foreground">{search.notice}</p>
+			)}
+
+			{search.error && (
 				<div className="flex items-center gap-2 pl-12" role="alert">
-					<p className="text-xs text-red-600">
-						{errText(search.error, "Search failed. Try again.")}
-					</p>
+					<p className="text-xs text-red-600">{search.error.message}</p>
 					<Button
 						type="button"
 						variant="outline"
 						size="xs"
-						disabled={browserSearch.isPending}
-						onClick={() => browserSearch.mutate(query)}
+						disabled={search.browserPending}
+						onClick={() => search.runBrowserFallback()}
 					>
-						{browserSearch.isPending ? "Searching…" : "Search from browser"}
+						{search.browserPending ? "Searching…" : "Search from browser"}
 					</Button>
-					{browserSearch.isError && (
-						<p className="text-xs text-red-600">
-							{errText(
-								browserSearch.error,
-								"Browser search failed. Try again.",
-							)}
-						</p>
-					)}
 				</div>
 			)}
 		</li>

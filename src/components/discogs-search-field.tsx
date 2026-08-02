@@ -280,6 +280,9 @@ export function useDiscogsSearch(opts?: {
 	initialInput?: string;
 	initialFields?: Partial<StructuredFields>;
 	onResults?: (candidates: Array<Candidate>) => void;
+	// Fires after any run (server or browser) settles, success or error — the
+	// bulk dialog uses it to advance its one-at-a-time auto-search queue.
+	onSettled?: () => void;
 }): UseDiscogsSearch {
 	const [input, setInput] = useState(opts?.initialInput ?? "");
 	const [fields, setFields] = useState<StructuredFields>({
@@ -299,10 +302,12 @@ export function useDiscogsSearch(opts?: {
 	const search = useMutation({
 		mutationFn: () => executeSearch(input, fields),
 		onSuccess: onOutcome,
+		onSettled: opts?.onSettled,
 	});
 	const browserSearch = useMutation({
 		mutationFn: () => executeBrowserSearch(input, fields),
 		onSuccess: onOutcome,
+		onSettled: opts?.onSettled,
 	});
 
 	return {
