@@ -357,6 +357,7 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 				country: record.country ?? bestRelease.country,
 				format: record.format ?? bestRelease.type,
 				size: record.size ?? bestRelease.size,
+				discCount: record.discCount ?? bestRelease.discCount,
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, id))
