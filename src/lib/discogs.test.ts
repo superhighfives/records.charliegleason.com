@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildMasterSearchUrl,
 	buildSearchUrl,
+	checkMasterLiveness,
 	parseMasterId,
 	parseReleaseId,
 	parseSizeAndType,
@@ -360,6 +361,48 @@ describe("buildMasterSearchUrl", () => {
 		const url = buildMasterSearchUrl(params({ artist: "Wire" }));
 		expect(url.searchParams.has("title")).toBe(false);
 		expect(url.searchParams.get("per_page")).toBe("25");
+	});
+});
+
+describe("checkMasterLiveness", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	const respond = (init: ResponseInit) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, init)),
+		);
+	};
+
+	it("returns 'live' when the master resolves (200)", async () => {
+		respond({ status: 200 });
+		await expect(checkMasterLiveness("98765")).resolves.toBe("live");
+	});
+
+	it("returns 'gone' on 404 (master deleted or merged on Discogs)", async () => {
+		respond({ status: 404 });
+		await expect(checkMasterLiveness("98765")).resolves.toBe("gone");
+	});
+
+	it("returns 'inconclusive' when fetch throws (network error)", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn().mockRejectedValue(new TypeError("network error"));
+		vi.stubGlobal("fetch", fetchMock);
+		const promise = checkMasterLiveness("98765");
+		await vi.runAllTimersAsync();
+		await expect(promise).resolves.toBe("inconclusive");
+	});
+
+	it("returns 'inconclusive' for a non-404 error status after retries", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn(async () => new Response(null, { status: 500 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const promise = checkMasterLiveness("98765");
+		await vi.runAllTimersAsync();
+		await expect(promise).resolves.toBe("inconclusive");
 	});
 });
 

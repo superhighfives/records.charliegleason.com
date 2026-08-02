@@ -18,7 +18,12 @@ import {
 	type Row as TableRow,
 	useReactTable,
 } from "@tanstack/react-table";
-import { BadgeCheck, ChevronDownIcon, EllipsisVertical } from "lucide-react";
+import {
+	BadgeCheck,
+	ChevronDownIcon,
+	EllipsisVertical,
+	TriangleAlertIcon,
+} from "lucide-react";
 import {
 	Fragment,
 	memo,
@@ -606,10 +611,29 @@ function AdminRecords() {
 	// Bulk "assign masters" modal — works through every record still missing an
 	// album, independent of the current tab/search filter.
 	const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+	// Which set the bulk-assign modal works through when opened: the never-assigned
+	// "unmatched" rows (the "Assign masters" button) or the broken-link rows the
+	// health check flagged (the red banner's "Fix" button). Same modal, same flow —
+	// just a different starting set.
+	const [assignScope, setAssignScope] = useState<"unmatched" | "broken">(
+		"unmatched",
+	);
 	const unmatchedRecords = useMemo(
 		() => data.filter((r) => r.masterId == null),
 		[data],
 	);
+	// Records whose linked Discogs master 404'd on the last scheduled health check
+	// (src/lib/master-health.ts) — a *broken* album link, distinct from unmatched.
+	const brokenMasterRecords = useMemo(
+		() => data.filter((r) => r.masterMissing),
+		[data],
+	);
+	const bulkAssignRecords =
+		assignScope === "broken" ? brokenMasterRecords : unmatchedRecords;
+	const openBulkAssign = (scope: "unmatched" | "broken") => {
+		setAssignScope(scope);
+		setBulkAssignOpen(true);
+	};
 
 	// Collection value totals (USD). `total` sums every record's effective value
 	// (manual if set, else the Discogs guess); `confirmedTotal` counts only records
@@ -1154,7 +1178,7 @@ function AdminRecords() {
 							type="button"
 							variant="outline"
 							className="flex-1 md:flex-none"
-							onClick={() => setBulkAssignOpen(true)}
+							onClick={() => openBulkAssign("unmatched")}
 						>
 							Assign masters
 							<span className="rounded-full bg-foreground px-1.5 text-xs tabular-nums text-background">
@@ -1187,6 +1211,40 @@ function AdminRecords() {
 					</div>
 				</div>
 			</div>
+
+			{/* Broken-master banner. The scheduled health check (src/lib/master-health.ts)
+			    flags records whose Discogs master was deleted/merged; surface them
+			    loudly here since a broken album link is a data-integrity problem, not
+			    the routine "not assigned yet" case the amber Unmatched badge covers.
+			    Fix reuses the bulk-assign modal, scoped to just these rows. */}
+			{brokenMasterRecords.length > 0 && (
+				<div
+					role="alert"
+					className="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm"
+				>
+					<TriangleAlertIcon className="size-5 shrink-0 text-red-600 dark:text-red-400" />
+					<div className="min-w-0 flex-1">
+						<p className="font-medium text-red-700 dark:text-red-300">
+							{brokenMasterRecords.length === 1
+								? "1 record has a broken album link"
+								: `${brokenMasterRecords.length} records have a broken album link`}
+						</p>
+						<p className="text-red-700/80 dark:text-red-300/80">
+							Their Discogs master was deleted or merged — re-link each to a
+							current album.
+						</p>
+					</div>
+					<Button
+						type="button"
+						variant="destructive"
+						size="sm"
+						className="shrink-0"
+						onClick={() => openBulkAssign("broken")}
+					>
+						Fix
+					</Button>
+				</div>
+			)}
 
 			{/* Bulk actions. The bar stays put whenever there are rows to act on (so
 			    ticking the first row doesn't shift the table down), but the action
@@ -1481,7 +1539,7 @@ function AdminRecords() {
 			<BulkAssignMasterDialog
 				open={bulkAssignOpen}
 				onOpenChange={setBulkAssignOpen}
-				records={unmatchedRecords}
+				records={bulkAssignRecords}
 			/>
 		</div>
 	);

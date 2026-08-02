@@ -70,6 +70,14 @@ export const records = sqliteTable("records", {
 	// record may have neither.
 	masterId: text("master_id"),
 	masterUrl: text("master_url"),
+	// Master-link health, maintained by the scheduled master-check job
+	// (src/lib/master-health.ts). Discogs deletes/merges masters over time, so a
+	// `masterId` that once resolved can start 404ing — `masterMissing` flags exactly
+	// that (a *broken* album link, distinct from the never-assigned "unmatched" case),
+	// which the admin surfaces as a red "fix these" banner. `masterCheckedAt` is the
+	// last time the job validated this row's master, so it can re-check the stalest first.
+	masterMissing: integer("master_missing", { mode: "boolean" }).default(false),
+	masterCheckedAt: integer("master_checked_at", { mode: "timestamp" }),
 	discogsId: text("discogs_id"),
 	discogsUrl: text("discogs_url"),
 	catno: text("catno"), // Discogs catalog number, e.g. "WIGLP450" — release-specific

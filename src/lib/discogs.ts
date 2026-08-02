@@ -229,6 +229,34 @@ export async function getMasterDetail(
 }
 
 /**
+ * Liveness of a Discogs master, for the scheduled health check. Deliberately
+ * three-valued rather than the boolean `getMasterDetail` collapses to, because the
+ * health job must tell a *genuinely gone* master (404 → flag it) apart from a
+ * transient problem (token/proxy/5xx → leave the flag and `checkedAt` untouched so
+ * it retries next run, rather than falsely flagging a live album). `discogsFetch`
+ * already absorbs 429/5xx blips via retry, so a non-404 error reaching here is
+ * inconclusive, not proof of death.
+ *
+ *   "live"         → 200, the master resolves
+ *   "gone"         → 404, deleted or merged on Discogs
+ *   "inconclusive" → anything else (auth, proxy, network, exhausted retries)
+ */
+export async function checkMasterLiveness(
+	id: string,
+): Promise<"live" | "gone" | "inconclusive"> {
+	let res: Response;
+	try {
+		res = await discogsFetch(`${BASE}/masters/${id}`);
+	} catch {
+		return "inconclusive";
+	}
+	await res.body?.cancel().catch(() => {});
+	if (res.ok) return "live";
+	if (res.status === 404) return "gone";
+	return "inconclusive";
+}
+
+/**
  * Fetch a master and shape it into a `DiscogsMasterCandidate` so a pasted master
  * URL drops into the same pick-list as a search hit.
  */
