@@ -2,9 +2,9 @@ import * as Sentry from "@sentry/cloudflare";
 import entry from "@tanstack/react-start/server-entry";
 
 import { runWeeklyDigest } from "#/lib/digest";
-import { runMasterCheck } from "#/lib/master-health";
+import { runLinkHealthCheck } from "#/lib/master-health";
 
-const MASTER_CHECK_CRON = "0 9 * * *";
+const LINK_CHECK_CRON = "0 9 * * *";
 
 // Re-export the container Durable Object so wrangler can bind it (see wrangler.jsonc
 // `containers` + `durable_objects`). It fronts the matte render image in `containers/matte/`.
@@ -25,12 +25,12 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 	// TanStack's handler takes (request); env/ctx are reached via cloudflare:workers.
 	fetch: (request) => entry.fetch(request),
 	// Two crons share this handler (see wrangler.jsonc `triggers.crons`) — dispatch
-	// by the cron expression that fired. The daily master-check validates Discogs
-	// master links; anything else is the weekly digest.
+	// by the cron expression that fired. The daily link-check validates Discogs
+	// master + release links; anything else is the weekly digest.
 	scheduled(controller, _env, ctx) {
 		ctx.waitUntil(
-			controller.cron === MASTER_CHECK_CRON
-				? runMasterCheck()
+			controller.cron === LINK_CHECK_CRON
+				? runLinkHealthCheck()
 				: runWeeklyDigest(),
 		);
 	},

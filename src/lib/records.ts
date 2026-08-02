@@ -43,6 +43,7 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
+import { type LinkHealthResult, runLinkHealthCheck } from "#/lib/master-health";
 import { generateMatteFromCapture } from "#/lib/matte";
 import { detectCaptureCorners, professionalPipeline } from "#/lib/professional";
 import type { CoverStageResult } from "#/lib/professional-pipeline";
@@ -901,6 +902,15 @@ export const publishRecord = createServerFn({ method: "POST" })
 						masterUrl,
 						discogsId,
 						discogsUrl,
+						// Re-linking clears the matching health flag so a record fixed in
+						// the editor drops out of the broken-link banner without waiting for
+						// the next scheduled pass (which re-validates it anyway). Only on an
+						// actual change of the id — an unrelated save (e.g. editing notes)
+						// leaves the flag as the link-check set it.
+						...(masterId !== current.masterId ? { masterMissing: false } : {}),
+						...(discogsId !== current.discogsId
+							? { releaseMissing: false }
+							: {}),
 						coverImageKey,
 						coverIsUpload,
 						// A record is only publishable once it has an identity (master
@@ -1436,6 +1446,18 @@ export const assignRecordMaster = createServerFn({ method: "POST" })
 				return row ?? null;
 			}),
 	);
+
+/**
+ * Run the Discogs link-health check on demand from the admin UI, for the "Check
+ * links" button. Same job the daily cron runs (validates one stalest-first batch
+ * of masters + releases and updates the `*Missing` flags); this just makes it
+ * admin-triggerable so a fresh check — and the resulting banner — is one click
+ * away instead of a wait for the next scheduled pass or a manual cron POST.
+ * Returns the per-run tally so the button can report what it found.
+ */
+export const checkLinkHealth = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.handler((): Promise<LinkHealthResult> => runLinkHealthCheck());
 
 /**
  * Link a record as an intentional duplicate copy of another — the admin "I own two

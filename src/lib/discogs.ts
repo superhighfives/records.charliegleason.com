@@ -228,25 +228,25 @@ export async function getMasterDetail(
 	return mapMasterDetail(await res.json(), id);
 }
 
+export type Liveness = "live" | "gone" | "inconclusive";
+
 /**
- * Liveness of a Discogs master, for the scheduled health check. Deliberately
- * three-valued rather than the boolean `getMasterDetail` collapses to, because the
- * health job must tell a *genuinely gone* master (404 → flag it) apart from a
- * transient problem (token/proxy/5xx → leave the flag and `checkedAt` untouched so
- * it retries next run, rather than falsely flagging a live album). `discogsFetch`
- * already absorbs 429/5xx blips via retry, so a non-404 error reaching here is
- * inconclusive, not proof of death.
+ * Liveness of a Discogs resource, for the scheduled health check. Deliberately
+ * three-valued rather than the boolean `getMasterDetail`/`getReleaseCandidate`
+ * collapse to, because the health job must tell a *genuinely gone* resource (404 →
+ * flag it) apart from a transient problem (token/proxy/5xx → leave the flag and
+ * `checkedAt` untouched so it retries next run, rather than falsely flagging a live
+ * one). `discogsFetch` already absorbs 429/5xx blips via retry, so a non-404 error
+ * reaching here is inconclusive, not proof of death.
  *
- *   "live"         → 200, the master resolves
+ *   "live"         → 200, the resource resolves
  *   "gone"         → 404, deleted or merged on Discogs
  *   "inconclusive" → anything else (auth, proxy, network, exhausted retries)
  */
-export async function checkMasterLiveness(
-	id: string,
-): Promise<"live" | "gone" | "inconclusive"> {
+async function checkLiveness(url: string): Promise<Liveness> {
 	let res: Response;
 	try {
-		res = await discogsFetch(`${BASE}/masters/${id}`);
+		res = await discogsFetch(url);
 	} catch {
 		return "inconclusive";
 	}
@@ -254,6 +254,16 @@ export async function checkMasterLiveness(
 	if (res.ok) return "live";
 	if (res.status === 404) return "gone";
 	return "inconclusive";
+}
+
+/** Liveness of a Discogs master (album). See {@link checkLiveness}. */
+export function checkMasterLiveness(id: string): Promise<Liveness> {
+	return checkLiveness(`${BASE}/masters/${id}`);
+}
+
+/** Liveness of a Discogs release (pressing). See {@link checkLiveness}. */
+export function checkReleaseLiveness(id: string): Promise<Liveness> {
+	return checkLiveness(`${BASE}/releases/${id}`);
 }
 
 /**

@@ -70,16 +70,22 @@ export const records = sqliteTable("records", {
 	// record may have neither.
 	masterId: text("master_id"),
 	masterUrl: text("master_url"),
-	// Master-link health, maintained by the scheduled master-check job
-	// (src/lib/master-health.ts). Discogs deletes/merges masters over time, so a
-	// `masterId` that once resolved can start 404ing — `masterMissing` flags exactly
-	// that (a *broken* album link, distinct from the never-assigned "unmatched" case),
-	// which the admin surfaces as a red "fix these" banner. `masterCheckedAt` is the
-	// last time the job validated this row's master, so it can re-check the stalest first.
+	// Link health, maintained by the scheduled link-check job
+	// (src/lib/master-health.ts). Discogs deletes/merges masters *and* releases over
+	// time, so an id that once resolved can start 404ing — the `*Missing` flags mark
+	// exactly that (a *broken* link, distinct from the never-assigned "unmatched"
+	// case), and a record with no live link left is surfaced in the admin's red "fix
+	// these" banner. The `*CheckedAt` timestamps are the last time the job validated
+	// each link, so it re-checks the stalest first. Release health matters because a
+	// record can be identity'd by a release alone (see `discogsId` below).
 	masterMissing: integer("master_missing", { mode: "boolean" }).default(false),
 	masterCheckedAt: integer("master_checked_at", { mode: "timestamp" }),
 	discogsId: text("discogs_id"),
 	discogsUrl: text("discogs_url"),
+	releaseMissing: integer("release_missing", { mode: "boolean" }).default(
+		false,
+	),
+	releaseCheckedAt: integer("release_checked_at", { mode: "timestamp" }),
 	catno: text("catno"), // Discogs catalog number, e.g. "WIGLP450" — release-specific
 	country: text("country"), // pressing country — release-specific
 

@@ -169,6 +169,13 @@
       "when": 1785685507823,
       "tag": "0023_mysterious_toxin",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1785696584687,
+      "tag": "0024_redundant_dreadnoughts",
+      "breakpoints": true
     }
   ]
 }

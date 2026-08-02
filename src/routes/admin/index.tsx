@@ -66,6 +66,7 @@ import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
 import { orderRecordsForReview } from "#/lib/record-order";
 import {
+	checkLinkHealth,
 	deleteRecord,
 	deleteRecords,
 	publishRecords,
@@ -622,14 +623,25 @@ function AdminRecords() {
 		() => data.filter((r) => r.masterId == null),
 		[data],
 	);
-	// Records whose linked Discogs master 404'd on the last scheduled health check
-	// (src/lib/master-health.ts) — a *broken* album link, distinct from unmatched.
-	const brokenMasterRecords = useMemo(
-		() => data.filter((r) => r.masterMissing),
-		[data],
-	);
+	// Records whose Discogs identity is broken: they have a link (master and/or
+	// release), but every link they have 404'd on the last scheduled health check
+	// (src/lib/master-health.ts) — so nothing live identifies them anymore. Distinct
+	// from "unmatched" (never had a link): a broken link is a data-integrity problem.
+	// A record with at least one *live* link (e.g. dead pinned release but live
+	// master) is still publishable and stays out of this set.
+	const brokenRecords = useMemo(() => {
+		const hasLiveMaster = (r: Record) => r.masterId != null && !r.masterMissing;
+		const hasLiveRelease = (r: Record) =>
+			r.discogsId != null && !r.releaseMissing;
+		return data.filter(
+			(r) =>
+				(r.masterId != null || r.discogsId != null) &&
+				!hasLiveMaster(r) &&
+				!hasLiveRelease(r),
+		);
+	}, [data]);
 	const bulkAssignRecords =
-		assignScope === "broken" ? brokenMasterRecords : unmatchedRecords;
+		assignScope === "broken" ? brokenRecords : unmatchedRecords;
 	const openBulkAssign = (scope: "unmatched" | "broken") => {
 		setAssignScope(scope);
 		setBulkAssignOpen(true);
@@ -658,6 +670,27 @@ function AdminRecords() {
 		mutationFn: (id: number) => deleteRecord({ data: id }),
 		onSuccess: () =>
 			queryClient.invalidateQueries({ queryKey: recordsQueryOptions.queryKey }),
+	});
+
+	// Force a link-health pass now instead of waiting for the daily cron. Runs one
+	// stalest-first batch (masters + releases), then refreshes the list so any newly
+	// broken links surface in the banner immediately. One batch per click — the toast
+	// reports the tally so it's clear whether a follow-up click is worth it.
+	const checkLinksMutation = useMutation({
+		mutationFn: () => checkLinkHealth(),
+		onSuccess: async ({ masters, releases }) => {
+			await queryClient.invalidateQueries({
+				queryKey: recordsQueryOptions.queryKey,
+			});
+			const checked = masters.checked + releases.checked;
+			const broken = masters.gone + releases.gone;
+			toast.success(
+				checked === 0
+					? "No linked records to check."
+					: `Checked ${checked} link${checked === 1 ? "" : "s"} — ${broken} broken.`,
+			);
+		},
+		onError: () => toast.error("Couldn't check links. Try again."),
 	});
 
 	// Selected-rows actions: hand the ids to the matching batched endpoint and
@@ -1173,6 +1206,17 @@ function AdminRecords() {
 						</PopoverContent>
 					</Popover>
 
+					<Button
+						type="button"
+						variant="outline"
+						className="flex-1 md:flex-none"
+						disabled={checkLinksMutation.isPending}
+						onClick={() => checkLinksMutation.mutate()}
+						title="Validate a batch of linked Discogs masters and releases now, flagging any that were deleted or merged"
+					>
+						{checkLinksMutation.isPending ? "Checking…" : "Check links"}
+					</Button>
+
 					{unmatchedRecords.length > 0 && (
 						<Button
 							type="button"
@@ -1212,12 +1256,13 @@ function AdminRecords() {
 				</div>
 			</div>
 
-			{/* Broken-master banner. The scheduled health check (src/lib/master-health.ts)
-			    flags records whose Discogs master was deleted/merged; surface them
-			    loudly here since a broken album link is a data-integrity problem, not
-			    the routine "not assigned yet" case the amber Unmatched badge covers.
-			    Fix reuses the bulk-assign modal, scoped to just these rows. */}
-			{brokenMasterRecords.length > 0 && (
+			{/* Broken-link banner. The scheduled health check (src/lib/master-health.ts)
+			    flags records whose Discogs master OR release was deleted/merged; these
+			    are the ones with no live link left. Surface them loudly — a broken link
+			    is a data-integrity problem, not the routine "not assigned yet" case the
+			    amber Unmatched badge covers. Fix reuses the bulk-assign modal (assigning
+			    a live master restores identity), scoped to just these rows. */}
+			{brokenRecords.length > 0 && (
 				<div
 					role="alert"
 					className="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm"
@@ -1225,13 +1270,13 @@ function AdminRecords() {
 					<TriangleAlertIcon className="size-5 shrink-0 text-red-600 dark:text-red-400" />
 					<div className="min-w-0 flex-1">
 						<p className="font-medium text-red-700 dark:text-red-300">
-							{brokenMasterRecords.length === 1
-								? "1 record has a broken album link"
-								: `${brokenMasterRecords.length} records have a broken album link`}
+							{brokenRecords.length === 1
+								? "1 record has a broken Discogs link"
+								: `${brokenRecords.length} records have a broken Discogs link`}
 						</p>
 						<p className="text-red-700/80 dark:text-red-300/80">
-							Their Discogs master was deleted or merged — re-link each to a
-							current album.
+							The album or release they point at was deleted or merged — re-link
+							each to a current one.
 						</p>
 					</div>
 					<Button
