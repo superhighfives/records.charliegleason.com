@@ -355,8 +355,9 @@ export async function analyzeCapture(
 		genre: detail?.genre ?? best?.genre ?? bestRelease?.genre ?? null,
 		pitchforkScore: pitchfork?.score ?? null,
 		pitchforkUrl: pitchfork?.url ?? null,
-		masterId: best?.masterId ?? null,
-		masterUrl: detail?.masterUrl ?? best?.masterUrl ?? null,
+		masterId: best?.masterId ?? bestRelease?.masterId ?? null,
+		masterUrl:
+			detail?.masterUrl ?? best?.masterUrl ?? bestRelease?.masterUrl ?? null,
 		// No pressing auto-pinned when a master matched — the editor lists its
 		// versions to pick from. A release-only match has no versions to list, so
 		// it's pinned directly.
