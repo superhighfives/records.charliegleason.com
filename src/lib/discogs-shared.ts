@@ -201,6 +201,60 @@ export function parseMasterId(input: string): string | null {
 }
 
 /**
+ * An Amazon ASIN for a physical product (vinyl, CD) — a 10-character code that
+ * begins with `B` followed by 9 alphanumerics (e.g. `B00M30T9F2`). Book ASINs are
+ * ISBN-10s (all digits / trailing `X`) and aren't handled here; records are the
+ * B-prefixed form. Returns the normalised (upper-case) ASIN or null. The ASIN
+ * isn't in Discogs — callers resolve it to artist/title/barcode first (see the
+ * ASIN identify path) — but detecting it lets one search box accept a pasted ASIN.
+ */
+export function parseAsin(input: string): string | null {
+	const s = input.trim().toUpperCase();
+	return /^B[0-9A-Z]{9}$/.test(s) ? s : null;
+}
+
+/**
+ * A retail barcode (UPC-A / EAN-13) as printed on a record sleeve — 12 or 13
+ * digits, tolerant of the spaces/hyphens people paste off a product page. Discogs
+ * indexes releases by barcode, so this is the one input that can pin an *exact*
+ * pressing. Returns the digits-only barcode or null. Deliberately strict on length
+ * (12–13) so a catalog number or a 4-digit year is never mistaken for a barcode.
+ */
+export function parseBarcode(input: string): string | null {
+	const digits = input.trim().replace(/[\s-]/g, "");
+	return /^\d{12,13}$/.test(digits) ? digits : null;
+}
+
+/** How the unified search field should route a raw input string. */
+export type QueryRoute =
+	| { kind: "release-url"; id: string }
+	| { kind: "master-url"; id: string }
+	| { kind: "asin"; asin: string }
+	| { kind: "barcode"; barcode: string }
+	| { kind: "text"; text: string };
+
+/**
+ * Decide what a single free-text search box should *do* with what was typed, so
+ * one field can accept a Discogs release/master URL, an Amazon ASIN, a barcode, or
+ * plain keywords. Only an explicit `/release/`|`/master/` path counts as a URL — a
+ * bare number is treated as keywords (too ambiguous to be an id), so pasting a URL
+ * is unambiguous while typing `1971` still searches. ASIN and barcode are
+ * shape-detected; everything else falls through to a keyword search.
+ */
+export function classifyQuery(input: string): QueryRoute {
+	const s = input.trim();
+	const releaseMatch = s.match(/\/releases?\/(\d+)/);
+	if (releaseMatch) return { kind: "release-url", id: releaseMatch[1] };
+	const masterMatch = s.match(/\/masters?\/(\d+)/);
+	if (masterMatch) return { kind: "master-url", id: masterMatch[1] };
+	const asin = parseAsin(s);
+	if (asin) return { kind: "asin", asin };
+	const barcode = parseBarcode(s);
+	if (barcode) return { kind: "barcode", barcode };
+	return { kind: "text", text: s };
+}
+
+/**
  * Build the Discogs `/database/search` URL for *releases* (pressings), normalising
  * inputs so whitespace misses and invalid years never reach Discogs. Pure +
  * exported for testing. (Masters use {@link buildMasterSearchUrl}.)
@@ -226,6 +280,22 @@ export function buildSearchUrl(
 	if (/^\d{4}$/.test(y)) url.searchParams.set("year", y);
 	// General keyword search — AND-ed with the structured filters above.
 	if (query) url.searchParams.set("q", query);
+	url.searchParams.set("per_page", String(perPage));
+	return url;
+}
+
+/**
+ * Build the Discogs `/database/search` URL for a barcode (UPC/EAN) lookup — the
+ * exact-pressing fast path. Barcodes are release-level (a pressing carries the
+ * barcode, not the album), so `type=release`. Pure + exported for testing.
+ */
+export function buildBarcodeSearchUrl(
+	barcode: string,
+	perPage: number = DEFAULT_PER_PAGE,
+): URL {
+	const url = new URL(`${DISCOGS_API_BASE}/database/search`);
+	url.searchParams.set("type", "release");
+	url.searchParams.set("barcode", barcode.trim());
 	url.searchParams.set("per_page", String(perPage));
 	return url;
 }

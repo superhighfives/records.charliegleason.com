@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	buildBarcodeSearchUrl,
+	classifyQuery,
 	mapMasterDetail,
 	mapMasterSearchResult,
 	mapReleaseCandidate,
 	mapReleaseSearchResult,
 	masterDetailToCandidate,
+	parseAsin,
+	parseBarcode,
 	parseDiscCount,
 	parseSizeAndType,
 } from "./discogs-shared";
@@ -190,5 +194,87 @@ describe("mapMasterDetail + masterDetailToCandidate", () => {
 		expect(detail.imageUrl).toBeNull();
 		expect(detail.masterUrl).toBe("https://www.discogs.com/master/7");
 		expect(masterDetailToCandidate(detail).thumb).toBeNull();
+	});
+});
+
+describe("parseAsin", () => {
+	it("accepts a B-prefixed product ASIN, normalising case", () => {
+		expect(parseAsin("B00M30T9F2")).toBe("B00M30T9F2");
+		expect(parseAsin("  b00m30t9f2 ")).toBe("B00M30T9F2");
+	});
+
+	it("rejects non-ASIN shapes (wrong prefix, wrong length, a bare number)", () => {
+		expect(parseAsin("A00M30T9F2")).toBeNull(); // wrong prefix
+		expect(parseAsin("B00M30T9F")).toBeNull(); // 9 chars
+		expect(parseAsin("B00M30T9F23")).toBeNull(); // 11 chars
+		expect(parseAsin("12345")).toBeNull();
+		expect(parseAsin("")).toBeNull();
+	});
+});
+
+describe("parseBarcode", () => {
+	it("accepts 12–13 digit UPC/EAN, tolerating spaces and hyphens", () => {
+		expect(parseBarcode("075678664250")).toBe("075678664250"); // UPC-A, 12
+		expect(parseBarcode("0075678664250")).toBe("0075678664250"); // EAN-13
+		expect(parseBarcode("0 75678 66425 0")).toBe("075678664250");
+		expect(parseBarcode("075678-664250")).toBe("075678664250");
+	});
+
+	it("rejects things that aren't barcodes (year, short/long digits, catalog no.)", () => {
+		expect(parseBarcode("1971")).toBeNull();
+		expect(parseBarcode("12345678")).toBeNull(); // 8 digits — too short
+		expect(parseBarcode("00756786642500")).toBeNull(); // 14 digits
+		expect(parseBarcode("SHSP 4076")).toBeNull();
+		expect(parseBarcode("")).toBeNull();
+	});
+});
+
+describe("classifyQuery", () => {
+	it("routes a Discogs release URL (and bare /release path) to release-url", () => {
+		expect(
+			classifyQuery("https://www.discogs.com/release/30268103-Wire-Pink-Flag"),
+		).toEqual({ kind: "release-url", id: "30268103" });
+		expect(classifyQuery("/releases/30268103")).toEqual({
+			kind: "release-url",
+			id: "30268103",
+		});
+	});
+
+	it("routes a Discogs master URL to master-url", () => {
+		expect(
+			classifyQuery("https://www.discogs.com/master/12345-Some-Album"),
+		).toEqual({ kind: "master-url", id: "12345" });
+	});
+
+	it("shape-detects an ASIN and a barcode", () => {
+		expect(classifyQuery("B00M30T9F2")).toEqual({
+			kind: "asin",
+			asin: "B00M30T9F2",
+		});
+		expect(classifyQuery("0 75678 66425 0")).toEqual({
+			kind: "barcode",
+			barcode: "075678664250",
+		});
+	});
+
+	it("treats a bare number and free text as keywords (too ambiguous for an id)", () => {
+		expect(classifyQuery("30268103")).toEqual({
+			kind: "text",
+			text: "30268103",
+		});
+		expect(classifyQuery("Led Zeppelin IV")).toEqual({
+			kind: "text",
+			text: "Led Zeppelin IV",
+		});
+	});
+});
+
+describe("buildBarcodeSearchUrl", () => {
+	it("builds a release-typed barcode search", () => {
+		const url = buildBarcodeSearchUrl("075678664250", 50);
+		expect(url.pathname).toBe("/database/search");
+		expect(url.searchParams.get("type")).toBe("release");
+		expect(url.searchParams.get("barcode")).toBe("075678664250");
+		expect(url.searchParams.get("per_page")).toBe("50");
 	});
 });

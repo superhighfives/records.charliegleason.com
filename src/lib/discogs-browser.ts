@@ -22,6 +22,7 @@
  */
 
 import {
+	buildBarcodeSearchUrl,
 	buildMasterSearchUrl,
 	buildSearchUrl,
 	DISCOGS_API_BASE,
@@ -80,6 +81,20 @@ export async function searchReleasesFromBrowser(
 	const data = (await discogsGetFromBrowser(
 		buildSearchUrl(params, MAX_PER_PAGE),
 		"search",
+	)) as { results?: Array<Record<string, unknown>> };
+	return (data.results ?? [])
+		.map(mapReleaseSearchResult)
+		.filter((c) => c.discogsId !== "")
+		.slice(0, MAX_PER_PAGE);
+}
+
+/** Re-run a barcode (UPC/EAN) lookup from the browser's clean IP, unauthenticated. */
+export async function searchByBarcodeFromBrowser(
+	barcode: string,
+): Promise<Array<DiscogsCandidate>> {
+	const data = (await discogsGetFromBrowser(
+		buildBarcodeSearchUrl(barcode, MAX_PER_PAGE),
+		"barcode search",
 	)) as { results?: Array<Record<string, unknown>> };
 	return (data.results ?? [])
 		.map(mapReleaseSearchResult)
