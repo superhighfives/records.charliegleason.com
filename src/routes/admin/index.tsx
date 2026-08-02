@@ -1240,6 +1240,7 @@ function AdminRecords() {
 								<DropdownMenuItem
 									disabled={checkLinksMutation.isPending}
 									onSelect={() => checkLinksMutation.mutate()}
+									title="Validate a batch of linked Discogs masters and releases now, flagging any that were deleted or merged"
 								>
 									{checkLinksMutation.isPending ? "Checking…" : "Check links"}
 								</DropdownMenuItem>
