@@ -901,6 +901,15 @@ export const publishRecord = createServerFn({ method: "POST" })
 						masterUrl,
 						discogsId,
 						discogsUrl,
+						// Re-linking clears the matching health flag so a record fixed in
+						// the editor drops out of the broken-link banner without waiting for
+						// the next scheduled pass (which re-validates it anyway). Only on an
+						// actual change of the id — an unrelated save (e.g. editing notes)
+						// leaves the flag as the link-check set it.
+						...(masterId !== current.masterId ? { masterMissing: false } : {}),
+						...(discogsId !== current.discogsId
+							? { releaseMissing: false }
+							: {}),
 						coverImageKey,
 						coverIsUpload,
 						// A record is only publishable once it has an identity (master
