@@ -66,6 +66,7 @@ import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
 import { orderRecordsForReview } from "#/lib/record-order";
 import {
+	checkLinkHealth,
 	deleteRecord,
 	deleteRecords,
 	publishRecords,
@@ -671,6 +672,27 @@ function AdminRecords() {
 			queryClient.invalidateQueries({ queryKey: recordsQueryOptions.queryKey }),
 	});
 
+	// Force a link-health pass now instead of waiting for the daily cron. Runs one
+	// stalest-first batch (masters + releases), then refreshes the list so any newly
+	// broken links surface in the banner immediately. One batch per click — the toast
+	// reports the tally so it's clear whether a follow-up click is worth it.
+	const checkLinksMutation = useMutation({
+		mutationFn: () => checkLinkHealth(),
+		onSuccess: async ({ masters, releases }) => {
+			await queryClient.invalidateQueries({
+				queryKey: recordsQueryOptions.queryKey,
+			});
+			const checked = masters.checked + releases.checked;
+			const broken = masters.gone + releases.gone;
+			toast.success(
+				checked === 0
+					? "No linked records to check."
+					: `Checked ${checked} link${checked === 1 ? "" : "s"} — ${broken} broken.`,
+			);
+		},
+		onError: () => toast.error("Couldn't check links. Try again."),
+	});
+
 	// Selected-rows actions: hand the ids to the matching batched endpoint and
 	// report a single summary toast off the count it actually acted on.
 	const bulkMutation = useMutation({
@@ -1183,6 +1205,17 @@ function AdminRecords() {
 							)}
 						</PopoverContent>
 					</Popover>
+
+					<Button
+						type="button"
+						variant="outline"
+						className="flex-1 md:flex-none"
+						disabled={checkLinksMutation.isPending}
+						onClick={() => checkLinksMutation.mutate()}
+						title="Validate a batch of linked Discogs masters and releases now, flagging any that were deleted or merged"
+					>
+						{checkLinksMutation.isPending ? "Checking…" : "Check links"}
+					</Button>
 
 					{unmatchedRecords.length > 0 && (
 						<Button
