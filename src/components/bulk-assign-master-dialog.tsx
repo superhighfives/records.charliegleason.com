@@ -96,6 +96,14 @@ export function BulkAssignMasterDialog({
 							id: r.id,
 							masterId: candidate.masterId,
 							masterUrl: candidate.masterUrl,
+							// Sync the row's album-level fields to the picked master so the
+							// record's identity matches what was linked (analysis-guessed
+							// artist/title/year/genre otherwise stick around and read as a
+							// mismatch in the editor).
+							artist: candidate.artist,
+							title: candidate.title,
+							year: candidate.year,
+							genre: candidate.genre,
 						},
 					});
 				}),
