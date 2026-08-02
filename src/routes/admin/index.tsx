@@ -117,8 +117,9 @@ const FACET_GROUPS: Array<{
 		key: "match",
 		label: "Match",
 		options: [
-			// "Matched" now means the record has an album (master) — the identity that
-			// makes it publishable. A pinned release is a separate axis (below).
+			// "Matched" means the record has an album (master) group linked. A pinned
+			// release is a separate axis (below) — some releases have no master at
+			// all, so either one (or both) can make a record publishable.
 			{ token: "matched", label: "Matched", test: (r) => r.masterId != null },
 			{
 				token: "unmatched",
@@ -810,9 +811,11 @@ function AdminRecords() {
 						params={{ id: String(row.original.id) }}
 						className="inline-flex flex-wrap items-center gap-1"
 					>
-						{/* Unmatched (no album) supersedes the plain "Unpublished" status —
-						    show one or the other, not both. */}
-						{row.original.status === "review" && !row.original.masterId ? (
+						{/* Unmatched (no album or release) supersedes the plain
+						    "Unpublished" status — show one or the other, not both. */}
+						{row.original.status === "review" &&
+						!row.original.masterId &&
+						!row.original.discogsId ? (
 							<UnmatchedBadge />
 						) : (
 							<StatusBadge status={row.original.status} />
@@ -1343,7 +1346,7 @@ function AdminRecords() {
 											{r.year ? ` · ${r.year}` : ""}
 										</p>
 										<div className="mt-1.5 flex flex-wrap items-center gap-1">
-											{r.status === "review" && !r.masterId ? (
+											{r.status === "review" && !r.masterId && !r.discogsId ? (
 												<UnmatchedBadge />
 											) : (
 												<StatusBadge status={r.status} />

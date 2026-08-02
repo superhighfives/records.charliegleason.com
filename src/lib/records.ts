@@ -212,10 +212,12 @@ export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
 			.where(isNotNull(records.copyOf))
 			.groupBy(records.copyOf);
 		const copiesByPrimary = new Map(copyCounts.map((r) => [r.copyOf, r.count]));
-		// Public = published AND has an album (master), AND is not itself a secondary
-		// copy (those are represented by the primary's count, not their own tile). The
-		// master requirement is defence-in-depth for the publish gate: even if a row
-		// slipped to `complete` without one, it never surfaces publicly without an album.
+		// Public = published AND has an identity (a master album and/or a specific
+		// release — some releases have no master group on Discogs at all), AND is
+		// not itself a secondary copy (those are represented by the primary's count,
+		// not their own tile). The identity requirement is defence-in-depth for the
+		// publish gate: even if a row slipped to `complete` without one, it never
+		// surfaces publicly without something to link back to Discogs.
 		const rows = await db
 			.select({
 				...getTableColumns(records),
@@ -229,7 +231,7 @@ export const listPublicRecords = createServerFn({ method: "GET" }).handler(() =>
 			.where(
 				and(
 					eq(records.status, "complete"),
-					isNotNull(records.masterId),
+					or(isNotNull(records.masterId), isNotNull(records.discogsId)),
 					isNull(records.copyOf),
 				),
 			)
@@ -887,6 +889,9 @@ export const publishRecord = createServerFn({ method: "POST" })
 				// (displayCoverKey), so the publish gate can't drift from what goes live.
 				// (The bulk publishRecords mirrors this as a SQL predicate.)
 				const hasCover = displayCoverKey(current) != null;
+				// A record's identity can be an album (master) or a specific pressing
+				// (release) — some releases have no master group on Discogs at all.
+				const hasIdentity = Boolean(masterId || discogsId);
 
 				const [row] = await db
 					.update(records)
@@ -898,10 +903,10 @@ export const publishRecord = createServerFn({ method: "POST" })
 						discogsUrl,
 						coverImageKey,
 						coverIsUpload,
-						// A record is only publishable once it has an album (master) *and* an
-						// approved cover/matte to display. Missing either, save it back to
-						// `review` rather than pushing it live.
-						status: masterId && hasCover ? "complete" : "review",
+						// A record is only publishable once it has an identity (master
+						// and/or release) *and* an approved cover/matte to display. Missing
+						// either, save it back to `review` rather than pushing it live.
+						status: hasIdentity && hasCover ? "complete" : "review",
 						error: null,
 						updatedAt: new Date(),
 					})
@@ -911,8 +916,8 @@ export const publishRecord = createServerFn({ method: "POST" })
 					? {
 							record: row,
 							coverFetchFailed,
-							needsMaster: !masterId,
-							needsCover: masterId ? !hasCover : false,
+							needsMaster: !hasIdentity,
+							needsCover: hasIdentity ? !hasCover : false,
 						}
 					: null;
 			}),
@@ -1726,9 +1731,9 @@ export const retryRecords = createServerFn({ method: "POST" })
 /**
  * Bulk publish. Flips the selected rows to `complete` so they appear on the
  * public homepage. Shares one timestamp across chunks. Returns how many rows were
- * published — rows without a `masterId` or an approved cover/matte are silently
- * skipped (a record needs both to be publishable), so the count can be lower than
- * the selection.
+ * published — rows without an identity (`masterId` or `discogsId`) or an approved
+ * cover/matte are silently skipped (a record needs both to be publishable), so the
+ * count can be lower than the selection.
  */
 export const publishRecords = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -1745,12 +1750,13 @@ export const publishRecords = createServerFn({ method: "POST" })
 					// Clear `error` too: it's only meaningful while `status === "failed"`,
 					// so publishing a previously-failed row must not leave it behind.
 					.set({ status: "complete", error: null, updatedAt: now })
-					// A record is only publishable once it has an album (master) and an
-					// approved cover/matte to display (see displayCoverKey).
+					// A record is only publishable once it has an identity (a master
+					// album and/or a specific release) and an approved cover/matte to
+					// display (see displayCoverKey).
 					.where(
 						and(
 							inArray(records.id, batch),
-							isNotNull(records.masterId),
+							or(isNotNull(records.masterId), isNotNull(records.discogsId)),
 							eq(records.professionalStatus, "approved"),
 							isNotNull(records.professionalImageKey),
 						),

@@ -266,8 +266,9 @@ export function RecordPanel({
 		copy(`${window.location.origin}${recordPath(record)}`, "link");
 
 	// Prefer the specific release when we have one, otherwise fall back to the
-	// master (the album as a work). Public records always carry a master, so there
-	// is normally a target either way.
+	// master (the album as a work). Public records carry at least one of the two
+	// (some releases have no master group on Discogs at all), so there is
+	// normally a target either way.
 	const discogsId = record.discogsId ?? record.masterId;
 	const discogsHref = record.discogsId
 		? (record.discogsUrl ??

@@ -6,6 +6,7 @@ import {
 	type DiscogsCandidate,
 	getMasterDetail,
 	searchMasters,
+	searchReleases,
 } from "#/lib/discogs";
 import { parseDiscCount, parseSizeAndType } from "#/lib/discogs-shared";
 import { bytesToBase64 } from "#/lib/image-data";
@@ -287,6 +288,23 @@ export async function analyzeCapture(
 
 	const best = masters[0] ?? null;
 
+	// No master group matched at all — some Discogs releases have none. Fall back
+	// to a direct release search so the record can still auto-match on its own
+	// identity rather than sitting unmatched until an admin manually pins one.
+	let bestRelease: DiscogsCandidate | null = null;
+	if (!best) {
+		const releases = extraction.artist
+			? await searchReleases({
+					artist: extraction.artist,
+					title: extraction.title,
+					country: "",
+					year: "",
+					q: "",
+				}).catch(() => [])
+			: [];
+		bestRelease = releases[0] ?? null;
+	}
+
 	// Pull the master for album-level enrichment (canonical year/genre) and its
 	// `mainReleaseId` — the album's canonical pressing, which we source the cover
 	// from without pinning it to the record.
@@ -301,41 +319,52 @@ export async function analyzeCapture(
 		extraction.title,
 	);
 
-	// 5. Source + resize the cover from the album's canonical (main) release.
+	// 5. Source + resize the cover — from the album's canonical (main) release when
+	// there's a master, otherwise directly from the matched release.
 	await onStep?.("artwork");
-	const coverReleaseId = detail?.mainReleaseId ?? null;
+	const coverReleaseId =
+		detail?.mainReleaseId ?? bestRelease?.discogsId ?? null;
 	const coverImageKey = coverReleaseId
 		? await sourceCoverFromDiscogs(coverReleaseId)
 		: null;
 
-	// No pressing is pinned yet, so fall back to whatever the collector's own
-	// capture-context hint implies (e.g. "2×LP, 12\"") rather than leaving the
-	// physical fields empty — pinning a release later overrides these.
+	// No pressing is pinned yet (beyond a release-only match), so fall back to
+	// whatever the collector's own capture-context hint implies (e.g. "2×LP, 12\"")
+	// rather than leaving the physical fields empty — pinning a release later
+	// overrides these.
 	const { size: contextSize, type: contextFormat } = parseSizeAndType(context);
 	const contextDiscCount = parseDiscCount(context);
 
 	return {
-		artist: detail?.artist || best?.artist || extraction.artist,
-		title: detail?.title || best?.title || extraction.title,
-		year: detail?.year ?? best?.year ?? extraction.year,
+		artist:
+			detail?.artist ||
+			best?.artist ||
+			bestRelease?.artist ||
+			extraction.artist,
+		title:
+			detail?.title || best?.title || bestRelease?.title || extraction.title,
+		year: detail?.year ?? best?.year ?? bestRelease?.year ?? extraction.year,
 		// Pressing-specific fields stay empty (beyond the context guess) until the
-		// collector pins a release.
-		label: null,
-		format: contextFormat,
-		size: contextSize,
-		discCount: contextDiscCount,
-		catno: null,
-		country: null,
-		genre: detail?.genre ?? best?.genre ?? null,
+		// collector pins a release — unless a release-only match already pinned one.
+		label: bestRelease?.label ?? null,
+		format: bestRelease?.type ?? contextFormat,
+		size: bestRelease?.size ?? contextSize,
+		discCount: bestRelease?.discCount ?? contextDiscCount,
+		catno: bestRelease?.catno ?? null,
+		country: bestRelease?.country ?? null,
+		genre: detail?.genre ?? best?.genre ?? bestRelease?.genre ?? null,
 		pitchforkScore: pitchfork?.score ?? null,
 		pitchforkUrl: pitchfork?.url ?? null,
-		masterId: best?.masterId ?? null,
-		masterUrl: detail?.masterUrl ?? best?.masterUrl ?? null,
-		// No pressing auto-pinned — the editor lists the master's versions to pick from.
-		discogsId: null,
-		discogsUrl: null,
+		masterId: best?.masterId ?? bestRelease?.masterId ?? null,
+		masterUrl:
+			detail?.masterUrl ?? best?.masterUrl ?? bestRelease?.masterUrl ?? null,
+		// No pressing auto-pinned when a master matched — the editor lists its
+		// versions to pick from. A release-only match has no versions to list, so
+		// it's pinned directly.
+		discogsId: bestRelease?.discogsId ?? null,
+		discogsUrl: bestRelease?.discogsUrl ?? null,
 		coverImageKey,
 		confidence: extraction.confidence,
-		candidates: [],
+		candidates: bestRelease ? [bestRelease] : [],
 	};
 }
