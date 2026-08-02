@@ -1422,6 +1422,13 @@ export const assignRecordMaster = createServerFn({ method: "POST" })
 						...(title ? { title } : {}),
 						...(year != null ? { year } : {}),
 						...(genre != null ? { genre } : {}),
+						// Re-linking is the fix for a broken master, so clear the health
+						// flag (and stamp the check) rather than leaving the row flagged
+						// until the next scheduled pass — that pass re-validates it anyway.
+						// Optimistic: if the newly-picked master is itself dead, the cron
+						// re-flags it.
+						masterMissing: false,
+						masterCheckedAt: new Date(),
 						updatedAt: new Date(),
 					})
 					.where(eq(records.id, id))

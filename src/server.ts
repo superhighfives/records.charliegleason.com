@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/cloudflare";
 import entry from "@tanstack/react-start/server-entry";
 
 import { runWeeklyDigest } from "#/lib/digest";
+import { runMasterCheck } from "#/lib/master-health";
 
 // Re-export the container Durable Object so wrangler can bind it (see wrangler.jsonc
 // `containers` + `durable_objects`). It fronts the matte render image in `containers/matte/`.
@@ -11,7 +12,8 @@ import { type AnalyzeMessage, handleAnalyzeBatch } from "#/lib/queue";
 
 /**
  * Worker entry. Wraps TanStack Start's default fetch handler, adds a `scheduled`
- * (cron) handler for the weekly digest and a `queue` consumer for background
+ * (cron) handler — the weekly digest and the daily master-link health check,
+ * dispatched by cron expression — and a `queue` consumer for background
  * record analysis, and instruments the whole thing with Sentry on the Workers
  * runtime via `withSentry` (covers fetch, scheduled and queue, and powers the
  * `Sentry.startSpan` calls in server functions). Needs `nodejs_compat`
@@ -20,8 +22,13 @@ import { type AnalyzeMessage, handleAnalyzeBatch } from "#/lib/queue";
 const handler: ExportedHandler<Cloudflare.Env> = {
 	// TanStack's handler takes (request); env/ctx are reached via cloudflare:workers.
 	fetch: (request) => entry.fetch(request),
-	scheduled(_controller, _env, ctx) {
-		ctx.waitUntil(runWeeklyDigest());
+	// Two crons share this handler (see wrangler.jsonc `triggers.crons`) — dispatch
+	// by the cron expression that fired. The daily master-check validates Discogs
+	// master links; anything else is the weekly digest.
+	scheduled(controller, _env, ctx) {
+		ctx.waitUntil(
+			controller.cron === "0 9 * * *" ? runMasterCheck() : runWeeklyDigest(),
+		);
 	},
 	queue: (batch) => handleAnalyzeBatch(batch as MessageBatch<AnalyzeMessage>),
 };
