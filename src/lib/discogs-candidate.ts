@@ -67,13 +67,23 @@ export function mergeReleases(
 	return [...primary, ...secondary.filter((r) => !seen.has(r.discogsId))];
 }
 
-/** Split a merged candidate list back into its master/release groups, order kept. */
+type MasterCandidate = Extract<Candidate, { kind: "master" }>;
+type ReleaseCandidate = Extract<Candidate, { kind: "release" }>;
+
+/**
+ * Split a merged candidate list back into its master/release groups, order kept.
+ * Narrows each group so `.data` is the concrete master/release shape, not the union.
+ */
 export function groupCandidates(candidates: Array<Candidate>): {
-	masters: Array<Candidate>;
-	releases: Array<Candidate>;
+	masters: Array<MasterCandidate>;
+	releases: Array<ReleaseCandidate>;
 } {
 	return {
-		masters: candidates.filter((c) => c.kind === "master"),
-		releases: candidates.filter((c) => c.kind === "release"),
+		masters: candidates.filter(
+			(c): c is MasterCandidate => c.kind === "master",
+		),
+		releases: candidates.filter(
+			(c): c is ReleaseCandidate => c.kind === "release",
+		),
 	};
 }

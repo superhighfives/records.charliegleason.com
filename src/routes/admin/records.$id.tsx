@@ -15,6 +15,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { CornerEditor } from "#/components/corner-editor";
+import {
+	DiscogsSearchInput,
+	useDiscogsSearch,
+} from "#/components/discogs-search-field";
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { ProPreview } from "#/components/pro-preview";
 import { RecordForm } from "#/components/record-form";
@@ -46,15 +50,8 @@ import type {
 	DiscogsCandidate,
 	DiscogsMasterCandidate,
 	DiscogsValue,
-	SearchParams,
 } from "#/lib/discogs";
-import {
-	lookupMasterFromBrowser,
-	lookupReleaseFromBrowser,
-	searchMastersFromBrowser,
-	searchReleasesFromBrowser,
-} from "#/lib/discogs-browser";
-import { parseMasterId, parseReleaseId } from "#/lib/discogs-shared";
+import { groupCandidates } from "#/lib/discogs-candidate";
 import { likelyDuplicateOf } from "#/lib/duplicates";
 import { orderRecordsForReview } from "#/lib/record-order";
 import type { RecordFormValues } from "#/lib/record-schema";
@@ -66,16 +63,12 @@ import {
 	getDiscogsMasterVersions,
 	getDiscogsRelease,
 	linkCopy,
-	lookupDiscogsMaster,
-	lookupDiscogsRelease,
 	previewReleaseValue,
 	publishRecord,
 	reframeRecord,
 	replaceCapture,
 	reprocessRecord,
 	retryProfessionalMatte,
-	searchDiscogs,
-	searchDiscogsMasters,
 	unlinkCopy,
 	unpublishRecord,
 } from "#/lib/records";
@@ -95,69 +88,6 @@ import {
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
 
-/** Does the pasted text look like it contains a Discogs release id? */
-function looksLikeReleaseId(input: string): boolean {
-	const s = input.trim();
-	return /^\d+$/.test(s) || /\/releases?\/\d+/.test(s);
-}
-
-/** Does the pasted text look like it contains a Discogs master id? */
-function looksLikeMasterId(input: string): boolean {
-	const s = input.trim();
-	return /^\d+$/.test(s) || /\/masters?\/\d+/.test(s);
-}
-
-/** An error's message, or a fallback when it isn't an `Error`. */
-function errText(error: unknown, fallback: string): string {
-	return error instanceof Error ? error.message : fallback;
-}
-
-/**
- * The "server IP is rate-limited → retry from your browser" fallback block, shown
- * when a server-side Discogs call (search or paste-a-URL lookup) fails. The Worker
- * egresses from a shared, throttled IP; the admin's own browser has a clean one, so
- * this offers the unauthenticated re-run (see src/lib/discogs-browser.ts). Shared by
- * both pickers' four failure sites so the copy/layout/disabled logic can't drift.
- */
-function RateLimitFallback({
-	primaryError,
-	onRetry,
-	retryPending,
-	retryDisabled = false,
-	retryLabel,
-	retryPendingLabel,
-	browserError,
-}: {
-	primaryError: string;
-	onRetry: () => void;
-	retryPending: boolean;
-	retryDisabled?: boolean;
-	retryLabel: string;
-	retryPendingLabel: string;
-	browserError?: string;
-}) {
-	return (
-		<div className="space-y-2" role="alert">
-			<p className="text-xs text-red-600">{primaryError}</p>
-			<div className="flex items-center justify-between gap-2">
-				<p className="text-xs text-muted-foreground">
-					The server shares a rate-limited IP. Retry from your browser instead.
-				</p>
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					disabled={retryPending || retryDisabled}
-					onClick={onRetry}
-				>
-					{retryPending ? retryPendingLabel : retryLabel}
-				</Button>
-			</div>
-			{browserError && <p className="text-xs text-red-600">{browserError}</p>}
-		</div>
-	);
-}
-
 /** Read a file to a data URL — used to ship a replacement capture to the server. */
 function readFileAsDataUrl(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -166,33 +96,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(file);
 	});
-}
-
-function TabButton({
-	active,
-	onClick,
-	children,
-}: {
-	active: boolean;
-	onClick: () => void;
-	children: React.ReactNode;
-}) {
-	return (
-		<button
-			type="button"
-			role="tab"
-			aria-selected={active}
-			onClick={onClick}
-			className={cn(
-				"-mb-px border-b-2 px-3 py-1.5 text-sm",
-				active
-					? "border-foreground font-medium text-foreground"
-					: "border-transparent text-muted-foreground hover:text-foreground",
-			)}
-		>
-			{children}
-		</button>
-	);
 }
 
 /** One labelled reframe knob: a slider with its current value shown on the right. */
@@ -479,278 +382,6 @@ function CandidateRow({
 				{active && <span className="shrink-0 text-xs">✓</span>}
 			</button>
 		</li>
-	);
-}
-
-/**
- * The album (master) picker — the primary "what record is this?" control. A record
- * needs a master to be publishable; the specific release (pressing) is an optional
- * pin handled by the separate candidate list below. Self-contained: owns its own
- * search / paste-URL flows and reports the chosen master (or a clear) to the parent.
- */
-function MasterPicker({
-	seedArtist,
-	seedTitle,
-	currentMasterId,
-	currentLabel,
-	currentUrl,
-	pickedId,
-	onPick,
-	onClear,
-}: {
-	seedArtist: string;
-	seedTitle: string;
-	currentMasterId: string | null;
-	currentLabel: string | null;
-	currentUrl: string | null;
-	pickedId: string | null;
-	onPick: (c: DiscogsMasterCandidate) => void;
-	onClear: () => void;
-}) {
-	const [q, setQ] = useState({ artist: seedArtist, title: seedTitle });
-	const [urlInput, setUrlInput] = useState("");
-	const [results, setResults] = useState<Array<DiscogsMasterCandidate> | null>(
-		null,
-	);
-
-	const search = useMutation({
-		mutationFn: (params: SearchParams) =>
-			searchDiscogsMasters({ data: params }),
-		onSuccess: setResults,
-	});
-	// Fallback when the server-side search is rate-limited: the Worker shares a
-	// Cloudflare egress IP that Discogs throttles per-IP, so run the same search
-	// from the admin's own (clean) browser IP instead. Unauthenticated — see
-	// src/lib/discogs-browser.ts.
-	const browserSearch = useMutation({
-		mutationFn: (params: { artist: string; title: string }) =>
-			searchMastersFromBrowser(params),
-		onSuccess: setResults,
-	});
-	const lookup = useMutation({
-		mutationFn: async (url: string) => {
-			const c = await lookupDiscogsMaster({ data: url });
-			if (!c) throw new Error("Couldn’t find a Discogs master at that URL.");
-			return c;
-		},
-		onSuccess: (c) => {
-			setResults([c]);
-			onPick(c);
-		},
-	});
-	// Same clean-IP fallback as the search, for the paste-a-URL path: resolve the
-	// master straight from the admin's browser when the server hits the rate limit.
-	const browserLookup = useMutation({
-		mutationFn: async (url: string) => {
-			const id = parseMasterId(url);
-			if (!id) throw new Error("Couldn’t find a Discogs master at that URL.");
-			return lookupMasterFromBrowser(id);
-		},
-		onSuccess: (c) => {
-			setResults([c]);
-			onPick(c);
-		},
-	});
-
-	return (
-		<div className="space-y-3 rounded-lg border p-3">
-			<div>
-				<h2 className="text-sm font-semibold">
-					Album{" "}
-					<span className="font-normal text-muted-foreground">(master)</span>
-				</h2>
-				<p className="text-xs text-muted-foreground">
-					The album is the record’s identity — it needs one to be published. A
-					specific pressing is optional (below).
-				</p>
-			</div>
-
-			{currentMasterId ? (
-				<div className="flex items-center justify-between gap-3 rounded-md border bg-accent/30 px-3 py-2 text-sm">
-					<span className="min-w-0 truncate">
-						{currentUrl ? (
-							<a
-								href={currentUrl}
-								target="_blank"
-								rel="noreferrer"
-								className="inline-flex items-center gap-1 hover:underline"
-							>
-								<span className="truncate">{currentLabel}</span>
-								<ExternalLink className="size-3 shrink-0 text-muted-foreground" />
-							</a>
-						) : (
-							currentLabel
-						)}
-					</span>
-					<Button type="button" size="xs" variant="ghost" onClick={onClear}>
-						Remove
-					</Button>
-				</div>
-			) : (
-				<p className="text-xs text-amber-600 dark:text-amber-400">
-					No album linked — search or paste a master URL to make this
-					publishable.
-				</p>
-			)}
-
-			<form
-				className="space-y-2"
-				onSubmit={(e) => {
-					e.preventDefault();
-					if (!search.isPending) {
-						search.mutate({
-							artist: q.artist,
-							title: q.title,
-							country: "",
-							year: "",
-							q: "",
-						});
-					}
-				}}
-			>
-				<div className="grid grid-cols-2 gap-2">
-					<Input
-						value={q.artist}
-						placeholder="Artist"
-						onChange={(e) => setQ((s) => ({ ...s, artist: e.target.value }))}
-					/>
-					<Input
-						value={q.title}
-						placeholder="Album title"
-						onChange={(e) => setQ((s) => ({ ...s, title: e.target.value }))}
-					/>
-				</div>
-				{search.isError && (
-					<RateLimitFallback
-						primaryError={errText(search.error, "Search failed. Try again.")}
-						onRetry={() =>
-							browserSearch.mutate({ artist: q.artist, title: q.title })
-						}
-						retryPending={browserSearch.isPending}
-						retryLabel="Search from browser"
-						retryPendingLabel="Searching…"
-						browserError={
-							browserSearch.isError
-								? errText(
-										browserSearch.error,
-										"Browser search failed. Try again.",
-									)
-								: undefined
-						}
-					/>
-				)}
-				<div className="flex justify-end">
-					<Button
-						type="submit"
-						variant="outline"
-						size="sm"
-						disabled={search.isPending}
-					>
-						{search.isPending ? "Searching…" : "Search albums"}
-					</Button>
-				</div>
-			</form>
-
-			{results && results.length > 0 && (
-				<ul className="max-h-64 divide-y overflow-y-auto rounded-md border">
-					{results.map((m) => {
-						const active =
-							pickedId === m.masterId ||
-							(pickedId == null && currentMasterId === m.masterId);
-						return (
-							<li key={m.masterId}>
-								<button
-									type="button"
-									onClick={() => onPick(m)}
-									className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
-										active ? "bg-accent" : "hover:bg-accent/50"
-									}`}
-								>
-									{m.thumb ? (
-										<img
-											src={m.thumb}
-											alt=""
-											className="size-10 shrink-0 rounded object-cover"
-										/>
-									) : (
-										<div className="size-10 shrink-0 rounded bg-muted" />
-									)}
-									<span className="min-w-0 flex-1 truncate">
-										<span className="block truncate">
-											<span className="font-medium">{m.artist}</span> —{" "}
-											{m.title}
-											{m.year ? ` (${m.year})` : ""}
-										</span>
-										{m.genre && (
-											<span className="block truncate text-xs text-muted-foreground">
-												{m.genre}
-											</span>
-										)}
-									</span>
-									{active && <span className="shrink-0 text-xs">✓</span>}
-								</button>
-							</li>
-						);
-					})}
-				</ul>
-			)}
-			{search.isSuccess && results?.length === 0 && (
-				<p className="text-xs text-muted-foreground" aria-live="polite">
-					No albums found. Try a different spelling or paste the master URL.
-				</p>
-			)}
-
-			<form
-				className="space-y-1"
-				onSubmit={(e) => {
-					e.preventDefault();
-					if (looksLikeMasterId(urlInput) && !lookup.isPending) {
-						lookup.mutate(urlInput);
-					}
-				}}
-			>
-				<label htmlFor="master-url" className="text-xs text-muted-foreground">
-					Or paste a Discogs master URL
-				</label>
-				<div className="flex gap-2">
-					<Input
-						id="master-url"
-						value={urlInput}
-						placeholder="https://www.discogs.com/master/…"
-						onChange={(e) => setUrlInput(e.target.value)}
-					/>
-					<Button
-						type="submit"
-						variant="outline"
-						size="sm"
-						disabled={lookup.isPending || !looksLikeMasterId(urlInput)}
-					>
-						{lookup.isPending ? "…" : "Link"}
-					</Button>
-				</div>
-				{lookup.isError && (
-					<RateLimitFallback
-						primaryError={errText(
-							lookup.error,
-							"Couldn’t find a Discogs master at that URL.",
-						)}
-						onRetry={() => browserLookup.mutate(urlInput)}
-						retryPending={browserLookup.isPending}
-						retryDisabled={!looksLikeMasterId(urlInput)}
-						retryLabel="Link from browser"
-						retryPendingLabel="Linking…"
-						browserError={
-							browserLookup.isError
-								? errText(
-										browserLookup.error,
-										"Browser lookup failed. Try again.",
-									)
-								: undefined
-						}
-					/>
-				)}
-			</form>
-		</div>
 	);
 }
 
@@ -1072,7 +703,6 @@ function RecordDetail() {
 	// record's existing release — so the admin can un-pin a pressing on purpose.
 	// Picking a candidate re-pins, so it clears this.
 	const [albumOnly, setAlbumOnly] = useState(false);
-	const [results, setResults] = useState<Array<DiscogsCandidate> | null>(null);
 	// A non-persisted Discogs value estimate for a picked-but-unpublished edition,
 	// so the admin can compare pricing across editions before committing. Cleared
 	// whenever the picked candidate changes so it never shows a stale edition's price.
@@ -1082,17 +712,12 @@ function RecordDetail() {
 	useEffect(() => {
 		setPreview(null);
 	}, [picked?.discogsId]);
-	const [query, setQuery] = useState({
-		artist: record?.artist ?? "",
-		title: record?.title ?? "",
-		country: "",
-		year: "",
-		q: "",
+	// One unified search for the record's identity — offers masters (albums) and
+	// releases (pressings) together, and routes a pasted Discogs URL / Amazon ASIN /
+	// barcode. Seeded with the record's own artist+title so the first Search works.
+	const identitySearch = useDiscogsSearch({
+		initialInput: `${record?.artist ?? ""} ${record?.title ?? ""}`.trim(),
 	});
-	// The Discogs box is always open; default to the URL tab (paste-and-go).
-	const [tab, setTab] = useState<"search" | "url">("url");
-	const [showAdvanced, setShowAdvanced] = useState(false);
-	const [discogsUrl, setDiscogsUrl] = useState("");
 	const [replacingCapture, setReplacingCapture] = useState(false);
 	const captureInputRef = useRef<HTMLInputElement>(null);
 
@@ -1150,46 +775,6 @@ function RecordDetail() {
 				queryKey: recordQueryOptions(recordId).queryKey,
 			}),
 		]);
-
-	const search = useMutation({
-		mutationFn: (q: SearchParams) => searchDiscogs({ data: q }),
-		onSuccess: setResults,
-	});
-	// Clean-IP fallback when the server search hits Discogs' per-IP rate limit:
-	// re-run the same release search (all filters, not just artist/title) from the
-	// admin's own browser, unauthenticated. See src/lib/discogs-browser.ts.
-	const browserSearch = useMutation({
-		mutationFn: (q: SearchParams) => searchReleasesFromBrowser(q),
-		onSuccess: setResults,
-	});
-
-	// Resolve a pasted Discogs release URL into a single candidate, then select it
-	// so the form populates and it publishes just like a search hit.
-	const lookup = useMutation({
-		mutationFn: async (url: string) => {
-			const candidate = await lookupDiscogsRelease({ data: url });
-			if (!candidate) {
-				throw new Error("Couldn’t find a Discogs release at that URL.");
-			}
-			return candidate;
-		},
-		onSuccess: (candidate) => {
-			setResults([candidate]);
-			setPicked(candidate);
-		},
-	});
-	// Browser fallback for the paste-a-URL path, same rationale as the search.
-	const browserLookup = useMutation({
-		mutationFn: async (url: string) => {
-			const id = parseReleaseId(url);
-			if (!id) throw new Error("Couldn’t find a Discogs release at that URL.");
-			return lookupReleaseFromBrowser(id);
-		},
-		onSuccess: (candidate) => {
-			setResults([candidate]);
-			setPicked(candidate);
-		},
-	});
 
 	// Replace the source capture with a freshly chosen photo, regenerate the crop
 	// server-side, then open the editor on the new image so it can be reviewed.
@@ -1422,10 +1007,18 @@ function RecordDetail() {
 	// A record needs an album and/or a release to be publishable.
 	const hasIdentity = Boolean(effectiveMasterId || effectiveDiscogsId);
 
-	// Release pick-list: a manual search/URL result wins; otherwise the linked
-	// album's vinyl pressings; falling back to whatever analysis stored on the row.
+	// Split the unified search's hits: releases feed the pressing pick-list; masters
+	// are offered as album picks above it. A null (no search yet) falls the pressing
+	// list back to the linked album's vinyl pressings, then the stored candidates.
+	const searchGroups = identitySearch.results
+		? groupCandidates(identitySearch.results)
+		: null;
+	const searchedReleases = searchGroups
+		? searchGroups.releases.map((c) => c.data)
+		: null;
+	const searchedMasters = searchGroups ? searchGroups.masters : [];
 	const candidates =
-		results ??
+		searchedReleases ??
 		masterVersionsQuery.data ??
 		parseCandidates(record.candidatesJson);
 	const inFlight =
@@ -1709,393 +1302,226 @@ function RecordDetail() {
 			{/* Review / failed / complete: confirm, edit, re-pick, publish. */}
 			{!inFlight && (
 				<div className="space-y-4">
-					{/* Album (master) — the record's identity and publish gate. Sits above
-					    the release picker: pick the album first, pin a pressing second. */}
-					<MasterPicker
-						seedArtist={record.artist}
-						seedTitle={record.title}
-						currentMasterId={effectiveMasterId}
-						currentLabel={effectiveMasterLabel}
-						currentUrl={effectiveMasterUrl}
-						pickedId={pickedMaster?.masterId ?? null}
-						onPick={(m) => {
-							setPickedMaster(m);
-							setUnmatchMaster(false);
-						}}
-						onClear={() => {
-							setPickedMaster(null);
-							setUnmatchMaster(true);
-						}}
-					/>
+					{/* Identity — one field for the album (master) and the pressing
+					    (release): search, or paste a Discogs link, an Amazon ASIN, or a
+					    barcode. Pick an album, a pressing, or one of each. */}
+					<div className="space-y-3 rounded-lg border p-3">
+						<div>
+							<h2 className="text-sm font-semibold">Album &amp; release</h2>
+							<p className="text-xs text-muted-foreground">
+								Search, or paste a Discogs link, an Amazon ASIN, or a barcode.
+								Pick an album, a pressing, or one of each.
+							</p>
+						</div>
 
-					{/* Release (pressing) — only shown once an album is linked, since a
-					    release is one of that album's pressings. A confidence banner, the
-					    search / paste-a-URL controls, and the pick-list — one panel, divided. */}
-					{effectiveMasterId != null && (
-						<div className="overflow-hidden rounded-lg border">
-							<div className="p-3 pb-0">
-								<h2 className="text-sm font-semibold">
-									Release{" "}
-									<span className="font-normal text-muted-foreground">
-										(optional)
-									</span>
-								</h2>
-								<p className="text-xs text-muted-foreground">
-									Pin a specific pressing for its catalog number, country and
-									value — or leave it album-only.
-								</p>
-							</div>
-							{record.confidence != null && (
-								<div className="mt-3 border-y bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-									Identified with {Math.round(record.confidence * 100)}%
-									confidence.
-									{record.status === "review"
-										? " Confirm the details before publishing."
-										: ""}
-								</div>
-							)}
-
-							{/* Wrong match? Search or paste a Discogs URL. The sourced cover isn't
-						    previewed here — it's visible in the candidate thumbnails below. */}
-							<div className="p-3">
-								<div className="min-w-0 space-y-3">
-									{/* Tabs on the left; the cover-download status (progress →
-								    size/type, or a failure) sits opposite, on the same row. */}
-									<div className="flex items-center justify-between gap-2 border-b">
-										<div
-											role="tablist"
-											aria-label="Discogs lookup method"
-											className="flex gap-1"
+						{effectiveMasterId != null ? (
+							<div className="flex items-center justify-between gap-3 rounded-md border bg-accent/30 px-3 py-2 text-sm">
+								<span className="min-w-0 truncate">
+									{effectiveMasterUrl ? (
+										<a
+											href={effectiveMasterUrl}
+											target="_blank"
+											rel="noreferrer"
+											className="inline-flex items-center gap-1 hover:underline"
 										>
-											<TabButton
-												active={tab === "url"}
-												onClick={() => setTab("url")}
-											>
-												Discogs URL
-											</TabButton>
-											<TabButton
-												active={tab === "search"}
-												onClick={() => setTab("search")}
-											>
-												Search
-											</TabButton>
-										</div>
-										{picked && coverProbe.status !== "idle" && (
-											<span
-												className={cn(
-													"shrink-0 text-xs text-muted-foreground",
-													coverProbe.status === "error" &&
-														"text-red-600 dark:text-red-400",
-												)}
-												aria-live="polite"
-											>
-												{coverProbe.status === "loading" && "Downloading…"}
-												{coverProbe.status === "ready" &&
-													`${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}`}
-												{coverProbe.status === "error" && "Download failed"}
-											</span>
-										)}
-									</div>
-
-									{tab === "search" ? (
-										<form
-											className="space-y-2"
-											onSubmit={(e) => {
-												e.preventDefault();
-												if (!search.isPending) search.mutate(query);
-											}}
-										>
-											<div className="flex items-end gap-2">
-												<div className="flex-1 space-y-1">
-													<label
-														htmlFor="q-artist"
-														className="text-xs text-muted-foreground"
-													>
-														Artist
-													</label>
-													<Input
-														id="q-artist"
-														value={query.artist}
-														onChange={(e) =>
-															setQuery((q) => ({
-																...q,
-																artist: e.target.value,
-															}))
-														}
-													/>
-												</div>
-												<div className="flex-1 space-y-1">
-													<label
-														htmlFor="q-title"
-														className="text-xs text-muted-foreground"
-													>
-														Title
-													</label>
-													<Input
-														id="q-title"
-														value={query.title}
-														onChange={(e) =>
-															setQuery((q) => ({ ...q, title: e.target.value }))
-														}
-													/>
-												</div>
-											</div>
-
-											{/* Country/Year are rarely needed — tuck them behind a disclosure. */}
-											<button
-												type="button"
-												aria-expanded={showAdvanced}
-												onClick={() => setShowAdvanced((v) => !v)}
-												className="text-xs text-muted-foreground underline underline-offset-4"
-											>
-												{showAdvanced
-													? "Hide advanced options"
-													: "Advanced options"}
-											</button>
-
-											{showAdvanced && (
-												<div className="flex items-end gap-2">
-													<div className="flex-1 space-y-1">
-														<label
-															htmlFor="q-country"
-															className="text-xs text-muted-foreground"
-														>
-															Country
-														</label>
-														<Input
-															id="q-country"
-															value={query.country}
-															placeholder="e.g. UK"
-															onChange={(e) =>
-																setQuery((q) => ({
-																	...q,
-																	country: e.target.value,
-																}))
-															}
-														/>
-													</div>
-													<div className="flex-1 space-y-1">
-														<label
-															htmlFor="q-year"
-															className="text-xs text-muted-foreground"
-														>
-															Year
-														</label>
-														<Input
-															id="q-year"
-															inputMode="numeric"
-															value={query.year}
-															placeholder="e.g. 1971"
-															onChange={(e) =>
-																setQuery((q) => ({
-																	...q,
-																	year: e.target.value,
-																}))
-															}
-														/>
-													</div>
-												</div>
-											)}
-
-											{/* Free-text catch-all — passed to Discogs' general search for
-								    anything the structured fields miss (label, catalog number). */}
-											{showAdvanced && (
-												<div className="space-y-1">
-													<label
-														htmlFor="q-keywords"
-														className="text-xs text-muted-foreground"
-													>
-														Discogs search
-													</label>
-													<Input
-														id="q-keywords"
-														value={query.q}
-														placeholder="e.g. label, catalog number, or any keywords"
-														onChange={(e) =>
-															setQuery((q) => ({ ...q, q: e.target.value }))
-														}
-													/>
-												</div>
-											)}
-
-											{search.isError && (
-												<RateLimitFallback
-													primaryError={errText(
-														search.error,
-														"Search failed. Try again.",
-													)}
-													onRetry={() => browserSearch.mutate(query)}
-													retryPending={browserSearch.isPending}
-													retryLabel="Search from browser"
-													retryPendingLabel="Searching…"
-													browserError={
-														browserSearch.isError
-															? errText(
-																	browserSearch.error,
-																	"Browser search failed. Try again.",
-																)
-															: undefined
-													}
-												/>
-											)}
-											{search.isSuccess && (search.data?.length ?? 0) === 0 && (
-												<p
-													className="text-xs text-muted-foreground"
-													aria-live="polite"
-												>
-													No matches on Discogs. Try a different spelling, drop
-													the title, or paste the release URL.
-												</p>
-											)}
-											<div className="flex justify-end">
-												<Button
-													type="submit"
-													variant="outline"
-													disabled={search.isPending}
-												>
-													{search.isPending ? "Searching…" : "Search"}
-												</Button>
-											</div>
-										</form>
+											<span className="truncate">{effectiveMasterLabel}</span>
+											<ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+										</a>
 									) : (
-										<form
-											className="space-y-2"
-											onSubmit={(e) => {
-												e.preventDefault();
-												if (
-													looksLikeReleaseId(discogsUrl) &&
-													!lookup.isPending
-												) {
-													lookup.mutate(discogsUrl);
-												}
-											}}
-										>
-											<div className="space-y-1">
-												<label
-													htmlFor="q-url"
-													className="text-xs text-muted-foreground"
-												>
-													Discogs release URL
-												</label>
-												<Input
-													id="q-url"
-													value={discogsUrl}
-													placeholder="https://www.discogs.com/release/…"
-													onChange={(e) => setDiscogsUrl(e.target.value)}
-												/>
-											</div>
-											{lookup.isError && (
-												<RateLimitFallback
-													primaryError={errText(
-														lookup.error,
-														"Couldn’t find a Discogs release at that URL.",
-													)}
-													onRetry={() => browserLookup.mutate(discogsUrl)}
-													retryPending={browserLookup.isPending}
-													retryDisabled={!looksLikeReleaseId(discogsUrl)}
-													retryLabel="Fetch from browser"
-													retryPendingLabel="Fetching…"
-													browserError={
-														browserLookup.isError
-															? errText(
-																	browserLookup.error,
-																	"Browser lookup failed. Try again.",
-																)
-															: undefined
-													}
-												/>
-											)}
-											<div className="flex justify-end">
-												<Button
-													type="submit"
-													variant="outline"
-													disabled={
-														lookup.isPending || !looksLikeReleaseId(discogsUrl)
-													}
-												>
-													{lookup.isPending ? "Fetching…" : "Fetch release"}
-												</Button>
-											</div>
-										</form>
+										effectiveMasterLabel
 									)}
-								</div>
+								</span>
+								<Button
+									type="button"
+									size="xs"
+									variant="ghost"
+									onClick={() => {
+										setPickedMaster(null);
+										setUnmatchMaster(true);
+									}}
+								>
+									Remove album
+								</Button>
 							</div>
+						) : (
+							<p className="text-xs text-amber-600 dark:text-amber-400">
+								No album linked — search or pick one to make this publishable. A
+								standalone pressing works too.
+							</p>
+						)}
 
-							{/* Loading the linked album's pressings (two Discogs calls). */}
-							{masterVersionsQuery.isFetching && results == null && (
-								<p className="border-t px-3 py-2 text-xs text-muted-foreground">
-									Loading pressings for this album…
+						{record.confidence != null && (
+							<div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+								Identified with {Math.round(record.confidence * 100)}%
+								confidence.
+								{record.status === "review"
+									? " Confirm the details before publishing."
+									: ""}
+							</div>
+						)}
+
+						<DiscogsSearchInput search={identitySearch} idPrefix="identity" />
+
+						{/* Cover probe for the pinned pressing — download the full-res
+						    artwork through our proxy so the admin can preview (and confirm
+						    the download of) exactly what will publish. */}
+						{picked && coverProbe.status !== "idle" && (
+							<div className="flex items-center gap-2 text-xs text-muted-foreground">
+								{coverProbe.status === "ready" && (
+									<ImageZoom
+										src={coverProbe.url}
+										alt="Selected pressing cover"
+										className="size-10 shrink-0 rounded"
+									/>
+								)}
+								<span
+									className={cn(
+										coverProbe.status === "error" &&
+											"text-red-600 dark:text-red-400",
+									)}
+									aria-live="polite"
+								>
+									{coverProbe.status === "loading" && "Downloading cover…"}
+									{coverProbe.status === "ready" &&
+										`Cover ${(coverProbe.bytes / 1024).toFixed(0)} KB, ${coverProbe.type}`}
+									{coverProbe.status === "error" && "Cover download failed"}
+								</span>
+							</div>
+						)}
+
+						{/* Album (master) hits from the same search — pick one to set the
+						    record’s identity. Pressings appear in the list below. */}
+						{searchedMasters.length > 0 && (
+							<div className="space-y-1">
+								<p className="text-xs font-medium text-muted-foreground">
+									Albums
 								</p>
-							)}
-
-							{/* Candidate pick-list — the lower half of the panel, divided from
-						    the controls above. A manual search can return every pressing,
-						    so cap the height and let it scroll rather than pushing the form
-						    off-screen. */}
-							{candidates.length > 0 && (
-								<ul className="max-h-[345px] divide-y overflow-y-auto border-t">
-									{candidates.map((c) => {
-										const active = picked
-											? picked.discogsId === c.discogsId
-											: !albumOnly && record.discogsId === c.discogsId;
+								<ul className="max-h-56 divide-y overflow-y-auto rounded-md border">
+									{searchedMasters.map((c) => {
+										const m = c.data;
+										const active =
+											pickedMaster?.masterId === m.masterId ||
+											(pickedMaster == null &&
+												!unmatchMaster &&
+												effectiveMasterId === m.masterId);
 										return (
-											<CandidateRow
-												key={c.discogsId}
-												candidate={c}
-												active={active}
-												onToggle={() => {
-													// Picking a release re-pins, so it clears album-only.
-													setAlbumOnly(false);
-													// A release implies its album, so a fresh pick also
-													// re-establishes the master (undoes an explicit unmatch).
-													if (!active) setUnmatchMaster(false);
-													setPicked(active ? null : c);
-												}}
-											/>
+											<li key={c.key}>
+												<button
+													type="button"
+													onClick={() => {
+														setPickedMaster(m);
+														setUnmatchMaster(false);
+													}}
+													className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
+														active ? "bg-accent" : "hover:bg-accent/50"
+													}`}
+												>
+													{m.thumb ? (
+														<img
+															src={m.thumb}
+															alt=""
+															className="size-10 shrink-0 rounded object-cover"
+														/>
+													) : (
+														<div className="size-10 shrink-0 rounded bg-muted" />
+													)}
+													<span className="min-w-0 flex-1 truncate">
+														<span className="block truncate">
+															<span className="font-medium">{m.artist}</span> —{" "}
+															{m.title}
+															{m.year ? ` (${m.year})` : ""}
+														</span>
+														{m.genre && (
+															<span className="block truncate text-xs text-muted-foreground">
+																{m.genre}
+															</span>
+														)}
+													</span>
+													{active && (
+														<span className="shrink-0 text-xs">✓</span>
+													)}
+												</button>
+											</li>
 										);
 									})}
 								</ul>
-							)}
+							</div>
+						)}
 
-							{/* Pressing un-pin control. Only meaningful when there's an album to
-						    keep — un-pinning drops the specific pressing but holds the album
-						    identity, and value/catno/country come from a pinned release, so
-						    they go quiet until one is picked again. */}
-							{effectiveMasterId != null && (
-								<div className="flex items-center justify-between gap-3 border-t px-3 py-2 text-xs">
-									<p className="text-muted-foreground">
-										{activeDiscogsId
-											? "Pinned to a specific pressing — its details and value apply."
-											: "No specific pressing pinned — album only. Pick a release above to pin one."}
-									</p>
-									{activeDiscogsId ? (
+						{/* Loading the linked album's pressings (two Discogs calls). */}
+						{masterVersionsQuery.isFetching && searchedReleases == null && (
+							<p className="border-t px-3 py-2 text-xs text-muted-foreground">
+								Loading pressings for this album…
+							</p>
+						)}
+
+						{/* Candidate pick-list — the lower half of the panel, divided from
+					    the controls above. A manual search can return every pressing,
+					    so cap the height and let it scroll rather than pushing the form
+					    off-screen. */}
+						{candidates.length > 0 && (
+							<ul className="max-h-[345px] divide-y overflow-y-auto border-t">
+								{candidates.map((c) => {
+									const active = picked
+										? picked.discogsId === c.discogsId
+										: !albumOnly && record.discogsId === c.discogsId;
+									return (
+										<CandidateRow
+											key={c.discogsId}
+											candidate={c}
+											active={active}
+											onToggle={() => {
+												// Picking a release re-pins, so it clears album-only.
+												setAlbumOnly(false);
+												// A release implies its album, so a fresh pick also
+												// re-establishes the master (undoes an explicit unmatch).
+												if (!active) setUnmatchMaster(false);
+												setPicked(active ? null : c);
+											}}
+										/>
+									);
+								})}
+							</ul>
+						)}
+
+						{/* Pressing un-pin control. Only meaningful when there's an album to
+					    keep — un-pinning drops the specific pressing but holds the album
+					    identity, and value/catno/country come from a pinned release, so
+					    they go quiet until one is picked again. */}
+						{effectiveMasterId != null && (
+							<div className="flex items-center justify-between gap-3 border-t px-3 py-2 text-xs">
+								<p className="text-muted-foreground">
+									{activeDiscogsId
+										? "Pinned to a specific pressing — its details and value apply."
+										: "No specific pressing pinned — album only. Pick a release above to pin one."}
+								</p>
+								{activeDiscogsId ? (
+									<Button
+										type="button"
+										size="xs"
+										variant="ghost"
+										onClick={() => {
+											setPicked(null);
+											setAlbumOnly(true);
+										}}
+									>
+										Remove pressing
+									</Button>
+								) : (
+									record.discogsId != null && (
 										<Button
 											type="button"
 											size="xs"
 											variant="ghost"
-											onClick={() => {
-												setPicked(null);
-												setAlbumOnly(true);
-											}}
+											onClick={() => setAlbumOnly(false)}
 										>
-											Remove pressing
+											Undo
 										</Button>
-									) : (
-										record.discogsId != null && (
-											<Button
-												type="button"
-												size="xs"
-												variant="ghost"
-												onClick={() => setAlbumOnly(false)}
-											>
-												Undo
-											</Button>
-										)
-									)}
-								</div>
-							)}
-						</div>
-					)}
+									)
+								)}
+							</div>
+						)}
+					</div>
 
 					{/* Value is per-pressing, so it only appears once an album is linked AND
 					    a specific release is pinned (a release without a master is a stale
