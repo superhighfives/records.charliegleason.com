@@ -1410,6 +1410,18 @@ function RecordDetail() {
 		? `${pickedMaster.artist} — ${pickedMaster.title}${pickedMaster.year ? ` (${pickedMaster.year})` : ""}`
 		: `${record.artist} — ${record.title}${record.year ? ` (${record.year})` : ""}`;
 
+	// The release that would be saved: same "album-only drops the pin" rule as
+	// `activeDiscogsId`. Some Discogs releases have no master group at all, so a
+	// record's identity can rest on this alone.
+	const effectiveDiscogsId = albumOnly
+		? null
+		: (picked?.discogsId ?? record.discogsId ?? null);
+	const effectiveDiscogsUrl = albumOnly
+		? null
+		: (picked?.discogsUrl ?? record.discogsUrl ?? null);
+	// A record needs an album and/or a release to be publishable.
+	const hasIdentity = Boolean(effectiveMasterId || effectiveDiscogsId);
+
 	// Release pick-list: a manual search/URL result wins; otherwise the linked
 	// album's vinyl pressings; falling back to whatever analysis stored on the row.
 	const candidates =
@@ -1517,8 +1529,11 @@ function RecordDetail() {
 								{record.copyOf == null && duplicateId != null && (
 									<DuplicateBadge />
 								)}
-								{/* Unmatched (no album) supersedes the plain "Unpublished" status. */}
-								{record.status === "review" && !record.masterId ? (
+								{/* Unmatched (no album or release) supersedes the plain
+								    "Unpublished" status. */}
+								{record.status === "review" &&
+								!record.masterId &&
+								!record.discogsId ? (
 									<UnmatchedBadge />
 								) : (
 									<StatusBadge
@@ -2164,9 +2179,10 @@ function RecordDetail() {
 							}
 							defaultValues={toForm(record, picked, pickedMaster)}
 							submitLabel={
-								// Publishing needs an album (master) *and* an approved cover/matte.
-								// Without either, the save can only keep the record as a draft.
-								!effectiveMasterId || !hasPublicCover
+								// Publishing needs an identity (album and/or release) *and* an
+								// approved cover/matte. Without either, the save can only keep
+								// the record as a draft.
+								!hasIdentity || !hasPublicCover
 									? "Save draft"
 									: record.status === "complete"
 										? "Save changes"
@@ -2177,17 +2193,14 @@ function RecordDetail() {
 									data: {
 										id: recordId,
 										data: input,
-										// The album (master) is the identity: an explicit master pick
-										// wins, else a picked release's master, else the record's own —
-										// unless it's been explicitly unmatched. Publishing requires it.
+										// The album (master) and/or release together form the
+										// identity: an explicit master pick wins, else a picked
+										// release's master, else the record's own — unless it's been
+										// explicitly unmatched. Publishing requires at least one.
 										masterId: effectiveMasterId,
 										masterUrl: effectiveMasterUrl,
-										discogsId: albumOnly
-											? null
-											: (picked?.discogsId ?? record.discogsId ?? null),
-										discogsUrl: albumOnly
-											? null
-											: (picked?.discogsUrl ?? record.discogsUrl ?? null),
+										discogsId: effectiveDiscogsId,
+										discogsUrl: effectiveDiscogsUrl,
 										coverImageKey: null,
 									},
 								});
@@ -2206,9 +2219,10 @@ function RecordDetail() {
 										"Saved, but couldn't fetch the cover from Discogs. Upload one manually or try again.",
 									);
 								} else if (result.needsMaster) {
-									// Saved as a draft — no album linked, so it can't go live yet.
+									// Saved as a draft — no album or release linked, so it can't go
+									// live yet.
 									toast.warning(
-										"Saved as a draft. Link an album (master) to publish it.",
+										"Saved as a draft. Link an album or release to publish it.",
 									);
 								} else if (result.needsCover) {
 									// Saved as a draft — album linked, but no approved cover/matte to

@@ -22,6 +22,7 @@ import {
 	getReleaseDetail,
 	getReleaseValue,
 	searchMasters,
+	searchReleases,
 } from "#/lib/discogs";
 import {
 	type CoverStageResult,
@@ -225,9 +226,12 @@ export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
  *  - pinned release → refresh enrichment (year, label, genre, format, size, catno,
  *    country) + a fresh value, and backfill the master link;
  *  - album-only (master, no release) → refresh album-level fields from the master;
- *  - neither → guess a master from the record's artist/title (the cover metadata).
+ *  - neither → guess an identity from the record's artist/title (the cover
+ *    metadata): a master first, falling back to a release when no master group
+ *    matches (some Discogs releases have none).
  * Only overwrites a field when Discogs returns a value, so it never nulls good
- * data; a guess only sets the album identity and never publishes. Leaves
+ * data; a guess only sets the identity (and gap-fills enrichment) and never
+ * publishes. Leaves
  * artist/title/status alone. Returns the updated row, or null if the record is
  * gone or there's nothing to refresh/guess from. Shared by the sync `refreshRecord`
  * server fn and the bulk queue.
@@ -307,16 +311,52 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 			5,
 		).catch(() => []);
 		const best = hits[0];
-		if (!best) return record;
+		if (best) {
+			const [row] = await db
+				.update(records)
+				.set({
+					masterId: best.masterId,
+					masterUrl: best.masterUrl,
+					// Gap-fill only — never overwrite curated values with a guess.
+					year: record.year ?? best.year,
+					genre: record.genre ?? best.genre,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? record;
+		}
+
+		// No master group matched — some Discogs releases have none. Fall back to a
+		// release guess so the record can still gain an identity to confirm.
+		const releaseHits = await searchReleases(
+			{
+				artist: record.artist,
+				title: record.title,
+				country: "",
+				year: "",
+				q: "",
+			},
+			5,
+		).catch(() => []);
+		const bestRelease = releaseHits[0];
+		if (!bestRelease) return record;
 
 		const [row] = await db
 			.update(records)
 			.set({
-				masterId: best.masterId,
-				masterUrl: best.masterUrl,
+				discogsId: bestRelease.discogsId,
+				discogsUrl: bestRelease.discogsUrl,
+				masterId: bestRelease.masterId ?? record.masterId,
+				masterUrl: bestRelease.masterUrl ?? record.masterUrl,
 				// Gap-fill only — never overwrite curated values with a guess.
-				year: record.year ?? best.year,
-				genre: record.genre ?? best.genre,
+				year: record.year ?? bestRelease.year,
+				genre: record.genre ?? bestRelease.genre,
+				label: record.label ?? bestRelease.label,
+				catno: record.catno ?? bestRelease.catno,
+				country: record.country ?? bestRelease.country,
+				format: record.format ?? bestRelease.type,
+				size: record.size ?? bestRelease.size,
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, id))
@@ -655,13 +695,14 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			setJobStep(db, recordId, step),
 		);
 
-		if (!result.masterId) {
-			// Identified the sleeve but couldn't attach a Discogs album (master) —
-			// either a genuine gap in Discogs or a transient failure that outlived the
-			// retries. Surface it so "Unmatched" records are observable rather than
-			// silently landing in review with no album linked. A stable fingerprint
-			// rolls every unmatched record into a single issue instead of spawning a
-			// fresh one per record; the specifics ride along as per-event context.
+		if (!result.masterId && !result.discogsId) {
+			// Identified the sleeve but couldn't attach a Discogs identity — neither
+			// an album (master) nor a release matched, either a genuine gap in
+			// Discogs or a transient failure that outlived the retries. Surface it so
+			// "Unmatched" records are observable rather than silently landing in
+			// review with nothing linked. A stable fingerprint rolls every unmatched
+			// record into a single issue instead of spawning a fresh one per record;
+			// the specifics ride along as per-event context.
 			Sentry.withScope((scope) => {
 				scope.setLevel("warning");
 				scope.setFingerprint(["analyze-no-discogs-match"]);
@@ -670,7 +711,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 					artist: result.artist,
 					title: result.title,
 				});
-				Sentry.captureMessage("[analyze] no Discogs album match for record");
+				Sentry.captureMessage("[analyze] no Discogs match for record");
 			});
 		}
 
