@@ -1396,21 +1396,30 @@ export const updateRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Set a record's album (master) directly, without going through the full editor
- * form — the bulk "assign masters" admin flow picks a Discogs master per row and
- * needs to persist just that, not the whole {@link recordInputSchema}. Mirrors
- * {@link linkCopy}'s narrow-field update. Returns the updated row, or null if the
- * record vanished mid-session.
+ * Set a record's Discogs identity — a master (album) and/or a release (pressing) —
+ * directly, without the full editor form. Backs the bulk "assign masters" / "fix
+ * broken links" flow, which now offers both masters and releases per row: picking
+ * a master sets the album link; picking a release sets the pressing link *and* its
+ * parent master (or clears the master when the release is standalone). Only the
+ * fields actually provided are touched — an `undefined` link is left alone, so a
+ * master pick doesn't disturb an existing release and vice versa; a `null`
+ * `masterId` (standalone release) explicitly clears the album link. Mirrors
+ * {@link linkCopy}'s narrow update. Returns the updated row, or null if it vanished.
  */
-export const assignRecordMaster = createServerFn({ method: "POST" })
+export const assignRecordIdentity = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator(
 		(input: {
 			id: number;
-			masterId: string;
-			masterUrl: string | null;
-			// The picked master's album-level metadata. Optional so older callers keep
-			// working, but the bulk picker always sends it — see the sync note below.
+			// A master and/or a release. Nullable so a standalone release can clear the
+			// master; `undefined` leaves that link untouched.
+			masterId?: string | null;
+			masterUrl?: string | null;
+			discogsId?: string | null;
+			discogsUrl?: string | null;
+			// The picked candidate's album-level metadata, synced onto the row so it
+			// matches what was linked (analysis-guessed fields otherwise read as a
+			// mismatch in the editor).
 			artist?: string;
 			title?: string;
 			year?: number | null;
@@ -1418,32 +1427,41 @@ export const assignRecordMaster = createServerFn({ method: "POST" })
 		}) => input,
 	)
 	.handler(
-		({ data: { id, masterId, masterUrl, artist, title, year, genre } }) =>
-			Sentry.startSpan({ name: "assignRecordMaster" }, async () => {
+		({ data: { id, masterId, masterUrl, discogsId, discogsUrl, ...meta } }) =>
+			Sentry.startSpan({ name: "assignRecordIdentity" }, async () => {
 				const db = getDb(env.DB);
+				const now = new Date();
 				const [row] = await db
 					.update(records)
 					.set({
-						masterId,
-						masterUrl,
-						// The master IS the record's identity, so sync the album-level fields
-						// to it — otherwise the row keeps whatever capture/analysis guessed and
-						// the editor shows a mismatched album label. Mirrors what the
-						// single-record editor already does via the form (`toForm` prefers the
-						// picked master's fields). Skip artist/title when the candidate carried
-						// a blank so we never overwrite a real value with "".
-						...(artist ? { artist } : {}),
-						...(title ? { title } : {}),
-						...(year != null ? { year } : {}),
-						...(genre != null ? { genre } : {}),
-						// Re-linking is the fix for a broken master, so clear the health
-						// flag (and stamp the check) rather than leaving the row flagged
-						// until the next scheduled pass — that pass re-validates it anyway.
-						// Optimistic: if the newly-picked master is itself dead, the cron
-						// re-flags it.
-						masterMissing: false,
-						masterCheckedAt: new Date(),
-						updatedAt: new Date(),
+						// Set a link only when provided. Re-linking is the fix for a broken
+						// link, so clear the matching health flag and stamp the check
+						// (optimistic — the cron re-validates and re-flags if the new link
+						// is itself dead). `masterId` may be an explicit null (standalone
+						// release), which clears the album link.
+						...(masterId !== undefined
+							? {
+									masterId,
+									masterUrl: masterUrl ?? null,
+									masterMissing: false,
+									masterCheckedAt: now,
+								}
+							: {}),
+						...(discogsId !== undefined
+							? {
+									discogsId,
+									discogsUrl: discogsUrl ?? null,
+									releaseMissing: false,
+									releaseCheckedAt: now,
+								}
+							: {}),
+						// Sync album-level metadata; skip blanks so a real value isn't
+						// clobbered with "".
+						...(meta.artist ? { artist: meta.artist } : {}),
+						...(meta.title ? { title: meta.title } : {}),
+						...(meta.year != null ? { year: meta.year } : {}),
+						...(meta.genre != null ? { genre: meta.genre } : {}),
+						updatedAt: now,
 					})
 					.where(eq(records.id, id))
 					.returning();

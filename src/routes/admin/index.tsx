@@ -1141,7 +1141,7 @@ function AdminRecords() {
 							</Button>
 						</PopoverTrigger>
 						<PopoverContent
-							align="end"
+							align="start"
 							className="w-[min(28rem,calc(100vw-2rem))] space-y-1"
 						>
 							{/* One labelled row per group: a fixed label column keeps the
@@ -1585,6 +1585,7 @@ function AdminRecords() {
 				open={bulkAssignOpen}
 				onOpenChange={setBulkAssignOpen}
 				records={bulkAssignRecords}
+				mode={assignScope === "broken" ? "fix" : "assign"}
 			/>
 		</div>
 	);
