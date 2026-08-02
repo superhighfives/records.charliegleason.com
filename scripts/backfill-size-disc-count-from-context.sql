@@ -4,8 +4,13 @@
 -- analysis pipeline in src/lib/analyze.ts, for records captured before that
 -- change shipped.
 --
--- Only touches rows that still look untouched: size is empty AND disc_count is
--- the schema default of 1 — a pinned pressing's real data is never overwritten.
+-- Only touches rows with no pinned Discogs pressing (discogs_id IS NULL) — once
+-- a specific release is pinned, its real size/discCount data always overwrites
+-- these guesses, so gating on that (rather than "size/disc_count still blank")
+-- is the correct signal. It also has to be the gate rather than the earlier
+-- "size IS NULL" check: an older backfill (backfill-size-by-format.sql) already
+-- guessed size='12"' from a defaulted format on nearly every unpinned record,
+-- which made that check see hardly any rows as untouched.
 --
 --   Local:  wrangler d1 execute records --local  --file=scripts/backfill-size-disc-count-from-context.sql
 --   Remote: wrangler d1 execute records --remote --file=scripts/backfill-size-disc-count-from-context.sql
@@ -41,5 +46,4 @@ SET
   updated_at = (unixepoch())
 WHERE capture_context IS NOT NULL
   AND capture_context != ''
-  AND (size IS NULL OR size = '')
-  AND (disc_count IS NULL OR disc_count = 1);
+  AND discogs_id IS NULL;
