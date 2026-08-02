@@ -43,7 +43,11 @@ import {
 	storeCapturePhoto,
 	storeUploadedCover,
 } from "#/lib/images";
-import { type LinkHealthResult, runLinkHealthCheck } from "#/lib/master-health";
+import {
+	type LinkHealthResult,
+	MANUAL_CHECK_BATCH,
+	runLinkHealthCheck,
+} from "#/lib/master-health";
 import { generateMatteFromCapture } from "#/lib/matte";
 import { detectCaptureCorners, professionalPipeline } from "#/lib/professional";
 import type { CoverStageResult } from "#/lib/professional-pipeline";
@@ -1449,15 +1453,21 @@ export const assignRecordMaster = createServerFn({ method: "POST" })
 
 /**
  * Run the Discogs link-health check on demand from the admin UI, for the "Check
- * links" button. Same job the daily cron runs (validates one stalest-first batch
- * of masters + releases and updates the `*Missing` flags); this just makes it
+ * links" button. Same job the daily cron runs (validates a stalest-first batch of
+ * masters + releases and updates the `*Missing` flags); this just makes it
  * admin-triggerable so a fresh check — and the resulting banner — is one click
  * away instead of a wait for the next scheduled pass or a manual cron POST.
- * Returns the per-run tally so the button can report what it found.
+ *
+ * Uses the smaller {@link MANUAL_CHECK_BATCH}: the button awaits this inline, so a
+ * full-size pass (~110s) would risk a request timeout. Repeated clicks walk the
+ * stalest-first queue further. Returns the per-run tally so the button can report
+ * what it found.
  */
 export const checkLinkHealth = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.handler((): Promise<LinkHealthResult> => runLinkHealthCheck());
+	.handler(
+		(): Promise<LinkHealthResult> => runLinkHealthCheck(MANUAL_CHECK_BATCH),
+	);
 
 /**
  * Link a record as an intentional duplicate copy of another — the admin "I own two
