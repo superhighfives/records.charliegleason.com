@@ -1206,33 +1206,9 @@ function AdminRecords() {
 						</PopoverContent>
 					</Popover>
 
-					<Button
-						type="button"
-						variant="outline"
-						className="flex-1 md:flex-none"
-						disabled={checkLinksMutation.isPending}
-						onClick={() => checkLinksMutation.mutate()}
-						title="Validate a batch of linked Discogs masters and releases now, flagging any that were deleted or merged"
-					>
-						{checkLinksMutation.isPending ? "Checking…" : "Check links"}
-					</Button>
-
-					{unmatchedRecords.length > 0 && (
-						<Button
-							type="button"
-							variant="outline"
-							className="flex-1 md:flex-none"
-							onClick={() => openBulkAssign("unmatched")}
-						>
-							Assign masters
-							<span className="rounded-full bg-foreground px-1.5 text-xs tabular-nums text-background">
-								{unmatchedRecords.length}
-							</span>
-						</Button>
-					)}
-
 					{/* Split primary action: "Capture record" is the common path; the caret
-					    tucks the rarer "Add manually" behind a dropdown. */}
+					    tucks the rarer add + link-maintenance actions behind a dropdown. The
+					    menu is sized to the split button so its rows read as full-width. */}
 					<div className="flex flex-1 md:flex-none">
 						<Button asChild className="flex-1 rounded-r-none md:flex-none">
 							<Link to="/admin/capture">Capture record</Link>
@@ -1240,15 +1216,32 @@ function AdminRecords() {
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
 								<Button
-									aria-label="More add options"
+									aria-label="More actions"
 									className="rounded-l-none border-l border-neutral-900/20 px-2"
 								>
 									<ChevronDownIcon className="size-4" />
 								</Button>
 							</DropdownMenuTrigger>
-							<DropdownMenuContent align="end">
+							<DropdownMenuContent align="end" className="w-52">
 								<DropdownMenuItem asChild>
 									<Link to="/admin/records/new">Add manually</Link>
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									disabled={unmatchedRecords.length === 0}
+									onSelect={() => openBulkAssign("unmatched")}
+								>
+									Assign masters
+									{unmatchedRecords.length > 0 && (
+										<span className="ml-auto rounded-full bg-foreground px-1.5 text-xs tabular-nums text-background">
+											{unmatchedRecords.length}
+										</span>
+									)}
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									disabled={checkLinksMutation.isPending}
+									onSelect={() => checkLinksMutation.mutate()}
+								>
+									{checkLinksMutation.isPending ? "Checking…" : "Check links"}
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
