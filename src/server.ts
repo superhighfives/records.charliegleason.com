@@ -4,6 +4,8 @@ import entry from "@tanstack/react-start/server-entry";
 import { runWeeklyDigest } from "#/lib/digest";
 import { runMasterCheck } from "#/lib/master-health";
 
+const MASTER_CHECK_CRON = "0 9 * * *";
+
 // Re-export the container Durable Object so wrangler can bind it (see wrangler.jsonc
 // `containers` + `durable_objects`). It fronts the matte render image in `containers/matte/`.
 export { MatteContainer } from "#/lib/matte-container";
@@ -27,7 +29,9 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 	// master links; anything else is the weekly digest.
 	scheduled(controller, _env, ctx) {
 		ctx.waitUntil(
-			controller.cron === "0 9 * * *" ? runMasterCheck() : runWeeklyDigest(),
+			controller.cron === MASTER_CHECK_CRON
+				? runMasterCheck()
+				: runWeeklyDigest(),
 		);
 	},
 	queue: (batch) => handleAnalyzeBatch(batch as MessageBatch<AnalyzeMessage>),
