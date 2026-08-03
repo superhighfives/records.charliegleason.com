@@ -194,3 +194,55 @@ export function matchAmazonToRecord(
 	}
 	return bestScore >= 0.6 ? bestId : null;
 }
+
+/** A purchase paired with the record it belongs to. */
+export interface PurchasePair<R extends MatchRecord> {
+	item: AmazonItem;
+	record: R;
+}
+
+/**
+ * Pair purchases to records with a greedy, mutually-exclusive assignment: score
+ * every (purchase, record) pair by title-token overlap, then take them
+ * highest-score first, never reusing a purchase or a record. This beats "for each
+ * purchase, pick its best record" — which lets one popular record get claimed by
+ * several purchases (a live album + a greatest-hits both matching one title) and
+ * strands the rest. Threshold is a touch looser than the single-item matcher since
+ * each pairing is user-reviewed before it's saved. Records are matched at most
+ * once; the caller's pool is typically the *unmatched* records.
+ */
+export function pairPurchasesToRecords<R extends MatchRecord>(
+	items: Array<AmazonItem>,
+	records: Array<R>,
+	threshold = 0.5,
+): Array<PurchasePair<R>> {
+	const recTokens = records.map((record) => ({
+		record,
+		tokens: significantTokens(`${record.artist} ${record.title}`),
+	}));
+
+	const scored: Array<{ item: AmazonItem; record: R; score: number }> = [];
+	for (const item of items) {
+		const itemTokens = significantTokens(item.title);
+		if (itemTokens.size === 0) continue;
+		for (const { record, tokens } of recTokens) {
+			if (tokens.size === 0) continue;
+			let shared = 0;
+			for (const t of itemTokens) if (tokens.has(t)) shared++;
+			const score = shared / Math.min(itemTokens.size, tokens.size);
+			if (score >= threshold) scored.push({ item, record, score });
+		}
+	}
+
+	scored.sort((a, b) => b.score - a.score);
+	const usedItems = new Set<string>();
+	const usedRecords = new Set<number>();
+	const pairs: Array<PurchasePair<R>> = [];
+	for (const { item, record } of scored) {
+		if (usedItems.has(item.asin) || usedRecords.has(record.id)) continue;
+		usedItems.add(item.asin);
+		usedRecords.add(record.id);
+		pairs.push({ item, record });
+	}
+	return pairs;
+}
