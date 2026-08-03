@@ -33,6 +33,7 @@ import {
 import type { Record } from "#/db/schema";
 import { displayCoverKey } from "#/lib/cover";
 import {
+	assignArgs,
 	type Candidate,
 	candidateDetail,
 	candidateLabel,
@@ -45,32 +46,6 @@ import { recordsQueryOptions } from "#/lib/records-queries";
 // stretch of good matches doesn't feel endless, and the batch clears fast
 // enough that the "next 10" swap reads as steady progress.
 const BATCH_SIZE = 10;
-
-/**
- * The save-payload for a pick — a master sets the album link; a release sets the
- * pressing link *and* its parent master (a null `masterId` clears it, for a
- * standalone release). Album-level metadata rides along either way.
- */
-function assignArgs(c: Candidate, id: number) {
-	const { artist, title, year, genre } = c.data;
-	const meta = { artist, title, year, genre };
-	if (c.kind === "master") {
-		return {
-			id,
-			masterId: c.data.masterId,
-			masterUrl: c.data.masterUrl,
-			...meta,
-		};
-	}
-	return {
-		id,
-		masterId: c.data.masterId,
-		masterUrl: c.data.masterUrl,
-		discogsId: c.data.discogsId,
-		discogsUrl: c.data.discogsUrl,
-		...meta,
-	};
-}
 
 /**
  * Bulk identity picker for records still missing an album/release (`mode="assign"`,
