@@ -18,6 +18,33 @@ export interface AmazonItem {
 	title: string;
 	category: string | null;
 	orderDate: string | null;
+	// The pressing country implied by the marketplace you bought from (Amazon.co.uk
+	// → "UK"), as a Discogs-style country name, or null if unknown. A regional
+	// marketplace strongly implies the regional pressing — the fast disambiguator
+	// between otherwise-identical pressings — so we carry it through to matching.
+	country: string | null;
+}
+
+// Map an Amazon marketplace domain (the export's `Website` column) to the Discogs
+// country name for the pressing it most likely sold. Only the marketplaces worth
+// distinguishing; anything else is left null (no country hint).
+const MARKETPLACE_COUNTRY: { [domain: string]: string } = {
+	"amazon.co.uk": "UK",
+	"amazon.com": "US",
+	"amazon.ca": "Canada",
+	"amazon.de": "Germany",
+	"amazon.fr": "France",
+	"amazon.it": "Italy",
+	"amazon.es": "Spain",
+	"amazon.nl": "Netherlands",
+	"amazon.co.jp": "Japan",
+	"amazon.com.au": "Australia",
+};
+
+/** Discogs-style country name for an Amazon marketplace domain, or null. */
+export function marketplaceCountry(website: string | null): string | null {
+	if (!website) return null;
+	return MARKETPLACE_COUNTRY[website.trim().toLowerCase()] ?? null;
 }
 
 /**
@@ -98,6 +125,7 @@ export function parseAmazonOrderHistory(csv: string): Array<AmazonItem> {
 	const titleCol = findColumn(header, ["title", "product name", "name"]);
 	const catCol = findColumn(header, ["category"]);
 	const dateCol = findColumn(header, ["order date", "date"]);
+	const siteCol = findColumn(header, ["website"]);
 	if (asinCol < 0 || titleCol < 0) return [];
 
 	const seen = new Set<string>();
@@ -115,6 +143,7 @@ export function parseAmazonOrderHistory(csv: string): Array<AmazonItem> {
 			title,
 			category,
 			orderDate: dateCol >= 0 ? r[dateCol]?.trim() || null : null,
+			country: siteCol >= 0 ? marketplaceCountry(r[siteCol] ?? null) : null,
 		});
 	}
 	return items;
