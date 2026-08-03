@@ -55,8 +55,9 @@ export function AmazonImportDialog({
 
 	const fileRef = useRef<HTMLInputElement>(null);
 	const [pairs, setPairs] = useState<Array<PurchasePair<Record>> | null>(null);
-	// How many parsed purchases matched no record (books, non-collection, or
-	// already-pinned) — surfaced so the count isn't mistaken for a failure.
+	// How many parsed purchases matched no record (books, non-collection,
+	// already-pinned, or no master yet) — surfaced so the count isn't mistaken
+	// for a failure.
 	const [unpaired, setUnpaired] = useState(0);
 	const [skipped, setSkipped] = useState<Set<string>>(new Set());
 	const [parseError, setParseError] = useState<string | null>(null);
