@@ -1390,8 +1390,11 @@ function RecordDetail() {
 						)}
 
 						{/* Album (master) hits from the same search — pick one to set the
-						    record’s identity. Pressings appear in the list below. */}
-						{searchedMasters.length > 0 && (
+						    record’s identity. Only offered while there's no album yet: once
+						    one is linked, the search is for pinning a *pressing* of it, and
+						    swapping the album should be a deliberate "Remove album" first —
+						    otherwise a stray search could silently replace the identity. */}
+						{effectiveMasterId == null && searchedMasters.length > 0 && (
 							<div className="space-y-1">
 								<p className="text-xs font-medium text-muted-foreground">
 									Albums
