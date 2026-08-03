@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import {
+	buildBarcodeSearchUrl,
 	buildMasterSearchUrl,
 	buildSearchUrl,
 	cleanArtistName,
@@ -18,6 +19,8 @@ import {
 	mapReleaseSearchResult,
 	masterDetailToCandidate,
 	masterFields,
+	parseAsin,
+	parseBarcode,
 	parseDiscCount,
 	parseMasterId,
 	parseReleaseId,
@@ -32,6 +35,8 @@ export {
 	buildMasterSearchUrl,
 	buildSearchUrl,
 	MAX_PER_PAGE,
+	parseAsin,
+	parseBarcode,
 	parseMasterId,
 	parseReleaseId,
 	parseSizeAndType,
@@ -604,6 +609,31 @@ export async function searchReleases(
 
 	// Prefer vinyl pressings, but fall back to other formats so a CD/digital-only
 	// title still returns matches. Discogs' relevance order is preserved per group.
+	const vinyl = candidates.filter(isVinyl);
+	const rest = candidates.filter((c) => !isVinyl(c));
+	return [...vinyl, ...rest].slice(0, limit);
+}
+
+/**
+ * Look a release up by its printed barcode (UPC/EAN) — the exact-pressing fast
+ * path used when an Amazon product (or a scanned sleeve) carries one. Discogs
+ * indexes releases by barcode, so a hit is usually the precise pressing rather
+ * than a shortlist to pick from. Returns release candidates (typically one or a
+ * few near-identical variants), vinyl first like {@link searchReleases}. Throws on
+ * a non-2xx so the caller can surface why.
+ */
+export async function searchByBarcode(
+	barcode: string,
+	limit: number = MAX_CANDIDATES,
+): Promise<Array<DiscogsCandidate>> {
+	const perPage = Math.min(Math.max(limit, DEFAULT_PER_PAGE), MAX_PER_PAGE);
+	const res = await discogsFetch(buildBarcodeSearchUrl(barcode, perPage));
+	if (!res.ok) throw await discogsError(res, "barcode search");
+
+	const data = (await res.json()) as {
+		results?: Array<Record<string, unknown>>;
+	};
+	const candidates = (data.results ?? []).map(mapReleaseSearchResult);
 	const vinyl = candidates.filter(isVinyl);
 	const rest = candidates.filter((c) => !isVinyl(c));
 	return [...vinyl, ...rest].slice(0, limit);
