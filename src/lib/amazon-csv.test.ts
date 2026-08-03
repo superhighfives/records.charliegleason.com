@@ -158,6 +158,73 @@ describe("matchAmazonToRecord", () => {
 	});
 });
 
+describe("matchAmazonToRecord — gates against false matches", () => {
+	// The real false positives from a live import: one incidental shared word.
+	it("rejects an incidental ARTIST-word overlap (not an album-title match)", () => {
+		const dirtyProjectors = [
+			{ id: 1, artist: "Dirty Projectors", title: "Bitte Orca" },
+		];
+		// "Dirty" is the artist, not the album — must not match Janelle Monáe's album.
+		expect(
+			matchAmazonToRecord(
+				item("B1", "Dirty Computer [VINYL]"),
+				dirtyProjectors,
+			),
+		).toBeNull();
+
+		const jeffWayne = [
+			{
+				id: 1,
+				artist: "Jeff Wayne",
+				title: "Jeff Wayne's Musical Version Of The War Of The Worlds",
+			},
+		];
+		expect(
+			matchAmazonToRecord(item("B2", "God of War (PS4)"), jeffWayne),
+		).toBeNull();
+	});
+
+	it("rejects a one-common-word album title buried in an unrelated product", () => {
+		const beyonce = [{ id: 1, artist: "Beyoncé", title: "Lemonade" }];
+		// The album title word appears, but it's a tiny slice of the product name.
+		expect(
+			matchAmazonToRecord(
+				item(
+					"B1",
+					"Morrisons No Added Sugar Cloudy Lemonade Drink, 6 x 330ml Cans",
+				),
+				beyonce,
+			),
+		).toBeNull();
+	});
+
+	it("still matches when the Amazon title abbreviates a long album title", () => {
+		const bowie = [
+			{
+				id: 1,
+				artist: "David Bowie",
+				title: "The Rise and Fall of Ziggy Stardust and the Spiders from Mars",
+			},
+		];
+		expect(
+			matchAmazonToRecord(item("B1", "Ziggy Stardust [VINYL]"), bowie),
+		).toBe(1);
+	});
+
+	it("still matches a title-complete hit despite Amazon edition cruft", () => {
+		const miley = [{ id: 1, artist: "Miley Cyrus", title: "Bangerz" }];
+		expect(
+			matchAmazonToRecord(
+				item(
+					"B1",
+					"Bangerz: 10th Anniversary (Sea Glass colour vinyl) [VINYL]",
+				),
+				miley,
+			),
+		).toBe(1);
+	});
+});
+
 describe("marketplaceCountry", () => {
 	it("maps known Amazon marketplaces to Discogs country names", () => {
 		expect(marketplaceCountry("Amazon.co.uk")).toBe("UK");
