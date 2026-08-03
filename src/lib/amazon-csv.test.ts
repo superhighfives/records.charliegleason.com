@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	type AmazonItem,
 	type MatchRecord,
 	matchAmazonToRecord,
+	pairPurchasesToRecords,
 	parseAmazonOrderHistory,
 	parseCsv,
 } from "./amazon-csv";
+
+const item = (asin: string, title: string): AmazonItem => ({
+	asin,
+	title,
+	category: null,
+	orderDate: null,
+});
 
 describe("parseCsv", () => {
 	it("handles quoted fields with commas, quotes, and newlines", () => {
@@ -139,5 +148,38 @@ describe("matchAmazonToRecord", () => {
 				records,
 			),
 		).toBeNull();
+	});
+});
+
+describe("pairPurchasesToRecords", () => {
+	const records: Array<MatchRecord> = [
+		{ id: 1, artist: "My Chemical Romance", title: "The Black Parade" },
+		{ id: 2, artist: "Miles Davis", title: "Kind of Blue" },
+	];
+
+	it("assigns each purchase to its matching record, ignoring non-matches", () => {
+		const pairs = pairPurchasesToRecords(
+			[
+				item("B1", "The Black Parade [VINYL]"),
+				item("B2", "Kind of Blue [VINYL]"),
+				item("B3", "Stainless Steel Mixing Bowl"),
+			],
+			records,
+		);
+		expect(pairs.map((p) => [p.item.asin, p.record.id])).toEqual([
+			["B1", 1],
+			["B2", 2],
+		]);
+	});
+
+	it("never claims one record for two purchases (no double-assignment)", () => {
+		const pairs = pairPurchasesToRecords(
+			[
+				item("B1", "The Black Parade [VINYL]"),
+				item("B2", "The Black Parade (Live At Home) [VINYL]"),
+			],
+			[records[0]],
+		);
+		expect(pairs.length).toBe(1);
 	});
 });
