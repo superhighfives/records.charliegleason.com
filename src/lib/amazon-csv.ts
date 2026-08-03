@@ -191,37 +191,84 @@ function significantTokens(value: string): Set<string> {
 /** A collection member the Amazon matcher reads — just the fields it compares. */
 export type MatchRecord = Pick<Record, "id" | "artist" | "title">;
 
+// Minimum fraction of the Amazon title's significant tokens that the record
+// (artist + title) must explain. Rejects an album whose title is a single common
+// word buried in an unrelated product — "Lemonade" ← a lemonade drink, "Version"
+// ← a Windows licence — where that one word is a tiny slice of the product name.
+const MIN_COVERAGE = 0.4;
+
+/** A record's tokens, split so the matcher can weigh the title separately. */
+interface RecordTokens {
+	titleTokens: Set<string>;
+	recTokens: Set<string>;
+}
+
+function recordTokens(r: MatchRecord): RecordTokens {
+	return {
+		titleTokens: significantTokens(r.title),
+		recTokens: significantTokens(`${r.artist} ${r.title}`),
+	};
+}
+
 /**
- * Guess which record an Amazon purchase corresponds to, by token overlap between
- * the Amazon title (which usually smushes artist + album together, plus format
- * noise) and each record's `artist title`. Returns the best record id above a
- * confidence floor, or null when nothing's close enough — the importer only ever
- * matches a purchase to a record you already have. Pure; caller supplies the pool
- * (typically the *unmatched* records).
+ * Score how well an Amazon purchase matches a record, or null for no match. Two
+ * gates, tuned against real order-history noise where one shared word is common:
+ *  1. An album-TITLE token must appear in the Amazon title — an incidental artist
+ *     or generic overlap isn't enough. Stops "Dirty Projectors" matching "Dirty
+ *     Computer", "Jeff Wayne … War …" matching "God of War", "David Bowie"
+ *     matching "DAVID ARCHY" — there the shared word was the artist, not the album.
+ *  2. Coverage ≥ {@link MIN_COVERAGE} — most of the Amazon title's tokens must be
+ *     explained by the record, so a one-common-word album title ("Lemonade")
+ *     doesn't match a long unrelated product name that happens to contain it.
+ *  3. The shared title tokens must be a real chunk of the album title (title
+ *     recall high) OR the item must be almost entirely album words (coverage
+ *     high). Stops "God of War" matching "Jeff Wayne … War …" on the lone common
+ *     word "War", while still allowing an abbreviated long title ("Ziggy Stardust"
+ *     ← the full "Rise and Fall of Ziggy Stardust …") and a cruft-laden exact
+ *     title ("Bangerz: 10th Anniversary" ← "Bangerz").
+ * The score is the coverage, so the greedy pass prefers the tightest fit.
+ */
+const STRONG_COVERAGE = 0.75;
+const MIN_TITLE_RECALL = 0.5;
+
+function scorePurchase(
+	itemTokens: Set<string>,
+	rt: RecordTokens,
+): number | null {
+	if (itemTokens.size === 0 || rt.recTokens.size === 0) return null;
+	let titleShared = 0;
+	for (const t of rt.titleTokens) if (itemTokens.has(t)) titleShared++;
+	if (titleShared === 0) return null; // gate 1: the album title must appear
+	let covered = 0;
+	for (const t of itemTokens) if (rt.recTokens.has(t)) covered++;
+	const coverage = covered / itemTokens.size;
+	if (coverage < MIN_COVERAGE) return null; // gate 2
+	// gate 3: a meaningful slice of the title matched, or the item is ~all album.
+	const titleRecall = titleShared / rt.titleTokens.size;
+	if (titleRecall < MIN_TITLE_RECALL && coverage < STRONG_COVERAGE) return null;
+	return coverage;
+}
+
+/**
+ * Guess which record an Amazon purchase corresponds to — the best-scoring record
+ * that clears both {@link scorePurchase} gates, or null. Pure; the caller supplies
+ * the pool (typically records that have a master but no pinned pressing).
  */
 export function matchAmazonToRecord(
 	item: AmazonItem,
 	records: Array<MatchRecord>,
 ): number | null {
 	const itemTokens = significantTokens(item.title);
-	if (itemTokens.size === 0) return null;
-
 	let bestId: number | null = null;
 	let bestScore = 0;
 	for (const r of records) {
-		const recTokens = significantTokens(`${r.artist} ${r.title}`);
-		if (recTokens.size === 0) continue;
-		let shared = 0;
-		for (const t of itemTokens) if (recTokens.has(t)) shared++;
-		// Overlap relative to the smaller set, so a short record title fully
-		// contained in a long Amazon title still scores high.
-		const score = shared / Math.min(itemTokens.size, recTokens.size);
-		if (score > bestScore) {
+		const score = scorePurchase(itemTokens, recordTokens(r));
+		if (score != null && score > bestScore) {
 			bestScore = score;
 			bestId = r.id;
 		}
 	}
-	return bestScore >= 0.6 ? bestId : null;
+	return bestId;
 }
 
 /** A purchase paired with the record it belongs to. */
@@ -232,22 +279,19 @@ export interface PurchasePair<R extends MatchRecord> {
 
 /**
  * Pair purchases to records with a greedy, mutually-exclusive assignment: score
- * every (purchase, record) pair by title-token overlap, then take them
+ * every (purchase, record) pair through {@link scorePurchase}, then take them
  * highest-score first, never reusing a purchase or a record. This beats "for each
  * purchase, pick its best record" — which lets one popular record get claimed by
  * several purchases (a live album + a greatest-hits both matching one title) and
- * strands the rest. Threshold is a touch looser than the single-item matcher since
- * each pairing is user-reviewed before it's saved. Records are matched at most
- * once; the caller's pool is typically the *unmatched* records.
+ * strands the rest. Records are matched at most once.
  */
 export function pairPurchasesToRecords<R extends MatchRecord>(
 	items: Array<AmazonItem>,
 	records: Array<R>,
-	threshold = 0.5,
 ): Array<PurchasePair<R>> {
 	const recTokens = records.map((record) => ({
 		record,
-		tokens: significantTokens(`${record.artist} ${record.title}`),
+		tokens: recordTokens(record),
 	}));
 
 	const scored: Array<{ item: AmazonItem; record: R; score: number }> = [];
@@ -255,11 +299,8 @@ export function pairPurchasesToRecords<R extends MatchRecord>(
 		const itemTokens = significantTokens(item.title);
 		if (itemTokens.size === 0) continue;
 		for (const { record, tokens } of recTokens) {
-			if (tokens.size === 0) continue;
-			let shared = 0;
-			for (const t of itemTokens) if (tokens.has(t)) shared++;
-			const score = shared / Math.min(itemTokens.size, tokens.size);
-			if (score >= threshold) scored.push({ item, record, score });
+			const score = scorePurchase(itemTokens, tokens);
+			if (score != null) scored.push({ item, record, score });
 		}
 	}
 

@@ -40,11 +40,16 @@ export function AmazonImportDialog({
 }) {
 	const queryClient = useQueryClient();
 	const recordsQuery = useQuery(recordsQueryOptions);
-	// Records missing a specific pressing (`discogsId == null`) — includes
-	// album-only records (a master but no release) *and* fully-unmatched ones. A
-	// record that already has a pinned pressing is left alone.
+	// Records that have a matched album (master) but no pinned pressing. Requiring
+	// a master keeps the pool to records with a *canonical* artist/title (from
+	// Discogs) rather than a raw capture read — so a match is trustworthy, and
+	// junk-title unmatched records can't fuzzy-match unrelated purchases. A record
+	// that already has a pinned pressing is left alone.
 	const needRelease = useMemo(
-		() => (recordsQuery.data ?? []).filter((r) => r.discogsId == null),
+		() =>
+			(recordsQuery.data ?? []).filter(
+				(r) => r.masterId != null && r.discogsId == null,
+			),
 		[recordsQuery.data],
 	);
 
