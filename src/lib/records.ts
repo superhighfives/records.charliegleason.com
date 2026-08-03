@@ -63,6 +63,7 @@ import {
 	enqueueProfessionalMatte,
 	enqueueProfessionalMatteBatch,
 	enqueueRefreshBatch,
+	enqueueResolveAsinBatch,
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
@@ -1698,6 +1699,28 @@ export const identifyAsin = createServerFn({ method: "POST" })
 			const asin = parseAsin(input);
 			if (!asin) return null;
 			return identifyFromAsin(asin);
+		}),
+	);
+
+/**
+ * Queue a batch of Amazon ASIN→pressing resolutions (the importer's "Queue
+ * lookups"). Each job barcode-resolves one ASIN in the background and pins the
+ * exact pressing on its record, so the slow per-ASIN web search never blocks the
+ * modal. Ignores blanks; returns how many were actually enqueued.
+ */
+export const enqueueAmazonResolve = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(
+		(data: Array<{ recordId: number; asin: string; country: string | null }>) =>
+			data,
+	)
+	.handler(({ data: jobs }) =>
+		Sentry.startSpan({ name: "enqueueAmazonResolve" }, async () => {
+			const valid = jobs.filter(
+				(j) => Number.isFinite(j.recordId) && parseAsin(j.asin),
+			);
+			if (valid.length > 0) await enqueueResolveAsinBatch(valid);
+			return { queued: valid.length };
 		}),
 	);
 

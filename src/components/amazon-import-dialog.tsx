@@ -3,7 +3,6 @@ import { RedoIcon, UploadIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { useDiscogsSearch } from "#/components/discogs-search-field";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -13,49 +12,24 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
-import {
-	Select,
-	SelectContent,
-	SelectGroup,
-	SelectItem,
-	SelectLabel,
-	SelectTrigger,
-	SelectValue,
-} from "#/components/ui/select";
 import type { Record } from "#/db/schema";
 import {
-	type AmazonItem,
-	matchAmazonToRecord,
+	type PurchasePair,
+	pairPurchasesToRecords,
 	parseAmazonOrderHistory,
 } from "#/lib/amazon-csv";
-import {
-	assignArgs,
-	type Candidate,
-	candidateDetail,
-	candidateLabel,
-	groupCandidates,
-} from "#/lib/discogs-candidate";
-import { assignRecordIdentity } from "#/lib/records";
+import { enqueueAmazonResolve } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
-// Resolving an ASIN runs a web search, so work through matched purchases a batch
-// at a time (queued one lookup at a time, like the bulk assign dialog) rather than
-// firing a hundred expensive lookups at once.
-const BATCH_SIZE = 10;
-
-/** An Amazon purchase paired with the unmatched record it likely belongs to. */
-interface ImportRow {
-	item: AmazonItem;
-	record: Record;
-}
-
 /**
- * Import an Amazon "Request My Data" order-history export and use it to match the
- * collection's unmatched records to Discogs. Parses the CSV client-side, fuzzily
- * lines each music purchase up with an unmatched record (by title), then resolves
- * each purchase's ASIN through the shared unified search (web-search identify →
- * barcode/keyword match) so a pressing can be picked and assigned. Only ever
- * assigns to records you already have — it never creates records from Amazon data.
+ * Import an Amazon "Request My Data" order-history export and use it to pin the
+ * exact *pressing* on records you own. Parses the CSV client-side, pairs each music
+ * purchase with a record still missing a release (by title), then — on "Queue
+ * lookups" — hands each pairing to the background `resolve-asin` queue, which reads
+ * the barcode off the product page and pins the matching Discogs pressing. The slow
+ * per-ASIN web search runs server-side, so the modal never blocks; pressings fill
+ * in on the records over the next few minutes. Only ever touches records you
+ * already have, and never overwrites a pressing that's already pinned.
  */
 export function AmazonImportDialog({
 	open,
@@ -66,129 +40,72 @@ export function AmazonImportDialog({
 }) {
 	const queryClient = useQueryClient();
 	const recordsQuery = useQuery(recordsQueryOptions);
-	const unmatched = useMemo(
-		() => (recordsQuery.data ?? []).filter((r) => r.masterId == null),
+	// Records missing a specific pressing (`discogsId == null`) — includes
+	// album-only records (a master but no release) *and* fully-unmatched ones. A
+	// record that already has a pinned pressing is left alone.
+	const needRelease = useMemo(
+		() => (recordsQuery.data ?? []).filter((r) => r.discogsId == null),
 		[recordsQuery.data],
 	);
 
 	const fileRef = useRef<HTMLInputElement>(null);
-	// Parsed purchases: matched (paired with a record) and the count that matched no
-	// unmatched record, kept only to report "N couldn't be matched to a record".
-	const [rows, setRows] = useState<Array<ImportRow> | null>(null);
-	const [unmatchedCount, setUnmatchedCount] = useState(0);
-	const [parseError, setParseError] = useState<string | null>(null);
-	const [selections, setSelections] = useState<Map<string, Candidate>>(
-		new Map(),
-	);
+	const [pairs, setPairs] = useState<Array<PurchasePair<Record>> | null>(null);
+	// How many parsed purchases matched no record (books, non-collection, or
+	// already-pinned) — surfaced so the count isn't mistaken for a failure.
+	const [unpaired, setUnpaired] = useState(0);
 	const [skipped, setSkipped] = useState<Set<string>>(new Set());
-	const [autoSearchedAsins, setAutoSearchedAsins] = useState<Set<string>>(
-		new Set(),
-	);
+	const [parseError, setParseError] = useState<string | null>(null);
+	const [queued, setQueued] = useState(false);
 
 	useEffect(() => {
 		if (open) {
-			setRows(null);
-			setUnmatchedCount(0);
-			setParseError(null);
-			setSelections(new Map());
+			setPairs(null);
+			setUnpaired(0);
 			setSkipped(new Set());
-			setAutoSearchedAsins(new Set());
+			setParseError(null);
+			setQueued(false);
 		}
 	}, [open]);
 
 	async function handleFile(file: File | undefined) {
 		if (!file) return;
 		setParseError(null);
-		const text = await file.text();
-		const items = parseAmazonOrderHistory(text);
+		const items = parseAmazonOrderHistory(await file.text());
 		if (items.length === 0) {
 			setParseError(
 				"No music orders found in that file. Make sure it's the Retail.OrderHistory.csv from Amazon's data export.",
 			);
-			setRows([]);
+			setPairs([]);
 			return;
 		}
-		const matched: Array<ImportRow> = [];
-		let noMatch = 0;
-		// Claim each matched record out of the pool as we go, so two purchases that
-		// both fuzzy-match the same still-unmatched record (e.g. an original
-		// pressing + a reissue) don't both target it — the second would silently
-		// overwrite the first's Discogs identity on save.
-		const pool = [...unmatched];
-		for (const item of items) {
-			const id = matchAmazonToRecord(item, pool);
-			const recordIndex = id != null ? pool.findIndex((r) => r.id === id) : -1;
-			if (recordIndex >= 0) {
-				matched.push({ item, record: pool[recordIndex] });
-				pool.splice(recordIndex, 1);
-			} else {
-				noMatch++;
-			}
-		}
-		setRows(matched);
-		setUnmatchedCount(noMatch);
+		const matched = pairPurchasesToRecords(items, needRelease);
+		setPairs(matched);
+		setUnpaired(items.length - matched.length);
 	}
 
-	const remaining = (rows ?? []).filter((r) => !skipped.has(r.item.asin));
-	const batch = remaining.slice(0, BATCH_SIZE);
-	const done = rows != null && rows.length > 0 && remaining.length === 0;
-	const autoAsin = batch.find((r) => !autoSearchedAsins.has(r.item.asin))?.item
-		.asin;
+	const active = (pairs ?? []).filter((p) => !skipped.has(p.item.asin));
 
-	const saveBatch = useMutation({
-		mutationFn: async () => {
-			const toAssign = batch.filter((r) => selections.has(r.item.asin));
-			const outcomes = await Promise.allSettled(
-				toAssign.map((r) => {
-					// biome-ignore lint/style/noNonNullAssertion: filtered by selections.has above
-					const candidate = selections.get(r.item.asin)!;
-					return assignRecordIdentity({
-						data: assignArgs(candidate, r.record.id),
-					});
-				}),
-			);
-			return toAssign.map((r, i) => ({
-				asin: r.item.asin,
-				outcome: outcomes[i],
-			}));
-		},
-		onSuccess: async (results) => {
+	const enqueue = useMutation({
+		mutationFn: () =>
+			enqueueAmazonResolve({
+				data: active.map((p) => ({
+					recordId: p.record.id,
+					asin: p.item.asin,
+					country: p.item.country,
+				})),
+			}),
+		onSuccess: async (res) => {
 			await queryClient.invalidateQueries({
 				queryKey: recordsQueryOptions.queryKey,
 			});
-			const failed = results.filter(
-				(r) => r.outcome.status === "rejected",
-			).length;
-			if (failed > 0) {
-				toast.error(
-					failed === 1
-						? "One record couldn't be saved. Try again."
-						: `${failed} records couldn't be saved. Try again.`,
-				);
-			}
-			// Saved rows drop out of the pool; failures stay selected for a retry.
-			const failedAsins = new Set(
-				results
-					.filter((r) => r.outcome.status === "rejected")
-					.map((r) => r.asin),
+			setQueued(true);
+			toast.success(
+				res.queued === 1
+					? "Queued 1 lookup — the pressing will appear shortly."
+					: `Queued ${res.queued} lookups — pressings will appear as they resolve.`,
 			);
-			const savedAsins = results
-				.filter((r) => r.outcome.status !== "rejected")
-				.map((r) => r.asin);
-			setSkipped((s) => {
-				const next = new Set(s);
-				for (const asin of savedAsins) next.add(asin);
-				return next;
-			});
-			setSelections((s) => {
-				const next = new Map(s);
-				for (const asin of s.keys()) {
-					if (!failedAsins.has(asin)) next.delete(asin);
-				}
-				return next;
-			});
 		},
-		onError: () => toast.error("Couldn't save this batch."),
+		onError: () => toast.error("Couldn't queue the lookups. Try again."),
 	});
 
 	return (
@@ -198,12 +115,13 @@ export function AmazonImportDialog({
 					<DialogTitle>Import from Amazon</DialogTitle>
 					<DialogDescription>
 						Upload your Amazon order history (Retail.OrderHistory.csv from{" "}
-						<span className="font-medium">Request My Data</span>) to match
-						unmatched records to Discogs using what you bought.
+						<span className="font-medium">Request My Data</span>) to pin the
+						exact pressing on records you bought — resolved from the barcode in
+						the background.
 					</DialogDescription>
 				</DialogHeader>
 
-				{rows == null ? (
+				{pairs == null ? (
 					<div className="space-y-3">
 						<Button
 							type="button"
@@ -222,236 +140,89 @@ export function AmazonImportDialog({
 						/>
 						<p className="text-xs text-muted-foreground">
 							Get the file from Amazon → Account → Request Your Information →{" "}
-							<span className="font-medium">Your Orders</span>. Only music
-							purchases are read, and nothing is uploaded anywhere — the file is
-							parsed here in your browser.
+							<span className="font-medium">Your Orders</span> (unzip it and
+							pick <span className="font-medium">Retail.OrderHistory.csv</span>
+							). Only music purchases are read, and nothing is uploaded anywhere
+							— the file is parsed here in your browser.
 						</p>
 						{parseError && <p className="text-xs text-red-600">{parseError}</p>}
 					</div>
-				) : done ? (
+				) : queued ? (
 					<p className="py-6 text-center text-sm text-muted-foreground">
-						All caught up — nothing left to match in this import.
+						Queued — the matched pressings will fill in on your records over the
+						next few minutes.
 					</p>
 				) : (
 					<>
 						<p className="text-xs text-muted-foreground">
-							{remaining.length} matched to an unmatched record.
-							{unmatchedCount > 0 &&
-								` ${unmatchedCount} purchase${unmatchedCount === 1 ? "" : "s"} couldn't be paired with a record — match those by hand.`}
+							{active.length} purchase{active.length === 1 ? "" : "s"} matched a
+							record missing a pressing.
+							{unpaired > 0 &&
+								` ${unpaired} other purchase${unpaired === 1 ? "" : "s"} didn't match a record — ignored.`}
 						</p>
-						{rows.length === 0 ? (
+						{pairs.length === 0 ? (
 							<p className="py-4 text-center text-sm text-muted-foreground">
-								None of your Amazon music purchases matched an unmatched record.
+								None of your Amazon music purchases matched a record that still
+								needs a pressing.
 							</p>
 						) : (
-							<ul className="divide-y rounded-md border">
-								{batch.map((row) => (
-									<AmazonImportRow
-										key={row.item.asin}
-										row={row}
-										autoSearch={row.item.asin === autoAsin}
-										onAutoSearchDone={() =>
-											setAutoSearchedAsins((s) => new Set(s).add(row.item.asin))
-										}
-										selected={selections.get(row.item.asin)}
-										onSelect={(candidate) =>
-											setSelections((s) => {
-												const next = new Map(s);
-												if (candidate) next.set(row.item.asin, candidate);
-												else next.delete(row.item.asin);
-												return next;
-											})
-										}
-										onSkip={() =>
-											setSkipped((s) => new Set(s).add(row.item.asin))
-										}
-									/>
-								))}
+							<ul className="max-h-[360px] divide-y overflow-y-auto rounded-md border">
+								{pairs.map((p) => {
+									const isSkipped = skipped.has(p.item.asin);
+									return (
+										<li
+											key={p.item.asin}
+											className={`flex items-center gap-2 p-2 ${
+												isSkipped ? "opacity-40" : ""
+											}`}
+										>
+											<div className="min-w-0 flex-1">
+												<p className="truncate text-sm font-medium">
+													{p.record.artist} — {p.record.title}
+												</p>
+												<p className="truncate text-xs text-muted-foreground">
+													Amazon: {p.item.title}
+													{p.item.country ? ` · ${p.item.country}` : ""}
+												</p>
+											</div>
+											<Button
+												type="button"
+												variant="ghost"
+												size="icon-sm"
+												aria-label={isSkipped ? "Include" : "Skip"}
+												onClick={() =>
+													setSkipped((s) => {
+														const next = new Set(s);
+														if (next.has(p.item.asin)) next.delete(p.item.asin);
+														else next.add(p.item.asin);
+														return next;
+													})
+												}
+											>
+												<RedoIcon className="size-4" />
+											</Button>
+										</li>
+									);
+								})}
 							</ul>
 						)}
 					</>
 				)}
 
-				{rows != null && rows.length > 0 && !done && (
+				{pairs != null && pairs.length > 0 && !queued && (
 					<DialogFooter>
 						<Button
 							type="button"
-							onClick={() => saveBatch.mutate()}
-							disabled={selections.size === 0 || saveBatch.isPending}
+							onClick={() => enqueue.mutate()}
+							disabled={active.length === 0 || enqueue.isPending}
 						>
-							{saveBatch.isPending ? "Saving…" : "Save"}
+							{enqueue.isPending
+								? "Queuing…"
+								: `Queue ${active.length} lookup${active.length === 1 ? "" : "s"}`}
 						</Button>
 					</DialogFooter>
 				)}
 			</DialogContent>
 		</Dialog>
-	);
-}
-
-function AmazonImportRow({
-	row,
-	autoSearch,
-	onAutoSearchDone,
-	selected,
-	onSelect,
-	onSkip,
-}: {
-	row: ImportRow;
-	autoSearch: boolean;
-	onAutoSearchDone: () => void;
-	selected: Candidate | undefined;
-	onSelect: (candidate: Candidate | undefined) => void;
-	onSkip: () => void;
-}) {
-	// Seed the search with the ASIN so it resolves via the web-search identify path.
-	const search = useDiscogsSearch({
-		initialInput: row.item.asin,
-		// Pre-select the preferred pick — the exact barcode-matched release when
-		// Amazon gave one, else the top album (master) as a placeholder to refine.
-		onResults: (cands, preferredKey) =>
-			onSelect(
-				preferredKey ? cands.find((c) => c.key === preferredKey) : undefined,
-			),
-		onSettled: () => {
-			if (autoSearch) onAutoSearchDone();
-		},
-	});
-
-	const hasAutoSearched = useRef(false);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fire once when this row's turn comes up
-	useEffect(() => {
-		if (autoSearch && !hasAutoSearched.current) {
-			hasAutoSearched.current = true;
-			search.run();
-		}
-	}, [autoSearch]);
-
-	const busy = search.pending || search.browserPending;
-	const { masters, releases } = groupCandidates(search.results ?? []);
-
-	return (
-		<li className="flex flex-col gap-1 p-2">
-			<div className="flex items-center gap-2">
-				<div className="min-w-0 flex-1">
-					<p className="truncate text-sm font-medium" title={row.item.title}>
-						{row.record.artist} — {row.record.title}
-					</p>
-					<p
-						className="truncate text-xs text-muted-foreground"
-						title={row.item.title}
-					>
-						Amazon: {row.item.title}
-					</p>
-				</div>
-				<Select
-					value={selected?.key}
-					onValueChange={(value) =>
-						onSelect(search.results?.find((c) => c.key === value))
-					}
-					disabled={busy || !search.results || search.results.length === 0}
-				>
-					<SelectTrigger
-						className="w-0 min-w-0 flex-1 overflow-hidden"
-						size="sm"
-					>
-						<SelectValue
-							placeholder={
-								busy
-									? "Resolving…"
-									: search.results && search.results.length === 0
-										? "No match found"
-										: "Choose a pressing"
-							}
-						>
-							{selected && (
-								<span
-									className="min-w-0 truncate"
-									title={candidateLabel(selected)}
-								>
-									{candidateLabel(selected)}
-								</span>
-							)}
-						</SelectValue>
-					</SelectTrigger>
-					<SelectContent position="popper" className="max-w-[min(32rem,90vw)]">
-						{masters.length > 0 && (
-							<SelectGroup>
-								<SelectLabel>Albums</SelectLabel>
-								{masters.map((c) => (
-									<CandidateOption key={c.key} candidate={c} />
-								))}
-							</SelectGroup>
-						)}
-						{releases.length > 0 && (
-							<SelectGroup>
-								<SelectLabel>Pressings</SelectLabel>
-								{releases.map((c) => (
-									<CandidateOption key={c.key} candidate={c} />
-								))}
-							</SelectGroup>
-						)}
-					</SelectContent>
-				</Select>
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon-sm"
-					aria-label="Skip"
-					onClick={onSkip}
-				>
-					<RedoIcon className="size-4" />
-				</Button>
-			</div>
-
-			{search.notice && (
-				<p className="text-xs text-muted-foreground">{search.notice}</p>
-			)}
-			{search.error && (
-				<div className="flex items-center gap-2" role="alert">
-					<p className="text-xs text-red-600">{search.error.message}</p>
-					<Button
-						type="button"
-						variant="outline"
-						size="xs"
-						disabled={search.browserPending}
-						onClick={() => search.runBrowserFallback()}
-					>
-						{search.browserPending ? "Searching…" : "Search from browser"}
-					</Button>
-				</div>
-			)}
-		</li>
-	);
-}
-
-/** One master/release option: the headline + a muted distinguishing detail line. */
-function CandidateOption({ candidate }: { candidate: Candidate }) {
-	const label = candidateLabel(candidate);
-	const detail = candidateDetail(candidate);
-	return (
-		<SelectItem
-			value={candidate.key}
-			title={detail ? `${label} — ${detail}` : label}
-		>
-			<span className="flex min-w-0 items-center gap-2">
-				{candidate.data.thumb ? (
-					<img
-						src={candidate.data.thumb}
-						alt=""
-						className="size-6 shrink-0 rounded object-cover"
-					/>
-				) : (
-					<div className="size-6 shrink-0 rounded bg-muted" />
-				)}
-				<span className="flex min-w-0 flex-col">
-					<span className="min-w-0 truncate">{label}</span>
-					{detail && (
-						<span className="min-w-0 truncate text-xs text-muted-foreground">
-							{detail}
-						</span>
-					)}
-				</span>
-			</span>
-		</SelectItem>
 	);
 }
