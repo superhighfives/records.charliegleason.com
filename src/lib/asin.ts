@@ -120,7 +120,7 @@ export async function identifyFromAsin(
 			content: [
 				{
 					type: "text",
-					text: `Amazon ASIN "${asin}" is a music release (vinyl record or CD). Use web search to find its Amazon product page (e.g. amazon.com/dp/${asin}) and any corroborating source (Discogs, MusicBrainz), then report the artist, album title, and the pressing details that distinguish one edition from another — the barcode (UPC/EAN) above all, plus the label, catalog number, year, pressing country, number of discs, vinyl size and format. When you have it, call the "product" tool.`,
+					text: `Amazon ASIN "${asin}" is a music release (vinyl record or CD). Use web search to find its Amazon product page — the ASIN may be from any Amazon marketplace, so try the US and UK sites (amazon.com/dp/${asin}, amazon.co.uk/dp/${asin}) and any corroborating source (Discogs, MusicBrainz). Then report the artist, album title, and the pressing details that distinguish one edition from another — the barcode (UPC/EAN) above all, plus the label, catalog number, year, pressing country, number of discs, vinyl size and format. When you have it, call the "product" tool.`,
 				},
 			],
 		},
