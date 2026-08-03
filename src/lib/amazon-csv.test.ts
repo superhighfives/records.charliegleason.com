@@ -56,6 +56,43 @@ describe("parseAmazonOrderHistory", () => {
 			"B00XYZ1234",
 		]);
 	});
+
+	it("reads the real UK export shape: 'Product Name', no Category, ISO date", () => {
+		// Verbatim header + row from a Retail.OrderHistory.csv (Amazon.co.uk), which
+		// uses "Product Name" (not "Title"), an unquoted ASIN, ISO-8601 dates, and
+		// no Category column — plus commas inside quoted address fields.
+		const real = [
+			'ASIN,"Billing Address","Carrier Name & Tracking Number",Currency,"Gift Message","Gift Recipient Contact","Gift Sender Name","Item Serial Number","Order Date","Order ID","Order Status","Original Quantity","Payment Method Type","Product Condition","Product Name","Purchase Order Number","Ship Date","Shipment Item Subtotal","Shipment Item Subtotal Tax","Shipment Status","Shipping Address","Shipping Charge","Shipping Option","Total Amount","Total Discounts","Unit Price","Unit Price Tax",Website',
+			'B00PCI1HCU,"Charlie Gleason 10 Seville House 11 And A Half Wapping High St London London E1W1NX United Kingdom","AMZN_UK(Q22207405383)",GBP,"Not Available","Not Available","Not Available","Not Available",2016-10-09T17:43:27Z,205-1154491-4153944,Closed,1,"Visa - 9225",New,"The Black Parade [VINYL]","Not Applicable",2016-10-12T18:58:11Z,9.16,1.83,Shipped,"Charlie Gleason c/o Unbound, Unit 18, Waterside 44-48 Wharf Road London London N1 7UX United Kingdom",0,premium-rfu-uk,10.99,0,9.16,1.83,Amazon.co.uk',
+		].join("\n");
+		expect(parseAmazonOrderHistory(real)).toEqual([
+			{
+				asin: "B00PCI1HCU",
+				title: "The Black Parade [VINYL]",
+				category: null,
+				orderDate: "2016-10-09T17:43:27Z",
+			},
+		]);
+	});
+
+	it("matches that purchase to the right record despite artist-less title", () => {
+		// Amazon's Product Name is often the album alone — the matcher leans on the
+		// title tokens against the record's artist + title.
+		expect(
+			matchAmazonToRecord(
+				{
+					asin: "B00PCI1HCU",
+					title: "The Black Parade [VINYL]",
+					category: null,
+					orderDate: "2016-10-09T17:43:27Z",
+				},
+				[
+					{ id: 1, artist: "Arcade Fire", title: "Funeral" },
+					{ id: 2, artist: "My Chemical Romance", title: "The Black Parade" },
+				],
+			),
+		).toBe(2);
+	});
 });
 
 describe("matchAmazonToRecord", () => {
