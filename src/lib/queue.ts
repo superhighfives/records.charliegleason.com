@@ -520,6 +520,8 @@ async function resolveAsinForRecord(
 			...(chosen.label ? { label: chosen.label } : {}),
 			...(format ? { format } : {}),
 			...(chosen.size ? { size: chosen.size } : {}),
+			...(chosen.year ? { year: chosen.year } : {}),
+			...(chosen.genre ? { genre: chosen.genre } : {}),
 			discCount: chosen.discCount,
 			updatedAt: now,
 		})
