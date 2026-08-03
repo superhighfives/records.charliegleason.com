@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RedoIcon, UploadIcon } from "lucide-react";
+import { ChevronRight, RedoIcon, UploadIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -14,10 +14,12 @@ import {
 } from "#/components/ui/dialog";
 import type { Record } from "#/db/schema";
 import {
+	amazonImageUrl,
 	type PurchasePair,
 	pairPurchasesToRecords,
 	parseAmazonOrderHistory,
 } from "#/lib/amazon-csv";
+import { displayCoverKey } from "#/lib/cover";
 import { enqueueAmazonResolve } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
 
@@ -182,6 +184,16 @@ export function AmazonImportDialog({
 												isSkipped ? "opacity-40" : ""
 											}`}
 										>
+											{/* What you bought (Amazon) → what it'll pin to (your cover). */}
+											<Thumb
+												src={amazonImageUrl(p.item.asin)}
+												alt={`Amazon: ${p.item.title}`}
+											/>
+											<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+											<Thumb
+												src={coverSrc(p.record)}
+												alt={`${p.record.artist} — ${p.record.title}`}
+											/>
 											<div className="min-w-0 flex-1">
 												<p className="truncate text-sm font-medium">
 													{p.record.artist} — {p.record.title}
@@ -230,5 +242,32 @@ export function AmazonImportDialog({
 				)}
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+/** The `/api/photos` URL for a record's cover (capture photo included), or null. */
+function coverSrc(record: Record): string | null {
+	const key = displayCoverKey(record, { includeCapture: true });
+	return key ? `/api/photos/${key}` : null;
+}
+
+/**
+ * A small square thumbnail that degrades to a muted box when the image is missing
+ * or fails to load — Amazon has no product image for some ASINs, and a draft
+ * record may have no cover yet.
+ */
+function Thumb({ src, alt }: { src: string | null; alt: string }) {
+	const [failed, setFailed] = useState(false);
+	if (!src || failed) {
+		return <div className="size-10 shrink-0 rounded bg-muted" />;
+	}
+	return (
+		<img
+			src={src}
+			alt={alt}
+			loading="lazy"
+			className="size-10 shrink-0 rounded object-cover"
+			onError={() => setFailed(true)}
+		/>
 	);
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	type AmazonItem,
+	amazonImageUrl,
 	type MatchRecord,
 	marketplaceCountry,
 	matchAmazonToRecord,
@@ -234,6 +235,17 @@ describe("marketplaceCountry", () => {
 	it("is null for unknown or missing marketplaces", () => {
 		expect(marketplaceCountry("Amazon.example")).toBeNull();
 		expect(marketplaceCountry(null)).toBeNull();
+	});
+});
+
+describe("amazonImageUrl", () => {
+	it("builds the ASIN product-image URL with a size", () => {
+		expect(amazonImageUrl("B00PCI1HCU")).toBe(
+			"https://m.media-amazon.com/images/P/B00PCI1HCU.01._SL160_.jpg",
+		);
+		expect(amazonImageUrl("B00PCI1HCU", 80)).toBe(
+			"https://m.media-amazon.com/images/P/B00PCI1HCU.01._SL80_.jpg",
+		);
 	});
 });
 
