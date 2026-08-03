@@ -18,6 +18,33 @@ export interface AmazonItem {
 	title: string;
 	category: string | null;
 	orderDate: string | null;
+	// The pressing country implied by the marketplace you bought from (Amazon.co.uk
+	// → "UK"), as a Discogs-style country name, or null if unknown. A regional
+	// marketplace strongly implies the regional pressing — the fast disambiguator
+	// between otherwise-identical pressings — so we carry it through to matching.
+	country: string | null;
+}
+
+// Map an Amazon marketplace domain (the export's `Website` column) to the Discogs
+// country name for the pressing it most likely sold. Only the marketplaces worth
+// distinguishing; anything else is left null (no country hint).
+const MARKETPLACE_COUNTRY: { [domain: string]: string } = {
+	"amazon.co.uk": "UK",
+	"amazon.com": "US",
+	"amazon.ca": "Canada",
+	"amazon.de": "Germany",
+	"amazon.fr": "France",
+	"amazon.it": "Italy",
+	"amazon.es": "Spain",
+	"amazon.nl": "Netherlands",
+	"amazon.co.jp": "Japan",
+	"amazon.com.au": "Australia",
+};
+
+/** Discogs-style country name for an Amazon marketplace domain, or null. */
+export function marketplaceCountry(website: string | null): string | null {
+	if (!website) return null;
+	return MARKETPLACE_COUNTRY[website.trim().toLowerCase()] ?? null;
 }
 
 /**
@@ -98,6 +125,7 @@ export function parseAmazonOrderHistory(csv: string): Array<AmazonItem> {
 	const titleCol = findColumn(header, ["title", "product name", "name"]);
 	const catCol = findColumn(header, ["category"]);
 	const dateCol = findColumn(header, ["order date", "date"]);
+	const siteCol = findColumn(header, ["website"]);
 	if (asinCol < 0 || titleCol < 0) return [];
 
 	const seen = new Set<string>();
@@ -115,6 +143,7 @@ export function parseAmazonOrderHistory(csv: string): Array<AmazonItem> {
 			title,
 			category,
 			orderDate: dateCol >= 0 ? r[dateCol]?.trim() || null : null,
+			country: siteCol >= 0 ? marketplaceCountry(r[siteCol] ?? null) : null,
 		});
 	}
 	return items;
@@ -193,4 +222,56 @@ export function matchAmazonToRecord(
 		}
 	}
 	return bestScore >= 0.6 ? bestId : null;
+}
+
+/** A purchase paired with the record it belongs to. */
+export interface PurchasePair<R extends MatchRecord> {
+	item: AmazonItem;
+	record: R;
+}
+
+/**
+ * Pair purchases to records with a greedy, mutually-exclusive assignment: score
+ * every (purchase, record) pair by title-token overlap, then take them
+ * highest-score first, never reusing a purchase or a record. This beats "for each
+ * purchase, pick its best record" — which lets one popular record get claimed by
+ * several purchases (a live album + a greatest-hits both matching one title) and
+ * strands the rest. Threshold is a touch looser than the single-item matcher since
+ * each pairing is user-reviewed before it's saved. Records are matched at most
+ * once; the caller's pool is typically the *unmatched* records.
+ */
+export function pairPurchasesToRecords<R extends MatchRecord>(
+	items: Array<AmazonItem>,
+	records: Array<R>,
+	threshold = 0.5,
+): Array<PurchasePair<R>> {
+	const recTokens = records.map((record) => ({
+		record,
+		tokens: significantTokens(`${record.artist} ${record.title}`),
+	}));
+
+	const scored: Array<{ item: AmazonItem; record: R; score: number }> = [];
+	for (const item of items) {
+		const itemTokens = significantTokens(item.title);
+		if (itemTokens.size === 0) continue;
+		for (const { record, tokens } of recTokens) {
+			if (tokens.size === 0) continue;
+			let shared = 0;
+			for (const t of itemTokens) if (tokens.has(t)) shared++;
+			const score = shared / Math.min(itemTokens.size, tokens.size);
+			if (score >= threshold) scored.push({ item, record, score });
+		}
+	}
+
+	scored.sort((a, b) => b.score - a.score);
+	const usedItems = new Set<string>();
+	const usedRecords = new Set<number>();
+	const pairs: Array<PurchasePair<R>> = [];
+	for (const { item, record } of scored) {
+		if (usedItems.has(item.asin) || usedRecords.has(record.id)) continue;
+		usedItems.add(item.asin);
+		usedRecords.add(record.id);
+		pairs.push({ item, record });
+	}
+	return pairs;
 }

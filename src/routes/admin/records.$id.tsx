@@ -714,9 +714,14 @@ function RecordDetail() {
 	}, [picked?.discogsId]);
 	// One unified search for the record's identity — offers masters (albums) and
 	// releases (pressings) together, and routes a pasted Discogs URL / Amazon ASIN /
-	// barcode. Seeded with the record's own artist+title so the first Search works.
+	// barcode. Seed with the artist+title only when there's no album yet (to help
+	// find one); once an album's linked the search is for pinning a *pressing*, so
+	// leave it empty rather than pre-filling the album name (which reads as
+	// "re-search the album" — see the pressing-scoped copy/placeholder below).
 	const identitySearch = useDiscogsSearch({
-		initialInput: `${record?.artist ?? ""} ${record?.title ?? ""}`.trim(),
+		initialInput: record?.masterId
+			? ""
+			: `${record?.artist ?? ""} ${record?.title ?? ""}`.trim(),
 	});
 	const [replacingCapture, setReplacingCapture] = useState(false);
 	const captureInputRef = useRef<HTMLInputElement>(null);
@@ -1309,8 +1314,9 @@ function RecordDetail() {
 						<div>
 							<h2 className="text-sm font-semibold">Album &amp; release</h2>
 							<p className="text-xs text-muted-foreground">
-								Search, or paste a Discogs link, an Amazon ASIN, or a barcode.
-								Pick an album, a pressing, or one of each.
+								{effectiveMasterId != null
+									? "Pin a specific pressing — search below, or paste a barcode, Discogs release URL, or Amazon ASIN. To change the album, Remove it first."
+									: "Search, or paste a Discogs link, an Amazon ASIN, or a barcode. Pick an album, a pressing, or one of each."}
 							</p>
 						</div>
 
@@ -1360,7 +1366,15 @@ function RecordDetail() {
 							</div>
 						)}
 
-						<DiscogsSearchInput search={identitySearch} idPrefix="identity" />
+						<DiscogsSearchInput
+							search={identitySearch}
+							idPrefix="identity"
+							placeholder={
+								effectiveMasterId != null
+									? "Search for a pressing, barcode, Discogs release URL, or ASIN"
+									: undefined
+							}
+						/>
 
 						{/* Cover probe for the pinned pressing — download the full-res
 						    artwork through our proxy so the admin can preview (and confirm
@@ -1390,8 +1404,11 @@ function RecordDetail() {
 						)}
 
 						{/* Album (master) hits from the same search — pick one to set the
-						    record’s identity. Pressings appear in the list below. */}
-						{searchedMasters.length > 0 && (
+						    record’s identity. Only offered while there's no album yet: once
+						    one is linked, the search is for pinning a *pressing* of it, and
+						    swapping the album should be a deliberate "Remove album" first —
+						    otherwise a stray search could silently replace the identity. */}
+						{effectiveMasterId == null && searchedMasters.length > 0 && (
 							<div className="space-y-1">
 								<p className="text-xs font-medium text-muted-foreground">
 									Albums

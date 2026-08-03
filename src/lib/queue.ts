@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
 import { analyzeCapture } from "#/lib/analyze";
+import { identifyFromAsin } from "#/lib/asin";
 import {
 	type AnalyzeMessage,
 	type AnalyzeRecordMessage,
@@ -21,6 +22,7 @@ import {
 	getMasterDetail,
 	getReleaseDetail,
 	getReleaseValue,
+	searchByBarcode,
 	searchMasters,
 	searchReleases,
 } from "#/lib/discogs";
@@ -105,6 +107,23 @@ function analyzeQueue(): Queue<AnalyzeMessage> {
 /** Enqueue a captured record for background analysis. */
 export async function enqueueAnalyze(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId });
+}
+
+/**
+ * Enqueue Amazon ASIN→pressing resolutions in bulk (the importer's "queue
+ * lookups"). Each message barcode-resolves one ASIN and pins the exact pressing on
+ * its record in the background. Sent in batches (Cloudflare caps `sendBatch` at
+ * 100) so hundreds of lookups don't need hundreds of round-trips.
+ */
+export async function enqueueResolveAsinBatch(
+	jobs: Array<{ recordId: number; asin: string; country: string | null }>,
+): Promise<void> {
+	const queue = analyzeQueue();
+	for (const slice of chunk(jobs, 100)) {
+		await queue.sendBatch(
+			slice.map((job) => ({ body: { mode: "resolve-asin", ...job } })),
+		);
+	}
 }
 
 /**
@@ -415,6 +434,105 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 	return row ?? record;
 }
 
+/**
+ * Resolve an Amazon ASIN to its exact Discogs pressing and pin it on the record.
+ * Reads the barcode off the product page (web search), looks it up on Discogs, and
+ * pins the best-matching release — preferring one that belongs to the record's
+ * existing master, then the marketplace country. Conservative on purpose: never
+ * overwrites an already-pinned release, and never pins a release from a *different*
+ * master than the record already has (that would leave an inconsistent state) —
+ * those are left for a human. Best-effort; logs and returns on any miss.
+ */
+async function resolveAsinForRecord(
+	recordId: number,
+	asin: string,
+	preferCountry: string | null,
+): Promise<void> {
+	const db = getDb(env.DB);
+	const [record] = await db
+		.select()
+		.from(records)
+		.where(eq(records.id, recordId))
+		.limit(1);
+	if (!record) return;
+	// Already pinned — don't clobber a pressing a human (or a prior job) chose.
+	if (record.discogsId) {
+		console.info(
+			`[queue] resolve-asin ${asin}: record ${recordId} already has a release`,
+		);
+		return;
+	}
+
+	const identity = await identifyFromAsin(asin);
+	if (!identity?.barcode) {
+		console.info(`[queue] resolve-asin ${asin}: no barcode found`);
+		return;
+	}
+	const releases = await searchByBarcode(identity.barcode).catch(() => []);
+	if (releases.length === 0) {
+		console.info(
+			`[queue] resolve-asin ${asin}: barcode ${identity.barcode} matched no release`,
+		);
+		return;
+	}
+
+	// Only pin a release consistent with the record's identity: if it already has a
+	// master, the pressing must belong to that master; otherwise adopt the pressing's.
+	const consistent = record.masterId
+		? releases.filter((r) => r.masterId === record.masterId)
+		: releases;
+	if (consistent.length === 0) {
+		console.info(
+			`[queue] resolve-asin ${asin}: barcode release doesn't match record ${recordId}'s master — leaving for manual review`,
+		);
+		return;
+	}
+	// Prefer the pressing from the marketplace's country, else the first hit.
+	const chosen =
+		(preferCountry &&
+			consistent.find(
+				(r) => r.country?.toLowerCase() === preferCountry.toLowerCase(),
+			)) ||
+		consistent[0];
+	const format = chosen.type ?? chosen.format;
+
+	const now = new Date();
+	await db
+		.update(records)
+		.set({
+			discogsId: chosen.discogsId,
+			discogsUrl: chosen.discogsUrl,
+			releaseMissing: false,
+			releaseCheckedAt: now,
+			// The exact pressing is authoritative for the album too — adopt its master
+			// only when the record had none, keeping health flags fresh.
+			...(chosen.masterId && !record.masterId
+				? {
+						masterId: chosen.masterId,
+						masterUrl: chosen.masterUrl,
+						masterMissing: false,
+						masterCheckedAt: now,
+					}
+				: {}),
+			// Pressing-specific caches from the matched release.
+			...(chosen.catno ? { catno: chosen.catno } : {}),
+			...(chosen.country ? { country: chosen.country } : {}),
+			...(chosen.label ? { label: chosen.label } : {}),
+			...(format ? { format } : {}),
+			...(chosen.size ? { size: chosen.size } : {}),
+			...(chosen.year ? { year: chosen.year } : {}),
+			...(chosen.genre ? { genre: chosen.genre } : {}),
+			discCount: chosen.discCount,
+			updatedAt: now,
+		})
+		.where(eq(records.id, recordId));
+	console.info(
+		`[queue] resolve-asin ${asin}: pinned release ${chosen.discogsId} (${
+			chosen.country ?? "?"
+		}) on record ${recordId}`,
+	);
+}
+
 async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	// Colors-keyed job — handled entirely separately from the records pipeline below.
 	if (message.body.mode === "color-texture") {
@@ -441,6 +559,24 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		} catch (err) {
 			console.error(
 				`[queue] color-palette failed for color ${colorId}: ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+			Sentry.captureException(err);
+		}
+		message.ack();
+		return;
+	}
+
+	// Amazon ASIN → exact pressing (via barcode), pinned in the background. Its own
+	// branch (not a record `mode`) so it never touches the capture-pipeline fields.
+	if (message.body.mode === "resolve-asin") {
+		const { recordId, asin, country } = message.body;
+		try {
+			await resolveAsinForRecord(recordId, asin, country);
+		} catch (err) {
+			console.error(
+				`[queue] resolve-asin failed for record ${recordId} (${asin}): ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);
