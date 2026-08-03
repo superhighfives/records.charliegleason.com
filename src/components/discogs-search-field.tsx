@@ -355,7 +355,18 @@ export function useDiscogsSearch(opts?: {
 		notice,
 		pending: search.isPending,
 		browserPending: browserSearch.isPending,
-		error: search.isError ? (search.error as Error) : null,
+		// Once a browser retry has been attempted, its outcome (success or error)
+		// replaces the original server error — otherwise a failed retry leaves the
+		// user staring at the stale server-side message with no feedback that the
+		// retry itself also failed.
+		error:
+			browserSearch.status !== "idle"
+				? browserSearch.isError
+					? (browserSearch.error as Error)
+					: null
+				: search.isError
+					? (search.error as Error)
+					: null,
 	};
 }
 

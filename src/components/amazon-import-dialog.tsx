@@ -110,12 +110,20 @@ export function AmazonImportDialog({
 		}
 		const matched: Array<ImportRow> = [];
 		let noMatch = 0;
+		// Claim each matched record out of the pool as we go, so two purchases that
+		// both fuzzy-match the same still-unmatched record (e.g. an original
+		// pressing + a reissue) don't both target it — the second would silently
+		// overwrite the first's Discogs identity on save.
+		const pool = [...unmatched];
 		for (const item of items) {
-			const id = matchAmazonToRecord(item, unmatched);
-			const record =
-				id != null ? unmatched.find((r) => r.id === id) : undefined;
-			if (record) matched.push({ item, record });
-			else noMatch++;
+			const id = matchAmazonToRecord(item, pool);
+			const recordIndex = id != null ? pool.findIndex((r) => r.id === id) : -1;
+			if (recordIndex >= 0) {
+				matched.push({ item, record: pool[recordIndex] });
+				pool.splice(recordIndex, 1);
+			} else {
+				noMatch++;
+			}
 		}
 		setRows(matched);
 		setUnmatchedCount(noMatch);
