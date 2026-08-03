@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type AmazonItem,
 	type MatchRecord,
+	marketplaceCountry,
 	matchAmazonToRecord,
 	pairPurchasesToRecords,
 	parseAmazonOrderHistory,
@@ -14,6 +15,7 @@ const item = (asin: string, title: string): AmazonItem => ({
 	title,
 	category: null,
 	orderDate: null,
+	country: null,
 });
 
 describe("parseCsv", () => {
@@ -80,6 +82,7 @@ describe("parseAmazonOrderHistory", () => {
 				title: "The Black Parade [VINYL]",
 				category: null,
 				orderDate: "2016-10-09T17:43:27Z",
+				country: "UK", // derived from Website=Amazon.co.uk
 			},
 		]);
 	});
@@ -94,6 +97,7 @@ describe("parseAmazonOrderHistory", () => {
 					title: "The Black Parade [VINYL]",
 					category: null,
 					orderDate: "2016-10-09T17:43:27Z",
+					country: "UK",
 				},
 				[
 					{ id: 1, artist: "Arcade Fire", title: "Funeral" },
@@ -119,6 +123,7 @@ describe("matchAmazonToRecord", () => {
 					title: "Led Zeppelin IV [VINYL]",
 					category: null,
 					orderDate: null,
+					country: null,
 				},
 				records,
 			),
@@ -130,6 +135,7 @@ describe("matchAmazonToRecord", () => {
 					title: "Kind of Blue (Deluxe Edition) [VINYL]",
 					category: null,
 					orderDate: null,
+					country: null,
 				},
 				records,
 			),
@@ -144,10 +150,23 @@ describe("matchAmazonToRecord", () => {
 					title: "Taylor Swift 1989 [VINYL]",
 					category: null,
 					orderDate: null,
+					country: null,
 				},
 				records,
 			),
 		).toBeNull();
+	});
+});
+
+describe("marketplaceCountry", () => {
+	it("maps known Amazon marketplaces to Discogs country names", () => {
+		expect(marketplaceCountry("Amazon.co.uk")).toBe("UK");
+		expect(marketplaceCountry("Amazon.com")).toBe("US");
+		expect(marketplaceCountry("amazon.de")).toBe("Germany");
+	});
+	it("is null for unknown or missing marketplaces", () => {
+		expect(marketplaceCountry("Amazon.example")).toBeNull();
+		expect(marketplaceCountry(null)).toBeNull();
 	});
 });
 
