@@ -298,7 +298,12 @@ function AmazonImportRow({
 	// Seed the search with the ASIN so it resolves via the web-search identify path.
 	const search = useDiscogsSearch({
 		initialInput: row.item.asin,
-		onResults: () => onSelect(undefined),
+		// Pre-select the preferred pick — the exact barcode-matched release when
+		// Amazon gave one, else the top album (master) as a placeholder to refine.
+		onResults: (cands, preferredKey) =>
+			onSelect(
+				preferredKey ? cands.find((c) => c.key === preferredKey) : undefined,
+			),
 		onSettled: () => {
 			if (autoSearch) onAutoSearchDone();
 		},

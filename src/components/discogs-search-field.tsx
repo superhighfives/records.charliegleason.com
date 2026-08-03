@@ -56,6 +56,10 @@ interface SearchOutcome {
 	// When an ASIN resolves, the structured fields it pre-fills so the user sees
 	// (and can tweak) what Amazon reported.
 	fields?: StructuredFields;
+	// The `key` of a release we're confident is the exact pressing — a barcode
+	// match. The batch dialogs pre-select this when present, else fall back to the
+	// top album (master) as a placeholder. Null/absent when nothing's certain.
+	exactReleaseKey?: string | null;
 }
 
 function combine(qText: string, fields: StructuredFields) {
@@ -111,6 +115,8 @@ async function candidatesFromAsin(
 		candidates: [...masters.map(toMaster), ...releases.map(toRelease)],
 		notice: `${headline} · ${barcodeNote}`,
 		fields,
+		// A barcode hit is the exact pressing — flag the first for pre-selection.
+		exactReleaseKey: exact.length ? toRelease(exact[0]).key : null,
 	};
 }
 
@@ -162,6 +168,8 @@ async function executeSearch(
 				notice: releases.length
 					? null
 					: `No Discogs release matches barcode ${route.barcode}.`,
+				// A direct barcode search is all exact pressings — flag the first.
+				exactReleaseKey: releases.length ? toRelease(releases[0]).key : null,
 			};
 		}
 		default: {
@@ -226,6 +234,7 @@ async function executeBrowserSearch(
 				notice: releases.length
 					? null
 					: `No Discogs release matches barcode ${route.barcode}.`,
+				exactReleaseKey: releases.length ? toRelease(releases[0]).key : null,
 			};
 		}
 		default: {
@@ -279,7 +288,13 @@ export interface UseDiscogsSearch {
 export function useDiscogsSearch(opts?: {
 	initialInput?: string;
 	initialFields?: Partial<StructuredFields>;
-	onResults?: (candidates: Array<Candidate>) => void;
+	// Fires after a successful search with the merged candidates and the key to
+	// pre-select by the "prefer an exact release, else the top album placeholder"
+	// rule (null when there's nothing to pick). The batch dialogs use `preferredKey`.
+	onResults?: (
+		candidates: Array<Candidate>,
+		preferredKey: string | null,
+	) => void;
 	// Fires after any run (server or browser) settles, success or error — the
 	// bulk dialog uses it to advance its one-at-a-time auto-search queue.
 	onSettled?: () => void;
@@ -296,7 +311,14 @@ export function useDiscogsSearch(opts?: {
 		setResults(outcome.candidates);
 		setNotice(outcome.notice);
 		if (outcome.fields) setFields(outcome.fields);
-		opts?.onResults?.(outcome.candidates);
+		// Prefer an exact (barcode-matched) release, else the top album (master) as a
+		// placeholder, else the first release. The batch dialogs pre-select this.
+		const preferredKey =
+			outcome.exactReleaseKey ??
+			outcome.candidates.find((c) => c.kind === "master")?.key ??
+			outcome.candidates.find((c) => c.kind === "release")?.key ??
+			null;
+		opts?.onResults?.(outcome.candidates, preferredKey);
 	};
 
 	const search = useMutation({

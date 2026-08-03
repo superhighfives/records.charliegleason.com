@@ -246,7 +246,12 @@ function BulkAssignRow({
 		// query; the auto-search below fires it. Editing replaces it wholesale, so a
 		// row can be re-queried with a URL / ASIN / barcode too.
 		initialInput: `${record.artist} ${record.title}`.trim(),
-		onResults: () => onSelect(undefined),
+		// Pre-select the preferred pick — an exact release, else the top album as a
+		// placeholder (refine the pressing later). Cleared when nothing's pickable.
+		onResults: (cands, preferredKey) =>
+			onSelect(
+				preferredKey ? cands.find((c) => c.key === preferredKey) : undefined,
+			),
 		onSettled: () => {
 			if (autoSearch) onAutoSearchDone();
 		},
