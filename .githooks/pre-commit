@@ -24,7 +24,7 @@ fi
 # of sync, surfacing as confusing type errors at createFileRoute() call sites
 # rather than here (and CI's own check would then block the push). Regenerate
 # and re-stage it here too, same treatment as the Biome fixes above.
-bun run generate-routes >/dev/null
+bun run generate-routes >/dev/null || exit 1
 git add src/routeTree.gen.ts
 
 exit 0

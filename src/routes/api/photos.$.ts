@@ -1,9 +1,11 @@
 import { env } from "cloudflare:workers";
 import { createFileRoute } from "@tanstack/react-router";
 
-// Nothing on the site ever displays a photo wider than this — covers/mattes are
-// stored full-res (up to 4096px) for reprocessing headroom, not for display.
-const MAX_WIDTH = 2048;
+// The exact widths callers request (see `photoUrl` call sites) — snapping `?w=`
+// to this set means every request lands on the same handful of cached variants
+// instead of a public, unauthenticated caller being able to force up to 2048
+// distinct (paid) Image Transformations per photo by varying the query param.
+const ALLOWED_WIDTHS = [350, 500, 800, 1600];
 
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
@@ -54,7 +56,8 @@ export const Route = createFileRoute("/api/photos/$")({
 							"cache-control": IMMUTABLE_CACHE,
 						},
 					});
-				} catch {
+				} catch (error) {
+					console.error("Image transform failed, serving original", error);
 					return new Response(bytes, {
 						headers: {
 							"content-type": contentType,
@@ -71,5 +74,7 @@ function clampWidth(raw: string | null): number | null {
 	if (!raw) return null;
 	const n = Number(raw);
 	if (!Number.isFinite(n) || n <= 0) return null;
-	return Math.min(Math.round(n), MAX_WIDTH);
+	return ALLOWED_WIDTHS.reduce((closest, width) =>
+		Math.abs(width - n) < Math.abs(closest - n) ? width : closest,
+	);
 }
