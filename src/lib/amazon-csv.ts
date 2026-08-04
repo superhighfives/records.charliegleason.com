@@ -48,6 +48,17 @@ export function marketplaceCountry(website: string | null): string | null {
 }
 
 /**
+ * A best-effort product-image URL for an ASIN, off Amazon's public media CDN
+ * (`/images/P/{ASIN}.01._SL{size}_.jpg`). Undocumented but stable, and the same
+ * image across marketplaces — so a UK ASIN resolves too. Not every ASIN has an
+ * image (some 404); render it with an `onError` fallback. `size` scales the
+ * longest side, in px.
+ */
+export function amazonImageUrl(asin: string, size = 160): string {
+	return `https://m.media-amazon.com/images/P/${asin}.01._SL${size}_.jpg`;
+}
+
+/**
  * Split RFC 4180-ish CSV text into rows of fields — handles quoted fields with
  * embedded commas, newlines, and doubled `""` escapes (all of which Amazon's
  * export uses in product titles). Tolerates both `\r\n` and `\n` line endings.
