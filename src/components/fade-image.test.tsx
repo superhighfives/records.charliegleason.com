@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FadeImage } from "#/components/fade-image";
+import { FadeImage, isImageDecoded } from "#/components/fade-image";
 
 // jsdom never actually loads images, so `HTMLImageElement.complete` isn't
 // meaningful on its own — stub it on the prototype so each test decides whether
@@ -145,6 +145,52 @@ describe("FadeImage", () => {
 		expect(el.getAttribute("src")).toBe("/api/photos/a");
 		expect(el.getAttribute("loading")).toBe("lazy");
 		expect(el.getAttribute("decoding")).toBe("async");
+	});
+
+	it("calls onReady on load, on error, and immediately for a src already decoded this session", () => {
+		const onReadyLoad = vi.fn();
+		const { container: loadContainer } = render(
+			<FadeImage src="/api/photos/onready-load" alt="" onReady={onReadyLoad} />,
+		);
+		fireEvent.load(img(loadContainer));
+		expect(onReadyLoad).toHaveBeenCalledTimes(1);
+
+		const onReadyError = vi.fn();
+		const { container: errorContainer } = render(
+			<FadeImage
+				src="/api/photos/onready-error"
+				alt=""
+				onReady={onReadyError}
+			/>,
+		);
+		fireEvent.error(img(errorContainer));
+		expect(onReadyError).toHaveBeenCalledTimes(1);
+
+		// Remount with a src already marked decoded (from the load above) — the
+		// seeded/cached path a caller like the grid tile's peeking disc relies on
+		// to skip a re-fade rather than replaying it on every remount.
+		const onReadySeeded = vi.fn();
+		render(
+			<FadeImage
+				src="/api/photos/onready-load"
+				alt=""
+				onReady={onReadySeeded}
+			/>,
+		);
+		expect(onReadySeeded).toHaveBeenCalledTimes(1);
+	});
+
+	it("isImageDecoded reports whether a src has decoded this session", () => {
+		expect(isImageDecoded("/api/photos/never-loaded")).toBe(false);
+		expect(isImageDecoded(undefined)).toBe(false);
+
+		const { container } = render(
+			<FadeImage src="/api/photos/decoded-check" alt="" />,
+		);
+		expect(isImageDecoded("/api/photos/decoded-check")).toBe(false);
+
+		fireEvent.load(img(container));
+		expect(isImageDecoded("/api/photos/decoded-check")).toBe(true);
 	});
 
 	it("still calls a caller's onLoad and onError handlers", () => {
