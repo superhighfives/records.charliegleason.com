@@ -261,11 +261,6 @@ a {
     border-color 160ms ease;
 }
 
-/* Cover tiles: a plain square, no border or radius. */
-.album-card {
-  background: var(--card);
-}
-
 /*
  * The vinyl disc(s) peeking out from behind a cover tile (see `VinylDisc`). Sits
  * behind `.album-card` in both DOM order and z-index, same-sized as the tile —

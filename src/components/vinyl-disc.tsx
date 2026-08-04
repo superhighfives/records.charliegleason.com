@@ -48,6 +48,12 @@ interface VinylDiscProps {
 	textureImageKey?: string | null;
 	textureStatus?: string | null;
 	colorName?: string | null;
+	/**
+	 * Translucent vinyl (`colors.translucent`): render the disc's colour fill
+	 * semi-transparent so the page background shows through when it peeks out,
+	 * matching how a "Transparent Red"/"Clear" pressing actually looks.
+	 */
+	translucent?: boolean | null;
 	/** Physical size, e.g. '12"' / '10"' / '7"' — scales the disc diameter. */
 	size?: string | null;
 	/** Discs to stack (capped at 3 — a box set reads the same as a triple LP). */
@@ -61,6 +67,7 @@ export function VinylDisc({
 	textureImageKey,
 	textureStatus,
 	colorName,
+	translucent,
 	size,
 	discCount,
 	className,
@@ -108,12 +115,14 @@ export function VinylDisc({
 							</pattern>
 						</defs>
 					)}
-					{/* Fill: the color/pattern, per `colors.textureImageKey`. */}
+					{/* Fill: the color/pattern, per `colors.textureImageKey`. Translucent
+					    pressings drop the fill's opacity so the page shows through. */}
 					<circle
 						cx="50"
 						cy="50"
 						r="48"
 						fill={hasTexture ? `url(#${patternId})` : "currentColor"}
+						fillOpacity={translucent ? 0.65 : undefined}
 						className={hasTexture ? undefined : "text-foreground/70"}
 					/>
 					{/* Overlay: shared "clear vinyl" grooves + sheen art, blended on

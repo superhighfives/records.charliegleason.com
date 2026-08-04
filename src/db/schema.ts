@@ -24,6 +24,11 @@ export const colors = sqliteTable("colors", {
 	// on-hover gradient in the collection grid. Best-effort: null on failed
 	// extraction or legacy rows awaiting backfill (the title just stays untinted).
 	palette: text("palette"),
+	// Translucent vinyl (e.g. "Transparent Red", "Clear"): VinylDisc renders the
+	// disc semi-transparent so the page background shows through, matching how the
+	// physical record looks. Purely a render hint — the generated texture itself is
+	// still an opaque swatch.
+	translucent: integer("translucent", { mode: "boolean" }).default(false),
 	createdAt: integer("created_at", { mode: "timestamp" }).default(
 		sql`(unixepoch())`,
 	),

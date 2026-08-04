@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	BlendIcon,
 	CheckIcon,
 	RefreshCwIcon,
 	TrashIcon,
@@ -20,7 +21,9 @@ import {
 	createColor,
 	DEFAULT_COLOR_NAME,
 	deleteColor,
+	ensureColorTexture,
 	regenerateColorTexture,
+	setColorTranslucent,
 	uploadColorTexture,
 } from "#/lib/colors";
 import { colorsQueryOptions } from "#/lib/colors-queries";
@@ -107,6 +110,29 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 		onSuccess: () =>
 			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey }),
 		onError: () => toast.error("Couldn't regenerate the texture."),
+	});
+
+	// Picking a chip whose texture never ran (or failed) queues it — so choosing a
+	// colour is enough to get its vinyl texture + title palette, no manual
+	// regenerate needed. No-op server-side for chips that are already generating
+	// or ready. Best-effort: a failure here shouldn't block selecting the colour.
+	const ensureTextureMutation = useMutation({
+		mutationFn: (colorId: number) => ensureColorTexture({ data: { colorId } }),
+		onSuccess: () =>
+			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey }),
+	});
+
+	const translucentMutation = useMutation({
+		mutationFn: ({
+			colorId,
+			translucent,
+		}: {
+			colorId: number;
+			translucent: boolean;
+		}) => setColorTranslucent({ data: { colorId, translucent } }),
+		onSuccess: () =>
+			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey }),
+		onError: () => toast.error("Couldn't update transparency."),
 	});
 
 	const uploadMutation = useMutation({
@@ -213,6 +239,12 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 									type="button"
 									onClick={() => {
 										onChange(c.id.toString());
+										if (
+											c.textureStatus === "idle" ||
+											c.textureStatus === "failed"
+										) {
+											ensureTextureMutation.mutate(c.id);
+										}
 										setQuery("");
 										setOpen(false);
 									}}
@@ -229,6 +261,28 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 									)}
 								</button>
 								<div className="flex items-center gap-1">
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										aria-label={`Mark ${c.name} translucent`}
+										aria-pressed={c.translucent ?? false}
+										className={cn(
+											"opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+											c.translucent &&
+												"text-brand-strong opacity-100 group-hover:opacity-100",
+										)}
+										disabled={translucentMutation.isPending}
+										onClick={(e) => {
+											e.stopPropagation();
+											translucentMutation.mutate({
+												colorId: c.id,
+												translucent: !c.translucent,
+											});
+										}}
+									>
+										<BlendIcon className="size-3.5" />
+									</Button>
 									<Button
 										type="button"
 										variant="ghost"

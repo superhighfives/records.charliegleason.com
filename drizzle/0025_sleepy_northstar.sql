@@ -1,0 +1,1 @@
+ALTER TABLE `colors` ADD `translucent` integer DEFAULT false;

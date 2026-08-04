@@ -11,6 +11,7 @@ import { FadeImage } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { VinylDisc } from "#/components/vinyl-disc";
 import { parseColorPalette } from "#/lib/color-palette";
+import { DEFAULT_COLOR_NAME } from "#/lib/colors";
 import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { cn } from "#/lib/utils";
@@ -86,7 +87,13 @@ function RecordTile({
 	// color-palette.ts), with lightness clamped per theme in CSS (`.title-palette`)
 	// so it always reads. Records whose chip has no palette yet keep the default
 	// (untinted) title on hover, same as the peeking disc's plain-colour fallback.
-	const palette = parseColorPalette(record.colorPalette);
+	// The default (Black) chip brands its title in the site accent on hover rather
+	// than a near-black palette gradient that barely reads — see the brand fallback
+	// below. Every other chip uses its own extracted palette when it has one.
+	const isDefaultColor = record.colorName === DEFAULT_COLOR_NAME;
+	const palette = isDefaultColor
+		? null
+		: parseColorPalette(record.colorPalette);
 	const paletteFrom = palette?.colors[0];
 	const paletteTo = palette?.colors[1] ?? palette?.colors[0];
 	return (
@@ -101,6 +108,7 @@ function RecordTile({
 						colorName={record.colorName}
 						textureImageKey={record.colorTextureImageKey}
 						textureStatus={record.colorTextureStatus}
+						translucent={record.colorTranslucent}
 						size={record.size}
 						discCount={record.discCount}
 					/>
@@ -126,8 +134,10 @@ function RecordTile({
 					<p
 						className={cn(
 							"truncate font-serif text-base font-medium transition-colors duration-300 ease-out",
-							paletteFrom &&
-								"title-palette bg-clip-text group-hover:text-transparent",
+							paletteFrom
+								? "title-palette bg-clip-text group-hover:text-transparent"
+								: // Black default: brand the title in the site accent on hover.
+									isDefaultColor && "group-hover:text-brand-strong",
 						)}
 						style={
 							paletteFrom
