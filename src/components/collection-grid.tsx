@@ -79,9 +79,10 @@ function RecordTile({
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
-	// Only reveal the peeking vinyl disc once the cover is up, so a slow/lazy tile
-	// never flashes bare vinyl behind a not-yet-loaded (now background-less) cover.
-	// No cover at all → the placeholder is there immediately, so the disc can show.
+	// Keep the peeking vinyl disc faint (10%) until the cover is up, then fade it to
+	// full in step with the cover — so a slow/lazy tile never flashes a bold disc
+	// behind a not-yet-loaded (now background-less) cover. No cover at all → the
+	// placeholder is there immediately, so the disc shows straight away.
 	const [coverReady, setCoverReady] = useState(!cover);
 	// On hover the title "brands" itself with the record's own vinyl colour (it
 	// replaced the old yellow cover-lift bar). Rather than clip the photographic
@@ -117,7 +118,7 @@ function RecordTile({
 						discCount={record.discCount}
 						className={cn(
 							"transition-opacity duration-700 ease-out motion-reduce:transition-none",
-							coverReady ? "opacity-100" : "opacity-0",
+							coverReady ? "opacity-100" : "opacity-10",
 						)}
 					/>
 					<div className="album-card grain aspect-square overflow-hidden">
