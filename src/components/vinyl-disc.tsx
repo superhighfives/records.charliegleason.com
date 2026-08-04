@@ -92,7 +92,7 @@ export function VinylDisc({
 				<svg
 					key={i}
 					viewBox="0 0 100 100"
-					className="vinyl-disc absolute p-1 size-full"
+					className="vinyl-disc absolute p-2 size-full"
 					style={{ "--vinyl-stack-index": i } as React.CSSProperties}
 				>
 					<title>{colorName ? `${colorName} vinyl` : "Vinyl record"}</title>

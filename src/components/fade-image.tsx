@@ -1,5 +1,6 @@
 import {
 	type ComponentPropsWithoutRef,
+	useCallback,
 	useEffect,
 	useRef,
 	useState,
@@ -83,21 +84,50 @@ export function FadeImage({
 		if (loaded) onReadyRef.current?.();
 	}, [loaded]);
 
-	const reveal = (value: string | undefined) => {
-		if (typeof value === "string") decodedSrcs.add(value);
-		setLoadedSrc(value);
-	};
+	// True from mount to unmount — guards the rAF pair below against firing
+	// (and warning) after this instance is gone, which matters more than usual
+	// here: see the note on `mountedRef.current` inside `reveal`.
+	const mountedRef = useRef(true);
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => {
+			mountedRef.current = false;
+		};
+	}, []);
+
+	// Two rAFs (not zero, not one) bracket a real paint of the *pre-reveal*
+	// (opacity-0) frame before the class flips — otherwise, on a fast or
+	// already-cached load, React can resolve the state update within the same
+	// commit/paint as the initial mount, so the browser never actually paints
+	// the hidden starting point the CSS transition would animate from. The
+	// result is a hard cut instead of a fade, most visible when several images
+	// on a page all finish around the same instant (they cut in unison). A
+	// single rAF can still land before that first paint; two reliably don't.
+	const reveal = useCallback((value: string | undefined) => {
+		requestAnimationFrame(() => {
+			requestAnimationFrame(() => {
+				// `decodedSrcs` is deliberately marked *here*, not at the top of
+				// `reveal`, and only if this instance survived to actually paint the
+				// reveal: a caller that unmounts this instance before the rAF pair
+				// fires (the collection grid remounts every tile once, right after
+				// hydration, when it switches from its plain first-paint markup to
+				// the virtualized one) would otherwise mark the src decoded for an
+				// animation that never played — the *next* mount then reads it back
+				// as "already seen" and skips the fade it's actually showing for the
+				// first time, i.e. exactly the interrupted mount's hard-cut bug.
+				if (!mountedRef.current) return;
+				if (typeof value === "string") decodedSrcs.add(value);
+				setLoadedSrc(value);
+			});
+		});
+	}, []);
 
 	useEffect(() => {
 		// A cached image can already be complete before `onLoad` is wired up (on
 		// mount, or right after a src swap), in which case the event never fires —
-		// reveal it straight away. Inlined (not via `reveal`) so the effect needs no
-		// unstable-callback dependency.
-		if (ref.current?.complete) {
-			if (typeof src === "string") decodedSrcs.add(src);
-			setLoadedSrc(src);
-		}
-	}, [src]);
+		// reveal it via the same rAF-bracketed path as everything else.
+		if (ref.current?.complete) reveal(src);
+	}, [src, reveal]);
 
 	return (
 		<img

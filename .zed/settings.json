@@ -1,0 +1,17 @@
+{
+  // Use the project's pinned TypeScript (not whatever vtsls falls back to) — a
+  // version mismatch is a common source of IDE-only errors that a local `tsc`
+  // build doesn't reproduce.
+  "lsp": {
+    "vtsls": {
+      "settings": {
+        "typescript": {
+          "tsdk": "node_modules/typescript/lib"
+        },
+        "javascript": {
+          "tsdk": "node_modules/typescript/lib"
+        }
+      }
+    }
+  }
+}

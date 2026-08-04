@@ -24,6 +24,19 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      - name: Generated routes are current
+        # src/routeTree.gen.ts is committed but derived from src/routes/** —
+        # regenerate it and fail if that produces a diff, so a route file edited
+        # without the dev server's watcher running (which keeps it in sync locally)
+        # can't land stale. A stale tree surfaces as confusing type errors at
+        # createFileRoute() call sites rather than here, so catch it explicitly.
+        run: |
+          bun run generate-routes
+          git diff --exit-code -- src/routeTree.gen.ts || {
+            echo "::error::src/routeTree.gen.ts is out of date — run 'bun run generate-routes' and commit the result."
+            exit 1
+          }
+
       - name: Typecheck
         run: bunx tsc --noEmit
 
