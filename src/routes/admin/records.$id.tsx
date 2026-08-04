@@ -1473,32 +1473,39 @@ function RecordDetail() {
 						)}
 
 						{/* Candidate pick-list — the lower half of the panel, divided from
-					    the controls above. A manual search can return every pressing,
-					    so cap the height and let it scroll rather than pushing the form
-					    off-screen. */}
+					    the controls above. Headed "Releases" so it reads as the second
+					    group beneath the "Albums" (masters) list: albums first, then the
+					    specific pressings underneath. A manual search can return every
+					    pressing, so cap the height and let it scroll rather than pushing
+					    the form off-screen. */}
 						{candidates.length > 0 && (
-							<ul className="max-h-[345px] divide-y overflow-y-auto border-t">
-								{candidates.map((c) => {
-									const active = picked
-										? picked.discogsId === c.discogsId
-										: !albumOnly && record.discogsId === c.discogsId;
-									return (
-										<CandidateRow
-											key={c.discogsId}
-											candidate={c}
-											active={active}
-											onToggle={() => {
-												// Picking a release re-pins, so it clears album-only.
-												setAlbumOnly(false);
-												// A release implies its album, so a fresh pick also
-												// re-establishes the master (undoes an explicit unmatch).
-												if (!active) setUnmatchMaster(false);
-												setPicked(active ? null : c);
-											}}
-										/>
-									);
-								})}
-							</ul>
+							<div className="border-t">
+								<p className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+									Releases
+								</p>
+								<ul className="max-h-[345px] divide-y overflow-y-auto border-t">
+									{candidates.map((c) => {
+										const active = picked
+											? picked.discogsId === c.discogsId
+											: !albumOnly && record.discogsId === c.discogsId;
+										return (
+											<CandidateRow
+												key={c.discogsId}
+												candidate={c}
+												active={active}
+												onToggle={() => {
+													// Picking a release re-pins, so it clears album-only.
+													setAlbumOnly(false);
+													// A release implies its album, so a fresh pick also
+													// re-establishes the master (undoes an explicit unmatch).
+													if (!active) setUnmatchMaster(false);
+													setPicked(active ? null : c);
+												}}
+											/>
+										);
+									})}
+								</ul>
+							</div>
 						)}
 
 						{/* Pressing un-pin control. Only meaningful when there's an album to
