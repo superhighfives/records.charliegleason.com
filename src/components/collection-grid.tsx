@@ -48,7 +48,18 @@ function useColumns(): number {
 	return cols;
 }
 
-/** False during SSR and the first client paint, true after mount. */
+/**
+ * False during SSR and the first client paint, true after mount. This is one of
+ * the few legitimate uses of `setState` in an effect — the virtualizer needs
+ * `window`, so the very first client render must still match the server's (no
+ * `window`) to avoid a hydration mismatch, and only the *next* render can switch
+ * on. That switch swaps `CollectionGrid` from the plain map below to the
+ * virtualized tree, which unmounts and remounts every `RecordTile` (they're
+ * structurally different subtrees, so React can't reconcile across them) —
+ * `FadeImage`'s reveal is deliberately resilient to that (see its `reveal`
+ * rAF-guard comment), but any *other* per-tile state or side effect added later
+ * should assume it gets reset the instant the page becomes interactive.
+ */
 function useMounted(): boolean {
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);

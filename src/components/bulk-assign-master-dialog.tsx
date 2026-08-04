@@ -83,6 +83,10 @@ export function BulkAssignMasterDialog({
 	const [autoSearchedIds, setAutoSearchedIds] = useState<Set<number>>(
 		new Set(),
 	);
+	// Reset-on-open, not a `key`-driven remount: the Dialog needs to stay mounted
+	// through its own close animation, so swapping `key`s on `open` would tear the
+	// content down (and its transition) the instant `open` flips to false, before
+	// Radix gets to animate it out.
 	useEffect(() => {
 		if (open) {
 			setSkipped(new Set());
