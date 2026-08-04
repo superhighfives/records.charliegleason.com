@@ -44,9 +44,38 @@ export const getOrCreateColor = createServerOnlyFn(
 			return inserted[0];
 		}
 		const [row] = await db.select().from(colors).where(eq(colors.name, name));
+		// Re-attaching an existing color that never got a texture (idle) or whose
+		// generation failed: kick it off now so picking such a chip is enough to
+		// get its vinyl texture + title palette, without needing the manual
+		// "regenerate" button. `queued`/`processing`/`ready` are left alone.
+		if (
+			row &&
+			(row.textureStatus === "idle" || row.textureStatus === "failed")
+		) {
+			await queueColorTexture(row.id).catch((err) => {
+				Sentry.captureException(err);
+			});
+			return { ...row, textureStatus: "queued", textureError: null };
+		}
 		return row;
 	},
 );
+
+/**
+ * Mark a color `queued` and enqueue its texture generation. The single write +
+ * enqueue shared by every "(re)generate this color's texture" path — the
+ * regenerate button, the on-select {@link ensureColorTexture}, and
+ * {@link getOrCreateColor}'s re-attach branch. Sets `queued` up front so the UI
+ * shows the retry immediately, before the consumer picks the job up.
+ */
+const queueColorTexture = createServerOnlyFn(async (colorId: number) => {
+	const db = getDb(env.DB);
+	await db
+		.update(colors)
+		.set({ textureStatus: "queued", textureError: null })
+		.where(eq(colors.id, colorId));
+	await enqueueColorTexture(colorId);
+});
 
 /**
  * All vinyl color chips, for the admin combobox's suggestion list — each with
@@ -96,13 +125,55 @@ export const regenerateColorTexture = createServerFn({ method: "POST" })
 		z.object({ colorId: z.number().int() }).parse(data),
 	)
 	.handler(({ data: { colorId } }) =>
-		Sentry.startSpan({ name: "regenerateColorTexture" }, async () => {
+		Sentry.startSpan({ name: "regenerateColorTexture" }, () =>
+			queueColorTexture(colorId),
+		),
+	);
+
+/**
+ * "Make sure this color has a texture" — the combobox fires this when a chip is
+ * picked, so selecting a color whose texture never ran (`idle`) or failed is
+ * enough to queue it. A no-op when the texture is already `queued`/`processing`/
+ * `ready`, so re-picking a good chip costs nothing.
+ */
+export const ensureColorTexture = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) =>
+		z.object({ colorId: z.number().int() }).parse(data),
+	)
+	.handler(({ data: { colorId } }) =>
+		Sentry.startSpan({ name: "ensureColorTexture" }, async () => {
+			const db = getDb(env.DB);
+			const [row] = await db
+				.select({ textureStatus: colors.textureStatus })
+				.from(colors)
+				.where(eq(colors.id, colorId))
+				.limit(1);
+			if (row?.textureStatus === "idle" || row?.textureStatus === "failed") {
+				await queueColorTexture(colorId);
+			}
+		}),
+	);
+
+/**
+ * Toggle whether a color is translucent vinyl — the combobox's transparency
+ * affordance. Purely a render hint (`VinylDisc` drops the disc's fill opacity so
+ * the page shows through); doesn't touch the generated texture.
+ */
+export const setColorTranslucent = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) =>
+		z
+			.object({ colorId: z.number().int(), translucent: z.boolean() })
+			.parse(data),
+	)
+	.handler(({ data: { colorId, translucent } }) =>
+		Sentry.startSpan({ name: "setColorTranslucent" }, async () => {
 			const db = getDb(env.DB);
 			await db
 				.update(colors)
-				.set({ textureStatus: "queued", textureError: null })
+				.set({ translucent })
 				.where(eq(colors.id, colorId));
-			await enqueueColorTexture(colorId);
 		}),
 	);
 

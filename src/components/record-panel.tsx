@@ -44,6 +44,7 @@ export type PanelRecord = Omit<
 	| "colorTextureImageKey"
 	| "colorTextureStatus"
 	| "colorPalette"
+	| "colorTranslucent"
 > &
 	// `copies` (physical copies owned) is derived on the public list; the admin drawer
 	// passes a raw row without it, so it's optional here — the "Copies" line only shows
@@ -59,6 +60,7 @@ export type PanelRecord = Omit<
 			| "colorTextureImageKey"
 			| "colorTextureStatus"
 			| "colorPalette"
+			| "colorTranslucent"
 		>
 	> &
 	Partial<
@@ -504,6 +506,7 @@ export function RecordPanel({
 							colorName={record.colorName}
 							textureImageKey={record.colorTextureImageKey}
 							textureStatus={record.colorTextureStatus}
+							translucent={record.colorTranslucent}
 							size={record.size}
 							discCount={record.discCount}
 						/>
