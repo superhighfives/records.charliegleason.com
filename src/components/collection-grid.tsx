@@ -7,7 +7,7 @@ import {
 	useState,
 } from "react";
 
-import { FadeImage } from "#/components/fade-image";
+import { FadeImage, isImageDecoded } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { VinylDisc } from "#/components/vinyl-disc";
 import { parseColorPalette } from "#/lib/color-palette";
@@ -79,11 +79,17 @@ function RecordTile({
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
+	const coverSrc = cover ? `/api/photos/${cover}` : undefined;
 	// Keep the peeking vinyl disc faint (10%) until the cover is up, then fade it to
 	// full in step with the cover — so a slow/lazy tile never flashes a bold disc
 	// behind a not-yet-loaded (now background-less) cover. No cover at all → the
-	// placeholder is there immediately, so the disc shows straight away.
-	const [coverReady, setCoverReady] = useState(!cover);
+	// placeholder is there immediately, so the disc shows straight away. Seeded from
+	// `FadeImage`'s own decoded-src cache too, so a cover the grid has already shown
+	// this session (e.g. scrolling back to a row outside the overscan window) mounts
+	// the disc at full opacity instead of replaying the fade the cover itself skips.
+	const [coverReady, setCoverReady] = useState(
+		() => !cover || isImageDecoded(coverSrc),
+	);
 	// On hover the title "brands" itself with the record's own vinyl colour (it
 	// replaced the old yellow cover-lift bar). Rather than clip the photographic
 	// texture into the glyphs — which split a wide title across the texture's own
@@ -124,7 +130,7 @@ function RecordTile({
 					<div className="album-card grain aspect-square overflow-hidden">
 						{cover ? (
 							<FadeImage
-								src={`/api/photos/${cover}`}
+								src={coverSrc}
 								alt={`${record.artist} — ${record.title}`}
 								onReady={() => setCoverReady(true)}
 								className={cn(

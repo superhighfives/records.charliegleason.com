@@ -35,6 +35,17 @@ import { cn } from "#/lib/utils";
  */
 const decodedSrcs = new Set<string>();
 
+/**
+ * Whether `src` has already decoded once this session — i.e. whether a
+ * `FadeImage` mounted with this src would reveal instantly instead of
+ * fading in. Lets a caller seed its own reveal state (e.g. the grid tile's
+ * peeking vinyl disc) in step with the cover it's paired with, rather than
+ * guessing from `!src` and replaying a fade the cover itself skips.
+ */
+export function isImageDecoded(src: string | undefined) {
+	return typeof src === "string" && decodedSrcs.has(src);
+}
+
 export function FadeImage({
 	alt,
 	className,
