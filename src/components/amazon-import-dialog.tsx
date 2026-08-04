@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, RedoIcon, UploadIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "#/components/ui/button";
@@ -22,6 +22,7 @@ import {
 import { displayCoverKey } from "#/lib/cover";
 import { enqueueAmazonResolve } from "#/lib/records";
 import { recordsQueryOptions } from "#/lib/records-queries";
+import { cn } from "#/lib/utils";
 
 /**
  * Import an Amazon "Request My Data" order-history export and use it to pin the
@@ -64,6 +65,8 @@ export function AmazonImportDialog({
 	const [skipped, setSkipped] = useState<Set<string>>(new Set());
 	const [parseError, setParseError] = useState<string | null>(null);
 	const [queued, setQueued] = useState(false);
+	// The pairing whose Amazon-vs-yours comparison modal is open, if any.
+	const [compare, setCompare] = useState<PurchasePair<Record> | null>(null);
 
 	useEffect(() => {
 		if (open) {
@@ -72,6 +75,7 @@ export function AmazonImportDialog({
 			setSkipped(new Set());
 			setParseError(null);
 			setQueued(false);
+			setCompare(null);
 		}
 	}, [open]);
 
@@ -117,131 +121,237 @@ export function AmazonImportDialog({
 	});
 
 	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-2xl">
-				<DialogHeader>
-					<DialogTitle>Import from Amazon</DialogTitle>
-					<DialogDescription>
-						Upload your Amazon order history (Retail.OrderHistory.csv from{" "}
-						<span className="font-medium">Request My Data</span>) to pin the
-						exact pressing on records you bought — resolved from the barcode in
-						the background.
-					</DialogDescription>
-				</DialogHeader>
+		<>
+			<Dialog open={open} onOpenChange={onOpenChange}>
+				<DialogContent className="max-w-2xl">
+					<DialogHeader>
+						<DialogTitle>Import from Amazon</DialogTitle>
+						<DialogDescription>
+							Upload your Amazon order history (Retail.OrderHistory.csv from{" "}
+							<span className="font-medium">Request My Data</span>) to pin the
+							exact pressing on records you bought — resolved from the barcode
+							in the background.
+						</DialogDescription>
+					</DialogHeader>
 
-				{pairs == null ? (
-					<div className="space-y-3">
-						<Button
-							type="button"
-							variant="outline"
-							onClick={() => fileRef.current?.click()}
-						>
-							<UploadIcon className="size-4" />
-							Choose CSV
-						</Button>
-						<input
-							ref={fileRef}
-							type="file"
-							accept=".csv,text/csv"
-							className="hidden"
-							onChange={(e) => handleFile(e.target.files?.[0])}
-						/>
-						<p className="text-xs text-muted-foreground">
-							Get the file from Amazon → Account → Request Your Information →{" "}
-							<span className="font-medium">Your Orders</span> (unzip it and
-							pick <span className="font-medium">Retail.OrderHistory.csv</span>
-							). Only music purchases are read, and nothing is uploaded anywhere
-							— the file is parsed here in your browser.
-						</p>
-						{parseError && <p className="text-xs text-red-600">{parseError}</p>}
-					</div>
-				) : queued ? (
-					<p className="py-6 text-center text-sm text-muted-foreground">
-						Queued — the matched pressings will fill in on your records over the
-						next few minutes.
-					</p>
-				) : (
-					<>
-						<p className="text-xs text-muted-foreground">
-							{active.length} purchase{active.length === 1 ? "" : "s"} matched a
-							record missing a pressing.
-							{unpaired > 0 &&
-								` ${unpaired} other purchase${unpaired === 1 ? "" : "s"} didn't match a record — ignored.`}
-						</p>
-						{pairs.length === 0 ? (
-							<p className="py-4 text-center text-sm text-muted-foreground">
-								None of your Amazon music purchases matched a record that still
-								needs a pressing.
+					{pairs == null ? (
+						<div className="space-y-3">
+							<Button
+								type="button"
+								variant="outline"
+								onClick={() => fileRef.current?.click()}
+							>
+								<UploadIcon className="size-4" />
+								Choose CSV
+							</Button>
+							<input
+								ref={fileRef}
+								type="file"
+								accept=".csv,text/csv"
+								className="hidden"
+								onChange={(e) => handleFile(e.target.files?.[0])}
+							/>
+							<p className="text-xs text-muted-foreground">
+								Get the file from Amazon → Account → Request Your Information →{" "}
+								<span className="font-medium">Your Orders</span> (unzip it and
+								pick{" "}
+								<span className="font-medium">Retail.OrderHistory.csv</span>
+								). Only music purchases are read, and nothing is uploaded
+								anywhere — the file is parsed here in your browser.
 							</p>
-						) : (
-							<ul className="max-h-[360px] divide-y overflow-y-auto rounded-md border">
-								{pairs.map((p) => {
-									const isSkipped = skipped.has(p.item.asin);
-									return (
-										<li
-											key={p.item.asin}
-											className={`flex items-center gap-2 p-2 ${
-												isSkipped ? "opacity-40" : ""
-											}`}
-										>
-											{/* What you bought (Amazon) → what it'll pin to (your cover). */}
-											<Thumb
-												src={amazonImageUrl(p.item.asin)}
-												alt={`Amazon: ${p.item.title}`}
-											/>
-											<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-											<Thumb
-												src={coverSrc(p.record)}
-												alt={`${p.record.artist} — ${p.record.title}`}
-											/>
-											<div className="min-w-0 flex-1">
-												<p className="truncate text-sm font-medium">
-													{p.record.artist} — {p.record.title}
-												</p>
-												<p className="truncate text-xs text-muted-foreground">
-													Amazon: {p.item.title}
-													{p.item.country ? ` · ${p.item.country}` : ""}
-												</p>
-											</div>
-											<Button
-												type="button"
-												variant="ghost"
-												size="icon-sm"
-												aria-label={isSkipped ? "Include" : "Skip"}
-												onClick={() =>
-													setSkipped((s) => {
-														const next = new Set(s);
-														if (next.has(p.item.asin)) next.delete(p.item.asin);
-														else next.add(p.item.asin);
-														return next;
-													})
-												}
+							{parseError && (
+								<p className="text-xs text-red-600">{parseError}</p>
+							)}
+						</div>
+					) : queued ? (
+						<p className="py-6 text-center text-sm text-muted-foreground">
+							Queued — the matched pressings will fill in on your records over
+							the next few minutes.
+						</p>
+					) : (
+						<>
+							<p className="text-xs text-muted-foreground">
+								{active.length} purchase{active.length === 1 ? "" : "s"} matched
+								a record missing a pressing.
+								{unpaired > 0 &&
+									` ${unpaired} other purchase${unpaired === 1 ? "" : "s"} didn't match a record — ignored.`}
+							</p>
+							{pairs.length === 0 ? (
+								<p className="py-4 text-center text-sm text-muted-foreground">
+									None of your Amazon music purchases matched a record that
+									still needs a pressing.
+								</p>
+							) : (
+								<ul className="max-h-[360px] divide-y overflow-y-auto rounded-md border">
+									{pairs.map((p) => {
+										const isSkipped = skipped.has(p.item.asin);
+										return (
+											<li
+												key={p.item.asin}
+												className={cn(
+													"flex items-center gap-2 p-2 transition-colors",
+													isSkipped ? "opacity-40" : "hover:bg-accent/40",
+												)}
 											>
-												<RedoIcon className="size-4" />
-											</Button>
-										</li>
-									);
-								})}
-							</ul>
-						)}
-					</>
-				)}
+												{/* Click the pairing to compare Amazon vs your record side by
+											    side; the skip control is a separate sibling button. */}
+												<button
+													type="button"
+													onClick={() => setCompare(p)}
+													title="Compare Amazon vs your record"
+													className="flex min-w-0 flex-1 items-center gap-2 text-left"
+												>
+													{/* What you bought (Amazon) → what it'll pin to (your cover). */}
+													<Thumb
+														src={amazonImageUrl(p.item.asin)}
+														alt={`Amazon: ${p.item.title}`}
+													/>
+													<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+													<Thumb
+														src={coverSrc(p.record)}
+														alt={`${p.record.artist} — ${p.record.title}`}
+													/>
+													<div className="min-w-0 flex-1">
+														<p className="truncate text-sm font-medium">
+															{p.record.artist} — {p.record.title}
+														</p>
+														<p className="truncate text-xs text-muted-foreground">
+															Amazon: {p.item.title}
+															{p.item.country ? ` · ${p.item.country}` : ""}
+														</p>
+													</div>
+												</button>
+												<Button
+													type="button"
+													variant="ghost"
+													size="icon-sm"
+													aria-label={isSkipped ? "Include" : "Skip"}
+													onClick={() =>
+														setSkipped((s) => {
+															const next = new Set(s);
+															if (next.has(p.item.asin))
+																next.delete(p.item.asin);
+															else next.add(p.item.asin);
+															return next;
+														})
+													}
+												>
+													<RedoIcon className="size-4" />
+												</Button>
+											</li>
+										);
+									})}
+								</ul>
+							)}
+						</>
+					)}
 
-				{pairs != null && pairs.length > 0 && !queued && (
-					<DialogFooter>
-						<Button
-							type="button"
-							onClick={() => enqueue.mutate()}
-							disabled={active.length === 0 || enqueue.isPending}
-						>
-							{enqueue.isPending
-								? "Queuing…"
-								: `Queue ${active.length} lookup${active.length === 1 ? "" : "s"}`}
-						</Button>
-					</DialogFooter>
-				)}
-			</DialogContent>
-		</Dialog>
+					{pairs != null && pairs.length > 0 && !queued && (
+						<DialogFooter>
+							<Button
+								type="button"
+								onClick={() => enqueue.mutate()}
+								disabled={active.length === 0 || enqueue.isPending}
+							>
+								{enqueue.isPending
+									? "Queuing…"
+									: `Queue ${active.length} lookup${active.length === 1 ? "" : "s"}`}
+							</Button>
+						</DialogFooter>
+					)}
+				</DialogContent>
+			</Dialog>
+
+			{/* Side-by-side comparison for one pairing — bigger covers plus the
+			    Amazon-vs-yours details, opened by clicking a row above. Its own
+			    Dialog (stacked over the import one) so it can open/close on its own. */}
+			<Dialog
+				open={compare != null}
+				onOpenChange={(o) => {
+					if (!o) setCompare(null);
+				}}
+			>
+				<DialogContent className="max-w-2xl">
+					{compare && (
+						<>
+							<DialogHeader>
+								<DialogTitle>
+									{compare.record.artist} — {compare.record.title}
+								</DialogTitle>
+								<DialogDescription>
+									What you bought on Amazon, next to the record it'll pin a
+									pressing on.
+								</DialogDescription>
+							</DialogHeader>
+							<div className="grid grid-cols-2 gap-4">
+								<section className="space-y-2">
+									<p className="text-xs font-medium text-muted-foreground">
+										Amazon
+									</p>
+									<Thumb
+										key={compare.item.asin}
+										src={amazonImageUrl(compare.item.asin, 500)}
+										alt={`Amazon: ${compare.item.title}`}
+										className="aspect-square w-full"
+										fit="contain"
+									/>
+									<dl className="space-y-1 text-sm">
+										<Field label="Title">{compare.item.title}</Field>
+										<Field label="Category">
+											{compare.item.category ?? "—"}
+										</Field>
+										<Field label="Ordered">
+											{compare.item.orderDate ?? "—"}
+										</Field>
+										<Field label="Country">{compare.item.country ?? "—"}</Field>
+										<Field label="ASIN">
+											<a
+												href={`https://www.amazon.com/dp/${compare.item.asin}`}
+												target="_blank"
+												rel="noreferrer"
+												className="underline underline-offset-2"
+											>
+												{compare.item.asin}
+											</a>
+										</Field>
+									</dl>
+								</section>
+								<section className="space-y-2">
+									<p className="text-xs font-medium text-muted-foreground">
+										Your record
+									</p>
+									<Thumb
+										key={compare.record.id}
+										src={coverSrc(compare.record)}
+										alt={`${compare.record.artist} — ${compare.record.title}`}
+										className="aspect-square w-full"
+										fit="contain"
+									/>
+									<dl className="space-y-1 text-sm">
+										<Field label="Artist">{compare.record.artist}</Field>
+										<Field label="Title">{compare.record.title}</Field>
+										<Field label="Year">{compare.record.year ?? "—"}</Field>
+										<Field label="Label">{compare.record.label ?? "—"}</Field>
+										<Field label="Format">
+											{[compare.record.format, compare.record.size]
+												.filter(Boolean)
+												.join(" · ") || "—"}
+										</Field>
+										<Field label="Genre">{compare.record.genre ?? "—"}</Field>
+										<Field label="Catalog #">
+											{compare.record.catno ?? "—"}
+										</Field>
+										<Field label="Country">
+											{compare.record.country ?? "—"}
+										</Field>
+									</dl>
+								</section>
+							</div>
+						</>
+					)}
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }
 
@@ -252,22 +362,53 @@ function coverSrc(record: Record): string | null {
 }
 
 /**
- * A small square thumbnail that degrades to a muted box when the image is missing
- * or fails to load — Amazon has no product image for some ASINs, and a draft
- * record may have no cover yet.
+ * A square image that degrades to a muted box when the image is missing or fails
+ * to load — Amazon has no product image for some ASINs, and a draft record may
+ * have no cover yet. Defaults to the `size-10` row thumbnail; pass `className`
+ * (e.g. `aspect-square w-full`) and `fit="contain"` for the larger comparison
+ * covers. `key` it by src so a fresh instance clears the failed state per image.
  */
-function Thumb({ src, alt }: { src: string | null; alt: string }) {
+function Thumb({
+	src,
+	alt,
+	className = "size-10",
+	fit = "cover",
+}: {
+	src: string | null;
+	alt: string;
+	className?: string;
+	fit?: "cover" | "contain";
+}) {
 	const [failed, setFailed] = useState(false);
 	if (!src || failed) {
-		return <div className="size-10 shrink-0 rounded bg-muted" />;
+		return <div className={cn("shrink-0 rounded bg-muted", className)} />;
 	}
 	return (
 		<img
 			src={src}
 			alt={alt}
 			loading="lazy"
-			className="size-10 shrink-0 rounded object-cover"
+			className={cn(
+				"shrink-0 rounded",
+				fit === "contain" ? "object-contain" : "object-cover",
+				className,
+			)}
 			onError={() => setFailed(true)}
 		/>
+	);
+}
+
+/** A label/value line in the comparison modal's details lists. */
+function Field({ label, children }: { label: string; children: ReactNode }) {
+	return (
+		<div className="flex justify-between gap-3">
+			<dt className="shrink-0 text-muted-foreground">{label}</dt>
+			<dd
+				className="min-w-0 truncate text-right"
+				title={typeof children === "string" ? children : undefined}
+			>
+				{children}
+			</dd>
+		</div>
 	);
 }
