@@ -221,7 +221,11 @@ export function CornerEditor({
 	// Re-run the edge search whenever the band moves — coalesced to one animation
 	// frame so a fast drag doesn't queue a search per pointer event. The search runs
 	// from the band midline, bounded per edge by the inner/outer quads — exactly the
-	// server's cut.
+	// server's cut. `value` is safe as a whole-object dependency here: the caller
+	// holds it in `useState` and only replaces it (via `onChange`) when the band
+	// actually moves, so its identity doesn't change on unrelated re-renders —
+	// unlike a prop rebuilt as a fresh literal every render, which would need
+	// narrowing to primitive fields to avoid spurious re-runs.
 	useEffect(() => {
 		if (!refineSource || !bandValid) {
 			if (!bandValid) setRefined(null);

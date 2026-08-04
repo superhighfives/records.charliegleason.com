@@ -705,13 +705,17 @@ function RecordDetail() {
 	const [albumOnly, setAlbumOnly] = useState(false);
 	// A non-persisted Discogs value estimate for a picked-but-unpublished edition,
 	// so the admin can compare pricing across editions before committing. Cleared
-	// whenever the picked candidate changes so it never shows a stale edition's price.
+	// whenever the picked candidate changes so it never shows a stale edition's
+	// price — adjusted inline during render (not in an effect) by comparing
+	// against the last-seen id, so the picked-candidate render never paints the
+	// old price first and then clears it a beat later.
 	const [preview, setPreview] = useState<DiscogsValue | null>(null);
-	// Any change to the picked edition invalidates a previously previewed price.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the id only.
-	useEffect(() => {
-		setPreview(null);
-	}, [picked?.discogsId]);
+	const [previewedFor, setPreviewedFor] = useState<string | null>(null);
+	const pickedDiscogsId = picked?.discogsId ?? null;
+	if (previewedFor !== pickedDiscogsId) {
+		setPreviewedFor(pickedDiscogsId);
+		if (preview !== null) setPreview(null);
+	}
 	// One unified search for the record's identity — offers masters (albums) and
 	// releases (pressings) together, and routes a pasted Discogs URL / Amazon ASIN /
 	// barcode. Seed with the artist+title only when there's no album yet (to help
