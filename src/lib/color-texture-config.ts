@@ -25,9 +25,16 @@ export const COLOR_TEXTURE_SIZE = 1024;
  * material reference, not album art.
  */
 export function colorTexturePrompt(colorName: string): string {
+	// Steer hard AWAY from rendering a whole record: naming "vinyl record" makes
+	// the model paint the entire disc — shape, centre label, spindle hole, white
+	// backdrop — but VinylDisc supplies all of that itself and only needs the raw
+	// coloured surface. So we ask for a flat, seamless, frame-filling MATERIAL
+	// swatch and explicitly forbid every whole-object cue.
 	return (
-		`extreme close-up top-down photo of the flat playing surface of a vinyl record, ` +
-		`colored: ${colorName}. Studio lighting, seamless texture, no label, no text, ` +
-		`no spindle hole, fills the entire frame edge to edge.`
+		`Seamless flat macro texture swatch of ${colorName} vinyl material — the raw ` +
+		`coloured record plastic surface only, filling the entire frame edge to edge ` +
+		`with no background. Extreme close-up, top-down, even studio lighting, subtle ` +
+		`groove sheen. Absolutely no disc shape, no round record, no edges or rim, no ` +
+		`centre label, no spindle hole, no text — just a continuous flat surface.`
 	);
 }
