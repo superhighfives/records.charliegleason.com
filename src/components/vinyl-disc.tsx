@@ -92,7 +92,7 @@ export function VinylDisc({
 				<svg
 					key={i}
 					viewBox="0 0 100 100"
-					className="vinyl-disc absolute inset-0 size-full"
+					className="vinyl-disc absolute p-1 size-full"
 					style={{ "--vinyl-stack-index": i } as React.CSSProperties}
 				>
 					<title>{colorName ? `${colorName} vinyl` : "Vinyl record"}</title>
@@ -127,14 +127,7 @@ export function VinylDisc({
 					/>
 					{/* Overlay: shared "clear vinyl" grooves + sheen art, blended on
 					    top of the fill (see `VINYL_OVERLAY_SRC` above). */}
-					<image
-						href={overlaySrc}
-						x="1"
-						y="1"
-						width="98"
-						height="98"
-						style={{ mixBlendMode: "overlay" }}
-					/>
+					<image href={overlaySrc} x="1" y="1" width="98" height="98" />
 				</svg>
 			))}
 		</div>

@@ -112,7 +112,7 @@ function RecordTile({
 						size={record.size}
 						discCount={record.discCount}
 					/>
-					<div className="album-card grain aspect-square overflow-hidden">
+					<div className="aspect-square overflow-hidden">
 						{cover ? (
 							<FadeImage
 								src={`/api/photos/${cover}`}
@@ -155,14 +155,6 @@ function RecordTile({
 						{record.artist}
 						{record.year ? ` · ${record.year}` : ""}
 					</p>
-					{record.pitchforkScore != null && (
-						<p className="mt-1 text-xs font-bold text-brand-strong tabular-nums">
-							{record.pitchforkScore}
-							<span className="ml-1 font-normal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-								on Pitchfork
-							</span>
-						</p>
-					)}
 				</div>
 			</button>
 		</div>
