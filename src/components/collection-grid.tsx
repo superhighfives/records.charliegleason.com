@@ -79,6 +79,10 @@ function RecordTile({
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
+	// Only reveal the peeking vinyl disc once the cover is up, so a slow/lazy tile
+	// never flashes bare vinyl behind a not-yet-loaded (now background-less) cover.
+	// No cover at all → the placeholder is there immediately, so the disc can show.
+	const [coverReady, setCoverReady] = useState(!cover);
 	// On hover the title "brands" itself with the record's own vinyl colour (it
 	// replaced the old yellow cover-lift bar). Rather than clip the photographic
 	// texture into the glyphs — which split a wide title across the texture's own
@@ -111,12 +115,17 @@ function RecordTile({
 						translucent={record.colorTranslucent}
 						size={record.size}
 						discCount={record.discCount}
+						className={cn(
+							"transition-opacity duration-700 ease-out motion-reduce:transition-none",
+							coverReady ? "opacity-100" : "opacity-0",
+						)}
 					/>
 					<div className="album-card grain aspect-square overflow-hidden">
 						{cover ? (
 							<FadeImage
 								src={`/api/photos/${cover}`}
 								alt={`${record.artist} — ${record.title}`}
+								onReady={() => setCoverReady(true)}
 								className={cn(
 									// Fade in on load *and* keep the grayscale→colour hover —
 									// one combined transition property so both animate.

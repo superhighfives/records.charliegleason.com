@@ -40,9 +40,18 @@ export function FadeImage({
 	className,
 	onLoad,
 	onError,
+	onReady,
 	src,
 	...props
-}: ComponentPropsWithoutRef<"img">) {
+}: ComponentPropsWithoutRef<"img"> & {
+	/**
+	 * Fires once each time the image becomes visible — on real load, on error,
+	 * and (unlike `onLoad`) for a cached src that was already decoded before the
+	 * handler was wired up. Lets a caller reveal something in step with the image,
+	 * e.g. the grid tile fading its vinyl disc in only once the cover is up.
+	 */
+	onReady?: () => void;
+}) {
 	const ref = useRef<HTMLImageElement>(null);
 	// The src we've revealed. Deriving `loaded` from it (rather than storing a
 	// boolean) resets the fade in the same render that the src changes — no flash,
@@ -52,6 +61,16 @@ export function FadeImage({
 		typeof src === "string" && decodedSrcs.has(src) ? src : undefined,
 	);
 	const loaded = loadedSrc != null && loadedSrc === src;
+
+	// Notify the caller in step with the reveal, covering every path (DOM onLoad,
+	// error, and the cached/seeded cases the event misses). Via a ref so an inline
+	// `onReady` doesn't re-fire the effect on every parent render — it runs only
+	// when `loaded` actually flips.
+	const onReadyRef = useRef(onReady);
+	onReadyRef.current = onReady;
+	useEffect(() => {
+		if (loaded) onReadyRef.current?.();
+	}, [loaded]);
 
 	const reveal = (value: string | undefined) => {
 		if (typeof value === "string") decodedSrcs.add(value);
