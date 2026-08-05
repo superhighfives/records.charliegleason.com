@@ -98,16 +98,12 @@ export async function runMatteAudit(
 					.where(eq(records.id, row.id));
 			} catch (error) {
 				// A transient R2/Images blip or a genuinely corrupt stored cutout — either
-				// way, don't let one bad row abort the whole sweep. Mark it checked with no
-				// reason so the stalest-first queue moves on instead of wedging here.
+				// way, don't let one bad row abort the whole sweep. Unlike the "gone"
+				// branch above, leave checkedAt untouched (same as an inconclusive result
+				// in master-health.ts's sweep): a decode failure is itself a strong
+				// bad-matte signal, so the row stays at the front of the stalest-first
+				// queue and gets retried next run instead of parking as "audited, clean".
 				Sentry.captureException(error);
-				await db
-					.update(records)
-					.set({
-						professionalMatteAuditCheckedAt: now,
-						professionalMatteAuditReason: null,
-					})
-					.where(eq(records.id, row.id));
 			}
 		}
 
