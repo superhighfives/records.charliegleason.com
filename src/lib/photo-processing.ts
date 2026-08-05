@@ -470,6 +470,30 @@ export interface AutoToneOptions {
 /** Percentile of each channel treated as the near-white reference for white-balance. */
 const WB_WHITE_PCT = 0.97;
 
+/**
+ * Below this brightness (0..255) the 97th-percentile "near-white" sample isn't
+ * actually white — on a dark, low-key cover (e.g. a mostly-black sleeve with no true
+ * highlight) it's just whatever pixels happen to be brightest, often with a small,
+ * meaningless per-channel imbalance. Trusting it as a white reference forces that
+ * noise to neutral and pushes the *whole* frame the opposite direction; skip white
+ * balance below this floor instead of correcting a cast that was never really there.
+ */
+const WB_MIN_REF_BRIGHTNESS = 140;
+/** Below this mean foreground luma (0..255) the frame is too dark overall for a
+ * reliable white-patch read; damp white balance further even if a single channel's
+ * percentile clears {@link WB_MIN_REF_BRIGHTNESS}. */
+const WB_MIN_MEAN_LUMA = 60;
+/**
+ * A genuine white point is close to neutral by definition — if the "near-white"
+ * sample's channels are already this far apart (as a fraction of the brightest
+ * channel), it isn't white, it's just whatever's brightest, and its spread is real
+ * image colour rather than an ambient cast. Trusting it as a reference doesn't just
+ * shift hue slightly: the subsequent exposure-lift gamma (steep on a dark frame) can
+ * blow a small, spurious per-channel gain gap into a strong, visible tint across the
+ * whole image. Trust fades to zero by twice this fraction.
+ */
+const WB_MAX_NEUTRAL_SPREAD = 0.12;
+
 export interface AutoToneResult extends RgbaImage {
 	debug: {
 		wbGain: [number, number, number];
@@ -509,7 +533,7 @@ export function autoTone(
 		targetMid = 0.5,
 	} = opts;
 
-	const { hist, lumaHist, n } = foregroundStats(img, alphaMin);
+	const { hist, lumaHist, mean, n } = foregroundStats(img, alphaMin);
 
 	// White-patch balance: line each channel's near-white reference up with the
 	// brightest channel's, so whites go neutral while saturated midtones keep their hue.
@@ -517,10 +541,21 @@ export function autoTone(
 		Math.max(percentile(hist[c], n, WB_WHITE_PCT), 1),
 	);
 	const refWhite = Math.max(...whiteRef);
+	// No plausible white point on a dark/low-key cover: don't invent a cast to correct.
+	// Damp continuously (not a hard cutoff) so covers near the floor don't jump abruptly.
+	const preMeanLuma = 0.2126 * mean[0] + 0.7152 * mean[1] + 0.0722 * mean[2];
+	const refTrust = Math.min(1, Math.max(0, refWhite / WB_MIN_REF_BRIGHTNESS));
+	const lumaTrust = Math.min(1, Math.max(0, preMeanLuma / WB_MIN_MEAN_LUMA));
+	const spreadFrac = (refWhite - Math.min(...whiteRef)) / refWhite;
+	const neutralTrust = Math.min(
+		1,
+		Math.max(0, 1 - spreadFrac / (2 * WB_MAX_NEUTRAL_SPREAD)),
+	);
+	const effectiveWbStrength = wbStrength * refTrust * lumaTrust * neutralTrust;
 	const wbGain: [number, number, number] = [1, 1, 1];
 	for (let c = 0; c < 3; c++) {
 		const g = refWhite / whiteRef[c];
-		const damped = 1 + (g - 1) * wbStrength;
+		const damped = 1 + (g - 1) * effectiveWbStrength;
 		// Clamp the per-channel gain to ±30%. A strongly-coloured cover drives one
 		// channel's near-white reference far above the others; a looser clamp (this was
 		// ±60%) let that swing green/cyan the whole midtone range. ±30% still neutralises
@@ -1467,6 +1502,35 @@ export function offsetQuad(quad: Corners, delta: EdgeDeltas): Corners {
 }
 
 /**
+ * Per-edge outward offsets for the AI matte's alpha clamp: a confident edge (see
+ * {@link EDGE_CONFIDENCE_MIN}) is trusted out to the outer (certified-background) quad
+ * — the admin drew it well clear of the sleeve, so worn corners, dips and bows anywhere
+ * in the band survive. But a confident edge that landed suspiciously close to that outer
+ * wall (past `outerProximityMax` of the band's room) is far more likely a false-positive
+ * gradient spike (a shadow, a seam) than a sleeve that genuinely grew right up to it, so
+ * it's demoted back to the tight low-confidence inset. A genuinely low-confidence edge
+ * (no discernible boundary) always gets that same inset: with nothing to see there, a
+ * crisp straight cut at the admin's best guess beats trusting the model in the dark.
+ */
+export function clampEdgeOffsets(
+	toOuter: EdgeConfidence,
+	toRefined: EdgeConfidence,
+	confidence: EdgeConfidence,
+	opts: {
+		minConfidence: number;
+		outerProximityMax: number;
+		lowConfInset: number;
+	},
+): EdgeConfidence {
+	return confidence.map((c, e) => {
+		const sane =
+			c >= opts.minConfidence &&
+			toRefined[e] <= toOuter[e] * opts.outerProximityMax;
+		return sane ? toOuter[e] : -opts.lowConfInset;
+	}) as EdgeConfidence;
+}
+
+/**
  * Build a ViTMatte-style trimap (single channel: 0 = definite background, 128 =
  * unknown, 255 = definite foreground) from the picked/refined sleeve `quad`. Erode the
  * quad inward for the definite-foreground core and dilate it outward for the
@@ -1933,4 +1997,82 @@ export function matteFromBand(
 		fgInset: Math.round(outSize * 0.005),
 	});
 	return composeMatteWarped(content, mask, quad, opts);
+}
+
+// ---------- admin matte-quality audit (cheap, non-AI pixel heuristics) ----------
+
+export interface MatteQualityAssessment {
+	/** Average per-channel spread (max-min, 0..255) among near-black opaque pixels — a
+	 * genuine shadow stays close to neutral even on a saturated cover, so a wide spread
+	 * here is the signature of an invented colour cast (see `autoTone`'s white-balance
+	 * guards). 0 when there aren't enough shadow pixels to trust a reading. */
+	tintScore: number;
+	/** Fraction of the canvas's outer margin ring that's unexpectedly opaque — that ring
+	 * is meant to stay transparent (it's the shadow's breathing room), so alpha bleeding
+	 * into it is the signature of the AI matte's edge clamp overrunning the sleeve (see
+	 * `clampEdgeOffsets`). */
+	edgeScore: number;
+	tintSuspect: boolean;
+	edgeSuspect: boolean;
+}
+
+/** "Near black" luma cutoff (0..255) for the tint check's shadow sample. */
+const AUDIT_SHADOW_LUMA_MAX = 26;
+/** Average shadow channel spread (0..255) past which a render is flagged for tint. */
+const AUDIT_TINT_SPREAD_SUSPECT = 18;
+/** Minimum shadow-pixel sample size before trusting the tint score — avoids noise on a
+ * cover with almost no dark content. */
+const AUDIT_TINT_MIN_SAMPLE = 200;
+/** Outer margin ring width, as a fraction of the shorter canvas side. */
+const AUDIT_EDGE_RING_FRAC = 0.015;
+/** Fraction of the ring that must be opaque before a render is flagged for edge overrun. */
+const AUDIT_EDGE_ALPHA_SUSPECT_FRAC = 0.04;
+
+/**
+ * Cheap, non-AI pixel scan of a rendered matte (or any RGBA square with a transparent
+ * margin) for the two regression classes the matte pipeline has produced in the past: an
+ * invented colour cast on a dark, low-key cover, and the AI matte's alpha overrunning the
+ * certified crop into the canvas's outer shadow margin. Pure pixel statistics, no model
+ * calls — meant to run over every stored matte cheaply so the admin can shortlist
+ * likely-bad renders instead of eyeballing the whole collection. Not exhaustive (a subtle
+ * case can still slip through, and a genuinely near-black, hard-edged cover could
+ * false-positive) — a shortlist to review, not an authority.
+ */
+export function assessMatteQuality(img: RgbaImage): MatteQualityAssessment {
+	const { data, width, height } = img;
+
+	let spreadSum = 0;
+	let shadowN = 0;
+	for (let p = 0; p < width * height; p++) {
+		if (data[p * 4 + 3] < 16) continue;
+		const r = data[p * 4];
+		const g = data[p * 4 + 1];
+		const b = data[p * 4 + 2];
+		const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+		if (luma > AUDIT_SHADOW_LUMA_MAX) continue;
+		spreadSum += Math.max(r, g, b) - Math.min(r, g, b);
+		shadowN++;
+	}
+	const tintScore = shadowN >= AUDIT_TINT_MIN_SAMPLE ? spreadSum / shadowN : 0;
+	const tintSuspect =
+		shadowN >= AUDIT_TINT_MIN_SAMPLE && tintScore > AUDIT_TINT_SPREAD_SUSPECT;
+
+	const ring = Math.max(
+		1,
+		Math.round(Math.min(width, height) * AUDIT_EDGE_RING_FRAC),
+	);
+	let ringN = 0;
+	let ringOpaque = 0;
+	for (let y = 0; y < height; y++) {
+		const inRingRow = y < ring || y >= height - ring;
+		for (let x = 0; x < width; x++) {
+			if (!inRingRow && x >= ring && x < width - ring) continue;
+			ringN++;
+			if (data[(y * width + x) * 4 + 3] >= 16) ringOpaque++;
+		}
+	}
+	const edgeScore = ringN > 0 ? ringOpaque / ringN : 0;
+	const edgeSuspect = edgeScore > AUDIT_EDGE_ALPHA_SUSPECT_FRAC;
+
+	return { tintScore, edgeScore, tintSuspect, edgeSuspect };
 }

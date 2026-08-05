@@ -39,6 +39,7 @@ import { BulkAssignMasterDialog } from "#/components/bulk-assign-master-dialog";
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { FadeImage } from "#/components/fade-image";
 import { GenerationFailedBadge } from "#/components/generation-failed-badge";
+import { MatteAuditBadge } from "#/components/matte-audit-badge";
 import { MatteFallbackBadge } from "#/components/matte-fallback-badge";
 import { MatteStaleBadge } from "#/components/matte-stale-badge";
 import { RecordPanel } from "#/components/record-panel";
@@ -66,10 +67,12 @@ import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
 import { orderRecordsForReview } from "#/lib/record-order";
 import {
+	auditMatteQuality,
 	checkLinkHealth,
 	deleteRecord,
 	deleteRecords,
 	publishRecords,
+	retryFlaggedMattes,
 	retryProfessionalGenerations,
 	retryProfessionalMattes,
 	unpublishRecords,
@@ -254,6 +257,13 @@ const FLAG_FACETS: FacetOption[] = [
 	},
 	// The deterministic-matte-fallback case (paid Magic matte failed) is now the "Lo-fi
 	// matte" side of the `matte` facet group above, not a standalone flag.
+	// Flagged by the on-demand "Audit covers" sweep (matte-audit.ts) — a likely colour
+	// cast or edge overrun in the stored matte, independent of which source cut it.
+	{
+		token: "matteFlagged",
+		label: "Matte flagged",
+		test: (r) => r.professionalMatteAuditReason != null,
+	},
 	{
 		token: "duplicate",
 		label: "Duplicate",
@@ -270,6 +280,10 @@ const FLAG_COLORS: globalThis.Record<string, { active: string; idle: string }> =
 			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
 		},
 		genFailed: {
+			active: "border-red-600 bg-red-600 text-white",
+			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
+		},
+		matteFlagged: {
 			active: "border-red-600 bg-red-600 text-white",
 			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
 		},
@@ -347,6 +361,7 @@ type BulkAction =
 	| "unpublish"
 	| "retryGeneration"
 	| "retryMatte"
+	| "retryFlaggedMatte"
 	| "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
@@ -378,6 +393,11 @@ const BULK_ACTIONS: {
 		label: "Retry Magic matte",
 		verb: "queued for Magic matte",
 		fn: retryProfessionalMattes,
+	},
+	retryFlaggedMatte: {
+		label: "Retry flagged mattes",
+		verb: "queued for a matte re-cut",
+		fn: retryFlaggedMattes,
 	},
 	delete: {
 		label: "Delete",
@@ -697,6 +717,26 @@ function AdminRecords() {
 		onError: () => toast.error("Couldn't check links. Try again."),
 	});
 
+	// Force a matte-quality audit pass now (see matte-audit.ts): a cheap, non-AI pixel
+	// scan of stored covers that flags a likely colour cast or edge overrun — the
+	// regression classes the Parachutes matte fix addressed, for records whose bad
+	// render predates the fix. One stalest-first batch per click, same shape as "Check
+	// links"; flagged rows show a badge and can be selected for "Retry flagged mattes".
+	const auditMatteMutation = useMutation({
+		mutationFn: () => auditMatteQuality(),
+		onSuccess: async ({ checked, suspects }) => {
+			await queryClient.invalidateQueries({
+				queryKey: recordsQueryOptions.queryKey,
+			});
+			toast.success(
+				checked === 0
+					? "No covers to audit."
+					: `Audited ${checked} cover${checked === 1 ? "" : "s"} — ${suspects} flagged.`,
+			);
+		},
+		onError: () => toast.error("Couldn't audit covers. Try again."),
+	});
+
 	// Selected-rows actions: hand the ids to the matching batched endpoint and
 	// report a single summary toast off the count it actually acted on.
 	const bulkMutation = useMutation({
@@ -895,6 +935,11 @@ function AdminRecords() {
 							row.original.professionalJobStatus === "failed" && (
 								<MatteStaleBadge />
 							)}
+						{row.original.professionalMatteAuditReason && (
+							<MatteAuditBadge
+								reason={row.original.professionalMatteAuditReason}
+							/>
+						)}
 						<StatusError record={row.original} />
 					</Link>
 				),
@@ -996,10 +1041,14 @@ function AdminRecords() {
 	const anyMatteFallback = selectedRows.some(
 		(r) => r.original.professionalAlphaSource === "deterministic",
 	);
+	const anyMatteFlagged = selectedRows.some(
+		(r) => r.original.professionalMatteAuditReason != null,
+	);
 	const bulkActions: BulkAction[] = [
 		allPublished ? "unpublish" : "publish",
 		...(anyGenFailed ? (["retryGeneration"] as const) : []),
 		...(anyMatteFallback ? (["retryMatte"] as const) : []),
+		...(anyMatteFlagged ? (["retryFlaggedMatte"] as const) : []),
 		"delete",
 	];
 	// Rows visible under the current tab + search. Drives the empty state and
@@ -1062,10 +1111,12 @@ function AdminRecords() {
 		// confirm before spending on a whole selection — rows with nothing to redo are
 		// skipped server-side, so the actual job count may be lower.
 		if (
-			(action === "retryGeneration" || action === "retryMatte") &&
+			(action === "retryGeneration" ||
+				action === "retryMatte" ||
+				action === "retryFlaggedMatte") &&
 			!confirm(
 				`Re-run ${
-					action === "retryMatte" ? "the Magic matte" : "generation"
+					action === "retryGeneration" ? "generation" : "the Magic matte"
 				} for ${n} selected ${noun}? This runs paid background jobs.`,
 			)
 		) {
@@ -1247,6 +1298,13 @@ function AdminRecords() {
 									title="Validate a batch of linked Discogs masters and releases now, flagging any that were deleted or merged"
 								>
 									{checkLinksMutation.isPending ? "Checking…" : "Check links"}
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									disabled={auditMatteMutation.isPending}
+									onSelect={() => auditMatteMutation.mutate()}
+									title="Scan a batch of stored covers for a likely matte colour cast or edge overrun — no AI calls, just a pixel check. Flagged rows can be retried with 'Retry flagged mattes'"
+								>
+									{auditMatteMutation.isPending ? "Auditing…" : "Audit covers"}
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
@@ -1468,6 +1526,11 @@ function AdminRecords() {
 												r.professionalJobStatus === "failed" && (
 													<MatteStaleBadge />
 												)}
+											{r.professionalMatteAuditReason && (
+												<MatteAuditBadge
+													reason={r.professionalMatteAuditReason}
+												/>
+											)}
 											<StatusError record={r} />
 										</div>
 									</div>

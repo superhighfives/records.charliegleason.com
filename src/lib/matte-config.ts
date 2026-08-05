@@ -34,6 +34,17 @@ export const MODEL_PAD = 0.2;
 
 /** Low-confidence edge clamp inset (a hair inside the band midline). */
 export const CLAMP_LOWCONF_INSET = Math.round(MODEL_SIZE * 0.004);
+/**
+ * A "confident" edge (see `EDGE_CONFIDENCE_MIN`) is only trusted if the refined line
+ * still sits meaningfully inside the outer quad. An admin draws the outer quad in the
+ * certified-background zone, well clear of the sleeve, so a refined edge landing flush
+ * against it almost never means the true edge grew right up to the wall — it means the
+ * gradient search locked onto background clutter (a shadow, a seam, a grain line) and
+ * the peak/median confidence check false-positived on it. Past this fraction of the
+ * band's outward room, treat the edge as unconfident and fall back to the low-confidence
+ * inset clamp instead of trusting it out to the outer quad.
+ */
+export const EDGE_OUTER_PROXIMITY_MAX = 0.92;
 /** Colour-veto policing depth + sample-ring width, and the foreground ring's inset. */
 export const VETO_DEPTH = Math.round(MODEL_SIZE * 0.02);
 export const VETO_RING = Math.round(MODEL_SIZE * 0.02);

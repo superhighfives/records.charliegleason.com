@@ -197,6 +197,22 @@ export const records = sqliteTable("records", {
 	professionalAlphaSource: text("professional_alpha_source", {
 		enum: ["ai", "deterministic"],
 	}),
+	// The on-demand admin "Audit covers" sweep (src/lib/matte-audit.ts): a cheap,
+	// non-AI pixel scan of the stored `professionalAlphaCutoutKey` webp that flags
+	// likely-bad renders (a colour cast invented on a dark cover, or the matte's alpha
+	// bleeding into the transparent shadow margin) — both regression classes the matte
+	// pipeline has quietly produced in the past. `CheckedAt` null = never audited (or
+	// invalidated by a fresh matte, see professional-pipeline.ts); the sweep validates
+	// stalest-first, same pattern as the Discogs link-health check. `Reason` is a
+	// comma-joined list of what tripped ("tint", "edge", "tint,edge") or null when the
+	// last check came back clean.
+	professionalMatteAuditCheckedAt: integer(
+		"professional_matte_audit_checked_at",
+		{
+			mode: "timestamp",
+		},
+	),
+	professionalMatteAuditReason: text("professional_matte_audit_reason"),
 	// Vestigial — the pipeline no longer makes any Replicate call. Kept as a nullable
 	// column (not dropped) so a migration never has to remove something the currently
 	// deployed production code still selects; a later migration can drop it post-merge.

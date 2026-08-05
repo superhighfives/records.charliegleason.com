@@ -224,6 +224,16 @@ export async function commitProfessionalMatte(
 			// fresh Apply / reprocess starts a new one). Even the matte-failed path is
 			// terminal-with-action, not a reap target, so resetting here is safe.
 			professionalRetryCount: 0,
+			// A fresh matte invalidates any prior audit result (see matte-audit.ts) — clear
+			// it so the next sweep re-checks the new image rather than reporting on the
+			// superseded one. A matte failure keeps the existing matte live, so its audit
+			// result (if any) is still accurate and stays untouched.
+			professionalMatteAuditCheckedAt: matteFailed
+				? record.professionalMatteAuditCheckedAt
+				: null,
+			professionalMatteAuditReason: matteFailed
+				? record.professionalMatteAuditReason
+				: null,
 			professionalError: matteFailed
 				? `Matte generation failed: ${matteError instanceof Error ? matteError.message : String(matteError)}`
 				: opts.aiFallbackReason

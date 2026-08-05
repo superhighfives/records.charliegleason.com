@@ -1,16 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+	assessMatteQuality,
 	autoTone,
 	bleedEdgeColor,
 	boxBlur1,
 	buildTrimap,
 	buildTrimapFromBand,
 	type Corners,
+	clampEdgeOffsets,
 	composeMatte,
 	composeMatteWarped,
 	deskewBandPadded,
 	deskewToLevel,
 	detectSleeveCorners,
+	type EdgeConfidence,
 	edgeDistances,
 	homography,
 	keepLargestComponent,
@@ -157,6 +160,69 @@ describe("autoTone", () => {
 		expect(sum / n).toBeGreaterThan(40);
 		// alpha is preserved
 		expect(toned.data[3]).toBe(255);
+	});
+
+	it("doesn't invent a colour cast on a dark, low-key cover with no true white point", () => {
+		// Regression for the Parachutes orange-tint bug: a mostly-dark, near-neutral
+		// foreground where the only "bright" pixels are a small noisy cluster — nowhere
+		// near an actual white. Naively trusting that cluster as a white-balance
+		// reference pushes the WHOLE dark bulk toward the opposite colour.
+		const size = 64;
+		const n = size * size;
+		const data = new Uint8ClampedArray(n * 4);
+		for (let p = 0; p < n; p++) {
+			const bright = p % 20 === 0; // ~5% of pixels
+			const [r, g, b] = bright ? [60, 45, 30] : [15, 15, 15];
+			data[p * 4] = r;
+			data[p * 4 + 1] = g;
+			data[p * 4 + 2] = b;
+			data[p * 4 + 3] = 255;
+		}
+		const toned = autoTone({ data, width: size, height: size });
+		// White balance should stay close to unity — there's no plausible white
+		// reference here, so the gain shouldn't chase the noisy highlight cluster.
+		for (const gain of toned.debug.wbGain) expect(gain).toBeLessThan(1.15);
+		// A bulk (originally neutral) pixel should stay close to neutral, not pick up a
+		// hue shift from an over-eager white-balance correction.
+		const bulkIdx = 1; // p=1 is not a multiple of 20, so it's a "dark" pixel
+		const r = toned.data[bulkIdx * 4];
+		const g = toned.data[bulkIdx * 4 + 1];
+		const b = toned.data[bulkIdx * 4 + 2];
+		expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeLessThan(15);
+	});
+});
+
+describe("clampEdgeOffsets", () => {
+	const opts = { minConfidence: 3, outerProximityMax: 0.92, lowConfInset: 5 };
+
+	it("trusts a confident edge out to the outer quad when it hasn't landed near the wall", () => {
+		const toOuter: EdgeConfidence = [40, 40, 40, 40];
+		const toRefined: EdgeConfidence = [20, 20, 20, 20]; // well inside the band
+		const confidence: EdgeConfidence = [5, 5, 5, 5]; // >= minConfidence
+		expect(clampEdgeOffsets(toOuter, toRefined, confidence, opts)).toEqual([
+			40, 40, 40, 40,
+		]);
+	});
+
+	it("demotes a confident edge that landed suspiciously flush against the outer quad", () => {
+		// Regression for the torn-edge-past-the-crop bug: a spurious gradient (a
+		// shadow, a seam) can score as "confident" while sitting right on the admin's
+		// certified-background boundary — that should no longer be trusted.
+		const toOuter: EdgeConfidence = [40, 40, 40, 40];
+		const toRefined: EdgeConfidence = [39, 20, 20, 20]; // edge 0 is flush (>92%)
+		const confidence: EdgeConfidence = [5, 5, 5, 5];
+		expect(clampEdgeOffsets(toOuter, toRefined, confidence, opts)).toEqual([
+			-5, 40, 40, 40,
+		]);
+	});
+
+	it("always insets a low-confidence edge, regardless of how far it moved", () => {
+		const toOuter: EdgeConfidence = [40, 40, 40, 40];
+		const toRefined: EdgeConfidence = [5, 5, 5, 5]; // nowhere near the wall
+		const confidence: EdgeConfidence = [1, 1, 1, 1]; // < minConfidence
+		expect(clampEdgeOffsets(toOuter, toRefined, confidence, opts)).toEqual([
+			-5, -5, -5, -5,
+		]);
 	});
 });
 
@@ -948,5 +1014,77 @@ describe("composeMatte", () => {
 		});
 		expect(cutout.data[(100 * 200 + 100) * 4 + 3]).toBe(255); // centre opaque
 		expect(cutout.data[3]).toBe(0); // top-left corner is margin
+	});
+});
+
+describe("assessMatteQuality", () => {
+	const size = 200;
+
+	/** A clean matte: a near-black, perfectly neutral opaque square with a transparent
+	 * margin — no cast, no edge overrun. */
+	function cleanMatte(): RgbaImage {
+		const data = new Uint8ClampedArray(size * size * 4);
+		const margin = 10;
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const i = (y * size + x) * 4;
+				const inside =
+					x >= margin && x < size - margin && y >= margin && y < size - margin;
+				data[i] = data[i + 1] = data[i + 2] = 12; // near-black, perfectly neutral
+				data[i + 3] = inside ? 255 : 0;
+			}
+		return { data, width: size, height: size };
+	}
+
+	it("doesn't flag a clean, neutral matte with a transparent margin", () => {
+		const a = assessMatteQuality(cleanMatte());
+		expect(a.tintSuspect).toBe(false);
+		expect(a.edgeSuspect).toBe(false);
+	});
+
+	it("flags a colour cast in the near-black shadow pixels", () => {
+		const img = cleanMatte();
+		const { data, width, height } = img;
+		for (let p = 0; p < width * height; p++) {
+			if (data[p * 4 + 3] < 16) continue;
+			// Still reads as "near black" by luma, but with a real per-channel spread —
+			// an invented cast, not a genuinely saturated bright colour.
+			data[p * 4] = 4;
+			data[p * 4 + 1] = 24;
+			data[p * 4 + 2] = 14;
+		}
+		const a = assessMatteQuality(img);
+		expect(a.tintSuspect).toBe(true);
+		expect(a.edgeSuspect).toBe(false);
+	});
+
+	it("flags alpha bleeding into the outer shadow margin", () => {
+		const img = cleanMatte();
+		const { data, width, height } = img;
+		// Fill the entire outer ring opaque — the matte overran into the margin that's
+		// supposed to stay transparent for the contact shadow.
+		for (let y = 0; y < height; y++)
+			for (let x = 0; x < width; x++) {
+				if (x < 3 || x >= width - 3 || y < 3 || y >= height - 3) {
+					data[(y * width + x) * 4 + 3] = 255;
+				}
+			}
+		const a = assessMatteQuality(img);
+		expect(a.edgeSuspect).toBe(true);
+	});
+
+	it("doesn't flag tint on a cover with too little dark content to trust", () => {
+		// Uniformly bright — no shadow sample at all, so tintScore/suspect stay at the
+		// "not enough data" default rather than a spurious reading.
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let p = 0; p < size * size; p++) {
+			data[p * 4] = 200;
+			data[p * 4 + 1] = 150;
+			data[p * 4 + 2] = 100;
+			data[p * 4 + 3] = 255;
+		}
+		const a = assessMatteQuality({ data, width: size, height: size });
+		expect(a.tintSuspect).toBe(false);
+		expect(a.tintScore).toBe(0);
 	});
 });

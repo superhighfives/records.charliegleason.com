@@ -4,6 +4,7 @@ import { bytesToBase64 } from "#/lib/image-data";
 import {
 	CANVAS_SIZE,
 	CLAMP_LOWCONF_INSET,
+	EDGE_OUTER_PROXIMITY_MAX,
 	FEATHER,
 	MATTE_ESRGAN_MAX,
 	MATTE_MODEL_MAX_SIZE,
@@ -24,6 +25,7 @@ import {
 import {
 	applyMask,
 	buildTrimapFromBand,
+	clampEdgeOffsets,
 	deskewBandPadded,
 	EDGE_CONFIDENCE_MIN,
 	edgeDistances,
@@ -203,9 +205,11 @@ async function matteAI(
 	// otherwise ride the soft edge is handled by the colour bleed in the warp.
 	const clampQuad = offsetQuad(
 		mid,
-		confidence.map((c, e) =>
-			c >= EDGE_CONFIDENCE_MIN ? toOuter[e] : -CLAMP_LOWCONF_INSET,
-		) as [number, number, number, number],
+		clampEdgeOffsets(toOuter, edgeDistances(mid, refined), confidence, {
+			minConfidence: EDGE_CONFIDENCE_MIN,
+			outerProximityMax: EDGE_OUTER_PROXIMITY_MAX,
+			lowConfInset: CLAMP_LOWCONF_INSET,
+		}),
 	);
 	const clamp = rasterizePolygon(clampQuad, content.width, content.height);
 	const raw = maskFromModelOutput(model, content.width, content.height);
