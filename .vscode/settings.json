@@ -1,4 +1,9 @@
 {
+	// Use the project's pinned TypeScript (not VS Code's bundled copy) — a version
+	// mismatch is a common source of IDE-only errors that a local `tsc` build
+	// doesn't reproduce (e.g. older `moduleResolution` behavior for the `#/*`
+	// package.json `imports` aliases).
+	"typescript.tsdk": "node_modules/typescript/lib",
 	"files.watcherExclude": {
 		"**/routeTree.gen.ts": true
 	},

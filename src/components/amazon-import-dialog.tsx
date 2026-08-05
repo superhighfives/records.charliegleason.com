@@ -1,8 +1,10 @@
+import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, RedoIcon, UploadIcon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { Pager } from "#/components/pager";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -65,8 +67,10 @@ export function AmazonImportDialog({
 	const [skipped, setSkipped] = useState<Set<string>>(new Set());
 	const [parseError, setParseError] = useState<string | null>(null);
 	const [queued, setQueued] = useState(false);
-	// The pairing whose Amazon-vs-yours comparison modal is open, if any.
-	const [compare, setCompare] = useState<PurchasePair<Record> | null>(null);
+	// Index into `pairs` of the pairing whose Amazon-vs-yours comparison modal is
+	// open, if any — an index (rather than the pair itself) so Previous/Next can
+	// step through the list without needing to look the current one back up.
+	const [compareIndex, setCompareIndex] = useState<number | null>(null);
 
 	// Reset-on-open, not a `key`-driven remount: the Dialog needs to stay mounted
 	// through its own close animation, so swapping `key`s on `open` would tear the
@@ -79,9 +83,18 @@ export function AmazonImportDialog({
 			setSkipped(new Set());
 			setParseError(null);
 			setQueued(false);
-			setCompare(null);
+			setCompareIndex(null);
 		}
 	}, [open]);
+
+	function toggleSkip(asin: string) {
+		setSkipped((s) => {
+			const next = new Set(s);
+			if (next.has(asin)) next.delete(asin);
+			else next.add(asin);
+			return next;
+		});
+	}
 
 	async function handleFile(file: File | undefined) {
 		if (!file) return;
@@ -100,6 +113,28 @@ export function AmazonImportDialog({
 	}
 
 	const active = (pairs ?? []).filter((p) => !skipped.has(p.item.asin));
+
+	const compare = compareIndex != null ? (pairs?.[compareIndex] ?? null) : null;
+	const hasPrev = compareIndex != null && compareIndex > 0;
+	const hasNext =
+		compareIndex != null && pairs != null && compareIndex < pairs.length - 1;
+
+	// ← / → step through the pairings without closing the comparison modal,
+	// matching the record editor's pager. Disabled once nothing's open so the
+	// arrows don't hijack the file picker or the row list behind it.
+	useHotkeys(
+		[
+			{
+				hotkey: "ArrowLeft",
+				callback: () => hasPrev && setCompareIndex((i) => (i ?? 0) - 1),
+			},
+			{
+				hotkey: "ArrowRight",
+				callback: () => hasNext && setCompareIndex((i) => (i ?? 0) + 1),
+			},
+		],
+		{ enabled: compare != null },
+	);
 
 	const enqueue = useMutation({
 		mutationFn: () =>
@@ -187,7 +222,7 @@ export function AmazonImportDialog({
 								</p>
 							) : (
 								<ul className="max-h-[360px] divide-y overflow-y-auto rounded-md border">
-									{pairs.map((p) => {
+									{pairs.map((p, i) => {
 										const isSkipped = skipped.has(p.item.asin);
 										return (
 											<li
@@ -201,7 +236,7 @@ export function AmazonImportDialog({
 											    side; the skip control is a separate sibling button. */}
 												<button
 													type="button"
-													onClick={() => setCompare(p)}
+													onClick={() => setCompareIndex(i)}
 													title="Compare Amazon vs your record"
 													className="flex min-w-0 flex-1 items-center gap-2 text-left"
 												>
@@ -230,15 +265,7 @@ export function AmazonImportDialog({
 													variant="ghost"
 													size="icon-sm"
 													aria-label={isSkipped ? "Include" : "Skip"}
-													onClick={() =>
-														setSkipped((s) => {
-															const next = new Set(s);
-															if (next.has(p.item.asin))
-																next.delete(p.item.asin);
-															else next.add(p.item.asin);
-															return next;
-														})
-													}
+													onClick={() => toggleSkip(p.item.asin)}
 												>
 													<RedoIcon className="size-4" />
 												</Button>
@@ -272,16 +299,29 @@ export function AmazonImportDialog({
 			<Dialog
 				open={compare != null}
 				onOpenChange={(o) => {
-					if (!o) setCompare(null);
+					if (!o) setCompareIndex(null);
 				}}
 			>
 				<DialogContent className="max-w-2xl">
 					{compare && (
 						<>
 							<DialogHeader>
-								<DialogTitle>
-									{compare.record.artist} — {compare.record.title}
-								</DialogTitle>
+								{/* `pr-8` clears the dialog's absolute close button, same as the
+								    record editor's header pager. */}
+								<div className="flex items-start justify-between gap-4 pr-8">
+									<DialogTitle>
+										{compare.record.artist} — {compare.record.title}
+									</DialogTitle>
+									<Pager
+										index={compareIndex ?? -1}
+										total={pairs?.length ?? 0}
+										hasPrev={hasPrev}
+										hasNext={hasNext}
+										onPrev={() => setCompareIndex((i) => (i ?? 0) - 1)}
+										onNext={() => setCompareIndex((i) => (i ?? 0) + 1)}
+										noun="pairing"
+									/>
+								</div>
 								<DialogDescription>
 									What you bought on Amazon, next to the record it'll pin a
 									pressing on.
@@ -351,6 +391,15 @@ export function AmazonImportDialog({
 									</dl>
 								</section>
 							</div>
+							<DialogFooter>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => toggleSkip(compare.item.asin)}
+								>
+									{skipped.has(compare.item.asin) ? "Include" : "Skip"}
+								</Button>
+							</DialogFooter>
 						</>
 					)}
 				</DialogContent>

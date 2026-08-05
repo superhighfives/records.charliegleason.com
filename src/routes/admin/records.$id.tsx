@@ -2,8 +2,6 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
-	ChevronLeft,
-	ChevronRight,
 	Copy,
 	ExternalLink,
 	Info,
@@ -20,6 +18,7 @@ import {
 	useDiscogsSearch,
 } from "#/components/discogs-search-field";
 import { DuplicateBadge } from "#/components/duplicate-badge";
+import { Pager } from "#/components/pager";
 import { ProPreview } from "#/components/pro-preview";
 import { RecordForm } from "#/components/record-form";
 import { RecordLoading } from "#/components/spinning-record";
@@ -132,57 +131,6 @@ function Knob({
 				disabled={disabled}
 				onValueChange={([v]) => onChange(v)}
 			/>
-		</div>
-	);
-}
-
-/** Back/next paging control: two arrow buttons around an "index / total" counter. */
-function RecordPager({
-	index,
-	total,
-	hasPrev,
-	hasNext,
-	onPrev,
-	onNext,
-	className,
-}: {
-	index: number;
-	total: number;
-	hasPrev: boolean;
-	hasNext: boolean;
-	onPrev: () => void;
-	onNext: () => void;
-	className?: string;
-}) {
-	// Nothing to page through — a lone record, or the list hasn't loaded yet.
-	if (total <= 1 || index < 0) return null;
-	return (
-		<div className={cn("flex shrink-0 items-center gap-2", className)}>
-			<Button
-				type="button"
-				variant="outline"
-				size="icon-sm"
-				disabled={!hasPrev}
-				onClick={onPrev}
-				aria-label="Previous record"
-				title="Previous record (←)"
-			>
-				<ChevronLeft />
-			</Button>
-			<span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-				{index + 1} / {total}
-			</span>
-			<Button
-				type="button"
-				variant="outline"
-				size="icon-sm"
-				disabled={!hasNext}
-				onClick={onNext}
-				aria-label="Next record"
-				title="Next record (→)"
-			>
-				<ChevronRight />
-			</Button>
 		</div>
 	);
 }
@@ -1072,13 +1020,14 @@ function RecordDetail() {
 					>
 						← Collection
 					</Link>
-					<RecordPager
+					<Pager
 						index={pagerIndex}
 						total={ordered.length}
 						hasPrev={prevRecord != null}
 						hasNext={nextRecord != null}
 						onPrev={() => prevRecord && goToRecord(prevRecord.id, false)}
 						onNext={() => nextRecord && goToRecord(nextRecord.id, false)}
+						noun="record"
 					/>
 				</div>
 				{/* Photo + text take ~half the width on desktop, with the badges pushed
@@ -1851,13 +1800,14 @@ function RecordEditorHost() {
 					    editor open so you can run straight down the collection setting mattes. */}
 					<div className="flex items-start justify-between gap-4 pr-8">
 						<DialogTitle>Edit image</DialogTitle>
-						<RecordPager
+						<Pager
 							index={pagerIndex}
 							total={ordered.length}
 							hasPrev={prevRecord != null}
 							hasNext={nextRecord != null}
 							onPrev={() => prevRecord && goToRecord(prevRecord.id, true)}
 							onNext={() => nextRecord && goToRecord(nextRecord.id, true)}
+							noun="record"
 						/>
 					</div>
 					<DialogDescription>

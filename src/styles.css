@@ -150,6 +150,7 @@ html,
 body,
 #app {
   min-height: 100dvh;
+  overflow-x: hidden;
 }
 
 body {
@@ -300,7 +301,7 @@ a {
      practice, which is fine: a small consistent peek is the goal. */
   transform: translateX(
       calc(
-        min(10%, 14px) * var(--vinyl-scale, 1) - 1px *
+        min(10%, 30px) * var(--vinyl-scale, 1) - 1px *
           var(--vinyl-stack-index, 0)
       )
     )

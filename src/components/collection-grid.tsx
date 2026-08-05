@@ -9,10 +9,11 @@ import {
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
+import { Skeleton } from "#/components/ui/skeleton";
 import { VinylDisc } from "#/components/vinyl-disc";
 import { parseColorPalette } from "#/lib/color-palette";
 import { DEFAULT_COLOR_NAME } from "#/lib/colors";
-import { displayCoverKey, displayMatteKey } from "#/lib/cover";
+import { displayCoverKey, displayMatteKey, photoUrl } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { cn } from "#/lib/utils";
 
@@ -90,7 +91,9 @@ function RecordTile({
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
-	const coverSrc = cover ? `/api/photos/${cover}` : undefined;
+	// A grid tile never renders wider than ~250px (4 columns in the max-w-5xl
+	// container) — 500 covers that at 2x without shipping the ~1MB master.
+	const coverSrc = cover ? photoUrl(cover, 500) : undefined;
 	// Keep the peeking vinyl disc faint (10%) until the cover is up, then fade it to
 	// full in step with the cover — so a slow/lazy tile never flashes a bold disc
 	// behind a not-yet-loaded (now background-less) cover. No cover at all → the
@@ -134,11 +137,19 @@ function RecordTile({
 						size={record.size}
 						discCount={record.discCount}
 						className={cn(
-							"transition-opacity duration-700 ease-out motion-reduce:transition-none",
-							coverReady ? "opacity-100" : "opacity-10",
+							"transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
+							coverReady ? "opacity-100" : "opacity-0",
 						)}
 					/>
-					<div className="aspect-square overflow-hidden">
+					<div className="relative aspect-square overflow-hidden">
+						{/* Shown behind the cover while it loads — `-z-10` (rather than
+						    unmounting once ready) so it never has to fight FadeImage's own
+						    opacity for stacking order; the opaque cover simply paints over
+						    it once revealed. Cover-less tiles skip straight to the
+						    placeholder, so no skeleton for those. */}
+						{cover && !coverReady && (
+							<Skeleton className="absolute inset-0 -z-10 rounded-none" />
+						)}
 						{cover ? (
 							<FadeImage
 								src={coverSrc}
@@ -146,7 +157,12 @@ function RecordTile({
 								onReady={() => setCoverReady(true)}
 								className={cn(
 									// Fade in on load *and* keep the grayscale→colour hover —
-									// one combined transition property so both animate.
+									// one combined transition property so both animate. Opacity
+									// itself stays driven by FadeImage's own `loaded` state (via
+									// onReady below just for the disc) — mirroring it here too
+									// would round-trip through a second component's state update,
+									// which can resolve before the browser ever paints the hidden
+									// frame, skipping the fade entirely.
 									"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
 									matte ? "object-contain" : "object-cover",
 								)}

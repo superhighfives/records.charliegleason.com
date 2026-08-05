@@ -47,3 +47,15 @@ export function displayMatteKey(
 		? record.professionalAlphaKey
 		: null;
 }
+
+/**
+ * A display URL for a stored photo. Masters live in R2 at full resolution (up to
+ * 4096px, often ~1MB) so there's headroom to reprocess later; `width` asks
+ * `/api/photos/$` to resize + re-encode to webp on the way out via the Cloudflare
+ * Images binding, so a caller requests the size it actually renders at (a grid
+ * tile, a lightbox) instead of shipping the master every time. Omit `width` for
+ * the master itself (e.g. feeding a downstream image pipeline).
+ */
+export function photoUrl(key: string, width?: number): string {
+	return width ? `/api/photos/${key}?w=${width}` : `/api/photos/${key}`;
+}

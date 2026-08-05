@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
@@ -44,7 +44,7 @@ function img(container: HTMLElement): HTMLImageElement {
 }
 
 describe("FadeImage", () => {
-	it("starts hidden and fades in once the image loads", () => {
+	it("starts hidden and fades in once the image loads", async () => {
 		const { container } = render(<FadeImage src="/api/photos/a" alt="" />);
 		const el = img(container);
 
@@ -53,36 +53,48 @@ describe("FadeImage", () => {
 
 		fireEvent.load(el);
 
-		expect(el.classList.contains("opacity-100")).toBe(true);
-		expect(el.classList.contains("opacity-0")).toBe(false);
+		// Reveal is bracketed by two rAFs (see FadeImage's `reveal`) so the browser
+		// always paints the pre-reveal frame before the transition starts — not
+		// synchronous with the load event.
+		await waitFor(() => {
+			expect(el.classList.contains("opacity-100")).toBe(true);
+			expect(el.classList.contains("opacity-0")).toBe(false);
+		});
 	});
 
-	it("reveals immediately when the image is already cached (complete on mount)", () => {
+	it("reveals when the image is already cached (complete on mount)", async () => {
 		// A cached image is `complete` before `onLoad` can fire — the mount effect
-		// should reveal it without waiting for a load event.
+		// should reveal it without waiting for a load event (still rAF-bracketed,
+		// same as the load/error paths).
 		complete = true;
 		const { container } = render(<FadeImage src="/api/photos/a" alt="" />);
 
-		expect(img(container).classList.contains("opacity-100")).toBe(true);
+		await waitFor(() => {
+			expect(img(container).classList.contains("opacity-100")).toBe(true);
+		});
 	});
 
-	it("reveals on error so a broken src never stays invisible", () => {
+	it("reveals on error so a broken src never stays invisible", async () => {
 		const { container } = render(<FadeImage src="/api/photos/broken" alt="" />);
 		const el = img(container);
 		expect(el.classList.contains("opacity-0")).toBe(true);
 
 		fireEvent.error(el);
 
-		expect(el.classList.contains("opacity-100")).toBe(true);
+		await waitFor(() => {
+			expect(el.classList.contains("opacity-100")).toBe(true);
+		});
 	});
 
-	it("re-hides and fades in again when the src changes on a mounted instance", () => {
+	it("re-hides and fades in again when the src changes on a mounted instance", async () => {
 		const { container, rerender } = render(
 			<FadeImage src="/api/photos/a" alt="" />,
 		);
 		const el = img(container);
 		fireEvent.load(el);
-		expect(el.classList.contains("opacity-100")).toBe(true);
+		await waitFor(() => {
+			expect(el.classList.contains("opacity-100")).toBe(true);
+		});
 
 		// Same element, new src (e.g. an admin thumbnail whose cover updated): the
 		// reveal should reset so the new image gets the fade too.
@@ -91,19 +103,25 @@ describe("FadeImage", () => {
 		expect(el.classList.contains("opacity-100")).toBe(false);
 
 		fireEvent.load(el);
-		expect(el.classList.contains("opacity-100")).toBe(true);
+		await waitFor(() => {
+			expect(el.classList.contains("opacity-100")).toBe(true);
+		});
 	});
 
-	it("keeps a cached image revealed after a src swap to another cached image", () => {
+	it("keeps a cached image revealed after a src swap to another cached image", async () => {
 		complete = true;
 		const { container, rerender } = render(
 			<FadeImage src="/api/photos/a" alt="" />,
 		);
-		expect(img(container).classList.contains("opacity-100")).toBe(true);
+		await waitFor(() => {
+			expect(img(container).classList.contains("opacity-100")).toBe(true);
+		});
 
 		rerender(<FadeImage src="/api/photos/b" alt="" />);
 		// The mount effect re-runs on the new src and sees it already complete.
-		expect(img(container).classList.contains("opacity-100")).toBe(true);
+		await waitFor(() => {
+			expect(img(container).classList.contains("opacity-100")).toBe(true);
+		});
 	});
 
 	it("lets a caller's className override the base transition while keeping the opacity toggle", () => {
@@ -147,13 +165,13 @@ describe("FadeImage", () => {
 		expect(el.getAttribute("decoding")).toBe("async");
 	});
 
-	it("calls onReady on load, on error, and immediately for a src already decoded this session", () => {
+	it("calls onReady on load, on error, and immediately for a src already decoded this session", async () => {
 		const onReadyLoad = vi.fn();
 		const { container: loadContainer } = render(
 			<FadeImage src="/api/photos/onready-load" alt="" onReady={onReadyLoad} />,
 		);
 		fireEvent.load(img(loadContainer));
-		expect(onReadyLoad).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(onReadyLoad).toHaveBeenCalledTimes(1));
 
 		const onReadyError = vi.fn();
 		const { container: errorContainer } = render(
@@ -164,7 +182,7 @@ describe("FadeImage", () => {
 			/>,
 		);
 		fireEvent.error(img(errorContainer));
-		expect(onReadyError).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(onReadyError).toHaveBeenCalledTimes(1));
 
 		// Remount with a src already marked decoded (from the load above) — the
 		// seeded/cached path a caller like the grid tile's peeking disc relies on
@@ -180,7 +198,7 @@ describe("FadeImage", () => {
 		expect(onReadySeeded).toHaveBeenCalledTimes(1);
 	});
 
-	it("isImageDecoded reports whether a src has decoded this session", () => {
+	it("isImageDecoded reports whether a src has decoded this session", async () => {
 		expect(isImageDecoded("/api/photos/never-loaded")).toBe(false);
 		expect(isImageDecoded(undefined)).toBe(false);
 
@@ -190,7 +208,39 @@ describe("FadeImage", () => {
 		expect(isImageDecoded("/api/photos/decoded-check")).toBe(false);
 
 		fireEvent.load(img(container));
-		expect(isImageDecoded("/api/photos/decoded-check")).toBe(true);
+		// Marked decoded only once the reveal actually commits (rAF-bracketed,
+		// same as the opacity class) — not synchronously on load — so an
+		// instance unmounted before that point (e.g. the collection grid's
+		// post-hydration remount) never marks a src "seen" for a fade it didn't
+		// get to show.
+		await waitFor(() => {
+			expect(isImageDecoded("/api/photos/decoded-check")).toBe(true);
+		});
+	});
+
+	it("doesn't mark a src decoded if unmounted before the reveal commits, so the next mount still fades", async () => {
+		// Reproduces the collection grid's post-hydration remount: it renders a
+		// plain grid on first paint, then a `useEffect` immediately swaps in the
+		// virtualized version, tearing down and recreating every tile before the
+		// first instance's rAF-bracketed reveal ever fires.
+		const { container, unmount } = render(
+			<FadeImage src="/api/photos/interrupted" alt="" />,
+		);
+		fireEvent.load(img(container));
+		unmount();
+
+		// Let the orphaned rAF pair run its course (it should no-op).
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(isImageDecoded("/api/photos/interrupted")).toBe(false);
+
+		// A fresh mount with the same src must still fade in — not start
+		// pre-revealed because the interrupted mount had already marked it
+		// "seen" for an animation that never actually played.
+		const { container: freshContainer } = render(
+			<FadeImage src="/api/photos/interrupted" alt="" />,
+		);
+		expect(img(freshContainer).classList.contains("opacity-0")).toBe(true);
+		expect(img(freshContainer).classList.contains("opacity-100")).toBe(false);
 	});
 
 	it("still calls a caller's onLoad and onError handlers", () => {
