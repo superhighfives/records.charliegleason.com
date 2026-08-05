@@ -619,8 +619,12 @@ function AdminRecords() {
 	const [assignScope, setAssignScope] = useState<"unmatched" | "broken">(
 		"unmatched",
 	);
+	// A record only belongs in the assign-masters queue if it has no identity
+	// at all yet — neither an album (master) nor a pinned release. A record
+	// matched to a standalone release (no Discogs master exists for it) is
+	// already handled and must not keep reappearing here.
 	const unmatchedRecords = useMemo(
-		() => data.filter((r) => r.masterId == null),
+		() => data.filter((r) => r.masterId == null && r.discogsId == null),
 		[data],
 	);
 	// Records whose Discogs identity is broken: they have a link (master and/or
