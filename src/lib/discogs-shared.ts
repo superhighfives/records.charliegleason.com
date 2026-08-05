@@ -152,16 +152,20 @@ export function parseDiscCount(
  */
 function reorderLeadingArticle(name: string): string {
 	const m = name.match(/^(.+),\s*(The|An?)$/i);
-	return m ? `${m[2]} ${m[1]}` : name;
+	if (!m) return name;
+	const article = m[2][0].toUpperCase() + m[2].slice(1).toLowerCase();
+	return `${article} ${m[1]}`;
 }
 
 /**
  * Canonicalise a Discogs artist name for display: strip the disambiguation
  * suffix ("Wire (2)" → "Wire") and un-invert a trailing sort article
- * ("Frames, The" → "The Frames").
+ * ("Frames, The" → "The Frames"). The suffix strip is anchored to either the
+ * end of the string or a following comma, so it catches both orders Discogs
+ * is seen to emit ("Frames, The (2)" and "Frames (2), The").
  */
 export function cleanArtistName(name: string): string {
-	return reorderLeadingArticle(name.replace(/\s*\(\d+\)\s*$/, "").trim());
+	return reorderLeadingArticle(name.replace(/\s*\(\d+\)\s*(?=,|$)/, "").trim());
 }
 
 /**
