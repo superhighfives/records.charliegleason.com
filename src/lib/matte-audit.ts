@@ -70,31 +70,45 @@ export async function runMatteAudit(
 					.where(eq(records.id, row.id));
 				continue;
 			}
-			const out = await env.IMAGES.input(object.body)
-				.transform({
-					width: AUDIT_DECODE_SIZE,
-					height: AUDIT_DECODE_SIZE,
-					fit: "scale-down",
-				})
-				.output({ format: "image/webp", quality: 92 });
-			const rgba = decodeRgba(
-				new Uint8Array(await out.response().arrayBuffer()),
-			);
-			const assessment = assessMatteQuality(rgba);
-			const reasons = [
-				assessment.tintSuspect ? "tint" : null,
-				assessment.edgeSuspect ? "edge" : null,
-			].filter((r): r is string => r != null);
-			if (reasons.length > 0) suspects++;
-			await db
-				.update(records)
-				.set({
-					professionalMatteAuditCheckedAt: now,
-					professionalMatteAuditReason: reasons.length
-						? reasons.join(",")
-						: null,
-				})
-				.where(eq(records.id, row.id));
+			try {
+				const out = await env.IMAGES.input(object.body)
+					.transform({
+						width: AUDIT_DECODE_SIZE,
+						height: AUDIT_DECODE_SIZE,
+						fit: "scale-down",
+					})
+					.output({ format: "image/webp", quality: 92 });
+				const rgba = decodeRgba(
+					new Uint8Array(await out.response().arrayBuffer()),
+				);
+				const assessment = assessMatteQuality(rgba);
+				const reasons = [
+					assessment.tintSuspect ? "tint" : null,
+					assessment.edgeSuspect ? "edge" : null,
+				].filter((r): r is string => r != null);
+				if (reasons.length > 0) suspects++;
+				await db
+					.update(records)
+					.set({
+						professionalMatteAuditCheckedAt: now,
+						professionalMatteAuditReason: reasons.length
+							? reasons.join(",")
+							: null,
+					})
+					.where(eq(records.id, row.id));
+			} catch (error) {
+				// A transient R2/Images blip or a genuinely corrupt stored cutout — either
+				// way, don't let one bad row abort the whole sweep. Mark it checked with no
+				// reason so the stalest-first queue moves on instead of wedging here.
+				Sentry.captureException(error);
+				await db
+					.update(records)
+					.set({
+						professionalMatteAuditCheckedAt: now,
+						professionalMatteAuditReason: null,
+					})
+					.where(eq(records.id, row.id));
+			}
 		}
 
 		return { checked: due.length, suspects };
