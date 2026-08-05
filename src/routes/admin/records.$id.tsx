@@ -1479,7 +1479,9 @@ function RecordDetail() {
 								<p className="text-muted-foreground">
 									{activeDiscogsId
 										? "Pinned to a specific pressing — its details and value apply."
-										: "No specific pressing pinned — album only. Pick a release above to pin one."}
+										: effectiveMasterId != null
+											? "No specific pressing pinned — album only. Pick a release above to pin one."
+											: "No specific pressing pinned. Pick a release above to pin one."}
 								</p>
 								{activeDiscogsId ? (
 									<Button
