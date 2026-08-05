@@ -773,6 +773,48 @@ describe("vetoBackgroundAlpha", () => {
 		expect(mask[100 * img.width + 100]).toBe(255);
 	});
 
+	it("strips a background-coloured bleed outside the cut, up to bgQuad", () => {
+		// A confident AI-matte edge is trusted out to the outer (certified-background)
+		// quad — see clampEdgeOffsets — so the model's raw alpha can bleed wood past the
+		// TRUE edge (the refined `cut`) without ever tripping the old inward-only veto,
+		// which skipped every pixel outside `cut` entirely. Mat's true edge is x=160; the
+		// model mistakenly paints alpha out to x=180, inside the certified wall at x=190.
+		const img = woodScene();
+		const cut: Corners = [
+			[40, 40],
+			[160, 40], // sits exactly on the true edge — no inward overshoot
+			[160, 160],
+			[40, 160],
+		];
+		const outer: Corners = [
+			[35, 35],
+			[190, 35],
+			[190, 165],
+			[35, 165],
+		];
+		const mask = rasterizePolygon(
+			[
+				[40, 40],
+				[180, 40], // the spurious bleed: alpha painted 20px past the true edge
+				[180, 160],
+				[40, 160],
+			],
+			img.width,
+			img.height,
+		);
+		const vetoed = vetoBackgroundAlpha(img, mask, cut, cut, {
+			depth: 15,
+			ring: 15,
+			bgQuad: outer,
+		});
+		expect(vetoed).toBeGreaterThan(0);
+		// The bleed past the true edge is gone…
+		expect(mask[100 * img.width + 170]).toBe(0);
+		// …but the mat itself, including right up to its true edge, survives.
+		expect(mask[100 * img.width + 155]).toBe(255);
+		expect(mask[100 * img.width + 100]).toBe(255);
+	});
+
 	it("stands down when sleeve and background are inseparable (white on white)", () => {
 		const size = 200;
 		const data = new Uint8ClampedArray(size * size * 4);

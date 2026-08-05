@@ -1653,7 +1653,16 @@ function quadRingStats(
  * reshoot) with nothing hardcoded.
  *
  * Deliberately conservative, so it can only remove background — never eat the sleeve:
- *  - it only polices a band `depth` px inside the cut edge (the interior is untouched);
+ *  - it only polices a band `depth` px inside the cut edge, plus — when `bgQuad` is
+ *    given — the whole outward band from the cut edge out to `bgQuad` too (the interior
+ *    beyond `depth` is always untouched). A confident edge is trusted for the AI matte
+ *    out to the outer, certified-background quad (see `clampEdgeOffsets`), so the
+ *    model's raw alpha can bleed background anywhere between the true edge and that
+ *    outer wall, not just in a thin band hugging the cut — a dark cover's low-contrast
+ *    edge region has produced exactly that (wood grain painted in as sleeve well outside
+ *    the true edge, confident-scored because most of that edge's scanlines were clean).
+ *    Without `bgQuad` (the band-trimap caller, whose `cut` already sits at the certified
+ *    outer wall) the policed region stays the original inward-only band;
  *  - it only fires when the two colour distributions are clearly separable (a white
  *    sleeve on white paper is a silent no-op);
  *  - a pixel is vetoed only when it is decisively closer to the background model
@@ -1715,8 +1724,12 @@ export function vetoBackgroundAlpha(
 	if (Math.sqrt(sep) < 2) return 0;
 
 	const inner = offsetQuad(cut, -opts.depth);
-	const xs = cut.map((c) => c[0]);
-	const ys = cut.map((c) => c[1]);
+	// With `bgQuad`, the outward bound is the background wall itself (minus the gap the
+	// background ring sampling already reserves, so this stays clear of the ring); without
+	// it, the outward bound is `cut` — the original inward-only band.
+	const outerBound = opts.bgQuad ? offsetQuad(opts.bgQuad, -gap) : cut;
+	const xs = outerBound.map((c) => c[0]);
+	const ys = outerBound.map((c) => c[1]);
 	const x0 = Math.max(0, Math.floor(Math.min(...xs)));
 	const x1 = Math.min(width - 1, Math.ceil(Math.max(...xs)));
 	const y0 = Math.max(0, Math.floor(Math.min(...ys)));
@@ -1726,7 +1739,7 @@ export function vetoBackgroundAlpha(
 		for (let x = x0; x <= x1; x++) {
 			const p = y * width + x;
 			if (!mask[p]) continue;
-			if (insideQuad(inner, x, y) || !insideQuad(cut, x, y)) continue;
+			if (insideQuad(inner, x, y) || !insideQuad(outerBound, x, y)) continue;
 			const i = p * 4;
 			let dBg = 0;
 			let dFg = 0;
