@@ -313,22 +313,48 @@ a {
  * thumbnail, not a hoverable grid tile — see record-panel.tsx), so instead of
  * `.vinyl-disc`'s default fully-hidden rest state it gets a small permanent peek,
  * matching the collection grid's pre-hover art direction on a page where hover
- * never fires.
+ * never fires. The slide is delayed 700ms — matching `FadeImage`'s own
+ * `duration-700` cover fade — so the cover finishes fading in first and the disc
+ * only starts sliding out from behind it once fully revealed, rather than the
+ * two animations racing each other.
  */
 .vinyl-peek--static .vinyl-disc {
   /* The wrapper's own `inset-[12%]` (see record-panel.tsx, ~21px on the 176px
      box) already eats most of a small translate before the disc's edge even
      reaches the wrapper's own bounds — this needs to clear THAT first, then
-     travel a bit further to actually read as peeking past the artwork. */
+     travel a bit further to actually read as peeking past the artwork. 40px
+     (not 26px) because the cover's own 3deg rotation grows its bounding box
+     by several px on this edge too — a smaller translate cleared the inset
+     but not that rotated overhang, so the "peek" landed back under the cover
+     and never actually became visible. */
   transform: translate(
-      calc(26px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
-      calc(2px * var(--vinyl-stack-index, 0))
+      calc(40px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
+      calc(4px * var(--vinyl-stack-index, 0))
     )
     rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
+  transition-delay: 700ms;
+}
+
+/*
+ * `vinyl-peek--static` also flips the wrapper itself from `opacity-0` to
+ * `opacity-100` (record-panel.tsx) the moment `coverReady` fires — which, like
+ * the slide above, races the cover's own fade rather than waiting for it (see
+ * that component's comment for why `coverReady` fires early). Without this the
+ * disc — now opaque, still at rest directly behind the cover — flashes through
+ * the still-transparent cover and only gets covered up as the cover's fade
+ * catches up. Same 700ms delay, 0 duration: an instant snap once the cover has
+ * actually finished, not a second fade layered on top of it.
+ */
+.vinyl-peek--static {
+  transition: opacity 0ms 700ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .vinyl-disc {
+    transition: none;
+  }
+
+  .vinyl-peek--static {
     transition: none;
   }
 }

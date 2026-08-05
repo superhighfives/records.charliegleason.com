@@ -259,11 +259,12 @@ export function RecordPanel({
 	// another record (remounting the panel) instead of being handled by the dialog.
 	const [zoomOpen, setZoomOpen] = useState(false);
 
-	// Sequences the header artwork's entrance: the disc stays fully tucked behind
-	// the thumbnail (its `.vinyl-disc` rest state) until `CoverZoom`'s `onReveal`
-	// says the completed cover has faded in, then `vinyl-peek--static` slides it
-	// out — rather than both appearing at once (or a spinner standing in for the
-	// disc while the cover loads).
+	// Sequences the header artwork's entrance: the disc stays hidden (`opacity-0`)
+	// until `CoverZoom`'s `onReveal` fires — which happens as soon as the cover
+	// *starts* fading in, not once it finishes — so `vinyl-peek--static`'s slide-out
+	// carries a matching CSS `transition-delay` (see styles.css) to hold off until
+	// the cover's own fade has actually completed. Without that delay the two
+	// animations race and the disc ends up sliding out mid-fade instead of after.
 	const [coverReady, setCoverReady] = useState(false);
 
 	const copy = async (
@@ -511,17 +512,24 @@ export function RecordPanel({
 					    slide-out). */}
 					<div className="absolute right-8 -bottom-8 z-10 aspect-square w-44">
 						<VinylDisc
-							// The default `.vinyl-disc` rest state is fully hidden — held there
-							// until `coverReady`, so the disc slides out from behind the cover
-							// rather than both appearing at once. `vinyl-peek--static` (in place
-							// of the grid's hover-only peek — this static thumbnail has no
-							// hover) then holds it at a small permanent peek; see styles.css.
-							// Inset a bit (twMerge overrides the base `inset-0`): the matte
-							// thumbnail's own visible sleeve doesn't fill its whole square (it
-							// has a margin for the drop shadow), so a full-bleed disc reads as
-							// overflowing past the visible artwork rather than peeking from
-							// behind it.
-							className={cn("inset-[12%]", coverReady && "vinyl-peek--static")}
+							// `.vinyl-disc`'s rest position sits directly behind the cover, but
+							// while the cover is still loading its `FadeImage` is transparent
+							// (opacity-0 pre-reveal), so the disc would show straight through —
+							// hence the explicit `opacity-0` here rather than relying on the
+							// cover to obscure it. Once `coverReady` fires the disc snaps
+							// visible (still hidden behind the now fully-faded-in cover) and
+							// `vinyl-peek--static` (in place of the grid's hover-only peek —
+							// this static thumbnail has no hover) slides it out to a small
+							// permanent peek, delayed to start only once the cover's own fade
+							// has finished — see styles.css. Inset a bit (twMerge overrides the
+							// base `inset-0`): the matte thumbnail's own visible sleeve doesn't
+							// fill its whole square (it has a margin for the drop shadow), so a
+							// full-bleed disc reads as overflowing past the visible artwork
+							// rather than peeking from behind it.
+							className={cn(
+								"inset-[12%] opacity-0",
+								coverReady && "opacity-100 vinyl-peek--static",
+							)}
 							colorName={record.colorName}
 							textureImageKey={record.colorTextureImageKey}
 							textureStatus={record.colorTextureStatus}
