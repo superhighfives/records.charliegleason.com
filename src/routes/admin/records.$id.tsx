@@ -1467,8 +1467,14 @@ function RecordDetail() {
 					    this the admin has no visual confirmation a standalone pressing is
 					    linked. Un-pinning drops the specific pressing but holds the album
 					    identity if there is one, and value/catno/country come from a
-					    pinned release, so they go quiet until one is picked again. */}
-						{(effectiveMasterId != null || activeDiscogsId != null) && (
+					    pinned release, so they go quiet until one is picked again.
+					    Also keyed on the record's saved discogsId (not just the derived
+					    active/effective ids) so a standalone pressing (no master to fall
+					    back on) still shows this block — with its Undo — after "Remove
+					    pressing" sets albumOnly and collapses both derived ids to null. */}
+						{(effectiveMasterId != null ||
+							activeDiscogsId != null ||
+							record.discogsId != null) && (
 							<div className="flex items-center justify-between gap-3 border-t px-3 py-2 text-xs">
 								<p className="text-muted-foreground">
 									{activeDiscogsId
