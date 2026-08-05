@@ -483,6 +483,16 @@ const WB_MIN_REF_BRIGHTNESS = 140;
  * reliable white-patch read; damp white balance further even if a single channel's
  * percentile clears {@link WB_MIN_REF_BRIGHTNESS}. */
 const WB_MIN_MEAN_LUMA = 60;
+/**
+ * A genuine white point is close to neutral by definition — if the "near-white"
+ * sample's channels are already this far apart (as a fraction of the brightest
+ * channel), it isn't white, it's just whatever's brightest, and its spread is real
+ * image colour rather than an ambient cast. Trusting it as a reference doesn't just
+ * shift hue slightly: the subsequent exposure-lift gamma (steep on a dark frame) can
+ * blow a small, spurious per-channel gain gap into a strong, visible tint across the
+ * whole image. Trust fades to zero by twice this fraction.
+ */
+const WB_MAX_NEUTRAL_SPREAD = 0.12;
 
 export interface AutoToneResult extends RgbaImage {
 	debug: {
@@ -536,7 +546,12 @@ export function autoTone(
 	const preMeanLuma = 0.2126 * mean[0] + 0.7152 * mean[1] + 0.0722 * mean[2];
 	const refTrust = Math.min(1, Math.max(0, refWhite / WB_MIN_REF_BRIGHTNESS));
 	const lumaTrust = Math.min(1, Math.max(0, preMeanLuma / WB_MIN_MEAN_LUMA));
-	const effectiveWbStrength = wbStrength * refTrust * lumaTrust;
+	const spreadFrac = (refWhite - Math.min(...whiteRef)) / refWhite;
+	const neutralTrust = Math.min(
+		1,
+		Math.max(0, 1 - spreadFrac / (2 * WB_MAX_NEUTRAL_SPREAD)),
+	);
+	const effectiveWbStrength = wbStrength * refTrust * lumaTrust * neutralTrust;
 	const wbGain: [number, number, number] = [1, 1, 1];
 	for (let c = 0; c < 3; c++) {
 		const g = refWhite / whiteRef[c];
@@ -1484,6 +1499,35 @@ export function offsetQuad(quad: Corners, delta: EdgeDeltas): Corners {
 		const cur = lines[i];
 		return lineIntersect(prev[0], prev[1], cur[0], cur[1]);
 	}) as Corners;
+}
+
+/**
+ * Per-edge outward offsets for the AI matte's alpha clamp: a confident edge (see
+ * {@link EDGE_CONFIDENCE_MIN}) is trusted out to the outer (certified-background) quad
+ * — the admin drew it well clear of the sleeve, so worn corners, dips and bows anywhere
+ * in the band survive. But a confident edge that landed suspiciously close to that outer
+ * wall (past `outerProximityMax` of the band's room) is far more likely a false-positive
+ * gradient spike (a shadow, a seam) than a sleeve that genuinely grew right up to it, so
+ * it's demoted back to the tight low-confidence inset. A genuinely low-confidence edge
+ * (no discernible boundary) always gets that same inset: with nothing to see there, a
+ * crisp straight cut at the admin's best guess beats trusting the model in the dark.
+ */
+export function clampEdgeOffsets(
+	toOuter: EdgeConfidence,
+	toRefined: EdgeConfidence,
+	confidence: EdgeConfidence,
+	opts: {
+		minConfidence: number;
+		outerProximityMax: number;
+		lowConfInset: number;
+	},
+): EdgeConfidence {
+	return confidence.map((c, e) => {
+		const sane =
+			c >= opts.minConfidence &&
+			toRefined[e] <= toOuter[e] * opts.outerProximityMax;
+		return sane ? toOuter[e] : -opts.lowConfInset;
+	}) as EdgeConfidence;
 }
 
 /**

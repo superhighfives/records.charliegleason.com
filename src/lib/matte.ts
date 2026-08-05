@@ -25,6 +25,7 @@ import {
 import {
 	applyMask,
 	buildTrimapFromBand,
+	clampEdgeOffsets,
 	deskewBandPadded,
 	EDGE_CONFIDENCE_MIN,
 	edgeDistances,
@@ -202,25 +203,13 @@ async function matteAI(
 	// admin's best guess beats trusting the model in the dark. Never erode a confident
 	// edge inward — the model's ragged edge is the point. The wood fringe that would
 	// otherwise ride the soft edge is handled by the colour bleed in the warp.
-	//
-	// Sanity-check "confident" before trusting it out to the wall: a refined edge that
-	// landed almost flush against the outer quad is more often a false-positive gradient
-	// peak (a shadow, a seam) than a sleeve that genuinely grew right up to the admin's
-	// certified-background boundary — demote those back to the low-confidence clamp.
-	const toRefined = edgeDistances(mid, refined);
-	const sane = confidence.map(
-		(c, e) =>
-			c >= EDGE_CONFIDENCE_MIN &&
-			toRefined[e] <= toOuter[e] * EDGE_OUTER_PROXIMITY_MAX,
-	);
 	const clampQuad = offsetQuad(
 		mid,
-		sane.map((ok, e) => (ok ? toOuter[e] : -CLAMP_LOWCONF_INSET)) as [
-			number,
-			number,
-			number,
-			number,
-		],
+		clampEdgeOffsets(toOuter, edgeDistances(mid, refined), confidence, {
+			minConfidence: EDGE_CONFIDENCE_MIN,
+			outerProximityMax: EDGE_OUTER_PROXIMITY_MAX,
+			lowConfInset: CLAMP_LOWCONF_INSET,
+		}),
 	);
 	const clamp = rasterizePolygon(clampQuad, content.width, content.height);
 	const raw = maskFromModelOutput(model, content.width, content.height);

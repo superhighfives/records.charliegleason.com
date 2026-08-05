@@ -29,6 +29,7 @@ import {
 import {
 	applyMask,
 	buildTrimapFromBand,
+	clampEdgeOffsets,
 	deskewBandPadded,
 	EDGE_CONFIDENCE_MIN,
 	edgeDistances,
@@ -105,22 +106,13 @@ async function matteAI(
 	if (!res.ok) throw new Error(`fetching the matte failed (${res.status})`);
 	const model = await decodeRgba(new Uint8Array(await res.arrayBuffer()));
 
-	// See `matteAI` in `src/lib/matte.ts` for the rationale: a "confident" edge is only
-	// trusted out to the outer quad if it hasn't landed suspiciously flush against it.
-	const toRefined = edgeDistances(mid, refined);
-	const sane = confidence.map(
-		(c, e) =>
-			c >= EDGE_CONFIDENCE_MIN &&
-			toRefined[e] <= toOuter[e] * EDGE_OUTER_PROXIMITY_MAX,
-	);
 	const clampQuad = offsetQuad(
 		mid,
-		sane.map((ok, e) => (ok ? toOuter[e] : -CLAMP_LOWCONF_INSET)) as [
-			number,
-			number,
-			number,
-			number,
-		],
+		clampEdgeOffsets(toOuter, edgeDistances(mid, refined), confidence, {
+			minConfidence: EDGE_CONFIDENCE_MIN,
+			outerProximityMax: EDGE_OUTER_PROXIMITY_MAX,
+			lowConfInset: CLAMP_LOWCONF_INSET,
+		}),
 	);
 	const clamp = rasterizePolygon(clampQuad, content.width, content.height);
 	const raw = maskFromModelOutput(model, content.width, content.height);
