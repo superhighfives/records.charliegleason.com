@@ -1998,3 +1998,81 @@ export function matteFromBand(
 	});
 	return composeMatteWarped(content, mask, quad, opts);
 }
+
+// ---------- admin matte-quality audit (cheap, non-AI pixel heuristics) ----------
+
+export interface MatteQualityAssessment {
+	/** Average per-channel spread (max-min, 0..255) among near-black opaque pixels — a
+	 * genuine shadow stays close to neutral even on a saturated cover, so a wide spread
+	 * here is the signature of an invented colour cast (see `autoTone`'s white-balance
+	 * guards). 0 when there aren't enough shadow pixels to trust a reading. */
+	tintScore: number;
+	/** Fraction of the canvas's outer margin ring that's unexpectedly opaque — that ring
+	 * is meant to stay transparent (it's the shadow's breathing room), so alpha bleeding
+	 * into it is the signature of the AI matte's edge clamp overrunning the sleeve (see
+	 * `clampEdgeOffsets`). */
+	edgeScore: number;
+	tintSuspect: boolean;
+	edgeSuspect: boolean;
+}
+
+/** "Near black" luma cutoff (0..255) for the tint check's shadow sample. */
+const AUDIT_SHADOW_LUMA_MAX = 26;
+/** Average shadow channel spread (0..255) past which a render is flagged for tint. */
+const AUDIT_TINT_SPREAD_SUSPECT = 18;
+/** Minimum shadow-pixel sample size before trusting the tint score — avoids noise on a
+ * cover with almost no dark content. */
+const AUDIT_TINT_MIN_SAMPLE = 200;
+/** Outer margin ring width, as a fraction of the shorter canvas side. */
+const AUDIT_EDGE_RING_FRAC = 0.015;
+/** Fraction of the ring that must be opaque before a render is flagged for edge overrun. */
+const AUDIT_EDGE_ALPHA_SUSPECT_FRAC = 0.04;
+
+/**
+ * Cheap, non-AI pixel scan of a rendered matte (or any RGBA square with a transparent
+ * margin) for the two regression classes the matte pipeline has produced in the past: an
+ * invented colour cast on a dark, low-key cover, and the AI matte's alpha overrunning the
+ * certified crop into the canvas's outer shadow margin. Pure pixel statistics, no model
+ * calls — meant to run over every stored matte cheaply so the admin can shortlist
+ * likely-bad renders instead of eyeballing the whole collection. Not exhaustive (a subtle
+ * case can still slip through, and a genuinely near-black, hard-edged cover could
+ * false-positive) — a shortlist to review, not an authority.
+ */
+export function assessMatteQuality(img: RgbaImage): MatteQualityAssessment {
+	const { data, width, height } = img;
+
+	let spreadSum = 0;
+	let shadowN = 0;
+	for (let p = 0; p < width * height; p++) {
+		if (data[p * 4 + 3] < 16) continue;
+		const r = data[p * 4];
+		const g = data[p * 4 + 1];
+		const b = data[p * 4 + 2];
+		const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+		if (luma > AUDIT_SHADOW_LUMA_MAX) continue;
+		spreadSum += Math.max(r, g, b) - Math.min(r, g, b);
+		shadowN++;
+	}
+	const tintScore = shadowN >= AUDIT_TINT_MIN_SAMPLE ? spreadSum / shadowN : 0;
+	const tintSuspect =
+		shadowN >= AUDIT_TINT_MIN_SAMPLE && tintScore > AUDIT_TINT_SPREAD_SUSPECT;
+
+	const ring = Math.max(
+		1,
+		Math.round(Math.min(width, height) * AUDIT_EDGE_RING_FRAC),
+	);
+	let ringN = 0;
+	let ringOpaque = 0;
+	for (let y = 0; y < height; y++) {
+		const inRingRow = y < ring || y >= height - ring;
+		for (let x = 0; x < width; x++) {
+			if (!inRingRow && x >= ring && x < width - ring) continue;
+			ringN++;
+			if (data[(y * width + x) * 4 + 3] >= 16) ringOpaque++;
+		}
+	}
+	const edgeScore = ringN > 0 ? ringOpaque / ringN : 0;
+	const edgeSuspect = edgeScore > AUDIT_EDGE_ALPHA_SUSPECT_FRAC;
+
+	return { tintScore, edgeScore, tintSuspect, edgeSuspect };
+}

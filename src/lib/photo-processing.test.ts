@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	assessMatteQuality,
 	autoTone,
 	bleedEdgeColor,
 	boxBlur1,
@@ -1013,5 +1014,77 @@ describe("composeMatte", () => {
 		});
 		expect(cutout.data[(100 * 200 + 100) * 4 + 3]).toBe(255); // centre opaque
 		expect(cutout.data[3]).toBe(0); // top-left corner is margin
+	});
+});
+
+describe("assessMatteQuality", () => {
+	const size = 200;
+
+	/** A clean matte: a near-black, perfectly neutral opaque square with a transparent
+	 * margin — no cast, no edge overrun. */
+	function cleanMatte(): RgbaImage {
+		const data = new Uint8ClampedArray(size * size * 4);
+		const margin = 10;
+		for (let y = 0; y < size; y++)
+			for (let x = 0; x < size; x++) {
+				const i = (y * size + x) * 4;
+				const inside =
+					x >= margin && x < size - margin && y >= margin && y < size - margin;
+				data[i] = data[i + 1] = data[i + 2] = 12; // near-black, perfectly neutral
+				data[i + 3] = inside ? 255 : 0;
+			}
+		return { data, width: size, height: size };
+	}
+
+	it("doesn't flag a clean, neutral matte with a transparent margin", () => {
+		const a = assessMatteQuality(cleanMatte());
+		expect(a.tintSuspect).toBe(false);
+		expect(a.edgeSuspect).toBe(false);
+	});
+
+	it("flags a colour cast in the near-black shadow pixels", () => {
+		const img = cleanMatte();
+		const { data, width, height } = img;
+		for (let p = 0; p < width * height; p++) {
+			if (data[p * 4 + 3] < 16) continue;
+			// Still reads as "near black" by luma, but with a real per-channel spread —
+			// an invented cast, not a genuinely saturated bright colour.
+			data[p * 4] = 4;
+			data[p * 4 + 1] = 24;
+			data[p * 4 + 2] = 14;
+		}
+		const a = assessMatteQuality(img);
+		expect(a.tintSuspect).toBe(true);
+		expect(a.edgeSuspect).toBe(false);
+	});
+
+	it("flags alpha bleeding into the outer shadow margin", () => {
+		const img = cleanMatte();
+		const { data, width, height } = img;
+		// Fill the entire outer ring opaque — the matte overran into the margin that's
+		// supposed to stay transparent for the contact shadow.
+		for (let y = 0; y < height; y++)
+			for (let x = 0; x < width; x++) {
+				if (x < 3 || x >= width - 3 || y < 3 || y >= height - 3) {
+					data[(y * width + x) * 4 + 3] = 255;
+				}
+			}
+		const a = assessMatteQuality(img);
+		expect(a.edgeSuspect).toBe(true);
+	});
+
+	it("doesn't flag tint on a cover with too little dark content to trust", () => {
+		// Uniformly bright — no shadow sample at all, so tintScore/suspect stay at the
+		// "not enough data" default rather than a spurious reading.
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let p = 0; p < size * size; p++) {
+			data[p * 4] = 200;
+			data[p * 4 + 1] = 150;
+			data[p * 4 + 2] = 100;
+			data[p * 4 + 3] = 255;
+		}
+		const a = assessMatteQuality({ data, width: size, height: size });
+		expect(a.tintSuspect).toBe(false);
+		expect(a.tintScore).toBe(0);
 	});
 });

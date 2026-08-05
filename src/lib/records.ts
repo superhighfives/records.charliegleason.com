@@ -53,6 +53,7 @@ import {
 	runLinkHealthCheck,
 } from "#/lib/master-health";
 import { generateMatteFromCapture } from "#/lib/matte";
+import { type MatteAuditTally, runMatteAudit } from "#/lib/matte-audit";
 import { detectCaptureCorners, professionalPipeline } from "#/lib/professional";
 import type { CoverStageResult } from "#/lib/professional-pipeline";
 import {
@@ -1495,6 +1496,19 @@ export const checkLinkHealth = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Run the matte-quality audit on demand from the admin UI, for the "Audit covers"
+ * action. Sweeps a stalest-first batch of stored mattes (see `matte-audit.ts`) with a
+ * cheap, non-AI pixel scan and flags likely tint/edge-overrun regressions — the same
+ * classes of bug the Parachutes matte fix addressed, for records that already have a
+ * stale, bad render baked into R2. Purely diagnostic: flagged rows still need a manual
+ * re-Apply or "Retry flagged mattes" to actually regenerate. Repeated clicks walk the
+ * stalest-first queue further, same as "Check links".
+ */
+export const auditMatteQuality = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.handler((): Promise<MatteAuditTally> => runMatteAudit());
+
+/**
  * Link a record as an intentional duplicate copy of another — the admin "I own two
  * copies" action. Sets the current record's `copyOf` to the PRIMARY it's a copy of,
  * so it drops off the public collection and instead bumps the primary's "copies"
@@ -2035,6 +2049,82 @@ export const retryProfessionalMattes = createServerFn({ method: "POST" })
 						and(
 							inArray(records.id, batch),
 							eq(records.professionalAlphaSource, "deterministic"),
+							isNotNull(records.capturePhotoKey),
+							isNotNull(records.professionalImageKey),
+						),
+					)
+					.returning({ id: records.id });
+				flipped.push(...rows.map(({ id }) => id));
+			}
+			const toEnqueue = flipped
+				.map((id) => byId.get(id))
+				.filter(
+					(i): i is { recordId: number; stage: CoverStageResult } => i != null,
+				);
+			if (toEnqueue.length === 0) return { count: 0 };
+			await enqueueProfessionalMatteBatch(toEnqueue);
+			return { count: toEnqueue.length };
+		}),
+	);
+
+/**
+ * Bulk re-cut the matte for records the audit shortlisted (see `matte-audit.ts`),
+ * regardless of `professionalAlphaSource` — unlike {@link retryProfessionalMattes},
+ * which only upgrades the deterministic fallback, an audit-flagged row can perfectly
+ * well have come from the AI path (that's exactly the tint/edge-overrun bug class this
+ * exists for). Only re-cuts rows still actually flagged at write time (re-applies the
+ * eligibility predicate atomically with the flip, same pattern as
+ * {@link retryProfessionalMattes}) and clears the flag so a clean result isn't
+ * re-surfaced before the next audit sweep confirms it. Matte-only — reframe/enhance are
+ * untouched, same division of labour as "Retry Magic matte".
+ */
+export const retryFlaggedMattes = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator(idList)
+	.handler(({ data: ids }) =>
+		Sentry.startSpan({ name: "retryFlaggedMattes" }, async () => {
+			if (ids.length === 0) return { count: 0 };
+			const db = getDb(env.DB);
+			const now = new Date();
+			const items: Array<{ recordId: number; stage: CoverStageResult }> = [];
+			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
+				const rows = await db
+					.select()
+					.from(records)
+					.where(inArray(records.id, batch));
+				for (const record of rows) {
+					if (!record.professionalMatteAuditReason) continue;
+					if (!record.capturePhotoKey || !record.professionalImageKey) continue;
+					const band = parseCornerBand(record.sleeveCornersJson);
+					const params = parseReframeParams(record.professionalParamsJson);
+					items.push({
+						recordId: record.id,
+						stage: {
+							coverKey: record.professionalImageKey,
+							enhanced: record.professionalEnhanced ?? false,
+							captureKey: record.capturePhotoKey,
+							bandJson: serializeCornerBand(band),
+							paramsJson: JSON.stringify(params),
+						},
+					});
+				}
+			}
+			if (items.length === 0) return { count: 0 };
+			const byId = new Map(items.map((i) => [i.recordId, i]));
+			const flipped: number[] = [];
+			for (const batch of chunk([...byId.keys()], D1_PARAM_CHUNK)) {
+				const rows = await db
+					.update(records)
+					.set({
+						professionalJobStatus: "queued",
+						professionalError: null,
+						professionalRetryCount: 0,
+						updatedAt: now,
+					})
+					.where(
+						and(
+							inArray(records.id, batch),
+							isNotNull(records.professionalMatteAuditReason),
 							isNotNull(records.capturePhotoKey),
 							isNotNull(records.professionalImageKey),
 						),
