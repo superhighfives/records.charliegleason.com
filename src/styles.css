@@ -335,6 +335,20 @@ a {
   transition-delay: 700ms;
 }
 
+/*
+ * `vinyl-peek--static` also flips the wrapper itself from `opacity-0` to
+ * `opacity-100` (record-panel.tsx) the moment `coverReady` fires — which, like
+ * the slide above, races the cover's own fade rather than waiting for it (see
+ * that component's comment for why `coverReady` fires early). Without this the
+ * disc — now opaque, still at rest directly behind the cover — flashes through
+ * the still-transparent cover and only gets covered up as the cover's fade
+ * catches up. Same 700ms delay, 0 duration: an instant snap once the cover has
+ * actually finished, not a second fade layered on top of it.
+ */
+.vinyl-peek--static {
+  transition: opacity 0ms 700ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vinyl-disc {
     transition: none;
