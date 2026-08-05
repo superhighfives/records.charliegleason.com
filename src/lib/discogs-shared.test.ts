@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildBarcodeSearchUrl,
 	classifyQuery,
+	cleanArtistName,
 	mapMasterDetail,
 	mapMasterSearchResult,
 	mapReleaseCandidate,
@@ -13,6 +14,36 @@ import {
 	parseDiscCount,
 	parseSizeAndType,
 } from "./discogs-shared";
+
+describe("cleanArtistName", () => {
+	it("strips a disambiguation suffix", () => {
+		expect(cleanArtistName("Ceres (3)")).toBe("Ceres");
+		expect(cleanArtistName("Wire (2)")).toBe("Wire");
+	});
+
+	it("un-inverts a trailing sort article", () => {
+		expect(cleanArtistName("Frames, The")).toBe("The Frames");
+		expect(cleanArtistName("Streets, A")).toBe("A Streets");
+		expect(cleanArtistName("XX, An")).toBe("An XX");
+	});
+
+	it("handles both a suffix and an inverted article together", () => {
+		expect(cleanArtistName("Frames, The (2)")).toBe("The Frames");
+		// Discogs also emits the disambiguation suffix before the inverted
+		// article rather than at the very end.
+		expect(cleanArtistName("Frames (2), The")).toBe("The Frames");
+	});
+
+	it("normalises the article's casing regardless of the input's", () => {
+		expect(cleanArtistName("Frames, the")).toBe("The Frames");
+		expect(cleanArtistName("Frames, THE")).toBe("The Frames");
+	});
+
+	it("leaves ordinary names untouched", () => {
+		expect(cleanArtistName("Wire")).toBe("Wire");
+		expect(cleanArtistName("The Frames")).toBe("The Frames");
+	});
+});
 
 describe("mapReleaseSearchResult", () => {
 	it("maps a populated release search row", () => {
