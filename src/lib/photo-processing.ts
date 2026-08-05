@@ -470,6 +470,20 @@ export interface AutoToneOptions {
 /** Percentile of each channel treated as the near-white reference for white-balance. */
 const WB_WHITE_PCT = 0.97;
 
+/**
+ * Below this brightness (0..255) the 97th-percentile "near-white" sample isn't
+ * actually white — on a dark, low-key cover (e.g. a mostly-black sleeve with no true
+ * highlight) it's just whatever pixels happen to be brightest, often with a small,
+ * meaningless per-channel imbalance. Trusting it as a white reference forces that
+ * noise to neutral and pushes the *whole* frame the opposite direction; skip white
+ * balance below this floor instead of correcting a cast that was never really there.
+ */
+const WB_MIN_REF_BRIGHTNESS = 140;
+/** Below this mean foreground luma (0..255) the frame is too dark overall for a
+ * reliable white-patch read; damp white balance further even if a single channel's
+ * percentile clears {@link WB_MIN_REF_BRIGHTNESS}. */
+const WB_MIN_MEAN_LUMA = 60;
+
 export interface AutoToneResult extends RgbaImage {
 	debug: {
 		wbGain: [number, number, number];
@@ -509,7 +523,7 @@ export function autoTone(
 		targetMid = 0.5,
 	} = opts;
 
-	const { hist, lumaHist, n } = foregroundStats(img, alphaMin);
+	const { hist, lumaHist, mean, n } = foregroundStats(img, alphaMin);
 
 	// White-patch balance: line each channel's near-white reference up with the
 	// brightest channel's, so whites go neutral while saturated midtones keep their hue.
@@ -517,10 +531,16 @@ export function autoTone(
 		Math.max(percentile(hist[c], n, WB_WHITE_PCT), 1),
 	);
 	const refWhite = Math.max(...whiteRef);
+	// No plausible white point on a dark/low-key cover: don't invent a cast to correct.
+	// Damp continuously (not a hard cutoff) so covers near the floor don't jump abruptly.
+	const preMeanLuma = 0.2126 * mean[0] + 0.7152 * mean[1] + 0.0722 * mean[2];
+	const refTrust = Math.min(1, Math.max(0, refWhite / WB_MIN_REF_BRIGHTNESS));
+	const lumaTrust = Math.min(1, Math.max(0, preMeanLuma / WB_MIN_MEAN_LUMA));
+	const effectiveWbStrength = wbStrength * refTrust * lumaTrust;
 	const wbGain: [number, number, number] = [1, 1, 1];
 	for (let c = 0; c < 3; c++) {
 		const g = refWhite / whiteRef[c];
-		const damped = 1 + (g - 1) * wbStrength;
+		const damped = 1 + (g - 1) * effectiveWbStrength;
 		// Clamp the per-channel gain to ±30%. A strongly-coloured cover drives one
 		// channel's near-white reference far above the others; a looser clamp (this was
 		// ±60%) let that swing green/cyan the whole midtone range. ±30% still neutralises

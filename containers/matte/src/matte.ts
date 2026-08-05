@@ -9,6 +9,7 @@
 
 import {
 	CLAMP_LOWCONF_INSET,
+	EDGE_OUTER_PROXIMITY_MAX,
 	FEATHER,
 	MATTE_ESRGAN_MAX,
 	MATTE_MODEL_MAX_SIZE,
@@ -104,11 +105,22 @@ async function matteAI(
 	if (!res.ok) throw new Error(`fetching the matte failed (${res.status})`);
 	const model = await decodeRgba(new Uint8Array(await res.arrayBuffer()));
 
+	// See `matteAI` in `src/lib/matte.ts` for the rationale: a "confident" edge is only
+	// trusted out to the outer quad if it hasn't landed suspiciously flush against it.
+	const toRefined = edgeDistances(mid, refined);
+	const sane = confidence.map(
+		(c, e) =>
+			c >= EDGE_CONFIDENCE_MIN &&
+			toRefined[e] <= toOuter[e] * EDGE_OUTER_PROXIMITY_MAX,
+	);
 	const clampQuad = offsetQuad(
 		mid,
-		confidence.map((c, e) =>
-			c >= EDGE_CONFIDENCE_MIN ? toOuter[e] : -CLAMP_LOWCONF_INSET,
-		) as [number, number, number, number],
+		sane.map((ok, e) => (ok ? toOuter[e] : -CLAMP_LOWCONF_INSET)) as [
+			number,
+			number,
+			number,
+			number,
+		],
 	);
 	const clamp = rasterizePolygon(clampQuad, content.width, content.height);
 	const raw = maskFromModelOutput(model, content.width, content.height);
