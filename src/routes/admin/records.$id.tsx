@@ -1461,16 +1461,27 @@ function RecordDetail() {
 							</div>
 						)}
 
-						{/* Pressing un-pin control. Only meaningful when there's an album to
-					    keep — un-pinning drops the specific pressing but holds the album
-					    identity, and value/catno/country come from a pinned release, so
-					    they go quiet until one is picked again. */}
-						{effectiveMasterId != null && (
+						{/* Pressing un-pin control. Shown whenever there's an album to keep
+					    the pin against, or a release is pinned standalone (no master at
+					    all) — a record can be identity'd by a release alone, and without
+					    this the admin has no visual confirmation a standalone pressing is
+					    linked. Un-pinning drops the specific pressing but holds the album
+					    identity if there is one, and value/catno/country come from a
+					    pinned release, so they go quiet until one is picked again.
+					    Also keyed on the record's saved discogsId (not just the derived
+					    active/effective ids) so a standalone pressing (no master to fall
+					    back on) still shows this block — with its Undo — after "Remove
+					    pressing" sets albumOnly and collapses both derived ids to null. */}
+						{(effectiveMasterId != null ||
+							activeDiscogsId != null ||
+							record.discogsId != null) && (
 							<div className="flex items-center justify-between gap-3 border-t px-3 py-2 text-xs">
 								<p className="text-muted-foreground">
 									{activeDiscogsId
 										? "Pinned to a specific pressing — its details and value apply."
-										: "No specific pressing pinned — album only. Pick a release above to pin one."}
+										: effectiveMasterId != null
+											? "No specific pressing pinned — album only. Pick a release above to pin one."
+											: "No specific pressing pinned. Pick a release above to pin one."}
 								</p>
 								{activeDiscogsId ? (
 									<Button
