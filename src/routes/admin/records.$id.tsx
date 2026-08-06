@@ -978,6 +978,28 @@ function RecordDetail() {
 		searchedReleases ??
 		masterVersionsQuery.data ??
 		parseCandidates(record.candidatesJson);
+	// Once a pressing is pinned, browsing the full candidate list is noise — the
+	// pin *is* the answer. Mirrors the album search above (hidden once linked):
+	// outside an active search, collapse the list down to just the pinned
+	// pressing; during a search, keep browsing but float the pinned one to the
+	// top so it reads as "this one, already selected" among the results rather
+	// than wherever Discogs's own ordering happened to place it.
+	const isSearchingReleases = searchedReleases != null;
+	const pinnedCandidate =
+		picked ??
+		(activeDiscogsId
+			? (candidates.find((c) => c.discogsId === activeDiscogsId) ?? null)
+			: null);
+	const displayedCandidates = pinnedCandidate
+		? isSearchingReleases
+			? [
+					pinnedCandidate,
+					...candidates.filter(
+						(c) => c.discogsId !== pinnedCandidate.discogsId,
+					),
+				]
+			: [pinnedCandidate]
+		: candidates;
 	const inFlight =
 		record.status === "pending" || record.status === "processing";
 	const failure =
@@ -1430,14 +1452,15 @@ function RecordDetail() {
 					    group beneath the "Albums" (masters) list: albums first, then the
 					    specific pressings underneath. A manual search can return every
 					    pressing, so cap the height and let it scroll rather than pushing
-					    the form off-screen. */}
-						{candidates.length > 0 && (
+					    the form off-screen. Collapsed to just the pin outside a search,
+					    pin-first during one — see `displayedCandidates`. */}
+						{displayedCandidates.length > 0 && (
 							<div className="border-t">
 								<p className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
 									Releases
 								</p>
 								<ul className="max-h-[345px] divide-y overflow-y-auto border-t">
-									{candidates.map((c) => {
+									{displayedCandidates.map((c) => {
 										const active = picked
 											? picked.discogsId === c.discogsId
 											: !albumOnly && record.discogsId === c.discogsId;
