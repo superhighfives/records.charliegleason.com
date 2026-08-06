@@ -6,11 +6,17 @@ import {
 	useUser,
 } from "@clerk/clerk-react";
 import { HotkeysProvider } from "@tanstack/react-hotkeys";
-import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	ErrorComponent,
+	Link,
+	Outlet,
+} from "@tanstack/react-router";
 
 import { QueueMenu } from "#/components/queue-menu";
 import { SettingsModal } from "#/components/settings-modal";
 import { ThemeToggle } from "#/components/theme-toggle";
+import { AdminSessionError } from "#/lib/auth";
 import { isAdmin } from "#/lib/roles";
 
 /**
@@ -19,7 +25,40 @@ import { isAdmin } from "#/lib/roles";
  * redirected to Clerk's hosted sign-in. This client gate is UX only — the real
  * boundary is `authMiddleware` on every write server function.
  */
-export const Route = createFileRoute("/admin")({ component: AdminLayout });
+export const Route = createFileRoute("/admin")({
+	component: AdminLayout,
+	// Catches `AdminSessionError` thrown by `listRecords`/`getRecord` when the
+	// client's Clerk user object (checked by `AdminGate` below) and the server's
+	// verified session JWT disagree on admin status — the client SDK can read as
+	// admin while a stale/unrefreshed session cookie still doesn't. Without this,
+	// that mismatch rendered as an unremarkable empty collection or a "Record not
+	// found", with nothing to tell an admin their session — not their data — was
+	// the problem.
+	errorComponent: (props) => {
+		if (!(props.error instanceof AdminSessionError))
+			return <ErrorComponent {...props} />;
+		const { error, reset } = props;
+		return (
+			<div className="flex min-h-screen flex-col items-center justify-center gap-3 p-6 text-center">
+				<h1 className="text-2xl font-semibold">Session out of sync</h1>
+				<p className="max-w-sm text-muted-foreground">
+					{error.message} Your account looks right, but the server couldn't
+					confirm it.
+				</p>
+				<button
+					type="button"
+					onClick={() => {
+						reset();
+						window.location.reload();
+					}}
+					className="text-sm underline underline-offset-4"
+				>
+					Reload
+				</button>
+			</div>
+		);
+	},
+});
 
 function AdminLayout() {
 	return (

@@ -21,7 +21,7 @@ import {
 	records,
 } from "#/db/schema";
 import { identifyFromAsin } from "#/lib/asin";
-import { authMiddleware, getAdminSession } from "#/lib/auth";
+import { AdminSessionError, authMiddleware, getAdminSession } from "#/lib/auth";
 import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
 import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
 import { displayCoverKey } from "#/lib/cover";
@@ -189,12 +189,13 @@ export function toPublicRecord(
 export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 	Sentry.startSpan({ name: "listRecords" }, async () => {
 		// Admin-only: returns full rows (capture keys, valuation, bookkeeping), so it
-		// must not be callable unauthenticated. Fail soft — it runs inside the /admin
-		// SSR loader, where a thrown 401 would break the render rather than fall through
-		// to the client-side signed-out redirect (mirrors getRecord / listInFlight).
-		// Failing closed also surfaces an auth outage as an empty list instead of a
-		// silent data leak.
-		if (!(await getAdminSession())) return [];
+		// must not be callable unauthenticated. Both this and `getRecord` are loaded via
+		// `useSuspenseQuery`/`ensureQueryData` under the `/admin` route, which has an
+		// `errorComponent` (route.tsx) — so throwing here surfaces a clear retry prompt
+		// instead of a silent empty collection indistinguishable from "you own zero
+		// records" (see `AdminSessionError`). Failing closed still means an auth outage
+		// never leaks data, it just no longer leaks it as an unremarkable empty list.
+		if (!(await getAdminSession())) throw new AdminSessionError();
 		const db = getDb(env.DB);
 		return db.select().from(records).orderBy(desc(records.createdAt));
 	}),
@@ -261,11 +262,10 @@ export const getRecord = createServerFn({ method: "GET" })
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "getRecord" }, async () => {
 			// Admin-only: this returns the full row (capture key, valuation, professional*
-			// bookkeeping), so it must not be
-			// callable unauthenticated. Fail soft — it runs inside the /admin SSR loader,
-			// where a thrown 401 would break the render rather than fall through to the
-			// client-side signed-out redirect.
-			if (!(await getAdminSession())) return null;
+			// bookkeeping), so it must not be callable unauthenticated. See `listRecords` —
+			// throws rather than returning `null`, which the record page couldn't tell
+			// apart from a genuinely deleted/bad id ("Record not found").
+			if (!(await getAdminSession())) throw new AdminSessionError();
 
 			const db = getDb(env.DB);
 			const [row] = await db

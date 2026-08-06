@@ -6,6 +6,23 @@ import { getRequest, setResponseStatus } from "@tanstack/react-start/server";
 import { isAdmin } from "#/lib/roles";
 
 /**
+ * Thrown by a read (`listRecords`, `getRecord`) when `getAdminSession` comes back
+ * null — the client-side `<SignedIn>` role gate in `/admin/route.tsx` says this
+ * request should be an admin, but the server-side Clerk session it's actually
+ * carrying doesn't agree (typically a stale/unrefreshed session token — the
+ * client SDK's live user object and the server's verified session JWT can
+ * genuinely disagree for a beat). Distinct from "the record doesn't exist" or
+ * "the collection is empty" so a caller can render an explicit retry prompt
+ * instead of a misleadingly-empty list.
+ */
+export class AdminSessionError extends Error {
+	constructor() {
+		super("Admin session couldn't be verified — try reloading.");
+		this.name = "AdminSessionError";
+	}
+}
+
+/**
  * Resolve the current request's Clerk session and return the admin's user id, or
  * `null` if the request isn't a signed-in admin. Non-throwing counterpart to
  * {@link authMiddleware}: for a *read* that gets embedded in an SSR loader (like
