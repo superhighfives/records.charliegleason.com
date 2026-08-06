@@ -1317,22 +1317,20 @@ function RecordDetail() {
 			    or an under-crop the model itself produced). "Re-cut this matte" runs
 			    regardless of `professionalAlphaSource`. */}
 			{record.professionalMatteAuditReason && (
-				<div className="space-y-1 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40">
-					<div className="flex flex-wrap items-center gap-2">
-						<MatteAuditBadge reason={record.professionalMatteAuditReason} />
-						<button
-							type="button"
-							disabled={retryFlaggedMatte.isPending}
-							onClick={() => retryFlaggedMatte.mutate()}
-							className="text-xs font-medium text-red-600 underline underline-offset-4 disabled:opacity-60 dark:text-red-400"
-						>
-							{retryFlaggedMatte.isPending ? "Retrying…" : "Re-cut this matte"}
-						</button>
-					</div>
-					<p className="text-xs text-red-700 dark:text-red-300">
+				<div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40">
+					<MatteAuditBadge reason={record.professionalMatteAuditReason} />
+					<p className="min-w-0 flex-1 text-xs text-red-700 dark:text-red-300">
 						Flagged for{" "}
 						{describeMatteAuditReason(record.professionalMatteAuditReason)}.
 					</p>
+					<button
+						type="button"
+						disabled={retryFlaggedMatte.isPending}
+						onClick={() => retryFlaggedMatte.mutate()}
+						className="shrink-0 text-xs font-medium text-red-600 underline underline-offset-4 disabled:opacity-60 dark:text-red-400"
+					>
+						{retryFlaggedMatte.isPending ? "Retrying…" : "Re-cut this matte"}
+					</button>
 				</div>
 			)}
 

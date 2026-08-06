@@ -748,9 +748,18 @@ function AdminRecords() {
 	// "Retry flagged mattes".
 	const auditMatteMutation = useMutation({
 		mutationFn: () => startMatteAuditSweep(),
-		onSuccess: () => {
+		onSuccess: async ({ started }) => {
+			// Invalidate the in-flight query directly (not just recordsQueryOptions) — its
+			// polling only re-arms once it sees a non-empty result, so without this a sweep
+			// started while nothing else was running wouldn't show in the queue menu until
+			// some unrelated refetch (e.g. window focus) happened to occur.
+			await queryClient.invalidateQueries({
+				queryKey: inFlightQueryOptions.queryKey,
+			});
 			toast.success(
-				"Started auditing covers — watch progress in the queue menu.",
+				started
+					? "Started auditing covers — watch progress in the queue menu."
+					: "A sweep is already running — check the queue menu for progress.",
 			);
 		},
 		onError: () => toast.error("Couldn't start the audit. Try again."),

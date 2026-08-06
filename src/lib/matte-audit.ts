@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
-import { asc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { matteAuditState, records } from "#/db/schema";
@@ -135,57 +135,60 @@ export async function getRunningMatteAudit(): Promise<MatteAuditProgress | null>
 
 /**
  * Start a fresh background sweep — the queued replacement for clicking "Audit covers".
- * Resets the accumulators and flips `running` on; the caller enqueues the first
- * `audit-mattes` message right after this resolves (see `enqueueAuditMattes`/
- * `startMatteAuditSweep` in queue.ts/records.ts).
+ * Race-safe against a second concurrent start (two tabs, a double-click before the
+ * client's poll catches up): first ensures the singleton row exists at rest
+ * (`onConflictDoNothing`, a no-op after the first-ever call), then atomically claims the
+ * sweep with an UPDATE guarded on `running = false` — only the caller whose UPDATE
+ * actually matches a row gets `started: true` and should go on to enqueue the first
+ * `audit-mattes` message (see `startMatteAuditSweep` in records.ts). A caller that loses
+ * the race gets `started: false` and enqueues nothing, so two overlapping chains can
+ * never both mutate the shared accumulators in `stepMatteAuditSweep`.
  */
-export async function beginMatteAuditSweep(): Promise<void> {
+export async function beginMatteAuditSweep(): Promise<{ started: boolean }> {
 	const db = getDb(env.DB);
 	const now = new Date();
 	await db
 		.insert(matteAuditState)
-		.values({
-			id: AUDIT_STATE_ID,
+		.values({ id: AUDIT_STATE_ID, running: false })
+		.onConflictDoNothing();
+	const claimed = await db
+		.update(matteAuditState)
+		.set({
 			running: true,
 			checked: 0,
 			suspects: 0,
 			startedAt: now,
 			updatedAt: now,
 		})
-		.onConflictDoUpdate({
-			target: matteAuditState.id,
-			set: {
-				running: true,
-				checked: 0,
-				suspects: 0,
-				startedAt: now,
-				updatedAt: now,
-			},
-		});
+		.where(
+			and(
+				eq(matteAuditState.id, AUDIT_STATE_ID),
+				eq(matteAuditState.running, false),
+			),
+		)
+		.returning({ id: matteAuditState.id });
+	return { started: claimed.length > 0 };
 }
 
 /**
  * Run one batch of the sweep and fold it into the accumulated progress. Returns whether
  * the consumer should self-enqueue another `audit-mattes` message — a batch that comes
  * back short of `MATTE_AUDIT_BATCH` means the stalest-first queue is exhausted, so the
- * sweep is flagged done (`running: false`) rather than chained further.
+ * sweep is flagged done (`running: false`) rather than chained further. The increment is
+ * a single atomic UPDATE (SQL arithmetic, no prior SELECT) so a redelivered/duplicate
+ * queue message can't lose an increment to a read-then-write race.
  */
 export async function stepMatteAuditSweep(): Promise<{ more: boolean }> {
 	const db = getDb(env.DB);
 	const tally = await runMatteAudit();
 	const more = tally.checked >= MATTE_AUDIT_BATCH;
 
-	const [row] = await db
-		.select()
-		.from(matteAuditState)
-		.where(eq(matteAuditState.id, AUDIT_STATE_ID))
-		.limit(1);
 	await db
 		.update(matteAuditState)
 		.set({
 			running: more,
-			checked: (row?.checked ?? 0) + tally.checked,
-			suspects: (row?.suspects ?? 0) + tally.suspects,
+			checked: sql`${matteAuditState.checked} + ${tally.checked}`,
+			suspects: sql`${matteAuditState.suspects} + ${tally.suspects}`,
 			updatedAt: new Date(),
 		})
 		.where(eq(matteAuditState.id, AUDIT_STATE_ID));

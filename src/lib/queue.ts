@@ -628,11 +628,21 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			// uncaught throw (e.g. identifyFromAsin itself erroring, not just missing a
 			// barcode) skips that — without this the row would stay "queued" forever,
 			// permanently hidden from re-import with nothing left to ever clear it.
+			// Best-effort recovery write: if THIS also fails (a second D1 blip right after
+			// the first), the row is left "queued" — an already-known, narrow gap the
+			// staleness reap in listInFlight now catches, so log rather than silently
+			// swallow instead of leaving zero trace of a double failure.
 			await getDb(env.DB)
 				.update(records)
 				.set({ amazonResolveStatus: "failed", amazonResolveError: reason })
 				.where(eq(records.id, recordId))
-				.catch(() => {});
+				.catch((cleanupErr) => {
+					console.error(
+						`[queue] resolve-asin: failed to flag record ${recordId} as failed`,
+						cleanupErr,
+					);
+					Sentry.captureException(cleanupErr);
+				});
 		}
 		message.ack();
 		return;
@@ -655,11 +665,20 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			Sentry.captureException(err);
 			// Don't leave the sweep stuck "running" forever with no further messages
 			// coming — flag it stopped so the queue menu doesn't show a phantom sweep.
+			// Best-effort: if this write also fails, log rather than silently swallow —
+			// a double failure here is exactly the kind of thing that would otherwise
+			// leave a permanently "running" sweep with zero trace of why.
 			await getDb(env.DB)
 				.update(matteAuditState)
 				.set({ running: false, updatedAt: new Date() })
 				.where(eq(matteAuditState.id, 1))
-				.catch(() => {});
+				.catch((cleanupErr) => {
+					console.error(
+						"[queue] audit-mattes: failed to clear running state",
+						cleanupErr,
+					);
+					Sentry.captureException(cleanupErr);
+				});
 		}
 		message.ack();
 		return;
