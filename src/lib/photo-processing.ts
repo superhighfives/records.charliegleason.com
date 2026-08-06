@@ -2085,8 +2085,14 @@ export interface MatteQualityAssessment {
 	 * into it is the signature of the AI matte's edge clamp overrunning the sleeve (see
 	 * `clampEdgeOffsets`). */
 	edgeScore: number;
+	/** Fraction of the whole canvas that's opaque — a correctly-cropped sleeve fills nearly
+	 * all of it (see `MARGIN` in matte-config.ts), so a render that's mostly transparent is
+	 * the signature of an under-crop: the matting model (or its fallback) kept only a thin
+	 * sliver of the sleeve instead of the whole thing. */
+	coverageScore: number;
 	tintSuspect: boolean;
 	edgeSuspect: boolean;
+	sparseSuspect: boolean;
 }
 
 /** "Near black" luma cutoff (0..255) for the tint check's shadow sample. */
@@ -2100,12 +2106,17 @@ const AUDIT_TINT_MIN_SAMPLE = 200;
 const AUDIT_EDGE_RING_FRAC = 0.015;
 /** Fraction of the ring that must be opaque before a render is flagged for edge overrun. */
 const AUDIT_EDGE_ALPHA_SUSPECT_FRAC = 0.04;
+/** Minimum fraction of the whole canvas that must be opaque before a render is flagged as
+ * under-cropped — well below a correctly-cropped sleeve's ~90%+, comfortably above a
+ * thin-sliver failure's typical single-digit percentage. */
+const AUDIT_COVERAGE_SPARSE_FRAC = 0.5;
 
 /**
  * Cheap, non-AI pixel scan of a rendered matte (or any RGBA square with a transparent
- * margin) for the two regression classes the matte pipeline has produced in the past: an
- * invented colour cast on a dark, low-key cover, and the AI matte's alpha overrunning the
- * certified crop into the canvas's outer shadow margin. Pure pixel statistics, no model
+ * margin) for the regression classes the matte pipeline has produced in the past: an
+ * invented colour cast on a dark, low-key cover, the AI matte's alpha overrunning the
+ * certified crop into the canvas's outer shadow margin, and an under-crop that keeps only a
+ * thin sliver of the sleeve instead of the whole thing. Pure pixel statistics, no model
  * calls — meant to run over every stored matte cheaply so the admin can shortlist
  * likely-bad renders instead of eyeballing the whole collection. Not exhaustive (a subtle
  * case can still slip through, and a genuinely near-black, hard-edged cover could
@@ -2116,8 +2127,10 @@ export function assessMatteQuality(img: RgbaImage): MatteQualityAssessment {
 
 	let spreadSum = 0;
 	let shadowN = 0;
+	let opaqueN = 0;
 	for (let p = 0; p < width * height; p++) {
 		if (data[p * 4 + 3] < 16) continue;
+		opaqueN++;
 		const r = data[p * 4];
 		const g = data[p * 4 + 1];
 		const b = data[p * 4 + 2];
@@ -2147,5 +2160,15 @@ export function assessMatteQuality(img: RgbaImage): MatteQualityAssessment {
 	const edgeScore = ringN > 0 ? ringOpaque / ringN : 0;
 	const edgeSuspect = edgeScore > AUDIT_EDGE_ALPHA_SUSPECT_FRAC;
 
-	return { tintScore, edgeScore, tintSuspect, edgeSuspect };
+	const coverageScore = width * height > 0 ? opaqueN / (width * height) : 0;
+	const sparseSuspect = coverageScore < AUDIT_COVERAGE_SPARSE_FRAC;
+
+	return {
+		tintScore,
+		edgeScore,
+		coverageScore,
+		tintSuspect,
+		edgeSuspect,
+		sparseSuspect,
+	};
 }

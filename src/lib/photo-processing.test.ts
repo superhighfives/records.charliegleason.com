@@ -1120,6 +1120,21 @@ describe("assessMatteQuality", () => {
 		const a = assessMatteQuality(cleanMatte());
 		expect(a.tintSuspect).toBe(false);
 		expect(a.edgeSuspect).toBe(false);
+		expect(a.sparseSuspect).toBe(false);
+	});
+
+	it("flags an under-crop that keeps only a thin sliver of the sleeve", () => {
+		// Opaque only in a thin horizontal strip — most of the canvas is transparent,
+		// unlike a real sleeve crop which fills nearly the whole frame.
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let y = 90; y < 110; y++)
+			for (let x = 0; x < size; x++) {
+				const i = (y * size + x) * 4;
+				data[i] = data[i + 1] = data[i + 2] = 12;
+				data[i + 3] = 255;
+			}
+		const a = assessMatteQuality({ data, width: size, height: size });
+		expect(a.sparseSuspect).toBe(true);
 	});
 
 	it("flags a colour cast in the near-black shadow pixels", () => {

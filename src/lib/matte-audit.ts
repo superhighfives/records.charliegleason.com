@@ -88,6 +88,7 @@ export async function runMatteAudit(
 				const reasons = [
 					assessment.tintSuspect ? "tint" : null,
 					assessment.edgeSuspect ? "edge" : null,
+					assessment.sparseSuspect ? "sparse" : null,
 				].filter((r): r is string => r != null);
 				if (reasons.length > 0) suspects++;
 				await db
