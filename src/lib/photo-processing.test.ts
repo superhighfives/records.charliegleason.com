@@ -815,6 +815,44 @@ describe("vetoBackgroundAlpha", () => {
 		expect(mask[100 * img.width + 100]).toBe(255);
 	});
 
+	it("spares an isolated background-coloured patch that never reaches real background", () => {
+		// A specular highlight (or any washed-out patch) near the edge can read as
+		// statistically closer to the sampled background than the flat sleeve interior,
+		// even though it's real sleeve and nowhere near the true background. Surrounded
+		// on every side by mat-coloured pixels, it has no path back to the actual
+		// background outside the cut, so it must survive even though its colour alone
+		// would trip the same eligibility test as a real bleed.
+		const img = woodScene();
+		const patchX0 = 70;
+		const patchX1 = 110;
+		const patchY0 = 70;
+		const patchY1 = 85;
+		for (let y = patchY0; y < patchY1; y++) {
+			for (let x = patchX0; x < patchX1; x++) {
+				const i = (y * img.width + x) * 4;
+				img.data[i] = 130;
+				img.data[i + 1] = 95;
+				img.data[i + 2] = 55;
+			}
+		}
+		const cut: Corners = [
+			[40, 40],
+			[160, 40],
+			[160, 160],
+			[40, 160],
+		];
+		const mask = rasterizePolygon(cut, img.width, img.height);
+		const vetoed = vetoBackgroundAlpha(img, mask, cut, cut, {
+			depth: 55,
+			ring: 15,
+		});
+		// The isolated patch survives, unreachable from real background…
+		expect(mask[78 * img.width + 90]).toBe(255);
+		// …while the mat elsewhere is untouched too.
+		expect(mask[100 * img.width + 100]).toBe(255);
+		expect(vetoed).toBe(0);
+	});
+
 	it("stands down when sleeve and background are inseparable (white on white)", () => {
 		const size = 200;
 		const data = new Uint8ClampedArray(size * size * 4);

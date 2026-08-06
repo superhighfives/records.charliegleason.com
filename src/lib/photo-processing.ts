@@ -1666,7 +1666,17 @@ function quadRingStats(
  *  - it only fires when the two colour distributions are clearly separable (a white
  *    sleeve on white paper is a silent no-op);
  *  - a pixel is vetoed only when it is decisively closer to the background model
- *    (< half the normalised distance) *and* plausibly background in absolute terms.
+ *    (< half the normalised distance) *and* plausibly background in absolute terms;
+ *  - a pixel is only ever removed if it's colour-eligible AND reachable, through other
+ *    colour-eligible pixels, from confirmed background (outside the policed band). A
+ *    genuine bleed channel runs unbroken from the real background inward, so it floods;
+ *    an isolated fleck deep in the band that merely *resembles* background by colour
+ *    (a specular highlight near the edge, say, whose washed-out tone reads as
+ *    statistically closer to the sampled background than the flat sleeve interior) has
+ *    no such path and survives, even though its colour alone would trip the test above.
+ *    Without this, a `depth` band wide enough to reach a real bleed is also wide enough
+ *    to swallow an isolated highlight it was never meant to touch — punching a hole
+ *    surrounded by kept alpha on both sides instead of eating in from one edge.
  *
  * Mutates `mask` (the cut alpha, same dimensions as `img`); returns the vetoed count.
  */
@@ -1728,31 +1738,81 @@ export function vetoBackgroundAlpha(
 	// background ring sampling already reserves, so this stays clear of the ring); without
 	// it, the outward bound is `cut` — the original inward-only band.
 	const outerBound = opts.bgQuad ? offsetQuad(opts.bgQuad, -gap) : cut;
+	// Expand the scan box a further 1px so the flood below always has at least a sliver of
+	// genuinely-outside-`outerBound` territory to seed from, even when `outerBound` runs to
+	// the image edge.
 	const xs = outerBound.map((c) => c[0]);
 	const ys = outerBound.map((c) => c[1]);
-	const x0 = Math.max(0, Math.floor(Math.min(...xs)));
-	const x1 = Math.min(width - 1, Math.ceil(Math.max(...xs)));
-	const y0 = Math.max(0, Math.floor(Math.min(...ys)));
-	const y1 = Math.min(height - 1, Math.ceil(Math.max(...ys)));
-	let vetoed = 0;
+	const x0 = Math.max(0, Math.floor(Math.min(...xs)) - 1);
+	const x1 = Math.min(width - 1, Math.ceil(Math.max(...xs)) + 1);
+	const y0 = Math.max(0, Math.floor(Math.min(...ys)) - 1);
+	const y1 = Math.min(height - 1, Math.ceil(Math.max(...ys)) + 1);
+	const bw = x1 - x0 + 1;
+	const bh = y1 - y0 + 1;
+	const colourEligible = (x: number, y: number): boolean => {
+		const i = (y * width + x) * 4;
+		let dBg = 0;
+		let dFg = 0;
+		for (let c = 0; c < 3; c++) {
+			dBg += ((data[i + c] - bg.mean[c]) / bg.std[c]) ** 2;
+			dFg += ((data[i + c] - fg.mean[c]) / fg.std[c]) ** 2;
+		}
+		// Decisively background-like: much closer to the background model than the
+		// sleeve's, and within a plausible absolute range of it.
+		return dBg * 4 < dFg && dBg < 25;
+	};
+	// Flood outward-in from confirmed background — outside `outerBound`, or already-empty
+	// mask — through only colour-eligible policed pixels. `inner` is never entered: it's
+	// always protected regardless of colour or reachability.
+	const visited = new Uint8Array(bw * bh);
+	const queue = new Int32Array(bw * bh);
+	let qHead = 0;
+	let qTail = 0;
 	for (let y = y0; y <= y1; y++) {
 		for (let x = x0; x <= x1; x++) {
-			const p = y * width + x;
-			if (!mask[p]) continue;
-			if (insideQuad(inner, x, y) || !insideQuad(outerBound, x, y)) continue;
-			const i = p * 4;
-			let dBg = 0;
-			let dFg = 0;
-			for (let c = 0; c < 3; c++) {
-				dBg += ((data[i + c] - bg.mean[c]) / bg.std[c]) ** 2;
-				dFg += ((data[i + c] - fg.mean[c]) / fg.std[c]) ** 2;
+			if (insideQuad(outerBound, x, y)) continue;
+			const bi = (y - y0) * bw + (x - x0);
+			visited[bi] = 1;
+			queue[qTail++] = bi;
+		}
+	}
+	let vetoed = 0;
+	while (qHead < qTail) {
+		const bi = queue[qHead++];
+		const bx = bi % bw;
+		const by = (bi / bw) | 0;
+		const x = bx + x0;
+		const y = by + y0;
+		const neighbours: Array<[number, number]> = [
+			[x - 1, y],
+			[x + 1, y],
+			[x, y - 1],
+			[x, y + 1],
+		];
+		for (const [nx, ny] of neighbours) {
+			if (nx < x0 || nx > x1 || ny < y0 || ny > y1) continue;
+			const nbi = (ny - y0) * bw + (nx - x0);
+			if (visited[nbi]) continue;
+			if (insideQuad(inner, nx, ny)) continue;
+			const inside = insideQuad(outerBound, nx, ny);
+			const p = ny * width + nx;
+			// Outside `outerBound` (or already transparent) is unconditionally passable —
+			// it's confirmed non-sleeve, so the flood keeps spreading through it without a
+			// colour check. Inside the policed band, a pixel only passes — and only then
+			// gets vetoed — if it's colour-eligible, so an eligible fleck with no path back
+			// to real background never gets swept in.
+			if (inside) {
+				if (!mask[p]) {
+					// Already transparent: passable, but nothing to veto.
+				} else if (!colourEligible(nx, ny)) {
+					continue;
+				} else {
+					mask[p] = 0;
+					vetoed++;
+				}
 			}
-			// Decisively background-like: much closer to the background model than the
-			// sleeve's, and within a plausible absolute range of it.
-			if (dBg * 4 < dFg && dBg < 25) {
-				mask[p] = 0;
-				vetoed++;
-			}
+			visited[nbi] = 1;
+			queue[qTail++] = nbi;
 		}
 	}
 	return vetoed;
