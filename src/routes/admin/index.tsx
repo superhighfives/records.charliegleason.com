@@ -126,14 +126,23 @@ const FACET_GROUPS: Array<{
 		key: "match",
 		label: "Match",
 		options: [
-			// "Matched" means the record has an album (master) group linked. A pinned
-			// release is a separate axis (below) — some releases have no master at
-			// all, so either one (or both) can make a record publishable.
-			{ token: "matched", label: "Matched", test: (r) => r.masterId != null },
+			// "Matched" means the record has an identity at all — an album (master),
+			// a pinned release, or both; either alone is enough to publish (see
+			// `unmatchedRecords`/`UnmatchedBadge`, the same bar). This used to be
+			// master-only, so a record with a pinned-but-masterless release (a
+			// standalone pressing — see the "Release" facet below) showed here as
+			// "Unmatched" even though it isn't: nothing on the row said so, the
+			// Unmatched badge didn't render for it, and it wasn't in the bulk
+			// "Assign masters" queue either. Matching those definitions here too.
+			{
+				token: "matched",
+				label: "Matched",
+				test: (r) => r.masterId != null || r.discogsId != null,
+			},
 			{
 				token: "unmatched",
 				label: "Unmatched",
-				test: (r) => r.masterId == null,
+				test: (r) => r.masterId == null && r.discogsId == null,
 			},
 		],
 	},
@@ -241,7 +250,7 @@ const FACET_GROUPS: Array<{
 
 // Attention states that aren't clean opposites — simple on/off toggles. (There's
 // no "review" flag: the `review` status just means "unpublished" now, which the
-// Published/Unpublished filter already covers, and Unmatched flags the no-album case.)
+// Published/Unpublished filter already covers, and Unmatched flags the no-identity case.)
 const FLAG_FACETS: FacetOption[] = [
 	{
 		token: "failed",
