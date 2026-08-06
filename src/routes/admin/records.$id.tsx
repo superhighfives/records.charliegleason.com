@@ -18,7 +18,10 @@ import {
 	useDiscogsSearch,
 } from "#/components/discogs-search-field";
 import { DuplicateBadge } from "#/components/duplicate-badge";
-import { MatteAuditBadge } from "#/components/matte-audit-badge";
+import {
+	describeMatteAuditReason,
+	MatteAuditBadge,
+} from "#/components/matte-audit-badge";
 import { Pager } from "#/components/pager";
 import { ProPreview } from "#/components/pro-preview";
 import { RecordForm } from "#/components/record-form";
@@ -1305,26 +1308,31 @@ function RecordDetail() {
 								)}
 							</span>
 						)}
-					{/* The offline "Audit covers" sweep (matte-audit.ts) flagged this record's
-					    stored matte for a likely defect — independent of the deterministic-
-					    fallback note above, since an *AI* matte can be flagged too (a tint or
-					    an under-crop the model itself produced). "Retry flagged mattes"
-					    re-cuts regardless of `professionalAlphaSource`. */}
-					{record.professionalMatteAuditReason && (
-						<div className="flex flex-wrap items-center gap-2">
-							<MatteAuditBadge reason={record.professionalMatteAuditReason} />
-							<button
-								type="button"
-								disabled={retryFlaggedMatte.isPending}
-								onClick={() => retryFlaggedMatte.mutate()}
-								className="text-xs font-medium text-red-600 underline underline-offset-4 disabled:opacity-60 dark:text-red-400"
-							>
-								{retryFlaggedMatte.isPending
-									? "Retrying…"
-									: "Re-cut this matte"}
-							</button>
-						</div>
-					)}
+				</div>
+			)}
+
+			{/* The offline "Audit covers" sweep (matte-audit.ts) flagged this record's
+			    stored matte for a likely defect — independent of the deterministic-fallback
+			    note above, since an *AI* matte can be flagged too (a tint, an edge overrun,
+			    or an under-crop the model itself produced). "Re-cut this matte" runs
+			    regardless of `professionalAlphaSource`. */}
+			{record.professionalMatteAuditReason && (
+				<div className="space-y-1 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40">
+					<div className="flex flex-wrap items-center gap-2">
+						<MatteAuditBadge reason={record.professionalMatteAuditReason} />
+						<button
+							type="button"
+							disabled={retryFlaggedMatte.isPending}
+							onClick={() => retryFlaggedMatte.mutate()}
+							className="text-xs font-medium text-red-600 underline underline-offset-4 disabled:opacity-60 dark:text-red-400"
+						>
+							{retryFlaggedMatte.isPending ? "Retrying…" : "Re-cut this matte"}
+						</button>
+					</div>
+					<p className="text-xs text-red-700 dark:text-red-300">
+						Flagged for{" "}
+						{describeMatteAuditReason(record.professionalMatteAuditReason)}.
+					</p>
 				</div>
 			)}
 
