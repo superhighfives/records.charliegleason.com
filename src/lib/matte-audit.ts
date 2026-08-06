@@ -3,9 +3,12 @@ import * as Sentry from "@sentry/tanstackstart-react";
 import { asc, eq, isNotNull } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { records } from "#/db/schema";
+import { matteAuditState, records } from "#/db/schema";
 import { assessMatteQuality } from "#/lib/photo-processing";
 import { decodeRgba } from "#/lib/professional";
+
+/** The audit sweep's global progress row is always this one id — see schema.ts. */
+const AUDIT_STATE_ID = 1;
 
 /**
  * How many stored mattes to re-check per sweep. Each row costs one R2 GET + a small
@@ -109,4 +112,82 @@ export async function runMatteAudit(
 
 		return { checked: due.length, suspects };
 	});
+}
+
+/** Live progress of the background audit sweep, for the header queue menu. Null when idle. */
+export type MatteAuditProgress = {
+	checked: number;
+	suspects: number;
+};
+
+/** Read the sweep's current state, if one is running. */
+export async function getRunningMatteAudit(): Promise<MatteAuditProgress | null> {
+	const db = getDb(env.DB);
+	const [row] = await db
+		.select()
+		.from(matteAuditState)
+		.where(eq(matteAuditState.id, AUDIT_STATE_ID))
+		.limit(1);
+	if (!row?.running) return null;
+	return { checked: row.checked ?? 0, suspects: row.suspects ?? 0 };
+}
+
+/**
+ * Start a fresh background sweep — the queued replacement for clicking "Audit covers".
+ * Resets the accumulators and flips `running` on; the caller enqueues the first
+ * `audit-mattes` message right after this resolves (see `enqueueAuditMattes`/
+ * `startMatteAuditSweep` in queue.ts/records.ts).
+ */
+export async function beginMatteAuditSweep(): Promise<void> {
+	const db = getDb(env.DB);
+	const now = new Date();
+	await db
+		.insert(matteAuditState)
+		.values({
+			id: AUDIT_STATE_ID,
+			running: true,
+			checked: 0,
+			suspects: 0,
+			startedAt: now,
+			updatedAt: now,
+		})
+		.onConflictDoUpdate({
+			target: matteAuditState.id,
+			set: {
+				running: true,
+				checked: 0,
+				suspects: 0,
+				startedAt: now,
+				updatedAt: now,
+			},
+		});
+}
+
+/**
+ * Run one batch of the sweep and fold it into the accumulated progress. Returns whether
+ * the consumer should self-enqueue another `audit-mattes` message — a batch that comes
+ * back short of `MATTE_AUDIT_BATCH` means the stalest-first queue is exhausted, so the
+ * sweep is flagged done (`running: false`) rather than chained further.
+ */
+export async function stepMatteAuditSweep(): Promise<{ more: boolean }> {
+	const db = getDb(env.DB);
+	const tally = await runMatteAudit();
+	const more = tally.checked >= MATTE_AUDIT_BATCH;
+
+	const [row] = await db
+		.select()
+		.from(matteAuditState)
+		.where(eq(matteAuditState.id, AUDIT_STATE_ID))
+		.limit(1);
+	await db
+		.update(matteAuditState)
+		.set({
+			running: more,
+			checked: (row?.checked ?? 0) + tally.checked,
+			suspects: (row?.suspects ?? 0) + tally.suspects,
+			updatedAt: new Date(),
+		})
+		.where(eq(matteAuditState.id, AUDIT_STATE_ID));
+
+	return { more };
 }

@@ -277,5 +277,28 @@ export const records = sqliteTable("records", {
 export type Record = typeof records.$inferSelect;
 export type NewRecord = typeof records.$inferInsert;
 
+/**
+ * Singleton row (always `id = 1`) tracking the background "Audit covers" sweep — see
+ * `runMatteAudit`/the `audit-mattes` queue mode in matte-audit.ts/queue.ts. Unlike every
+ * other queue job, an audit pass isn't keyed to one `records` row (it sweeps a batch of
+ * up to `MATTE_AUDIT_BATCH` at once), so there's nowhere on `records` to park "a sweep is
+ * currently running" — this table is that one piece of global state, upserted on
+ * `id = 1` rather than modeled as a growing job history (there's only ever one sweep
+ * running at a time). `checked`/`suspects` accumulate across every self-chained batch in
+ * the current sweep so the queue menu can show live progress; both reset to 0 when a
+ * fresh sweep starts. `running` flips back to false on the first pass that comes back
+ * short of a full batch (nothing left to check).
+ */
+export const matteAuditState = sqliteTable("matte_audit_state", {
+	id: integer("id").primaryKey(),
+	running: integer("running", { mode: "boolean" }).default(false),
+	checked: integer("checked").default(0),
+	suspects: integer("suspects").default(0),
+	startedAt: integer("started_at", { mode: "timestamp" }),
+	updatedAt: integer("updated_at", { mode: "timestamp" }),
+});
+
+export type MatteAuditState = typeof matteAuditState.$inferSelect;
+
 /** A fine-grained display-only sub-step of a running pipeline (see `records.jobStep`). */
 export type JobStep = NonNullable<Record["jobStep"]>;

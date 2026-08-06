@@ -81,12 +81,23 @@ export interface ResolveAsinMessage {
 	country: string | null;
 }
 
+/**
+ * Not keyed to any `records`/`colors` row — sweeps one stalest-first batch of stored
+ * mattes (see `runMatteAudit` in matte-audit.ts) and self-enqueues another of these
+ * until a pass comes back short of a full batch. Global progress lives in the
+ * `matteAuditState` singleton row, not on the message itself.
+ */
+export interface AuditMattesMessage {
+	mode: "audit-mattes";
+}
+
 /** Message enqueued for the analyze consumer. Re-exported from `#/lib/queue`. */
 export type AnalyzeMessage =
 	| AnalyzeRecordMessage
 	| ColorTextureMessage
 	| ColorPaletteMessage
-	| ResolveAsinMessage;
+	| ResolveAsinMessage
+	| AuditMattesMessage;
 
 /**
  * Chunk size for bulk `inArray(id, ids)` queries. Kept comfortably under D1's

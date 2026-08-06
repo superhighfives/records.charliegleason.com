@@ -3,7 +3,12 @@ import * as Sentry from "@sentry/cloudflare";
 import { eq, inArray } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { type JobStep, type Record, records } from "#/db/schema";
+import {
+	type JobStep,
+	matteAuditState,
+	type Record,
+	records,
+} from "#/db/schema";
 import { analyzeCapture } from "#/lib/analyze";
 import { identifyFromAsin } from "#/lib/asin";
 import {
@@ -26,6 +31,7 @@ import {
 	searchMasters,
 	searchReleases,
 } from "#/lib/discogs";
+import { stepMatteAuditSweep } from "#/lib/matte-audit";
 import {
 	type CoverStageResult,
 	commitProfessionalMatte,
@@ -107,6 +113,11 @@ function analyzeQueue(): Queue<AnalyzeMessage> {
 /** Enqueue a captured record for background analysis. */
 export async function enqueueAnalyze(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId });
+}
+
+/** Enqueue one batch of the background matte-quality audit sweep. */
+export async function enqueueAuditMattes(): Promise<void> {
+	await analyzeQueue().send({ mode: "audit-mattes" });
 }
 
 /**
@@ -621,6 +632,33 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				.update(records)
 				.set({ amazonResolveStatus: "failed", amazonResolveError: reason })
 				.where(eq(records.id, recordId))
+				.catch(() => {});
+		}
+		message.ack();
+		return;
+	}
+
+	// Background matte-quality sweep — not keyed to any record. Runs one bounded batch
+	// (see MATTE_AUDIT_BATCH) and, if that batch came back full (more may be due),
+	// self-enqueues another before acking — the same "consumer enqueues the next stage"
+	// pattern the Apply pipeline uses between "professional" and "professional-matte".
+	if (message.body.mode === "audit-mattes") {
+		try {
+			const { more } = await stepMatteAuditSweep();
+			if (more) await enqueueAuditMattes();
+		} catch (err) {
+			console.error(
+				`[queue] audit-mattes step failed: ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+			Sentry.captureException(err);
+			// Don't leave the sweep stuck "running" forever with no further messages
+			// coming — flag it stopped so the queue menu doesn't show a phantom sweep.
+			await getDb(env.DB)
+				.update(matteAuditState)
+				.set({ running: false, updatedAt: new Date() })
+				.where(eq(matteAuditState.id, 1))
 				.catch(() => {});
 		}
 		message.ack();

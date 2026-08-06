@@ -53,12 +53,13 @@ import {
 	runLinkHealthCheck,
 } from "#/lib/master-health";
 import { generateMatteFromCapture } from "#/lib/matte";
-import { type MatteAuditTally, runMatteAudit } from "#/lib/matte-audit";
+import { beginMatteAuditSweep, getRunningMatteAudit } from "#/lib/matte-audit";
 import { detectCaptureCorners, professionalPipeline } from "#/lib/professional";
 import type { CoverStageResult } from "#/lib/professional-pipeline";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
+	enqueueAuditMattes,
 	enqueueProfessional,
 	enqueueProfessionalBatch,
 	enqueueProfessionalMatte,
@@ -377,12 +378,16 @@ const STALE_PRO_NOTE =
 
 /** One entry in the header "in flight" menu — a record with a running background job. */
 export interface InFlightItem {
-	id: number;
+	/**
+	 * Null only for `kind: "audit"` — a sweep isn't a single record, so there's nowhere
+	 * for the menu to link it. Every other kind is always a real record id.
+	 */
+	id: number | null;
 	artist: string;
 	title: string;
 	thumbKey: string | null;
 	/** What's running, for the menu label. */
-	kind: "analyze" | "professional" | "amazon";
+	kind: "analyze" | "professional" | "amazon" | "audit";
 	/** The finer-grained state (all actively running — the menu shows a spinner). */
 	state: "pending" | "processing" | "queued";
 	/**
@@ -643,6 +648,23 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 			step: null,
 		}));
 
+		// A running audit sweep is one item, not one per record — id null, no thumb.
+		const auditProgress = await getRunningMatteAudit();
+		const auditItems: InFlightItem[] = auditProgress
+			? [
+					{
+						id: null,
+						artist: "Auditing covers",
+						title: `${auditProgress.checked} checked · ${auditProgress.suspects} flagged so far`,
+						thumbKey: null,
+						kind: "audit",
+						state: "processing",
+						stage: null,
+						step: null,
+					},
+				]
+			: [];
+
 		return [
 			...rows
 				.filter((row) => !dropped.has(row.id))
@@ -676,6 +698,7 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 					};
 				}),
 			...amazonItems,
+			...auditItems,
 		];
 	}),
 );
@@ -1527,17 +1550,22 @@ export const checkLinkHealth = createServerFn({ method: "POST" })
 	);
 
 /**
- * Run the matte-quality audit on demand from the admin UI, for the "Audit covers"
- * action. Sweeps a stalest-first batch of stored mattes (see `matte-audit.ts`) with a
- * cheap, non-AI pixel scan and flags likely tint/edge-overrun regressions — the same
- * classes of bug the Parachutes matte fix addressed, for records that already have a
- * stale, bad render baked into R2. Purely diagnostic: flagged rows still need a manual
- * re-Apply or "Retry flagged mattes" to actually regenerate. Repeated clicks walk the
- * stalest-first queue further, same as "Check links".
+ * Kick off the matte-quality audit in the background, for the "Audit covers" action.
+ * Unlike the synchronous "Check links", this doesn't block the request — a sweep over
+ * the whole collection can run to many batches, so it self-chains through the queue
+ * (see `stepMatteAuditSweep`/the `audit-mattes` mode in queue.ts) rather than the admin
+ * waiting on one request. Progress (checked/suspects so far) is polled from
+ * `listInFlight`, same as any other background job. Flags likely tint/edge-overrun
+ * regressions — the same classes of bug the Parachutes matte fix addressed — for
+ * records with a stale, bad render already baked into R2; purely diagnostic, flagged
+ * rows still need a manual re-Apply or "Retry flagged mattes" to actually regenerate.
  */
-export const auditMatteQuality = createServerFn({ method: "POST" })
+export const startMatteAuditSweep = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.handler((): Promise<MatteAuditTally> => runMatteAudit());
+	.handler(async () => {
+		await beginMatteAuditSweep();
+		await enqueueAuditMattes();
+	});
 
 /**
  * Link a record as an intentional duplicate copy of another — the admin "I own two

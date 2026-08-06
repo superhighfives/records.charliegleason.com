@@ -2,6 +2,7 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import {
 	useMutation,
+	useQuery,
 	useQueryClient,
 	useSuspenseQuery,
 } from "@tanstack/react-query";
@@ -67,7 +68,6 @@ import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
 import { orderRecordsForReview } from "#/lib/record-order";
 import {
-	auditMatteQuality,
 	checkLinkHealth,
 	deleteRecord,
 	deleteRecords,
@@ -75,9 +75,13 @@ import {
 	retryFlaggedMattes,
 	retryProfessionalGenerations,
 	retryProfessionalMattes,
+	startMatteAuditSweep,
 	unpublishRecords,
 } from "#/lib/records";
-import { recordsQueryOptions } from "#/lib/records-queries";
+import {
+	inFlightQueryOptions,
+	recordsQueryOptions,
+} from "#/lib/records-queries";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
 
@@ -726,24 +730,30 @@ function AdminRecords() {
 		onError: () => toast.error("Couldn't check links. Try again."),
 	});
 
-	// Force a matte-quality audit pass now (see matte-audit.ts): a cheap, non-AI pixel
-	// scan of stored covers that flags a likely colour cast or edge overrun — the
-	// regression classes the Parachutes matte fix addressed, for records whose bad
-	// render predates the fix. One stalest-first batch per click, same shape as "Check
-	// links"; flagged rows show a badge and can be selected for "Retry flagged mattes".
+	// A sweep already running (polled via the same query the header queue menu uses) —
+	// guards against a second click restarting the accumulated checked/suspects counters
+	// and racing a duplicate chain of queue messages against the first.
+	const { data: inFlight } = useQuery(inFlightQueryOptions);
+	const auditAlreadyRunning = (inFlight ?? []).some(
+		(item) => item.kind === "audit",
+	);
+
+	// Kick off a matte-quality audit sweep in the background (see matte-audit.ts): a
+	// cheap, non-AI pixel scan of stored covers that flags a likely colour cast or edge
+	// overrun — the regression classes the Parachutes matte fix addressed, for records
+	// whose bad render predates the fix. Unlike "Check links" this doesn't block the
+	// request — it self-chains through the whole stalest-first backlog via the queue, so
+	// progress (and its finish) shows up in the header queue menu rather than a toast at
+	// the end of one bounded batch. Flagged rows show a badge and can be selected for
+	// "Retry flagged mattes".
 	const auditMatteMutation = useMutation({
-		mutationFn: () => auditMatteQuality(),
-		onSuccess: async ({ checked, suspects }) => {
-			await queryClient.invalidateQueries({
-				queryKey: recordsQueryOptions.queryKey,
-			});
+		mutationFn: () => startMatteAuditSweep(),
+		onSuccess: () => {
 			toast.success(
-				checked === 0
-					? "No covers to audit."
-					: `Audited ${checked} cover${checked === 1 ? "" : "s"} — ${suspects} flagged.`,
+				"Started auditing covers — watch progress in the queue menu.",
 			);
 		},
-		onError: () => toast.error("Couldn't audit covers. Try again."),
+		onError: () => toast.error("Couldn't start the audit. Try again."),
 	});
 
 	// Selected-rows actions: hand the ids to the matching batched endpoint and
@@ -1309,11 +1319,15 @@ function AdminRecords() {
 									{checkLinksMutation.isPending ? "Checking…" : "Check links"}
 								</DropdownMenuItem>
 								<DropdownMenuItem
-									disabled={auditMatteMutation.isPending}
+									disabled={auditMatteMutation.isPending || auditAlreadyRunning}
 									onSelect={() => auditMatteMutation.mutate()}
-									title="Scan a batch of stored covers for a likely matte colour cast or edge overrun — no AI calls, just a pixel check. Flagged rows can be retried with 'Retry flagged mattes'"
+									title="Sweep stored covers in the background for a likely matte colour cast or edge overrun — no AI calls, just a pixel check. Flagged rows can be retried with 'Retry flagged mattes'. Progress shows in the queue menu."
 								>
-									{auditMatteMutation.isPending ? "Auditing…" : "Audit covers"}
+									{auditAlreadyRunning
+										? "Auditing…"
+										: auditMatteMutation.isPending
+											? "Starting…"
+											: "Audit covers"}
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>

@@ -65,6 +65,9 @@ function stepLabel(item: InFlightItem): { text: string; active: boolean } {
 	if (item.kind === "amazon") {
 		return { text: "Looking up pressing on Amazon", active: false };
 	}
+	if (item.kind === "audit") {
+		return { text: "Scanning stored covers", active: true };
+	}
 	if (item.state !== "processing")
 		return { text: "Queued to generate", active: false };
 	if (item.stage === "cover")
@@ -153,7 +156,7 @@ function loadFinished(): FinishedItem[] {
  * the session ends or the user clears it. An id that goes live again — a re-Apply —
  * leaves the finished list and shows as in-flight again.
  */
-function useQueueHistory(live: InFlightItem[]) {
+function useQueueHistory(live: Array<InFlightItem & { id: number }>) {
 	// Start empty so the first client render matches the server's (no hydration
 	// mismatch), then hydrate from sessionStorage once mounted.
 	const [finished, setFinished] = useState<FinishedItem[]>([]);
@@ -217,7 +220,8 @@ function QueueRow({
 	label,
 	busy,
 }: {
-	id: number;
+	/** Null for a job not tied to any one record (e.g. the audit sweep) — renders as a plain, non-navigable row. */
+	id: number | null;
 	artist: string;
 	title: string;
 	thumbKey: string | null;
@@ -230,6 +234,47 @@ function QueueRow({
 	// Tracked by key (not a bool) so a changed thumbKey retries rather than staying failed.
 	const [failedKey, setFailedKey] = useState<string | null>(null);
 	const showImage = thumbKey != null && failedKey !== thumbKey;
+	const content = (
+		<>
+			<span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded bg-muted">
+				{showImage ? (
+					<img
+						src={`/api/photos/${thumbKey}`}
+						alt=""
+						className="size-full object-cover"
+						onError={() => setFailedKey(thumbKey)}
+					/>
+				) : busy ? (
+					<Loader2 className="size-4 animate-spin text-muted-foreground" />
+				) : (
+					<Disc className="size-4 text-muted-foreground" />
+				)}
+			</span>
+			<span className="flex min-w-0 flex-col">
+				{/* Finished rows fade the title to muted too, matching their status text. */}
+				<span
+					className={cn(
+						"truncate font-medium",
+						!busy && "text-muted-foreground",
+					)}
+				>
+					{title ? `${artist} — ${title}` : artist}
+				</span>
+				{/* Colour is set by the caller's node (active step = brand, else muted). */}
+				<span className="text-xs">{label}</span>
+			</span>
+		</>
+	);
+	if (id == null) {
+		return (
+			<DropdownMenuItem
+				disabled
+				className="gap-3 opacity-100 data-[disabled]:opacity-100"
+			>
+				{content}
+			</DropdownMenuItem>
+		);
+	}
 	return (
 		<DropdownMenuItem asChild>
 			<Link
@@ -239,33 +284,7 @@ function QueueRow({
 				// ring, so hovering the long list stays calm — shadow-none cancels it.
 				className="gap-3 focus-visible:shadow-none"
 			>
-				<span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded bg-muted">
-					{showImage ? (
-						<img
-							src={`/api/photos/${thumbKey}`}
-							alt=""
-							className="size-full object-cover"
-							onError={() => setFailedKey(thumbKey)}
-						/>
-					) : busy ? (
-						<Loader2 className="size-4 animate-spin text-muted-foreground" />
-					) : (
-						<Disc className="size-4 text-muted-foreground" />
-					)}
-				</span>
-				<span className="flex min-w-0 flex-col">
-					{/* Finished rows fade the title to muted too, matching their status text. */}
-					<span
-						className={cn(
-							"truncate font-medium",
-							!busy && "text-muted-foreground",
-						)}
-					>
-						{artist} — {title}
-					</span>
-					{/* Colour is set by the caller's node (active step = brand, else muted). */}
-					<span className="text-xs">{label}</span>
-				</span>
+				{content}
 			</Link>
 		</DropdownMenuItem>
 	);
@@ -297,7 +316,26 @@ function isAuthError(error: unknown): boolean {
 export function QueueMenu() {
 	const { data } = useQuery(inFlightQueryOptions);
 	const live = data ?? [];
-	const { finished, clear } = useQueueHistory(live);
+	// The audit sweep isn't a record — no thumbnail, no per-record outcome to show once
+	// it finishes — so it's excluded from the finished-history diff entirely; it just
+	// disappears from the live list when the sweep completes.
+	const historyLive = live.filter(
+		(item): item is InFlightItem & { id: number } => item.id != null,
+	);
+	const { finished, clear } = useQueueHistory(historyLive);
+	const queryClient = useQueryClient();
+
+	// The audit sweep updates records' matte-audit badges as it goes, but nothing else
+	// polls the plain records list while it runs — invalidate once the sweep's item
+	// disappears from `live` so flagged rows show up without a manual refresh.
+	const wasAuditing = useRef(false);
+	useEffect(() => {
+		const auditing = live.some((item) => item.kind === "audit");
+		if (wasAuditing.current && !auditing) {
+			queryClient.invalidateQueries({ queryKey: ["records"] });
+		}
+		wasAuditing.current = auditing;
+	}, [live, queryClient]);
 
 	// Resolve each finished row's terminal outcome (failed / deterministic-matte fallback /
 	// ok) — the in-flight diff loses it when the item departs, so we look it up by id here.
@@ -312,7 +350,6 @@ export function QueueMenu() {
 	// "Fail all" is a two-step action inside the menu (arm → confirm) rather than a native
 	// dialog, so it doesn't fight the dropdown's own open/close. Reset the armed state
 	// whenever the menu closes so it never reopens already-confirming.
-	const queryClient = useQueryClient();
 	const { redirectToSignIn } = useClerk();
 	const [confirmingFailAll, setConfirmingFailAll] = useState(false);
 	const failAll = useMutation({
@@ -387,7 +424,7 @@ export function QueueMenu() {
 						const step = stepLabel(item);
 						return (
 							<QueueRow
-								key={item.id}
+								key={item.id ?? item.kind}
 								id={item.id}
 								artist={item.artist}
 								title={item.title}
