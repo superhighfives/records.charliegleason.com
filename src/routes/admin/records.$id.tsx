@@ -1302,12 +1302,12 @@ function RecordDetail() {
 									Remove album
 								</Button>
 							</div>
-						) : (
+						) : activeDiscogsId == null ? (
 							<p className="text-xs text-amber-600 dark:text-amber-400">
 								No album linked — search or pick one to make this publishable. A
 								standalone pressing works too.
 							</p>
-						)}
+						) : null}
 
 						{record.confidence != null && (
 							<div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
