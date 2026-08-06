@@ -25,12 +25,12 @@ export function describeMatteAuditReason(reason: string): string {
 
 /**
  * Shown when the "Audit covers" sweep (`src/lib/matte-audit.ts`) flagged this record's
- * stored matte for a likely colour cast, edge overrun, or under-crop — the regression
- * classes the Parachutes matte fix and the under-crop heuristic address, surfaced here
- * for records whose bad render predates the fix. Reads red (unlike the amber
- * `MatteFallbackBadge`) since, unlike a merely lo-fi fallback, this is a specific visual
- * defect worth reviewing. `reason` is the comma-joined `professionalMatteAuditReason`
- * ("tint", "edge", "sparse", or any combination).
+ * stored matte for a likely defect — the regression classes the Parachutes matte fix and
+ * the under-crop/punch-through heuristics address, surfaced here for records whose bad
+ * render predates the fix. Reads red (unlike the amber `MatteFallbackBadge`) since, unlike
+ * a merely lo-fi fallback, this is a specific visual defect worth reviewing. `reason` is
+ * the comma-joined `professionalMatteAuditReason` — see `MATTE_AUDIT_REASON_CODES` in
+ * photo-processing.ts for the full set, or any combination.
  */
 export function MatteAuditBadge({
 	reason,
