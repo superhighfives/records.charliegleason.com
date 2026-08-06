@@ -1,12 +1,17 @@
+import {
+	isMatteAuditReasonCode,
+	type MatteAuditReasonCode,
+} from "#/lib/photo-processing";
 import { cn } from "#/lib/utils";
 
 /** Human labels for each `professionalMatteAuditReason` code (see `assessMatteQuality`
- * in photo-processing.ts). Falls back to the raw code for a future reason this map
- * hasn't been updated for yet. */
-const REASON_LABELS: Record<string, string> = {
+ * in photo-processing.ts). A missing key here is a compile error, so a new reason code
+ * always ships with a label. */
+const REASON_LABELS: Record<MatteAuditReasonCode, string> = {
 	tint: "colour cast",
 	edge: "edge overrun",
 	sparse: "under-cropped (mostly transparent)",
+	inside: "hole inside the cover",
 };
 
 /** Turn a comma-joined `professionalMatteAuditReason` ("tint,edge") into a human,
@@ -14,18 +19,18 @@ const REASON_LABELS: Record<string, string> = {
 export function describeMatteAuditReason(reason: string): string {
 	return reason
 		.split(",")
-		.map((code) => REASON_LABELS[code] ?? code)
+		.map((code) => (isMatteAuditReasonCode(code) ? REASON_LABELS[code] : code))
 		.join(", ");
 }
 
 /**
  * Shown when the "Audit covers" sweep (`src/lib/matte-audit.ts`) flagged this record's
- * stored matte for a likely colour cast, edge overrun, or under-crop — the regression
- * classes the Parachutes matte fix and the under-crop heuristic address, surfaced here
- * for records whose bad render predates the fix. Reads red (unlike the amber
- * `MatteFallbackBadge`) since, unlike a merely lo-fi fallback, this is a specific visual
- * defect worth reviewing. `reason` is the comma-joined `professionalMatteAuditReason`
- * ("tint", "edge", "sparse", or any combination).
+ * stored matte for a likely defect — the regression classes the Parachutes matte fix and
+ * the under-crop/punch-through heuristics address, surfaced here for records whose bad
+ * render predates the fix. Reads red (unlike the amber `MatteFallbackBadge`) since, unlike
+ * a merely lo-fi fallback, this is a specific visual defect worth reviewing. `reason` is
+ * the comma-joined `professionalMatteAuditReason` — see `MATTE_AUDIT_REASON_CODES` in
+ * photo-processing.ts for the full set, or any combination.
  */
 export function MatteAuditBadge({
 	reason,

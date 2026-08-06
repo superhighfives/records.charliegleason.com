@@ -87,4 +87,40 @@ describe("runMatteAudit", () => {
 			expect.objectContaining({ professionalMatteAuditReason: null }),
 		);
 	});
+
+	it("joins every suspect flag, including an inside hole, into the stored reason", async () => {
+		const { updateSet } = makeDb([{ id: "flagged", cutoutKey: "flagged-key" }]);
+		const output = {
+			response: () => ({ arrayBuffer: async () => new ArrayBuffer(0) }),
+		};
+		const transform = vi.fn(() => ({ output: () => output }));
+		env.PHOTOS = {
+			get: vi.fn().mockResolvedValue({ body: {} }),
+		} as unknown as typeof env.PHOTOS;
+		env.IMAGES = {
+			input: vi.fn(() => ({ transform })),
+		} as unknown as typeof env.IMAGES;
+		(decodeRgba as ReturnType<typeof vi.fn>).mockReturnValue({
+			data: new Uint8ClampedArray(),
+			width: 1,
+			height: 1,
+		});
+		(assessMatteQuality as ReturnType<typeof vi.fn>).mockReturnValue({
+			tintScore: 0,
+			edgeScore: 0,
+			coverageScore: 1,
+			insideScore: 1,
+			tintSuspect: false,
+			edgeSuspect: false,
+			sparseSuspect: false,
+			insideSuspect: true,
+		});
+
+		const result = await runMatteAudit();
+
+		expect(result.suspects).toBe(1);
+		expect(updateSet).toHaveBeenCalledWith(
+			expect.objectContaining({ professionalMatteAuditReason: "inside" }),
+		);
+	});
 });
