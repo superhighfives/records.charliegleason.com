@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
@@ -118,11 +118,30 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
 export async function enqueueResolveAsinBatch(
 	jobs: Array<{ recordId: number; asin: string; country: string | null }>,
 ): Promise<void> {
+	const db = getDb(env.DB);
 	const queue = analyzeQueue();
 	for (const slice of chunk(jobs, 100)) {
 		await queue.sendBatch(
 			slice.map((job) => ({ body: { mode: "resolve-asin", ...job } })),
 		);
+		// Mark queued only after the send confirms — so a failed sendBatch doesn't
+		// leave a row flagged "queued" with nothing actually in flight (the importer's
+		// matching filter would then wrongly hide it forever). This is also what lets
+		// the header queue menu show these jobs, and what stops a re-uploaded CSV from
+		// re-offering a purchase that's already in flight.
+		await db
+			.update(records)
+			.set({
+				amazonResolveStatus: "queued",
+				amazonResolveError: null,
+				updatedAt: new Date(),
+			})
+			.where(
+				inArray(
+					records.id,
+					slice.map((job) => job.recordId),
+				),
+			);
 	}
 }
 
@@ -455,24 +474,36 @@ async function resolveAsinForRecord(
 		.where(eq(records.id, recordId))
 		.limit(1);
 	if (!record) return;
-	// Already pinned — don't clobber a pressing a human (or a prior job) chose.
+	// Already pinned — don't clobber a pressing a human (or a prior job) chose. Clear
+	// the queued flag regardless, so a stale "queued" doesn't linger on an already-done
+	// record (e.g. a human pinned it manually while this job was in flight).
 	if (record.discogsId) {
 		console.info(
 			`[queue] resolve-asin ${asin}: record ${recordId} already has a release`,
 		);
+		await db
+			.update(records)
+			.set({ amazonResolveStatus: "idle", amazonResolveError: null })
+			.where(eq(records.id, recordId));
 		return;
 	}
 
+	const fail = async (reason: string) => {
+		console.info(`[queue] resolve-asin ${asin}: ${reason}`);
+		await db
+			.update(records)
+			.set({ amazonResolveStatus: "failed", amazonResolveError: reason })
+			.where(eq(records.id, recordId));
+	};
+
 	const identity = await identifyFromAsin(asin);
 	if (!identity?.barcode) {
-		console.info(`[queue] resolve-asin ${asin}: no barcode found`);
+		await fail("no barcode found on the Amazon listing");
 		return;
 	}
 	const releases = await searchByBarcode(identity.barcode).catch(() => []);
 	if (releases.length === 0) {
-		console.info(
-			`[queue] resolve-asin ${asin}: barcode ${identity.barcode} matched no release`,
-		);
+		await fail(`barcode ${identity.barcode} matched no Discogs release`);
 		return;
 	}
 
@@ -482,8 +513,8 @@ async function resolveAsinForRecord(
 		? releases.filter((r) => r.masterId === record.masterId)
 		: releases;
 	if (consistent.length === 0) {
-		console.info(
-			`[queue] resolve-asin ${asin}: barcode release doesn't match record ${recordId}'s master — leaving for manual review`,
+		await fail(
+			`barcode ${identity.barcode} matched a release, but not this record's album — leaving for manual review`,
 		);
 		return;
 	}
@@ -504,6 +535,8 @@ async function resolveAsinForRecord(
 			discogsUrl: chosen.discogsUrl,
 			releaseMissing: false,
 			releaseCheckedAt: now,
+			amazonResolveStatus: "idle",
+			amazonResolveError: null,
 			// The exact pressing is authoritative for the album too — adopt its master
 			// only when the record had none, keeping health flags fresh.
 			...(chosen.masterId && !record.masterId
@@ -575,12 +608,20 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		try {
 			await resolveAsinForRecord(recordId, asin, country);
 		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
 			console.error(
-				`[queue] resolve-asin failed for record ${recordId} (${asin}): ${
-					err instanceof Error ? err.message : String(err)
-				}`,
+				`[queue] resolve-asin failed for record ${recordId} (${asin}): ${reason}`,
 			);
 			Sentry.captureException(err);
+			// resolveAsinForRecord clears "queued" on every path it completes, but an
+			// uncaught throw (e.g. identifyFromAsin itself erroring, not just missing a
+			// barcode) skips that — without this the row would stay "queued" forever,
+			// permanently hidden from re-import with nothing left to ever clear it.
+			await getDb(env.DB)
+				.update(records)
+				.set({ amazonResolveStatus: "failed", amazonResolveError: reason })
+				.where(eq(records.id, recordId))
+				.catch(() => {});
 		}
 		message.ack();
 		return;

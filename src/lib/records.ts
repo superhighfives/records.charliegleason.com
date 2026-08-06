@@ -382,7 +382,7 @@ export interface InFlightItem {
 	title: string;
 	thumbKey: string | null;
 	/** What's running, for the menu label. */
-	kind: "analyze" | "professional";
+	kind: "analyze" | "professional" | "amazon";
 	/** The finer-grained state (all actively running — the menu shows a spinner). */
 	state: "pending" | "processing" | "queued";
 	/**
@@ -487,6 +487,23 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 				),
 			)
 			.orderBy(desc(records.updatedAt));
+
+		// Amazon ASIN→pressing resolutions — a separate, much simpler lifecycle (see
+		// `amazonResolveStatus` in schema.ts): one queue message either pins a release or
+		// gives up, both fast and terminal, so there's no "processing" state and no reap/
+		// auto-retry to run here (a message that dies uncaught is already flagged "failed"
+		// by the consumer's catch block, so it can't get stuck "queued" forever).
+		const amazonRows = await db
+			.select({
+				id: records.id,
+				artist: records.artist,
+				title: records.title,
+				capturePhotoKey: records.capturePhotoKey,
+				professionalImageKey: records.professionalImageKey,
+				professionalStatus: records.professionalStatus,
+			})
+			.from(records)
+			.where(eq(records.amazonResolveStatus, "queued"));
 
 		// Reap dead jobs so they don't spin forever. Each is either re-enqueued (a fresh,
 		// clean-isolate run, while its auto-retry budget lasts) or flagged terminally failed
@@ -615,37 +632,51 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 			reaped.filter((r) => r.outcome === "fail").map((r) => r.id),
 		);
 
-		return rows
-			.filter((row) => !dropped.has(row.id))
-			.map((row): InFlightItem => {
-				const analyzing =
-					row.status === "pending" || row.status === "processing";
-				// A row re-enqueued in THIS sweep was just flipped to queued/pending with a
-				// fresh, stage-less job — reflect that rather than the pre-reap `rows`
-				// snapshot's now-stale `processing`/`stage` (which would otherwise show a
-				// plausible-but-wrong "still running stage N" for up to STALE_JOB_MS).
-				const retried = reapedOutcome.get(row.id) === "retry";
-				return {
-					id: row.id,
-					artist: row.artist,
-					title: row.title,
-					thumbKey: displayCoverKey(row, { includeCapture: true }),
-					kind: analyzing ? "analyze" : "professional",
-					state: analyzing
-						? retried
-							? "pending"
-							: (row.status as "pending" | "processing")
-						: retried
-							? "queued"
-							: (row.professionalJobStatus as "queued" | "processing"),
-					// Only meaningful for a processing professional job; a freshly re-enqueued
-					// one hasn't entered a stage yet, so null.
-					stage: analyzing || retried ? null : row.professionalStage,
-					// A re-enqueued job restarts from its first sub-step — the pre-reap
-					// snapshot's `jobStep` is stale, so null it (mirrors `stage` above).
-					step: retried ? null : row.jobStep,
-				};
-			});
+		const amazonItems: InFlightItem[] = amazonRows.map((row) => ({
+			id: row.id,
+			artist: row.artist,
+			title: row.title,
+			thumbKey: displayCoverKey(row, { includeCapture: true }),
+			kind: "amazon",
+			state: "queued",
+			stage: null,
+			step: null,
+		}));
+
+		return [
+			...rows
+				.filter((row) => !dropped.has(row.id))
+				.map((row): InFlightItem => {
+					const analyzing =
+						row.status === "pending" || row.status === "processing";
+					// A row re-enqueued in THIS sweep was just flipped to queued/pending with a
+					// fresh, stage-less job — reflect that rather than the pre-reap `rows`
+					// snapshot's now-stale `processing`/`stage` (which would otherwise show a
+					// plausible-but-wrong "still running stage N" for up to STALE_JOB_MS).
+					const retried = reapedOutcome.get(row.id) === "retry";
+					return {
+						id: row.id,
+						artist: row.artist,
+						title: row.title,
+						thumbKey: displayCoverKey(row, { includeCapture: true }),
+						kind: analyzing ? "analyze" : "professional",
+						state: analyzing
+							? retried
+								? "pending"
+								: (row.status as "pending" | "processing")
+							: retried
+								? "queued"
+								: (row.professionalJobStatus as "queued" | "processing"),
+						// Only meaningful for a processing professional job; a freshly re-enqueued
+						// one hasn't entered a stage yet, so null.
+						stage: analyzing || retried ? null : row.professionalStage,
+						// A re-enqueued job restarts from its first sub-step — the pre-reap
+						// snapshot's `jobStep` is stale, so null it (mirrors `stage` above).
+						step: retried ? null : row.jobStep,
+					};
+				}),
+			...amazonItems,
+		];
 	}),
 );
 

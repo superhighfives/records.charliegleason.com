@@ -94,6 +94,20 @@ export const records = sqliteTable("records", {
 	catno: text("catno"), // Discogs catalog number, e.g. "WIGLP450" — release-specific
 	country: text("country"), // pressing country — release-specific
 
+	// The background-job lifecycle for an Amazon ASIN→pressing resolution (the
+	// importer's "Queue lookups" — see enqueueResolveAsinBatch/resolveAsinForRecord in
+	// queue.ts): `idle` = nothing queued (or a prior job finished); `queued` = enqueued,
+	// awaiting the consumer. There's no `processing` state — a single message either
+	// pins a release or gives up, both fast, so `queued` alone covers "in flight" for
+	// the header's queue menu. `failed` means it ran and couldn't pin a pressing
+	// (no barcode, no matching release, or a master conflict) — best-effort and NOT
+	// auto-retried, so `amazonResolveError` explains why and the importer's matching
+	// filter still excludes it from being re-offered as a fresh "unmatched" purchase.
+	amazonResolveStatus: text("amazon_resolve_status", {
+		enum: ["idle", "queued", "failed"],
+	}).default("idle"),
+	amazonResolveError: text("amazon_resolve_error"),
+
 	// Valuation (admin only — never exposed on the public homepage / API).
 	// The "guessed" value comes from Discogs' seller price suggestions (VG+ grade,
 	// stored in `discogsValue`, full per-condition breakdown in `discogsValueJson`);

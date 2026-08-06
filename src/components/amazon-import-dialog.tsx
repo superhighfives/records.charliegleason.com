@@ -49,11 +49,17 @@ export function AmazonImportDialog({
 	// a master keeps the pool to records with a *canonical* artist/title (from
 	// Discogs) rather than a raw capture read — so a match is trustworthy, and
 	// junk-title unmatched records can't fuzzy-match unrelated purchases. A record
-	// that already has a pinned pressing is left alone.
+	// that already has a pinned pressing is left alone, and so is one with a
+	// resolve-asin job already queued — otherwise re-uploading the same CSV before
+	// the background queue drains would re-offer purchases that are already in
+	// flight (see the header queue menu for their live status).
 	const needRelease = useMemo(
 		() =>
 			(recordsQuery.data ?? []).filter(
-				(r) => r.masterId != null && r.discogsId == null,
+				(r) =>
+					r.masterId != null &&
+					r.discogsId == null &&
+					r.amazonResolveStatus !== "queued",
 			),
 		[recordsQuery.data],
 	);
@@ -204,8 +210,9 @@ export function AmazonImportDialog({
 						</div>
 					) : queued ? (
 						<p className="py-6 text-center text-sm text-muted-foreground">
-							Queued — the matched pressings will fill in on your records over
-							the next few minutes.
+							Queued — watch progress in the queue menu at the top of the admin,
+							and the matched pressings will fill in on your records over the
+							next few minutes.
 						</p>
 					) : (
 						<>
