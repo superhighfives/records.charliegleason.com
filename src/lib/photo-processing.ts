@@ -2074,6 +2074,29 @@ export function matteFromBand(
 
 // ---------- admin matte-quality audit (cheap, non-AI pixel heuristics) ----------
 
+/**
+ * The reason codes `assessMatteQuality` can flag, joined comma-separated into
+ * `records.professionalMatteAuditReason` by `runMatteAudit` (matte-audit.ts) and read back
+ * out by `describeMatteAuditReason`/`MatteAuditBadge` (matte-audit-badge.tsx) for the admin
+ * UI. Single source of truth so a renamed/added code is a compile error at every call site
+ * instead of a silently-stale label.
+ */
+export const MATTE_AUDIT_REASON_CODES = [
+	"tint",
+	"edge",
+	"sparse",
+	"inside",
+] as const;
+export type MatteAuditReasonCode = (typeof MATTE_AUDIT_REASON_CODES)[number];
+
+/** Narrow a `professionalMatteAuditReason` split-segment (untyped DB text) to a known
+ * reason code — the boundary between that free-text column and the closed set above. */
+export function isMatteAuditReasonCode(
+	code: string,
+): code is MatteAuditReasonCode {
+	return (MATTE_AUDIT_REASON_CODES as readonly string[]).includes(code);
+}
+
 export interface MatteQualityAssessment {
 	/** Average per-channel spread (max-min, 0..255) among near-black opaque pixels — a
 	 * genuine shadow stays close to neutral even on a saturated cover, so a wide spread
@@ -2090,9 +2113,15 @@ export interface MatteQualityAssessment {
 	 * the signature of an under-crop: the matting model (or its fallback) kept only a thin
 	 * sliver of the sleeve instead of the whole thing. */
 	coverageScore: number;
+	/** Fraction of the canvas's inner box — well inside the certified crop, clear of any
+	 * legitimate edge ambiguity — that's unexpectedly transparent. That box is meant to be
+	 * the sleeve itself, always fully opaque, so any transparency there is a hole punched
+	 * through the middle of the cover art rather than a crop issue. */
+	insideScore: number;
 	tintSuspect: boolean;
 	edgeSuspect: boolean;
 	sparseSuspect: boolean;
+	insideSuspect: boolean;
 }
 
 /** "Near black" luma cutoff (0..255) for the tint check's shadow sample. */
@@ -2110,6 +2139,14 @@ const AUDIT_EDGE_ALPHA_SUSPECT_FRAC = 0.04;
  * under-cropped — well below a correctly-cropped sleeve's ~90%+, comfortably above a
  * thin-sliver failure's typical single-digit percentage. */
 const AUDIT_COVERAGE_SPARSE_FRAC = 0.5;
+/** Inset of the "inside" box, as a fraction of the shorter canvas side, from the canvas
+ * edge — well past `MARGIN` (the certified transparent shadow ring) and the deterministic
+ * cutter's edge-search band, so this box never overlaps genuine crop-edge ambiguity. */
+const AUDIT_INSIDE_INSET_FRAC = 0.08;
+/** Fraction of the inside box that must be transparent before a render is flagged for a
+ * punch-through hole — a real sleeve is always fully opaque there, so even a small
+ * transparent fraction this deep inside the crop is a defect, not noise. */
+const AUDIT_INSIDE_ALPHA_SUSPECT_FRAC = 0.005;
 
 /**
  * Cheap, non-AI pixel scan of a rendered matte (or any RGBA square with a transparent
@@ -2163,12 +2200,30 @@ export function assessMatteQuality(img: RgbaImage): MatteQualityAssessment {
 	const coverageScore = width * height > 0 ? opaqueN / (width * height) : 0;
 	const sparseSuspect = coverageScore < AUDIT_COVERAGE_SPARSE_FRAC;
 
+	const inset = Math.round(Math.min(width, height) * AUDIT_INSIDE_INSET_FRAC);
+	const insideX0 = Math.min(inset, width);
+	const insideX1 = Math.max(insideX0, width - inset);
+	const insideY0 = Math.min(inset, height);
+	const insideY1 = Math.max(insideY0, height - inset);
+	let insideN = 0;
+	let insideTransparent = 0;
+	for (let y = insideY0; y < insideY1; y++) {
+		for (let x = insideX0; x < insideX1; x++) {
+			insideN++;
+			if (data[(y * width + x) * 4 + 3] < 16) insideTransparent++;
+		}
+	}
+	const insideScore = insideN > 0 ? insideTransparent / insideN : 0;
+	const insideSuspect = insideScore > AUDIT_INSIDE_ALPHA_SUSPECT_FRAC;
+
 	return {
 		tintScore,
 		edgeScore,
 		coverageScore,
+		insideScore,
 		tintSuspect,
 		edgeSuspect,
 		sparseSuspect,
+		insideSuspect,
 	};
 }

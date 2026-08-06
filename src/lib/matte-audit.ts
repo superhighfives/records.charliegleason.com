@@ -4,7 +4,10 @@ import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { matteAuditState, records } from "#/db/schema";
-import { assessMatteQuality } from "#/lib/photo-processing";
+import {
+	assessMatteQuality,
+	type MatteAuditReasonCode,
+} from "#/lib/photo-processing";
 import { decodeRgba } from "#/lib/professional";
 
 /** The audit sweep's global progress row is always this one id — see schema.ts. */
@@ -85,11 +88,12 @@ export async function runMatteAudit(
 					new Uint8Array(await out.response().arrayBuffer()),
 				);
 				const assessment = assessMatteQuality(rgba);
-				const reasons = [
+				const reasons: MatteAuditReasonCode[] = [
 					assessment.tintSuspect ? "tint" : null,
 					assessment.edgeSuspect ? "edge" : null,
 					assessment.sparseSuspect ? "sparse" : null,
-				].filter((r): r is string => r != null);
+					assessment.insideSuspect ? "inside" : null,
+				].filter((r): r is MatteAuditReasonCode => r != null);
 				if (reasons.length > 0) suspects++;
 				await db
 					.update(records)

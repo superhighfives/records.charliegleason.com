@@ -1,12 +1,17 @@
+import {
+	isMatteAuditReasonCode,
+	type MatteAuditReasonCode,
+} from "#/lib/photo-processing";
 import { cn } from "#/lib/utils";
 
 /** Human labels for each `professionalMatteAuditReason` code (see `assessMatteQuality`
- * in photo-processing.ts). Falls back to the raw code for a future reason this map
- * hasn't been updated for yet. */
-const REASON_LABELS: Record<string, string> = {
+ * in photo-processing.ts). A missing key here is a compile error, so a new reason code
+ * always ships with a label. */
+const REASON_LABELS: Record<MatteAuditReasonCode, string> = {
 	tint: "colour cast",
 	edge: "edge overrun",
 	sparse: "under-cropped (mostly transparent)",
+	inside: "hole inside the cover",
 };
 
 /** Turn a comma-joined `professionalMatteAuditReason` ("tint,edge") into a human,
@@ -14,7 +19,7 @@ const REASON_LABELS: Record<string, string> = {
 export function describeMatteAuditReason(reason: string): string {
 	return reason
 		.split(",")
-		.map((code) => REASON_LABELS[code] ?? code)
+		.map((code) => (isMatteAuditReasonCode(code) ? REASON_LABELS[code] : code))
 		.join(", ");
 }
 

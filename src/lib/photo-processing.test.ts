@@ -1121,6 +1121,7 @@ describe("assessMatteQuality", () => {
 		expect(a.tintSuspect).toBe(false);
 		expect(a.edgeSuspect).toBe(false);
 		expect(a.sparseSuspect).toBe(false);
+		expect(a.insideSuspect).toBe(false);
 	});
 
 	it("flags an under-crop that keeps only a thin sliver of the sleeve", () => {
@@ -1181,5 +1182,26 @@ describe("assessMatteQuality", () => {
 		const a = assessMatteQuality({ data, width: size, height: size });
 		expect(a.tintSuspect).toBe(false);
 		expect(a.tintScore).toBe(0);
+	});
+
+	it("flags a hole punched through the middle of the cover art", () => {
+		const img = cleanMatte();
+		const { data, width } = img;
+		// Punch a transparent hole well inside the crop — a real sleeve is always fully
+		// opaque this deep in, so this can only be a defect, not a crop issue.
+		for (let y = 85; y < 115; y++)
+			for (let x = 85; x < 115; x++) {
+				data[(y * width + x) * 4 + 3] = 0;
+			}
+		const a = assessMatteQuality(img);
+		expect(a.insideSuspect).toBe(true);
+	});
+
+	it("doesn't flag transparency confined to the certified edge margin", () => {
+		// The margin itself (already transparent in cleanMatte) sits outside the inside
+		// box's inset, so it should never trip the inside check on its own.
+		const a = assessMatteQuality(cleanMatte());
+		expect(a.insideScore).toBe(0);
+		expect(a.insideSuspect).toBe(false);
 	});
 });
