@@ -6,6 +6,17 @@ import { getRequest, setResponseStatus } from "@tanstack/react-start/server";
 import { isAdmin } from "#/lib/roles";
 
 /**
+ * `AdminSessionError`'s message — exported so a client-side error boundary can
+ * recognise one by content. A thrown `Error` doesn't survive the SSR→client
+ * serialization boundary as its subclass: TanStack Start's server-fn/loader
+ * error channel reconstructs it as a plain `Error`, so `instanceof
+ * AdminSessionError` is always false by the time a route's `errorComponent`
+ * sees it. The message is the only thing that reliably makes the trip.
+ */
+export const ADMIN_SESSION_ERROR_MESSAGE =
+	"Admin session couldn't be verified — try reloading.";
+
+/**
  * Thrown by a read (`listRecords`, `getRecord`) when `getAdminSession` comes back
  * null — the client-side `<SignedIn>` role gate in `/admin/route.tsx` says this
  * request should be an admin, but the server-side Clerk session it's actually
@@ -13,11 +24,12 @@ import { isAdmin } from "#/lib/roles";
  * client SDK's live user object and the server's verified session JWT can
  * genuinely disagree for a beat). Distinct from "the record doesn't exist" or
  * "the collection is empty" so a caller can render an explicit retry prompt
- * instead of a misleadingly-empty list.
+ * instead of a misleadingly-empty list. See `ADMIN_SESSION_ERROR_MESSAGE` for
+ * why detecting one back on the client goes by message, not `instanceof`.
  */
 export class AdminSessionError extends Error {
 	constructor() {
-		super("Admin session couldn't be verified — try reloading.");
+		super(ADMIN_SESSION_ERROR_MESSAGE);
 		this.name = "AdminSessionError";
 	}
 }
