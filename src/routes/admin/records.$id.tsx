@@ -985,10 +985,40 @@ function RecordDetail() {
 	// top so it reads as "this one, already selected" among the results rather
 	// than wherever Discogs's own ordering happened to place it.
 	const isSearchingReleases = searchedReleases != null;
-	const pinnedCandidate =
+	// The pin's full candidate shape, for the collapsed/floated-to-top display
+	// below. A fresh pick already carries it; otherwise it has to be in
+	// `candidates` — except a pin that predates today's `candidatesJson`/master-
+	// versions cache (an older pick, or one made via barcode/URL/ASIN, which
+	// never populated either) won't be. The record's own saved columns *are*
+	// that pressing's details (a pin persists catno/country/etc onto the
+	// record), so reconstruct from them rather than silently falling back to
+	// the un-collapsed list.
+	const pinnedCandidate: DiscogsCandidate | null =
 		picked ??
 		(activeDiscogsId
-			? (candidates.find((c) => c.discogsId === activeDiscogsId) ?? null)
+			? (candidates.find((c) => c.discogsId === activeDiscogsId) ??
+				(record.discogsId === activeDiscogsId
+					? {
+							discogsId: record.discogsId,
+							masterId: record.masterId,
+							masterUrl: record.masterUrl,
+							artist: record.artist,
+							title: record.title,
+							year: record.year,
+							label: record.label,
+							genre: record.genre,
+							format: record.format,
+							size: record.size,
+							type: null,
+							discCount: record.discCount ?? 1,
+							country: record.country,
+							catno: record.catno,
+							discogsUrl:
+								record.discogsUrl ??
+								`https://www.discogs.com/release/${record.discogsId}`,
+							thumb: null,
+						}
+					: null))
 			: null);
 	const displayedCandidates = pinnedCandidate
 		? isSearchingReleases
