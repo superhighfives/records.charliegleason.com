@@ -420,21 +420,20 @@ export function DiscogsSearchInput({
 				if (!busy) search.run();
 			}}
 		>
-			<div className="flex items-end gap-2">
-				<div className="flex-1 space-y-1">
-					<Input
-						autoFocus={autoFocus}
-						value={search.input}
-						placeholder={placeholder}
-						onChange={(e) => search.setInput(e.target.value)}
-					/>
-					{hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-				</div>
+			<div className="flex gap-2">
+				<Input
+					autoFocus={autoFocus}
+					value={search.input}
+					placeholder={placeholder}
+					className="flex-1"
+					onChange={(e) => search.setInput(e.target.value)}
+				/>
 				<Button type="submit" disabled={busy} className="shrink-0">
 					<SearchIcon className="size-4" />
 					{search.pending ? "Searching…" : "Search"}
 				</Button>
 			</div>
+			{hint && <p className="text-xs text-muted-foreground">{hint}</p>}
 
 			{/* Structured filters — rarely needed with the single box, so disclosed. */}
 			<button
