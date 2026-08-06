@@ -345,16 +345,28 @@ function CopyPickerRow({
 	onPick: () => void;
 	disabled: boolean;
 }) {
+	const coverKey = displayCoverKey(record, { includeCapture: true });
 	return (
 		<button
 			type="button"
 			onClick={onPick}
 			disabled={disabled}
-			className="flex w-full items-baseline justify-between gap-3 rounded-md px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
+			className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
 		>
-			<span className="min-w-0">
-				<span className="font-medium">{record.title || "Untitled"}</span>
-				<span className="text-muted-foreground"> · {record.artist}</span>
+			<span className="flex min-w-0 items-center gap-3">
+				{coverKey ? (
+					<img
+						src={`/api/photos/${coverKey}`}
+						alt=""
+						className="size-10 shrink-0 rounded object-cover"
+					/>
+				) : (
+					<div className="size-10 shrink-0 rounded bg-muted" />
+				)}
+				<span className="min-w-0">
+					<span className="font-medium">{record.title || "Untitled"}</span>
+					<span className="text-muted-foreground"> · {record.artist}</span>
+				</span>
 			</span>
 			<span className="flex shrink-0 items-center gap-2">
 				{suggested && (
