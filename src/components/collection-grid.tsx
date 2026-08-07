@@ -285,6 +285,7 @@ export function CollectionGrid({
 	const gridStyle: React.CSSProperties = {
 		display: "grid",
 		gridTemplateColumns: `repeat(auto-fill, minmax(${TILE_MIN_PX}px, 1fr))`,
+		gridAutoColumns: `minmax(${TILE_MIN_PX}px, 1fr)`,
 		gridAutoFlow: "dense",
 		gap: `${GAP_REM}rem`,
 	};

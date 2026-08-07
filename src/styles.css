@@ -150,7 +150,7 @@ html,
 body,
 #app {
   min-height: 100dvh;
-  /*overflow-x: hidden;*/
+  overflow-x: hidden;
 }
 
 body {
