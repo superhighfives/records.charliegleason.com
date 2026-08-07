@@ -1319,7 +1319,7 @@ function RecordDetail() {
 			    `professionalAlphaSource`. A `tint`-only result doesn't get this actionable
 			    box — see the minor colour-cast note below instead. */}
 			{record.professionalMatteAuditReason &&
-				hasMatteAuditFixReason(record.professionalMatteAuditReason) && (
+				(hasMatteAuditFixReason(record.professionalMatteAuditReason) ? (
 					<div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40">
 						<MatteAuditBadge reason={record.professionalMatteAuditReason} />
 						<p className="min-w-0 flex-1 text-xs text-red-700 dark:text-red-300">
@@ -1335,12 +1335,9 @@ function RecordDetail() {
 							{retryFlaggedMatte.isPending ? "Retrying…" : "Re-cut this matte"}
 						</button>
 					</div>
-				)}
-
-			{/* Colour cast alone is a minor, non-gating note — no re-cut action, just a
-			    heads-up (see `hasMatteAuditFixReason`). */}
-			{record.professionalMatteAuditReason &&
-				!hasMatteAuditFixReason(record.professionalMatteAuditReason) && (
+				) : (
+					// Colour cast alone is a minor, non-gating note — no re-cut action, just a
+					// heads-up (see `hasMatteAuditFixReason`).
 					<div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
 						<MatteAuditBadge reason={record.professionalMatteAuditReason} />
 						<p className="min-w-0 flex-1 text-xs text-amber-700 dark:text-amber-300">
@@ -1348,7 +1345,7 @@ function RecordDetail() {
 							noted — minor, not flagged for a re-cut.
 						</p>
 					</div>
-				)}
+				))}
 
 			{/* In-flight: just wait and poll. */}
 			{inFlight && (
