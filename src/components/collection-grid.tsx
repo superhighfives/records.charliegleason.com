@@ -1,4 +1,11 @@
-import { type CSSProperties, useMemo, useState } from "react";
+import {
+	type CSSProperties,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
@@ -76,15 +83,28 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * The tooltip's title uses the same serif treatment (and, where the chip has
  * an extracted palette, the same `.title-palette` gradient — see styles.css)
  * as the record panel's own title (`record-panel.tsx`).
+ *
+ * `scrollActive` (mobile only) is the touch equivalent of hover — set by
+ * `CollectionGrid`'s scroll-driven `IntersectionObserver` for whichever tile
+ * is currently centred, since touch devices have no hover to key off. It
+ * feeds into the same `data-active` attribute the tooltip's own open state
+ * already drives, so the grayscale→colour/disc-peek treatment is shared
+ * rather than duplicated. `hideTooltip` (also mobile) skips mounting the
+ * per-tile Radix tooltip there — `CollectionGrid` renders one shared,
+ * fixed-position tooltip instead (see `MobileNowShowing`).
  */
 function RecordTile({
 	record,
 	onOpen,
 	spanning = false,
+	scrollActive = false,
+	hideTooltip = false,
 }: {
 	record: PublicRecord;
 	onOpen: (record: PublicRecord) => void;
 	spanning?: boolean;
+	scrollActive?: boolean;
+	hideTooltip?: boolean;
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
@@ -126,7 +146,8 @@ function RecordTile({
 	return (
 		<div
 			className="group"
-			data-active={tooltipOpen ? "true" : undefined}
+			data-record-id={record.id}
+			data-active={tooltipOpen || scrollActive ? "true" : undefined}
 			style={
 				spanning
 					? { gridColumn: "span 2", gridRow: "span 2", alignSelf: "start" }
@@ -215,45 +236,107 @@ function RecordTile({
 				    classes) — inline style always wins for a custom property, no
 				    matter what class-based value also tries to set it. A bigger slide,
 				    no zoom, reads as the tooltip pulling out from *behind* the cover
-				    rather than a generic popover fade. */}
-				<TooltipContent
-					side="bottom"
-					sideOffset={1}
-					className="flex flex-col gap-1 text-center"
-					style={
-						{
-							"--tw-enter-translate-y": "-14px",
-							"--tw-enter-scale": "1",
-							"--tw-exit-translate-y": "-10px",
-							"--tw-exit-scale": "1",
-						} as CSSProperties
-					}
-				>
-					<p
-						className={cn(
-							"text-balance font-serif text-base font-medium leading-tight max-w-(--radix-popper-anchor-width)",
-							paletteFrom
-								? "title-palette bg-clip-text text-transparent"
-								: isDefaultColor && "text-brand-strong",
-						)}
+				    rather than a generic popover fade.
+
+				    Skipped on mobile (`hideTooltip`) — touch has no hover to trigger
+				    it off, and the fixed bottom bar (`MobileNowShowing`, driven by
+				    scroll instead) replaces it there. */}
+				{!hideTooltip && (
+					<TooltipContent
+						side="bottom"
+						sideOffset={1}
+						className="flex flex-col gap-1 text-center"
 						style={
-							paletteFrom
-								? ({
-										"--pal-a": paletteFrom,
-										"--pal-b": paletteTo,
-									} as CSSProperties)
-								: undefined
+							{
+								"--tw-enter-translate-y": "-14px",
+								"--tw-enter-scale": "1",
+								"--tw-exit-translate-y": "-10px",
+								"--tw-exit-scale": "1",
+							} as CSSProperties
 						}
 					>
-						{record.title}
-					</p>
-					<p className="font-mono text-muted-foreground text-xs">
-						{record.artist}
-					</p>
-				</TooltipContent>
+						<p
+							className={cn(
+								"text-balance font-serif text-base font-medium leading-tight max-w-(--radix-popper-anchor-width)",
+								paletteFrom
+									? "title-palette bg-clip-text text-transparent"
+									: isDefaultColor && "text-brand-strong",
+							)}
+							style={
+								paletteFrom
+									? ({
+											"--pal-a": paletteFrom,
+											"--pal-b": paletteTo,
+										} as CSSProperties)
+									: undefined
+							}
+						>
+							{record.title}
+						</p>
+						<p className="font-mono text-muted-foreground text-xs">
+							{record.artist}
+						</p>
+					</TooltipContent>
+				)}
 			</Tooltip>
 		</div>
 	);
+}
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.min(max, Math.max(min, value));
+}
+
+// How much of the remaining distance to the spotlight's target the eased
+// position closes each animation frame — lower reads as laggier/dreamier,
+// higher snaps closer to instant (1 would be the old 1:1 tracking).
+const SPOTLIGHT_EASE = 0.09;
+// Below this many px from the target, the eased position just snaps the
+// rest of the way and the animation loop stops — otherwise it'd tick
+// forever, asymptotically approaching but never quite reaching it.
+const SPOTLIGHT_SETTLE_PX = 0.5;
+// How far (px) tilt can nudge the spotlight from the active tile's centre.
+const TILT_MAX_OFFSET_PX = 50;
+// Degrees of tilt (either axis, from the phone's resting orientation) that
+// maps to the full TILT_MAX_OFFSET_PX nudge.
+const TILT_MAX_DEGREES = 30;
+
+/**
+ * Touch/no-hover devices (phones, tablets) get the scroll-driven "active
+ * tile" + tilt-driven spotlight + fixed bottom tooltip in `CollectionGrid`
+ * below, instead of mouse-hover + a per-tile popover — there's no cursor or
+ * hover state to drive either of those with. Re-checked on resize/rotation
+ * (a foldable, or a mouse getting plugged in) rather than pinned at mount.
+ */
+function useIsTouchDevice(): boolean {
+	const [isTouch, setIsTouch] = useState(false);
+	useEffect(() => {
+		const query = window.matchMedia("(hover: none) and (pointer: coarse)");
+		setIsTouch(query.matches);
+		const onChange = () => setIsTouch(query.matches);
+		query.addEventListener("change", onChange);
+		return () => query.removeEventListener("change", onChange);
+	}, []);
+	return isTouch;
+}
+
+/**
+ * Read in a ref (not state) — it's only consulted from `setSpotlightTarget`,
+ * which is called at pointer/tilt/scroll rate, so routing it through a
+ * re-render would be wasted work for a value that never needs to trigger one.
+ */
+function usePrefersReducedMotionRef(): React.RefObject<boolean> {
+	const ref = useRef(false);
+	useEffect(() => {
+		const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+		ref.current = query.matches;
+		const onChange = () => {
+			ref.current = query.matches;
+		};
+		query.addEventListener("change", onChange);
+		return () => query.removeEventListener("change", onChange);
+	}, []);
+	return ref;
 }
 
 /**
@@ -273,6 +356,14 @@ function RecordTile({
  * box and defeats the vinyl disc's deliberate peek past the tile's edge (see
  * `.vinyl-peek` in styles.css, which already made — and documented — this
  * same call once before).
+ *
+ * On touch devices (`useIsTouchDevice`), hover's whole job — which tile is
+ * "active", and where the spotlight backdrop sits — is instead driven by
+ * scroll (an `IntersectionObserver` watching a thin band through the
+ * viewport's centre) plus device tilt (a small nudge on top of the active
+ * tile's own position, since there's no cursor to place the spotlight at).
+ * The per-tile Radix tooltip is replaced by one shared, fixed bottom bar
+ * (`MobileNowShowing`) that tracks the same active tile.
  */
 export function CollectionGrid({
 	records,
@@ -289,16 +380,278 @@ export function CollectionGrid({
 		gridAutoFlow: "dense",
 		gap: `${GAP_REM}rem`,
 	};
+	const isTouch = useIsTouchDevice();
+	const gridElRef = useRef<HTMLDivElement>(null);
+	// Written straight to the DOM (not React state) so the gradient can track
+	// every pointer move at native rate — routing this through a re-render
+	// would both lag a frame behind the cursor and re-render every tile for a
+	// value none of them actually read.
+	const overlayRef = useRef<HTMLDivElement>(null);
+
+	// --- Eased spotlight position -------------------------------------------
+	// `target` is where the spotlight is headed (the pointer on desktop; the
+	// active tile's centre plus a tilt nudge on mobile — both set below);
+	// `current` is what's actually painted, chasing `target` by a fraction of
+	// the remaining distance every animation frame instead of snapping
+	// straight to it (see SPOTLIGHT_EASE). Both live in refs, not state, so
+	// tracking never itself triggers a React re-render.
+	const targetRef = useRef({ x: 0, y: 0 });
+	const currentRef = useRef({ x: 0, y: 0 });
+	const rafRef = useRef<number | null>(null);
+	const prefersReducedMotionRef = usePrefersReducedMotionRef();
+
+	const tick = useCallback(() => {
+		const target = targetRef.current;
+		const current = currentRef.current;
+		const dx = target.x - current.x;
+		const dy = target.y - current.y;
+		if (
+			Math.abs(dx) < SPOTLIGHT_SETTLE_PX &&
+			Math.abs(dy) < SPOTLIGHT_SETTLE_PX
+		) {
+			current.x = target.x;
+			current.y = target.y;
+			rafRef.current = null;
+		} else {
+			current.x += dx * SPOTLIGHT_EASE;
+			current.y += dy * SPOTLIGHT_EASE;
+			rafRef.current = requestAnimationFrame(tick);
+		}
+		overlayRef.current?.style.setProperty("--overlay-x", `${current.x}px`);
+		overlayRef.current?.style.setProperty("--overlay-y", `${current.y}px`);
+	}, []);
+
+	const setSpotlightTarget = useCallback(
+		(x: number, y: number) => {
+			targetRef.current = { x, y };
+			// Reduced motion: jump straight to the target instead of chasing it
+			// frame by frame — the whole point of the eased rAF loop is the chase.
+			if (prefersReducedMotionRef.current) {
+				if (rafRef.current != null) {
+					cancelAnimationFrame(rafRef.current);
+					rafRef.current = null;
+				}
+				currentRef.current = { x, y };
+				overlayRef.current?.style.setProperty("--overlay-x", `${x}px`);
+				overlayRef.current?.style.setProperty("--overlay-y", `${y}px`);
+				return;
+			}
+			if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick);
+		},
+		[tick, prefersReducedMotionRef],
+	);
+
+	useEffect(
+		() => () => {
+			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+		},
+		[],
+	);
+
+	// --- Mobile: scroll-driven "active" tile (hover's touch equivalent) ----
+	const [activeId, setActiveId] = useState<number | null>(null);
+	useEffect(() => {
+		if (!isTouch || !gridElRef.current) return;
+		const container = gridElRef.current;
+		const intersecting = new Set<number>();
+		const observer = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const id = Number((entry.target as HTMLElement).dataset.recordId);
+					if (entry.isIntersecting) intersecting.add(id);
+					else intersecting.delete(id);
+				}
+				// First record in reading order (top-to-bottom, left-to-right —
+				// `records`' own order) among whatever's currently in the band, so
+				// exactly one tile reads as "active" even when a wide row puts
+				// several tiles in the band at once — it resolves to the leftmost.
+				const next = records.find((r) => intersecting.has(r.id))?.id ?? null;
+				setActiveId(next);
+			},
+			// A thin horizontal band through the viewport's vertical centre —
+			// whichever tile is crossing it is "the one you're looking at".
+			{ rootMargin: "-45% 0px -45% 0px", threshold: 0 },
+		);
+		for (const el of container.querySelectorAll<HTMLElement>(
+			"[data-record-id]",
+		)) {
+			observer.observe(el);
+		}
+		return () => observer.disconnect();
+	}, [isTouch, records]);
+
+	const activeRecord = useMemo(
+		() => records.find((r) => r.id === activeId) ?? null,
+		[records, activeId],
+	);
+
+	// The active tile's on-screen centre is the spotlight's base position on
+	// mobile — there's no cursor, so tilt (below) nudges around this instead
+	// of driving the position outright. Recomputed whenever the active tile
+	// changes, and again on scroll since the *tile* stays active across a
+	// scroll but its on-screen position doesn't.
+	const activeCenterRef = useRef({ x: 0, y: 0 });
+	const tiltOffsetRef = useRef({ x: 0, y: 0 });
+
+	const recomputeActiveCenter = useCallback(() => {
+		if (!isTouch || activeId == null || !gridElRef.current) return;
+		const el = gridElRef.current.querySelector<HTMLElement>(
+			`[data-record-id="${activeId}"]`,
+		);
+		if (!el) return;
+		const rect = el.getBoundingClientRect();
+		activeCenterRef.current = {
+			x: rect.left + rect.width / 2,
+			y: rect.top + rect.height / 2,
+		};
+		setSpotlightTarget(
+			activeCenterRef.current.x + tiltOffsetRef.current.x,
+			activeCenterRef.current.y + tiltOffsetRef.current.y,
+		);
+	}, [isTouch, activeId, setSpotlightTarget]);
+
+	useEffect(() => {
+		recomputeActiveCenter();
+	}, [recomputeActiveCenter]);
+
+	useEffect(() => {
+		if (!isTouch) return;
+		// rAF-throttled — scroll fires far faster than a `getBoundingClientRect`
+		// read needs to keep up with, and reading layout on every event risks
+		// forcing a synchronous layout mid-scroll.
+		let ticking = false;
+		const onScroll = () => {
+			if (ticking) return;
+			ticking = true;
+			requestAnimationFrame(() => {
+				recomputeActiveCenter();
+				ticking = false;
+			});
+		};
+		window.addEventListener("scroll", onScroll, { passive: true });
+		return () => window.removeEventListener("scroll", onScroll);
+	}, [isTouch, recomputeActiveCenter]);
+
+	// --- Mobile: tilt nudges the spotlight around the active tile ----------
+	useEffect(() => {
+		if (!isTouch) return;
+		let calibrated: { beta: number; gamma: number } | null = null;
+		const onOrientation = (e: DeviceOrientationEvent) => {
+			if (e.beta == null || e.gamma == null) return;
+			// Calibrate off however the phone happens to be held when tilt
+			// tracking starts, rather than its absolute angle — a phone resting
+			// in a hand is rarely flat, and an absolute reading would leave the
+			// spotlight permanently off-centre until the phone was levelled.
+			if (!calibrated) calibrated = { beta: e.beta, gamma: e.gamma };
+			const dBeta = clamp(
+				e.beta - calibrated.beta,
+				-TILT_MAX_DEGREES,
+				TILT_MAX_DEGREES,
+			);
+			const dGamma = clamp(
+				e.gamma - calibrated.gamma,
+				-TILT_MAX_DEGREES,
+				TILT_MAX_DEGREES,
+			);
+			tiltOffsetRef.current = {
+				x: (dGamma / TILT_MAX_DEGREES) * TILT_MAX_OFFSET_PX,
+				y: (dBeta / TILT_MAX_DEGREES) * TILT_MAX_OFFSET_PX,
+			};
+			setSpotlightTarget(
+				activeCenterRef.current.x + tiltOffsetRef.current.x,
+				activeCenterRef.current.y + tiltOffsetRef.current.y,
+			);
+		};
+
+		let detach: (() => void) | undefined;
+		const attach = () => {
+			window.addEventListener("deviceorientation", onOrientation);
+			detach = () =>
+				window.removeEventListener("deviceorientation", onOrientation);
+		};
+
+		const requestPermission = (
+			DeviceOrientationEvent as unknown as {
+				requestPermission?: () => Promise<"granted" | "denied">;
+			}
+		).requestPermission;
+		if (typeof requestPermission === "function") {
+			// iOS only grants motion-sensor access from inside a user gesture —
+			// the grid's own first touch doubles as that gesture, so there's no
+			// separate "enable tilt" button to tap through first.
+			const onFirstTouch = () => {
+				requestPermission().then((state) => {
+					if (state === "granted") attach();
+				});
+			};
+			const el = gridElRef.current;
+			el?.addEventListener("touchstart", onFirstTouch, { once: true });
+			return () => {
+				el?.removeEventListener("touchstart", onFirstTouch);
+				detach?.();
+			};
+		}
+
+		attach();
+		return () => detach?.();
+	}, [isTouch, setSpotlightTarget]);
+
 	return (
-		<div style={gridStyle}>
+		<div
+			ref={gridElRef}
+			className="collection-grid"
+			style={gridStyle}
+			onPointerMove={
+				isTouch ? undefined : (e) => setSpotlightTarget(e.clientX, e.clientY)
+			}
+		>
 			{records.map((record) => (
 				<RecordTile
 					key={record.id}
 					record={record}
 					onOpen={onOpen}
 					spanning={spanningIds.has(record.id)}
+					scrollActive={isTouch && record.id === activeId}
+					hideTooltip={isTouch}
 				/>
 			))}
+			{/* Shared hover backdrop for every tile — see `.grid-focus-overlay` in
+			    styles.css. `position: fixed` excludes it from the grid's own auto-
+			    placement (an in-flow child here would otherwise consume a cell).
+			    Masked to a radial gradient centred on the eased spotlight position
+			    above (`--overlay-x/y`) so the blur opens up right where the
+			    cursor/active tile is instead of snapping between "sharp tile" and
+			    "blurred everything else" with nothing in between. */}
+			<div
+				ref={overlayRef}
+				aria-hidden="true"
+				className="grid-focus-overlay pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
+			/>
+			{isTouch && activeRecord && <MobileNowShowing record={activeRecord} />}
+		</div>
+	);
+}
+
+/**
+ * Touch's replacement for the per-tile Radix tooltip: one shared bar fixed to
+ * the bottom of the viewport, showing whichever record `CollectionGrid`'s
+ * scroll-driven `IntersectionObserver` currently considers "active" — see the
+ * comment on `CollectionGrid`. Deliberately plain text (no `.title-palette`
+ * gradient like the desktop tooltip) — it swaps records as fast as the user
+ * scrolls, and re-parsing a palette gradient into a fixed bar on every scroll
+ * tick isn't worth it for a label that's only ever on screen a moment.
+ */
+function MobileNowShowing({ record }: { record: PublicRecord }) {
+	return (
+		<div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
+			<div className="flex max-w-[calc(100%-2rem)] flex-col items-center gap-0.5 rounded-md border bg-popover/95 px-4 py-2 text-center text-popover-foreground shadow-lg backdrop-blur-sm">
+				<p className="text-balance font-serif text-base font-medium leading-tight">
+					{record.title}
+				</p>
+				<p className="font-mono text-muted-foreground text-xs">
+					{record.artist}
+				</p>
+			</div>
 		</div>
 	);
 }
