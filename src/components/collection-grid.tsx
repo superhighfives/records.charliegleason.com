@@ -321,6 +321,25 @@ function useIsTouchDevice(): boolean {
 }
 
 /**
+ * Read in a ref (not state) — it's only consulted from `setSpotlightTarget`,
+ * which is called at pointer/tilt/scroll rate, so routing it through a
+ * re-render would be wasted work for a value that never needs to trigger one.
+ */
+function usePrefersReducedMotionRef(): React.RefObject<boolean> {
+	const ref = useRef(false);
+	useEffect(() => {
+		const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+		ref.current = query.matches;
+		const onChange = () => {
+			ref.current = query.matches;
+		};
+		query.addEventListener("change", onChange);
+		return () => query.removeEventListener("change", onChange);
+	}, []);
+	return ref;
+}
+
+/**
  * The record grid: one continuous CSS grid with `grid-auto-flow: dense`, so
  * the browser's own placement algorithm packs every tile — no gaps, because
  * there's no artificial boundary for it to run into.
@@ -379,6 +398,7 @@ export function CollectionGrid({
 	const targetRef = useRef({ x: 0, y: 0 });
 	const currentRef = useRef({ x: 0, y: 0 });
 	const rafRef = useRef<number | null>(null);
+	const prefersReducedMotionRef = usePrefersReducedMotionRef();
 
 	const tick = useCallback(() => {
 		const target = targetRef.current;
@@ -404,9 +424,21 @@ export function CollectionGrid({
 	const setSpotlightTarget = useCallback(
 		(x: number, y: number) => {
 			targetRef.current = { x, y };
+			// Reduced motion: jump straight to the target instead of chasing it
+			// frame by frame — the whole point of the eased rAF loop is the chase.
+			if (prefersReducedMotionRef.current) {
+				if (rafRef.current != null) {
+					cancelAnimationFrame(rafRef.current);
+					rafRef.current = null;
+				}
+				currentRef.current = { x, y };
+				overlayRef.current?.style.setProperty("--overlay-x", `${x}px`);
+				overlayRef.current?.style.setProperty("--overlay-y", `${y}px`);
+				return;
+			}
 			if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick);
 		},
-		[tick],
+		[tick, prefersReducedMotionRef],
 	);
 
 	useEffect(
