@@ -2097,6 +2097,33 @@ export function isMatteAuditReasonCode(
 	return (MATTE_AUDIT_REASON_CODES as readonly string[]).includes(code);
 }
 
+/**
+ * Reason codes that make a stored matte eligible for the "flagged" fix workflow — the red
+ * `MatteAuditBadge`, the `matteFlagged` admin facet, and `retryFlaggedMattes` bulk re-cut.
+ * `tint` is deliberately excluded: colour-cast detection false-positives often enough on
+ * legitimately near-black, low-key covers that it's surfaced as an informational, non-gating
+ * warning instead of something that demands a re-cut.
+ */
+export const MATTE_AUDIT_FIX_REASON_CODES: readonly MatteAuditReasonCode[] = [
+	"edge",
+	"sparse",
+	"inside",
+];
+
+/** True when a comma-joined `professionalMatteAuditReason` contains at least one
+ * fix-worthy code (see {@link MATTE_AUDIT_FIX_REASON_CODES}) — as opposed to only a `tint`
+ * minor warning. */
+export function hasMatteAuditFixReason(
+	reason: string | null | undefined,
+): boolean {
+	if (!reason) return false;
+	return reason
+		.split(",")
+		.some((code) =>
+			(MATTE_AUDIT_FIX_REASON_CODES as readonly string[]).includes(code),
+		);
+}
+
 export interface MatteQualityAssessment {
 	/** Average per-channel spread (max-min, 0..255) among near-black opaque pixels — a
 	 * genuine shadow stays close to neutral even on a saturated cover, so a wide spread

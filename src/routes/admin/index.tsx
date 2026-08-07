@@ -68,6 +68,7 @@ import { backfillColorPalettes } from "#/lib/colors";
 import { colorsQueryOptions } from "#/lib/colors-queries";
 import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
+import { hasMatteAuditFixReason } from "#/lib/photo-processing";
 import { orderRecordsForReview } from "#/lib/record-order";
 import {
 	checkLinkHealth,
@@ -277,7 +278,7 @@ const FLAG_FACETS: FacetOption[] = [
 	{
 		token: "matteFlagged",
 		label: "Matte flagged",
-		test: (r) => r.professionalMatteAuditReason != null,
+		test: (r) => hasMatteAuditFixReason(r.professionalMatteAuditReason),
 	},
 	{
 		token: "duplicate",
@@ -1094,8 +1095,8 @@ function AdminRecords() {
 	const anyMatteFallback = selectedRows.some(
 		(r) => r.original.professionalAlphaSource === "deterministic",
 	);
-	const anyMatteFlagged = selectedRows.some(
-		(r) => r.original.professionalMatteAuditReason != null,
+	const anyMatteFlagged = selectedRows.some((r) =>
+		hasMatteAuditFixReason(r.original.professionalMatteAuditReason),
 	);
 	const bulkActions: BulkAction[] = [
 		allPublished ? "unpublish" : "publish",
