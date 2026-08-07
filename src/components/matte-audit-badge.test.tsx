@@ -32,4 +32,22 @@ describe("MatteAuditBadge", () => {
 		const { getByTitle } = render(<MatteAuditBadge reason="inside" />);
 		expect(getByTitle(/hole inside the cover/, { exact: false })).toBeTruthy();
 	});
+
+	it("reads red and flagged for a fix-worthy reason", () => {
+		const { getByText } = render(<MatteAuditBadge reason="edge" />);
+		const badge = getByText("Matte flagged");
+		expect(badge.className).toContain("text-red-600");
+	});
+
+	it("reads amber and non-flagged for a tint-only reason", () => {
+		const { getByText } = render(<MatteAuditBadge reason="tint" />);
+		const badge = getByText("Colour cast");
+		expect(badge.className).toContain("text-amber-600");
+	});
+
+	it("reads red when tint is mixed with a fix-worthy code", () => {
+		const { getByText } = render(<MatteAuditBadge reason="tint,edge" />);
+		const badge = getByText("Matte flagged");
+		expect(badge.className).toContain("text-red-600");
+	});
 });

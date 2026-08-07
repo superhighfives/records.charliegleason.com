@@ -15,6 +15,7 @@ import {
 	detectSleeveCorners,
 	type EdgeConfidence,
 	edgeDistances,
+	hasMatteAuditFixReason,
 	homography,
 	keepLargestComponent,
 	matteFromBand,
@@ -1203,5 +1204,30 @@ describe("assessMatteQuality", () => {
 		const a = assessMatteQuality(cleanMatte());
 		expect(a.insideScore).toBe(0);
 		expect(a.insideSuspect).toBe(false);
+	});
+});
+
+describe("hasMatteAuditFixReason", () => {
+	it("is false for a null or undefined reason", () => {
+		expect(hasMatteAuditFixReason(null)).toBe(false);
+		expect(hasMatteAuditFixReason(undefined)).toBe(false);
+	});
+
+	it("is false for an empty string", () => {
+		expect(hasMatteAuditFixReason("")).toBe(false);
+	});
+
+	it("is false for a tint-only reason", () => {
+		expect(hasMatteAuditFixReason("tint")).toBe(false);
+	});
+
+	it("is true for a single fix-worthy code", () => {
+		expect(hasMatteAuditFixReason("edge")).toBe(true);
+		expect(hasMatteAuditFixReason("sparse")).toBe(true);
+		expect(hasMatteAuditFixReason("inside")).toBe(true);
+	});
+
+	it("is true when a fix-worthy code is mixed with tint", () => {
+		expect(hasMatteAuditFixReason("tint,edge")).toBe(true);
 	});
 });
