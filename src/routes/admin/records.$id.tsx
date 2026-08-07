@@ -56,6 +56,7 @@ import type {
 } from "#/lib/discogs";
 import { groupCandidates } from "#/lib/discogs-candidate";
 import { likelyDuplicateOf } from "#/lib/duplicates";
+import { hasMatteAuditFixReason } from "#/lib/photo-processing";
 import { orderRecordsForReview } from "#/lib/record-order";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
@@ -1313,26 +1314,38 @@ function RecordDetail() {
 
 			{/* The offline "Audit covers" sweep (matte-audit.ts) flagged this record's
 			    stored matte for a likely defect — independent of the deterministic-fallback
-			    note above, since an *AI* matte can be flagged too (a tint, an edge overrun,
-			    or an under-crop the model itself produced). "Re-cut this matte" runs
-			    regardless of `professionalAlphaSource`. */}
-			{record.professionalMatteAuditReason && (
-				<div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40">
-					<MatteAuditBadge reason={record.professionalMatteAuditReason} />
-					<p className="min-w-0 flex-1 text-xs text-red-700 dark:text-red-300">
-						Flagged for{" "}
-						{describeMatteAuditReason(record.professionalMatteAuditReason)}.
-					</p>
-					<button
-						type="button"
-						disabled={retryFlaggedMatte.isPending}
-						onClick={() => retryFlaggedMatte.mutate()}
-						className="shrink-0 text-xs font-medium text-red-600 underline underline-offset-4 disabled:opacity-60 dark:text-red-400"
-					>
-						{retryFlaggedMatte.isPending ? "Retrying…" : "Re-cut this matte"}
-					</button>
-				</div>
-			)}
+			    note above, since an *AI* matte can be flagged too (an edge overrun or an
+			    under-crop the model itself produced). "Re-cut this matte" runs regardless of
+			    `professionalAlphaSource`. A `tint`-only result doesn't get this actionable
+			    box — see the minor colour-cast note below instead. */}
+			{record.professionalMatteAuditReason &&
+				(hasMatteAuditFixReason(record.professionalMatteAuditReason) ? (
+					<div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40">
+						<MatteAuditBadge reason={record.professionalMatteAuditReason} />
+						<p className="min-w-0 flex-1 text-xs text-red-700 dark:text-red-300">
+							Flagged for{" "}
+							{describeMatteAuditReason(record.professionalMatteAuditReason)}.
+						</p>
+						<button
+							type="button"
+							disabled={retryFlaggedMatte.isPending}
+							onClick={() => retryFlaggedMatte.mutate()}
+							className="shrink-0 text-xs font-medium text-red-600 underline underline-offset-4 disabled:opacity-60 dark:text-red-400"
+						>
+							{retryFlaggedMatte.isPending ? "Retrying…" : "Re-cut this matte"}
+						</button>
+					</div>
+				) : (
+					// Colour cast alone is a minor, non-gating note — no re-cut action, just a
+					// heads-up (see `hasMatteAuditFixReason`).
+					<div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
+						<MatteAuditBadge reason={record.professionalMatteAuditReason} />
+						<p className="min-w-0 flex-1 text-xs text-amber-700 dark:text-amber-300">
+							{describeMatteAuditReason(record.professionalMatteAuditReason)}{" "}
+							noted — minor, not flagged for a re-cut.
+						</p>
+					</div>
+				))}
 
 			{/* In-flight: just wait and poll. */}
 			{inFlight && (

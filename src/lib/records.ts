@@ -55,6 +55,7 @@ import {
 } from "#/lib/master-health";
 import { generateMatteFromCapture } from "#/lib/matte";
 import { beginMatteAuditSweep, getRunningMatteAudit } from "#/lib/matte-audit";
+import { hasMatteAuditFixReason } from "#/lib/photo-processing";
 import { detectCaptureCorners, professionalPipeline } from "#/lib/professional";
 import type { CoverStageResult } from "#/lib/professional-pipeline";
 import {
@@ -2200,15 +2201,16 @@ export const retryProfessionalMattes = createServerFn({ method: "POST" })
 	);
 
 /**
- * Bulk re-cut the matte for records the audit shortlisted (see `matte-audit.ts`),
- * regardless of `professionalAlphaSource` — unlike {@link retryProfessionalMattes},
- * which only upgrades the deterministic fallback, an audit-flagged row can perfectly
- * well have come from the AI path (that's exactly the tint/edge-overrun bug class this
- * exists for). Only re-cuts rows still actually flagged at write time (re-applies the
- * eligibility predicate atomically with the flip, same pattern as
- * {@link retryProfessionalMattes}) and clears the flag so a clean result isn't
- * re-surfaced before the next audit sweep confirms it. Matte-only — reframe/enhance are
- * untouched, same division of labour as "Retry Magic matte".
+ * Bulk re-cut the matte for records the audit shortlisted with a fix-worthy reason (see
+ * `hasMatteAuditFixReason` in photo-processing.ts — a `tint`-only result is a minor note,
+ * not eligible here), regardless of `professionalAlphaSource` — unlike
+ * {@link retryProfessionalMattes}, which only upgrades the deterministic fallback, an
+ * audit-flagged row can perfectly well have come from the AI path (that's exactly the
+ * edge-overrun/under-crop bug class this exists for). Only re-cuts rows still actually
+ * flagged at write time (re-applies the eligibility predicate atomically with the flip,
+ * same pattern as {@link retryProfessionalMattes}) and clears the flag so a clean result
+ * isn't re-surfaced before the next audit sweep confirms it. Matte-only — reframe/enhance
+ * are untouched, same division of labour as "Retry Magic matte".
  */
 export const retryFlaggedMattes = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -2225,7 +2227,8 @@ export const retryFlaggedMattes = createServerFn({ method: "POST" })
 					.from(records)
 					.where(inArray(records.id, batch));
 				for (const record of rows) {
-					if (!record.professionalMatteAuditReason) continue;
+					if (!hasMatteAuditFixReason(record.professionalMatteAuditReason))
+						continue;
 					if (!record.capturePhotoKey || !record.professionalImageKey) continue;
 					const band = parseCornerBand(record.sleeveCornersJson);
 					const params = parseReframeParams(record.professionalParamsJson);
