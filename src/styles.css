@@ -150,7 +150,7 @@ html,
 body,
 #app {
   min-height: 100dvh;
-  overflow-x: hidden;
+  /*overflow-x: hidden;*/
 }
 
 body {
@@ -182,12 +182,13 @@ body {
   }
 }
 
-/* Album-title hover gradient (see RecordTile / color-palette.ts). `--pal-a` and
- * `--pal-b` are the chip's extracted endpoint colours; we clamp their lightness
- * per theme — dark enough to read on white, light enough on #171717 — so the
- * clipped title is always legible. Living in CSS means the readability band can be
- * retuned without re-extracting palettes. Paired with Tailwind `bg-clip-text` +
- * `group-hover:text-transparent`, which reveal this gradient through the glyphs. */
+/* Album-title gradient (see record-panel.tsx's SheetTitle). `--pal-a` and
+ * `--pal-b` are the chip's extracted endpoint colours; we clamp their
+ * lightness per theme — dark enough to read on white, light enough on
+ * #171717 — so the clipped title is always legible on the plain page
+ * background it sits on. Living in CSS means the readability band can be
+ * retuned without re-extracting palettes. Paired with Tailwind `bg-clip-text`
+ * + `text-transparent`, which reveal this gradient through the glyphs. */
 .title-palette {
   background-image: linear-gradient(
     115deg,
@@ -287,25 +288,38 @@ a {
   z-index: 0;
 }
 
+/* Grid items paint in DOM order by default — without this, a disc sliding out
+ * to the right gets painted OVER by the next cell in the row instead of on
+ * top of it. `data-active` mirrors this for whenever the tooltip is open
+ * (including hovering its own portaled content, which plain `:hover` on
+ * `.group` can't see — see the comment on `RecordTile`/`tooltipOpen`), so the
+ * raised stacking sticks around for exactly as long as the peek itself does. */
+.group:hover,
+.group[data-active="true"] {
+  z-index: 10;
+}
+
 .vinyl-disc {
-  transform: translateX(0) rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
+  transform: translateX(0) scale(1)
+    rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
   transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.group:hover .vinyl-disc {
-  /* min(10%, 14px): a percentage alone scales with the tile, but on a wide
-     desktop grid 10% of a ~230px tile (~23px) can clear the page's own side
+.group:hover .vinyl-disc,
+.group[data-active="true"] .vinyl-disc {
+  /* min(25%, 64px): a percentage alone scales with the tile, but on a wide
+     desktop grid 25% of a ~260px tile (~65px) can clear the page's own side
      padding on the last column and force a horizontal scrollbar. Capping to a
-     small fixed px keeps the reveal bounded everywhere, at the cost of it being
-     the min() (not 10%) on any tile bigger than ~140px — i.e. always, in
-     practice, which is fine: a small consistent peek is the goal. */
+     fixed px keeps the reveal bounded everywhere. `scale(1.06)` on top of the
+     slide sells it as the record actually coming forward, not just sliding
+     sideways behind the same flat plane as the cover. */
   transform: translateX(
       calc(
-        min(10%, 30px) * var(--vinyl-scale, 1) - 1px *
+        min(25%, 64px) * var(--vinyl-scale, 1) - 1px *
           var(--vinyl-stack-index, 0)
       )
     )
-    rotate(calc(6deg - 3deg * var(--vinyl-stack-index, 0)));
+    scale(1.06) rotate(calc(6deg - 3deg * var(--vinyl-stack-index, 0)));
 }
 
 /*

@@ -92,7 +92,14 @@ export function VinylDisc({
 				<svg
 					key={i}
 					viewBox="0 0 100 100"
-					className="vinyl-disc absolute p-2 size-full"
+					// A stacked disc's rest-state rotation (`.vinyl-disc` in styles.css,
+					// `-3deg` per layer behind the front one) rotates a *square* box,
+					// which grows its bounding box beyond the tile — a fixed px inset
+					// couldn't out-grow that on a big tile even though it was plenty on
+					// a small one. `inset-[5%]` scales with the tile instead, and 5% is
+					// enough margin to keep even a 3-disc stack's rotated corners from
+					// poking past the tile's own edge at any size.
+					className="vinyl-disc absolute inset-[5%]"
 					style={{ "--vinyl-stack-index": i } as React.CSSProperties}
 				>
 					<title>{colorName ? `${colorName} vinyl` : "Vinyl record"}</title>

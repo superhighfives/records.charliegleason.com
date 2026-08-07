@@ -1,15 +1,13 @@
-import { useWindowVirtualizer } from "@tanstack/react-virtual";
-import {
-	type CSSProperties,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { type CSSProperties, useMemo, useState } from "react";
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Skeleton } from "#/components/ui/skeleton";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "#/components/ui/tooltip";
 import { VinylDisc } from "#/components/vinyl-disc";
 import { parseColorPalette } from "#/lib/color-palette";
 import { DEFAULT_COLOR_NAME } from "#/lib/colors";
@@ -20,167 +18,223 @@ import { cn } from "#/lib/utils";
 // Tailwind `gap-5` (1.25rem / 20px) — the grid's column *and* row gap.
 const GAP_REM = 1.25;
 
-/** Column count matching the CSS grid: 2 (<640px), 3 (<768px), 4 (≥768px). */
-function readColumns(): number {
-	if (typeof window === "undefined") return 4;
-	if (window.matchMedia("(min-width: 768px)").matches) return 4;
-	if (window.matchMedia("(min-width: 640px)").matches) return 3;
-	return 2;
+// Tiles never render narrower than this. Exported so CollectionSkeleton's
+// placeholder grid can use the same tracks and avoid a column jump on load.
+export const TILE_MIN_PX = 180;
+
+function hasNotes(record: PublicRecord): boolean {
+	return Boolean(record.notes?.trim());
 }
 
-function useColumns(): number {
-	// Starts at the SSR default (4) on both server and client so the first
-	// client paint matches the server-rendered markup; the real value (which
-	// may differ on narrow viewports) is only read once mounted, in the effect
-	// below.
-	const [cols, setCols] = useState(4);
-	useEffect(() => {
-		const md = window.matchMedia("(min-width: 768px)");
-		const sm = window.matchMedia("(min-width: 640px)");
-		const update = () => setCols(readColumns());
-		update();
-		md.addEventListener("change", update);
-		sm.addEventListener("change", update);
-		return () => {
-			md.removeEventListener("change", update);
-			sm.removeEventListener("change", update);
-		};
-	}, []);
-	return cols;
-}
+// Minimum number of plain 1×1 tiles between two 2×2 "notes" tiles — see
+// `computeSpanningIds`.
+const MIN_SPAN_GAP = 3;
 
 /**
- * False during SSR and the first client paint, true after mount. This is one of
- * the few legitimate uses of `setState` in an effect — the virtualizer needs
- * `window`, so the very first client render must still match the server's (no
- * `window`) to avoid a hydration mismatch, and only the *next* render can switch
- * on. That switch swaps `CollectionGrid` from the plain map below to the
- * virtualized tree, which unmounts and remounts every `RecordTile` (they're
- * structurally different subtrees, so React can't reconcile across them) —
- * `FadeImage`'s reveal is deliberately resilient to that (see its `reveal`
- * rAF-guard comment), but any *other* per-tile state or side effect added later
- * should assume it gets reset the instant the page becomes interactive.
+ * Which records render as a 2×2 "spanning" tile instead of the default 1×1.
+ * Every record with notes is *eligible*, but consecutive eligible records are
+ * throttled to at least `MIN_SPAN_GAP` tiles apart, so a run of back-to-back
+ * notes-bearing records in the collection (common here) reads as occasional
+ * feature moments rather than a wall of oversized tiles. Records skipped this
+ * way still show their notes — normally, in the detail panel — this only
+ * affects the grid tile's size.
  */
-function useMounted(): boolean {
-	const [mounted, setMounted] = useState(false);
-	useEffect(() => setMounted(true), []);
-	return mounted;
-}
-
-function chunk<T>(items: T[], size: number): T[][] {
-	if (size < 1) return [items];
-	const rows: T[][] = [];
-	for (let i = 0; i < items.length; i += size)
-		rows.push(items.slice(i, i + size));
-	return rows;
+function computeSpanningIds(records: PublicRecord[]): Set<number> {
+	const spanning = new Set<number>();
+	let sinceLastSpan = MIN_SPAN_GAP;
+	for (const record of records) {
+		if (hasNotes(record) && sinceLastSpan >= MIN_SPAN_GAP) {
+			spanning.add(record.id);
+			sinceLastSpan = 0;
+		} else {
+			sinceLastSpan++;
+		}
+	}
+	return spanning;
 }
 
 /**
- * One cover tile: the peeking vinyl disc behind the cover, plus the
- * title/artist/score. `.group` drives the hover states (grayscale→colour, the
- * disc slide-out, and the title "branding" itself with the record's own vinyl
- * colour — see the palette gradient below). The disc deliberately overflows the
- * tile sideways, so nothing wrapping a tile may clip overflow.
+ * One cover tile: the peeking vinyl disc behind the cover, plus a real
+ * (Radix, portal-rendered) tooltip carrying the title/artist. `.group` drives
+ * the hover states (grayscale→colour, the disc slide-out+scale-up, the
+ * pencil-badge fade) — both via plain CSS `:hover` for an instant response
+ * *and* via `data-active` (set from the tooltip's own open state) so they
+ * stay live while the pointer moves onto the (portaled, DOM-detached)
+ * tooltip content too — see `tooltipOpen` below. The disc deliberately
+ * overflows the tile sideways (and rises above sibling tiles on hover/active
+ * — see `.vinyl-peek` in styles.css — so it isn't painted over by the next
+ * cell in DOM order), so the cover's own wrapper carries the aspect ratio
+ * but not `overflow-hidden` — only the innermost box (just the image) clips.
+ *
+ * Every tile is a perfect square — no text block underneath pushing the tile
+ * taller than wide, which is what a 2×2 `spanning` tile needs to actually
+ * come out square. `spanning` claims a 2×2 slot in the parent grid (see
+ * `computeSpanningIds`). `alignSelf: "start"` (spanning only) opts out of the
+ * grid's default stretch, so a 2×2 tile doesn't get stretched to match a
+ * taller row if this one happens to be the shortest tile in it.
+ *
+ * The tooltip's title uses the same serif treatment (and, where the chip has
+ * an extracted palette, the same `.title-palette` gradient — see styles.css)
+ * as the record panel's own title (`record-panel.tsx`).
  */
 function RecordTile({
 	record,
 	onOpen,
+	spanning = false,
 }: {
 	record: PublicRecord;
 	onOpen: (record: PublicRecord) => void;
+	spanning?: boolean;
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
-	// A grid tile never renders wider than ~250px (4 columns in the max-w-5xl
-	// container) — 500 covers that at 2x without shipping the ~1MB master.
-	const coverSrc = cover ? photoUrl(cover, 500) : undefined;
+	// Tiles stay near TILE_MIN_PX wide regardless of viewport (more columns get
+	// added instead of individual tiles growing) — 500 covers a ~250px tile at
+	// 2x without shipping the ~1MB master. A spanning (2×2) tile is roughly
+	// double that, so it gets a correspondingly larger request.
+	const coverSrc = cover ? photoUrl(cover, spanning ? 900 : 500) : undefined;
 	// Keep the peeking vinyl disc faint (10%) until the cover is up, then fade it to
 	// full in step with the cover — so a slow/lazy tile never flashes a bold disc
 	// behind a not-yet-loaded (now background-less) cover. No cover at all → the
 	// placeholder is there immediately, so the disc shows straight away. Seeded from
 	// `FadeImage`'s own decoded-src cache too, so a cover the grid has already shown
-	// this session (e.g. scrolling back to a row outside the overscan window) mounts
+	// this session (e.g. scrolling back to a tile the browser had unloaded) mounts
 	// the disc at full opacity instead of replaying the fade the cover itself skips.
 	const [coverReady, setCoverReady] = useState(
 		() => !cover || isImageDecoded(coverSrc),
 	);
-	// On hover the title "brands" itself with the record's own vinyl colour (it
-	// replaced the old yellow cover-lift bar). Rather than clip the photographic
-	// texture into the glyphs — which split a wide title across the texture's own
-	// dark→light sweep and routinely went half-invisible — we clip a controlled
-	// two-stop gradient built from the chip's extracted palette (see
-	// color-palette.ts), with lightness clamped per theme in CSS (`.title-palette`)
-	// so it always reads. Records whose chip has no palette yet keep the default
-	// (untinted) title on hover, same as the peeking disc's plain-colour fallback.
-	// The default (Black) chip brands its title in the site accent on hover rather
-	// than a near-black palette gradient that barely reads — see the brand fallback
-	// below. Every other chip uses its own extracted palette when it has one.
+	// See `.title-palette` in styles.css — a two-stop gradient built from the
+	// chip's extracted palette, clipped through the title glyphs. The default
+	// (Black) chip has no meaningful palette of its own, so it brands the title
+	// in the site accent instead; a chip with a color but no extracted palette
+	// yet (not backfilled) just keeps the plain foreground color.
 	const isDefaultColor = record.colorName === DEFAULT_COLOR_NAME;
 	const palette = isDefaultColor
 		? null
 		: parseColorPalette(record.colorPalette);
 	const paletteFrom = palette?.colors[0];
 	const paletteTo = palette?.colors[1] ?? palette?.colors[0];
+	// Radix keeps the tooltip open while the pointer is over its (portaled,
+	// document-body-level) content too, not just the trigger — but that content
+	// lives outside this tile's DOM subtree, so plain CSS `:hover` on `.group`
+	// can't see it. Mirroring Radix's own open state onto `data-active` lets
+	// `group-data-[active=true]:*` (Tailwind) and `.group[data-active="true"]`
+	// (styles.css) keep the hover look — grayscale→colour, the disc peek — alive
+	// for exactly as long as Radix says the tooltip is open, hovering the
+	// content included.
+	const [tooltipOpen, setTooltipOpen] = useState(false);
 	return (
-		<div className="group">
-			<button
-				type="button"
-				onClick={() => onOpen(record)}
-				className="w-full cursor-pointer space-y-2 text-left"
-			>
-				<div className="relative">
-					<VinylDisc
-						colorName={record.colorName}
-						textureImageKey={record.colorTextureImageKey}
-						textureStatus={record.colorTextureStatus}
-						translucent={record.colorTranslucent}
-						size={record.size}
-						discCount={record.discCount}
-						className={cn(
-							"transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
-							coverReady ? "opacity-100" : "opacity-0",
-						)}
-					/>
-					<div className="relative aspect-square overflow-hidden">
-						{/* Shown behind the cover while it loads — `-z-10` (rather than
-						    unmounting once ready) so it never has to fight FadeImage's own
-						    opacity for stacking order; the opaque cover simply paints over
-						    it once revealed. Cover-less tiles skip straight to the
-						    placeholder, so no skeleton for those. */}
-						{cover && !coverReady && (
-							<Skeleton className="absolute inset-0 -z-10 rounded-none" />
-						)}
-						{cover ? (
-							<FadeImage
-								src={coverSrc}
-								alt={`${record.artist} — ${record.title}`}
-								onReady={() => setCoverReady(true)}
+		<div
+			className="group"
+			data-active={tooltipOpen ? "true" : undefined}
+			style={
+				spanning
+					? { gridColumn: "span 2", gridRow: "span 2", alignSelf: "start" }
+					: undefined
+			}
+		>
+			<Tooltip onOpenChange={setTooltipOpen}>
+				<TooltipTrigger asChild>
+					<button
+						type="button"
+						onClick={() => onOpen(record)}
+						className="block w-full cursor-pointer text-left"
+					>
+						<div className="relative aspect-square">
+							<VinylDisc
+								colorName={record.colorName}
+								textureImageKey={record.colorTextureImageKey}
+								textureStatus={record.colorTextureStatus}
+								translucent={record.colorTranslucent}
+								size={record.size}
+								discCount={record.discCount}
 								className={cn(
-									// Fade in on load *and* keep the grayscale→colour hover —
-									// one combined transition property so both animate. Opacity
-									// itself stays driven by FadeImage's own `loaded` state (via
-									// onReady below just for the disc) — mirroring it here too
-									// would round-trip through a second component's state update,
-									// which can resolve before the browser ever paints the hidden
-									// frame, skipping the fade entirely.
-									"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0",
-									matte ? "object-contain" : "object-cover",
+									"transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
+									coverReady ? "opacity-100" : "opacity-0",
 								)}
-								loading="lazy"
 							/>
-						) : (
-							<SleevePlaceholder />
-						)}
-					</div>
-				</div>
-				<div className="text-sm leading-snug">
+							<div className="absolute inset-0 overflow-hidden">
+								{/* Shown behind the cover while it loads — `-z-10` (rather
+								    than unmounting once ready) so it never has to fight
+								    FadeImage's own opacity for stacking order; the opaque
+								    cover simply paints over it once revealed. Cover-less
+								    tiles skip straight to the placeholder, so no skeleton
+								    for those. */}
+								{cover && !coverReady && (
+									<Skeleton className="absolute inset-0 -z-10 rounded-none" />
+								)}
+								{cover ? (
+									<FadeImage
+										src={coverSrc}
+										alt={`${record.artist} — ${record.title}`}
+										onReady={() => setCoverReady(true)}
+										className={cn(
+											// Fade in on load *and* keep the grayscale→colour
+											// hover — one combined transition property so both
+											// animate. Opacity itself stays driven by FadeImage's
+											// own `loaded` state (via onReady below just for the
+											// disc) — mirroring it here too would round-trip
+											// through a second component's state update, which
+											// can resolve before the browser ever paints the
+											// hidden frame, skipping the fade entirely.
+											"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0 group-data-[active=true]:grayscale-0",
+											matte ? "object-contain" : "object-cover",
+										)}
+										loading="lazy"
+									/>
+								) : (
+									<SleevePlaceholder />
+								)}
+							</div>
+							{/* Signals "this one has notes" at rest — the 2×2 span (when
+							    throttled-eligible, see `computeSpanningIds`) is a size
+							    hint, not everything with notes gets one, so records that
+							    stayed 1×1 still need their own affordance. Fades out on
+							    hover so it doesn't fight the tooltip/disc for attention
+							    once you're already looking at this tile. */}
+							{hasNotes(record) && (
+								<div className="pointer-events-none absolute top-1/12 left-1/12 size-3 rounded-full bg-brand border-1 border-black/50 opacity-100 shadow-sm transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
+							)}
+						</div>
+					</button>
+				</TooltipTrigger>
+				{/* A real tooltip (Radix, portal-rendered) rather than an overlay
+				    positioned within the tile — sized to its content and collision-
+				    aware, so a long title wraps instead of truncating and is never
+				    clipped by a neighbouring tile or the viewport edge. Pinned to the
+				    trigger's own width (`--radix-popper-anchor-width`, exposed by
+				    Radix's Popper primitive) rather than sizing to content, so it
+				    always reads as "attached to this cover" instead of a stray,
+				    differently-sized box.
+
+				    The entrance overrides tw-animate-css's `--tw-enter-translate-y`/
+				    `--tw-enter-scale` custom properties directly via inline style
+				    (rather than fighting `TooltipContent`'s default `slide-in-from-
+				    top-2 zoom-in-95` classes through `cn`/`twMerge`, which doesn't
+				    reliably win a specificity tie between two same-weight utility
+				    classes) — inline style always wins for a custom property, no
+				    matter what class-based value also tries to set it. A bigger slide,
+				    no zoom, reads as the tooltip pulling out from *behind* the cover
+				    rather than a generic popover fade. */}
+				<TooltipContent
+					side="bottom"
+					sideOffset={1}
+					className="flex flex-col gap-1 text-center"
+					style={
+						{
+							"--tw-enter-translate-y": "-14px",
+							"--tw-enter-scale": "1",
+							"--tw-exit-translate-y": "-10px",
+							"--tw-exit-scale": "1",
+						} as CSSProperties
+					}
+				>
 					<p
 						className={cn(
-							"truncate font-serif text-base font-medium transition-colors duration-300 ease-out",
+							"text-balance font-serif text-base font-medium leading-tight max-w-(--radix-popper-anchor-width)",
 							paletteFrom
-								? "title-palette bg-clip-text group-hover:text-transparent"
-								: // Black default: brand the title in the site accent on hover.
-									isDefaultColor && "group-hover:text-brand-strong",
+								? "title-palette bg-clip-text text-transparent"
+								: isDefaultColor && "text-brand-strong",
 						)}
 						style={
 							paletteFrom
@@ -190,30 +244,35 @@ function RecordTile({
 									} as CSSProperties)
 								: undefined
 						}
-						title={record.title ?? undefined}
 					>
 						{record.title}
 					</p>
-					<p className="truncate font-serif text-muted-foreground">
+					<p className="font-mono text-muted-foreground text-xs">
 						{record.artist}
-						{record.year ? ` · ${record.year}` : ""}
 					</p>
-				</div>
-			</button>
+				</TooltipContent>
+			</Tooltip>
 		</div>
 	);
 }
 
 /**
- * The record grid, row-virtualized against the window scroll. Only the rows near
- * the viewport are in the DOM; `measureElement` reads each row's true height so
- * variable tiles (some carry a Pitchfork line) and the square covers — whose size
- * tracks the column width — stay correctly spaced across breakpoints.
+ * The record grid: one continuous CSS grid with `grid-auto-flow: dense`, so
+ * the browser's own placement algorithm packs every tile — no gaps, because
+ * there's no artificial boundary for it to run into.
  *
- * Virtualization is client-only (`useMounted`): SSR and the first client paint
- * render the plain grid, so hydration matches and there's no window/measurement
- * on the server. Row wrappers never set `overflow`, so the vinyl disc's sideways
- * peek isn't clipped.
+ * An earlier version window-virtualized this by chunking records into fixed
+ * batches, each its own separate CSS grid. That fundamentally can't guarantee
+ * zero gaps: a batch boundary falling mid-row leaves that row's remaining
+ * cells empty in the first grid, with the next batch starting a fresh row
+ * below rather than continuing to fill them — visually a dead rectangle, no
+ * matter how large the batch. A single grid has no such boundary. Perf for
+ * the (currently few-hundred-record) collection comes from `loading="lazy"`
+ * on covers alone — a per-tile `content-visibility: auto` was tried too, but
+ * it implies `contain: paint`, which clips a tile's descendants to its own
+ * box and defeats the vinyl disc's deliberate peek past the tile's edge (see
+ * `.vinyl-peek` in styles.css, which already made — and documented — this
+ * same call once before).
  */
 export function CollectionGrid({
 	records,
@@ -222,78 +281,22 @@ export function CollectionGrid({
 	records: PublicRecord[];
 	onOpen: (record: PublicRecord) => void;
 }) {
-	const columns = useColumns();
-	const mounted = useMounted();
-	const rows = useMemo(() => chunk(records, columns), [records, columns]);
-
-	// Distance from the document top to the grid — the window virtualizer needs it
-	// to map window scroll onto row offsets (everything above the grid is the
-	// header). Re-measured on resize (header height changes with layout).
-	const listRef = useRef<HTMLDivElement>(null);
-	const [scrollMargin, setScrollMargin] = useState(0);
-	useEffect(() => {
-		const measure = () => {
-			const el = listRef.current;
-			if (el) setScrollMargin(el.getBoundingClientRect().top + window.scrollY);
-		};
-		measure();
-		window.addEventListener("resize", measure);
-		return () => window.removeEventListener("resize", measure);
-	}, []);
-
-	const virtualizer = useWindowVirtualizer({
-		count: rows.length,
-		// Rough first guess; `measureElement` corrects each row once it mounts.
-		estimateSize: () => 340,
-		overscan: 3,
-		scrollMargin,
-		getItemKey: (index) => rows[index]?.[0]?.id ?? index,
-	});
-
+	const spanningIds = useMemo(() => computeSpanningIds(records), [records]);
 	const gridStyle: React.CSSProperties = {
 		display: "grid",
-		gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+		gridTemplateColumns: `repeat(auto-fill, minmax(${TILE_MIN_PX}px, 1fr))`,
+		gridAutoFlow: "dense",
 		gap: `${GAP_REM}rem`,
 	};
-
-	if (!mounted) {
-		return (
-			<div style={gridStyle}>
-				{records.map((record) => (
-					<RecordTile key={record.id} record={record} onOpen={onOpen} />
-				))}
-			</div>
-		);
-	}
-
 	return (
-		<div
-			ref={listRef}
-			style={{ position: "relative", height: virtualizer.getTotalSize() }}
-		>
-			{virtualizer.getVirtualItems().map((virtualRow) => (
-				<div
-					key={virtualRow.key}
-					data-index={virtualRow.index}
-					ref={virtualizer.measureElement}
-					style={{
-						position: "absolute",
-						top: 0,
-						left: 0,
-						width: "100%",
-						transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
-						// gap-5 handles the column gaps within a row; separate per-row grids
-						// don't share the parent's row-gap, so reserve it below each row
-						// (measureElement includes padding in the height it reads).
-						paddingBottom: `${GAP_REM}rem`,
-					}}
-				>
-					<div style={gridStyle}>
-						{rows[virtualRow.index].map((record) => (
-							<RecordTile key={record.id} record={record} onOpen={onOpen} />
-						))}
-					</div>
-				</div>
+		<div style={gridStyle}>
+			{records.map((record) => (
+				<RecordTile
+					key={record.id}
+					record={record}
+					onOpen={onOpen}
+					spanning={spanningIds.has(record.id)}
+				/>
 			))}
 		</div>
 	);
