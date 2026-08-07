@@ -64,6 +64,8 @@ import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
+import { backfillColorPalettes } from "#/lib/colors";
+import { colorsQueryOptions } from "#/lib/colors-queries";
 import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
 import { orderRecordsForReview } from "#/lib/record-order";
@@ -683,6 +685,29 @@ function AdminRecords() {
 		setAssignScope(scope);
 		setBulkAssignOpen(true);
 	};
+
+	// Color chips with a ready texture but no extracted palette — legacy rows from
+	// before the `palette` column existed (see `backfillColorPalettes`). Harmless
+	// (the title just stays untinted on the public grid/panel), so this loads
+	// alongside the page rather than blocking it on suspense.
+	const { data: colors } = useQuery(colorsQueryOptions);
+	const pendingPaletteColors = useMemo(
+		() =>
+			(colors ?? []).filter((c) => c.textureStatus === "ready" && !c.palette),
+		[colors],
+	);
+	const backfillPaletteMutation = useMutation({
+		mutationFn: () => backfillColorPalettes(),
+		onSuccess: ({ queued }) => {
+			toast.success(
+				queued > 0
+					? `Queued ${queued} palette re-extraction${queued === 1 ? "" : "s"} — watch progress in the queue menu.`
+					: "Nothing to backfill.",
+			);
+			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey });
+		},
+		onError: () => toast.error("Couldn't start the backfill. Try again."),
+	});
 
 	// Collection value totals (USD). `total` sums every record's effective value
 	// (manual if set, else the Discogs guess); `confirmedTotal` counts only records
@@ -1377,6 +1402,40 @@ function AdminRecords() {
 						Fix
 					</Button>
 				</div>
+			)}
+
+			{/* Missing-palette banner. Informational, not a failure — the cover and
+			    disc render fine either way, only the title's on-hover gradient is
+			    missing (see `.title-palette` in styles.css) — so it reads amber like
+			    `MatteFallbackBadge`/`UnmatchedBadge`, not red. Fix queues a
+			    palette-only re-extraction from each color's existing texture (no
+			    Replicate call — `extractStoredColorPalette`); results land async via
+			    the queue, same as the matte-audit sweep. */}
+			{pendingPaletteColors.length > 0 && (
+				<output className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+					<TriangleAlertIcon className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+					<div className="min-w-0 flex-1">
+						<p className="font-medium text-amber-700 dark:text-amber-300">
+							{pendingPaletteColors.length === 1
+								? "1 color chip is missing its title gradient"
+								: `${pendingPaletteColors.length} color chips are missing their title gradient`}
+						</p>
+						<p className="text-amber-700/80 dark:text-amber-300/80">
+							Their texture predates palette extraction — re-extract from it to
+							light up their titles on the public site.
+						</p>
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="shrink-0"
+						disabled={backfillPaletteMutation.isPending}
+						onClick={() => backfillPaletteMutation.mutate()}
+					>
+						{backfillPaletteMutation.isPending ? "Queuing…" : "Fix"}
+					</Button>
+				</output>
 			)}
 
 			{/* Bulk actions. The bar stays put whenever there are rows to act on (so

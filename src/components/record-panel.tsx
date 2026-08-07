@@ -11,7 +11,13 @@ import {
 	Link2,
 	SquarePen,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+	type CSSProperties,
+	type ReactNode,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 
 import { FadeImage } from "#/components/fade-image";
 import { NotesContent } from "#/components/notes-content";
@@ -25,6 +31,8 @@ import {
 } from "#/components/ui/sheet";
 import { VinylDisc } from "#/components/vinyl-disc";
 import type { Record } from "#/db/schema";
+import { parseColorPalette } from "#/lib/color-palette";
+import { DEFAULT_COLOR_NAME } from "#/lib/colors";
 import { displayCoverKey, displayMatteKey, photoUrl } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { recordPath } from "#/lib/records-path";
@@ -254,6 +262,15 @@ export function RecordPanel({
 	// to another record remounts this component with a fresh state.
 	const [copied, setCopied] = useState<"catno" | "link" | null>(null);
 
+	// Echoes the collection grid's title treatment (see RecordTile) — same
+	// `.title-palette` gradient, same default-chip fallback to the site accent.
+	const isDefaultColor = record.colorName === DEFAULT_COLOR_NAME;
+	const palette = isDefaultColor
+		? null
+		: parseColorPalette(record.colorPalette);
+	const paletteFrom = palette?.colors[0];
+	const paletteTo = palette?.colors[1] ?? palette?.colors[0];
+
 	// The cover lightbox opens its own dialog on top of the panel. While it's open
 	// the arrow-key pager must stand down — otherwise an arrow press pages to
 	// another record (remounting the panel) instead of being handled by the dialog.
@@ -443,7 +460,23 @@ export function RecordPanel({
 						className="relative min-w-0 p-6 pr-52 before:content-[''] before:h-px before:w-full before:absolute before:bottom-0 before:left-0 before:bg-muted before:opacity-[calc(var(--hero,0))]"
 					>
 						<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
-							{record.title}{" "}
+							<span
+								className={cn(
+									paletteFrom
+										? "title-palette bg-clip-text text-transparent"
+										: isDefaultColor && "text-brand-strong",
+								)}
+								style={
+									paletteFrom
+										? ({
+												"--pal-a": paletteFrom,
+												"--pal-b": paletteTo,
+											} as CSSProperties)
+										: undefined
+								}
+							>
+								{record.title}
+							</span>{" "}
 							<button
 								type="button"
 								onClick={copyLink}

@@ -1,3 +1,4 @@
+import { TILE_MIN_PX } from "#/components/collection-grid";
 import { Skeleton } from "#/components/ui/skeleton";
 
 // Same tile count as a first paint typically shows above the fold — enough to
@@ -5,17 +6,9 @@ import { Skeleton } from "#/components/ui/skeleton";
 const TILE_COUNT = 12;
 const TILE_KEYS = Array.from({ length: TILE_COUNT }, (_, i) => `tile-${i}`);
 
-/** One skeleton tile — shaped like a `RecordTile`: a square cover, then two text lines. */
+/** One skeleton tile — shaped like a `RecordTile`: a perfect square, no text (that's hover-only now). */
 function SkeletonTile() {
-	return (
-		<div className="space-y-2">
-			<Skeleton className="aspect-square w-full" />
-			<div className="space-y-1.5">
-				<Skeleton className="h-4 w-4/5" />
-				<Skeleton className="h-3.5 w-3/5" />
-			</div>
-		</div>
-	);
+	return <Skeleton className="aspect-square w-full" />;
 }
 
 /**
@@ -27,7 +20,7 @@ function SkeletonTile() {
  */
 export function CollectionSkeleton() {
 	return (
-		<div className="w-full mx-auto max-w-5xl px-4 py-10 sm:px-6">
+		<div className="w-full px-4 py-10 sm:px-6">
 			<header className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
 				<div className="flex items-center gap-4">
 					<Skeleton className="size-14 shrink-0" />
@@ -43,7 +36,14 @@ export function CollectionSkeleton() {
 				</div>
 			</header>
 
-			<div className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4">
+			{/* Mirrors CollectionGrid's `auto-fill` tracks so the skeleton doesn't
+			    jump columns once the real grid lands. */}
+			<div
+				className="grid gap-5"
+				style={{
+					gridTemplateColumns: `repeat(auto-fill, minmax(${TILE_MIN_PX}px, 1fr))`,
+				}}
+			>
 				{TILE_KEYS.map((tileKey) => (
 					<SkeletonTile key={tileKey} />
 				))}

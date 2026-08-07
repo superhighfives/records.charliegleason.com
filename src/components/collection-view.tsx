@@ -106,7 +106,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	}, [open, animateOpenRef]);
 
 	return (
-		<div className="w-full mx-auto max-w-5xl px-4 py-10 sm:px-6">
+		<div className="w-full px-4 py-10 sm:px-6">
 			<header className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
 				<div className="flex items-center gap-4">
 					<a href="https://charliegleason.com" className="block shrink-0">
@@ -150,6 +150,13 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 					<ThemeToggle />
 				</div>
 			</header>
+
+			<p className="my-16 max-w-6xl font-serif text-4xl font-medium tracking-tight text-pretty sm:text-7xl lg:text-9xl">
+				<span className="text-brand italic">All</span>{" "}
+				<span className="text-muted-foreground">({data.length})</span>{" "}
+				<span className="text-brand italic">of my records,</span> photographed,
+				documented, and displayed.
+			</p>
 
 			{data.length === 0 ? (
 				<p className="text-muted-foreground">Nothing here yet.</p>
