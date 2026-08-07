@@ -299,6 +299,51 @@ a {
   z-index: 10;
 }
 
+/* Full-viewport, blurred backdrop that appears the instant any tile is
+ * hovered (or its tooltip is open — `data-active`, same trigger as the peek
+ * above). Sits at z-index 5 — above every resting tile (z-index: auto) but
+ * below the hovered one (z-index: 10, above) — so the hovered vinyl reads as
+ * popping forward off the page while the rest of the grid recedes behind
+ * glass. `:has()` keeps this a single shared, CSS-only toggle rather than a
+ * mouseenter/leave handler wired to every tile. */
+.grid-focus-overlay {
+  z-index: 5;
+  /* Fading out (mouse leaves) can snap back quickly — it's the fade *in*
+   * that needs to read as a deliberate settle rather than a flash, see
+   * below. */
+  transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* A hole in the overlay centred on the pointer (`--overlay-x/y`, written
+   * on pointer move in collection-grid.tsx) — fully open for the first
+   * 140px so the tile right under the cursor is never fogged, then a wide
+   * 320px ramp back to fully opaque so neighbouring tiles ease into the
+   * blur instead of the whole grid snapping blurred/sharp at once. Falls
+   * back to viewport centre before the first pointer move sets the vars. */
+  mask-image: radial-gradient(
+    circle at var(--overlay-x, 50%) var(--overlay-y, 50%),
+    transparent 0,
+    transparent 140px,
+    black 460px
+  );
+  -webkit-mask-image: radial-gradient(
+    circle at var(--overlay-x, 50%) var(--overlay-y, 50%),
+    transparent 0,
+    transparent 140px,
+    black 460px
+  );
+}
+
+.collection-grid:has(.group:hover, .group[data-active="true"])
+  .grid-focus-overlay {
+  opacity: 1;
+  transition-duration: 900ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grid-focus-overlay {
+    transition: none;
+  }
+}
+
 .vinyl-disc {
   transform: translateX(0) scale(1)
     rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
