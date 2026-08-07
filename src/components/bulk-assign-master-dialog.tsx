@@ -97,7 +97,7 @@ export function BulkAssignMasterDialog({
 
 	const remaining = records.filter((r) => !skipped.has(r.id));
 	const batch = remaining.slice(0, BATCH_SIZE);
-	const done = records.length > 0 && remaining.length === 0;
+	const done = remaining.length === 0;
 	const autoSearchId = batch.find((r) => !autoSearchedIds.has(r.id))?.id;
 
 	const noun = mode === "fix" ? "broken" : "unmatched";
