@@ -409,6 +409,7 @@ export function CollectionGrid({
 	};
 	const isTouch = useIsTouchDevice();
 	const gridElRef = useRef<HTMLDivElement>(null);
+	const prefersReducedMotionRef = usePrefersReducedMotionRef();
 
 	// Keeps the grid scrolled to whichever record the detail panel has open
 	// while paging prev/next inside it (smoothly — the panel covers most of
@@ -435,8 +436,11 @@ export function CollectionGrid({
 		const el = gridElRef.current.querySelector<HTMLElement>(
 			`[data-record-id="${focusedRecordId}"]`,
 		);
-		el?.scrollIntoView({ block: "center", behavior: "smooth" });
-	}, [focusedRecordId]);
+		el?.scrollIntoView({
+			block: "center",
+			behavior: prefersReducedMotionRef.current ? "auto" : "smooth",
+		});
+	}, [focusedRecordId, prefersReducedMotionRef]);
 
 	// Written straight to the DOM (not React state) so the gradient can track
 	// every pointer move at native rate — routing this through a re-render
@@ -454,7 +458,6 @@ export function CollectionGrid({
 	const targetRef = useRef({ x: 0, y: 0 });
 	const currentRef = useRef({ x: 0, y: 0 });
 	const rafRef = useRef<number | null>(null);
-	const prefersReducedMotionRef = usePrefersReducedMotionRef();
 
 	const tick = useCallback(() => {
 		const target = targetRef.current;
