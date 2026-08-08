@@ -477,20 +477,41 @@ export function CollectionGrid({
 		function updateActive() {
 			const inBand = [...intersecting]
 				.map((id) => [id, elements.get(id)?.getBoundingClientRect()] as const)
-				.filter((entry): entry is [number, DOMRect] => entry[1] !== undefined)
-				.sort((a, b) => a[1].left - b[1].left);
+				.filter((entry): entry is [number, DOMRect] => entry[1] !== undefined);
 			let next: number | null = null;
 			if (inBand.length > 0) {
-				const rowTop = Math.min(...inBand.map(([, r]) => r.top));
-				const rowBottom = Math.max(...inBand.map(([, r]) => r.bottom));
 				const centerY = window.innerHeight / 2;
+				// The band can briefly hold tiles from two different rows at once
+				// (one row's tiles exiting as the next row's are entering) — mixing
+				// their rects together made rowTop/rowBottom span both rows, which
+				// threw the fraction (and the picked tile) around wildly. Anchor on
+				// whichever tile's centre is actually closest to the centre line
+				// first, then only consider tiles that share its row — i.e. whose
+				// rect vertically overlaps it — for the left-to-right sweep.
+				const anchor = inBand.reduce((closest, entry) => {
+					const [, rect] = entry;
+					const [, closestRect] = closest;
+					const dist = Math.abs(rect.top + rect.height / 2 - centerY);
+					const closestDist = Math.abs(
+						closestRect.top + closestRect.height / 2 - centerY,
+					);
+					return dist < closestDist ? entry : closest;
+				});
+				const [, anchorRect] = anchor;
+				const row = inBand
+					.filter(
+						([, r]) => r.top < anchorRect.bottom && r.bottom > anchorRect.top,
+					)
+					.sort((a, b) => a[1].left - b[1].left);
+				const rowTop = Math.min(...row.map(([, r]) => r.top));
+				const rowBottom = Math.max(...row.map(([, r]) => r.bottom));
 				const fraction =
 					rowBottom > rowTop ? (centerY - rowTop) / (rowBottom - rowTop) : 0;
 				const index = Math.min(
-					inBand.length - 1,
-					Math.max(0, Math.floor(fraction * inBand.length)),
+					row.length - 1,
+					Math.max(0, Math.floor(fraction * row.length)),
 				);
-				next = inBand[index][0];
+				next = row[index][0];
 			}
 			setActiveId(next);
 		}
