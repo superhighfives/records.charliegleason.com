@@ -228,7 +228,7 @@ function RecordTile({
 							    hover so it doesn't fight the tooltip/disc for attention
 							    once you're already looking at this tile. */}
 							{hasNotes(record) && (
-								<div className="pointer-events-none absolute top-1/12 left-1/12 size-3 rounded-full bg-brand border-1 border-black/50 opacity-100 shadow-sm transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
+								<div className="pointer-events-none absolute top-1/12 left-1/12 size-3 rounded-full bg-brand border-1 border-black/50 opacity-100 shadow-sm transition-opacity duration-300 ease-out motion-safe:animate-pulse group-hover:animate-none group-hover:opacity-0 group-data-[active=true]:animate-none group-data-[active=true]:opacity-0" />
 							)}
 						</div>
 					</button>
@@ -271,7 +271,7 @@ function RecordTile({
 					>
 						<p
 							className={cn(
-								"text-balance font-serif text-base font-medium leading-tight max-w-(--radix-popper-anchor-width)",
+								"flex items-center justify-center gap-1.5 text-balance font-serif text-base font-medium leading-tight max-w-(--radix-popper-anchor-width)",
 								paletteFrom
 									? "title-palette bg-clip-text text-transparent"
 									: isDefaultColor && "text-brand-strong",
@@ -285,6 +285,12 @@ function RecordTile({
 									: undefined
 							}
 						>
+							{/* Same "has notes" signal as the tile's own corner dot, echoed
+							    here since the tooltip can be the first place you actually
+							    read the title. */}
+							{hasNotes(record) && (
+								<span className="inline-block size-1.5 shrink-0 rounded-full bg-brand motion-safe:animate-pulse" />
+							)}
 							{record.title}
 						</p>
 						<p className="font-mono text-muted-foreground text-xs">
