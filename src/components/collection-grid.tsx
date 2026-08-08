@@ -382,9 +382,16 @@ function usePrefersReducedMotionRef(): React.RefObject<boolean> {
 export function CollectionGrid({
 	records,
 	onOpen,
+	focusedRecordId,
 }: {
 	records: PublicRecord[];
 	onOpen: (record: PublicRecord) => void;
+	// The id of whichever record the detail panel currently has open — kept
+	// in sync even while the panel covers the grid (e.g. paging prev/next
+	// inside it) so the grid is already scrolled to that tile underneath by
+	// the time the panel closes, instead of leaving you wherever you were
+	// before it opened.
+	focusedRecordId?: number | null;
 }) {
 	const spanningIds = useMemo(() => computeSpanningIds(records), [records]);
 	const gridStyle: React.CSSProperties = {
@@ -396,6 +403,33 @@ export function CollectionGrid({
 	};
 	const isTouch = useIsTouchDevice();
 	const gridElRef = useRef<HTMLDivElement>(null);
+
+	// Keeps the grid scrolled to whichever record the detail panel has open
+	// while paging prev/next inside it, so closing the panel never leaves you
+	// scrolled back to wherever you were when it first opened. Only fires on
+	// a change *between* two already-open records (prevFocusedId starts
+	// non-null) — the initial open from a grid click is skipped, since that
+	// tile is already on screen (you just clicked it) and re-centring it
+	// would nudge the grid visibly mid slide-in, right as the panel that's
+	// meant to hide this motion is still becoming opaque.
+	const prevFocusedIdRef = useRef<number | null>(null);
+	useEffect(() => {
+		const prevFocusedId = prevFocusedIdRef.current;
+		prevFocusedIdRef.current = focusedRecordId ?? null;
+		if (
+			focusedRecordId == null ||
+			prevFocusedId == null ||
+			prevFocusedId === focusedRecordId ||
+			!gridElRef.current
+		) {
+			return;
+		}
+		const el = gridElRef.current.querySelector<HTMLElement>(
+			`[data-record-id="${focusedRecordId}"]`,
+		);
+		el?.scrollIntoView({ block: "center" });
+	}, [focusedRecordId]);
+
 	// Written straight to the DOM (not React state) so the gradient can track
 	// every pointer move at native rate — routing this through a re-render
 	// would both lag a frame behind the cursor and re-render every tile for a

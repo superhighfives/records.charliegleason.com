@@ -163,7 +163,11 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			) : filtered.length === 0 ? (
 				<p className="text-muted-foreground">No records match “{search}”.</p>
 			) : (
-				<CollectionGrid records={filtered} onOpen={openRecord} />
+				<CollectionGrid
+					records={filtered}
+					onOpen={openRecord}
+					focusedRecordId={shown?.record.id ?? null}
+				/>
 			)}
 
 			<Sheet
