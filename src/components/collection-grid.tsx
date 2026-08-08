@@ -228,7 +228,7 @@ function RecordTile({
 							    hover so it doesn't fight the tooltip/disc for attention
 							    once you're already looking at this tile. */}
 							{hasNotes(record) && (
-								<div className="pointer-events-none absolute top-1/12 left-1/12 size-3 rounded-full bg-brand border-1 border-black/50 opacity-100 shadow-sm transition-opacity duration-300 ease-out motion-safe:animate-pulse group-hover:animate-none group-hover:opacity-0 group-data-[active=true]:animate-none group-data-[active=true]:opacity-0" />
+								<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-3 rounded-full bg-brand border-1 border-black/50 opacity-100 transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
 							)}
 						</div>
 					</button>
@@ -289,7 +289,7 @@ function RecordTile({
 							    here since the tooltip can be the first place you actually
 							    read the title. */}
 							{hasNotes(record) && (
-								<span className="inline-block size-1.5 shrink-0 rounded-full bg-brand motion-safe:animate-pulse" />
+								<span className="inline-block size-1.5 shrink-0 rounded-full bg-brand" />
 							)}
 							{record.title}
 						</p>

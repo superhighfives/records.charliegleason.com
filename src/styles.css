@@ -205,6 +205,35 @@ body {
   );
 }
 
+/* "Has notes" corner dot's idle animation — a strong yellow glow that
+ * breathes in and out, rather than Tailwind's stock `animate-pulse` (a flat
+ * opacity fade), since that also fought the dot's own `group-hover:opacity-0`
+ * fade-out (both animating the same property). This only touches `transform`/
+ * `box-shadow`, so the hover fade-out still works untouched underneath it —
+ * the glow keeps animating, just invisibly, once opacity hits 0. */
+@keyframes dot-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent-yellow) 70%, transparent);
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 10px 4px
+      color-mix(in oklab, var(--accent-yellow) 90%, transparent);
+  }
+}
+
+.dot-pulse {
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-pulse {
+    animation: none;
+  }
+}
+
 code {
   font-family: var(--font-mono);
   font-size: 0.9em;
