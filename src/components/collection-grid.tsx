@@ -473,23 +473,25 @@ export function CollectionGrid({
 						intersecting.delete(id);
 					}
 				}
-				// Whichever tile in the band sits closest to the viewport's centre
-				// point wins — ties (same row, several tiles crossing the band at
-				// once) resolve by horizontal distance, so scrolling through a row
-				// sweeps left-to-right across its tiles instead of snapping straight
-				// to the leftmost one every time.
-				const centerX = window.innerWidth / 2;
-				const centerY = window.innerHeight / 2;
+				// Several tiles can share the band at once (a wide row). Rather than
+				// just picking whichever is centred, split the row's own height into
+				// as many bands as there are tiles and let scroll position within
+				// *that* pick the column — so scrolling through the top of the row
+				// lands on the leftmost tile, the bottom lands on the rightmost, and
+				// everything between sweeps left-to-right in step with the scroll.
+				const inBand = [...intersecting].sort((a, b) => a[1].left - b[1].left);
 				let next: number | null = null;
-				let bestDistance = Number.POSITIVE_INFINITY;
-				for (const [id, rect] of intersecting) {
-					const dx = rect.left + rect.width / 2 - centerX;
-					const dy = rect.top + rect.height / 2 - centerY;
-					const distance = dx * dx + dy * dy;
-					if (distance < bestDistance) {
-						bestDistance = distance;
-						next = id;
-					}
+				if (inBand.length > 0) {
+					const rowTop = Math.min(...inBand.map(([, r]) => r.top));
+					const rowBottom = Math.max(...inBand.map(([, r]) => r.bottom));
+					const centerY = window.innerHeight / 2;
+					const fraction =
+						rowBottom > rowTop ? (centerY - rowTop) / (rowBottom - rowTop) : 0;
+					const index = Math.min(
+						inBand.length - 1,
+						Math.max(0, Math.floor(fraction * inBand.length)),
+					);
+					next = inBand[index][0];
 				}
 				setActiveId(next);
 			},
