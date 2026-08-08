@@ -280,6 +280,15 @@ const FLAG_FACETS: FacetOption[] = [
 		label: "Matte flagged",
 		test: (r) => hasMatteAuditFixReason(r.professionalMatteAuditReason),
 	},
+	// The same audit sweep's `tint` reason, surfaced on its own: excluded from
+	// `matteFlagged` because it false-positives on legit near-black covers, but still
+	// useful as an opt-in shortlist when a colour cast is visibly wrong across a batch.
+	{
+		token: "colorCast",
+		label: "Color cast",
+		test: (r) =>
+			(r.professionalMatteAuditReason ?? "").split(",").includes("tint"),
+	},
 	{
 		token: "duplicate",
 		label: "Duplicate",
@@ -302,6 +311,10 @@ const FLAG_COLORS: globalThis.Record<string, { active: string; idle: string }> =
 		matteFlagged: {
 			active: "border-red-600 bg-red-600 text-white",
 			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
+		},
+		colorCast: {
+			active: "border-orange-600 bg-orange-600 text-white",
+			idle: "border-orange-500/40 text-orange-600 hover:bg-orange-500/10 dark:text-orange-400",
 		},
 		duplicate: {
 			active: "border-orange-600 bg-orange-600 text-white",

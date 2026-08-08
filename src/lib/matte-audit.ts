@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { matteAuditState, records } from "#/db/schema";
@@ -38,9 +38,17 @@ export type MatteAuditTally = {
  * with {@link assessMatteQuality} and persisting the result. Cheap and model-free — this
  * is a shortlist tool for the admin "Audit covers" action, not a fix: flagged records
  * still need a manual re-Apply / "Retry Magic matte" to actually regenerate.
+ *
+ * `sweepStartedAt`, when given, bounds the batch to rows not yet checked *during this
+ * sweep* (`checkedAt` null or before the sweep began). Without it, a collection with more
+ * rows than {@link MATTE_AUDIT_BATCH} would never converge: the stalest-first query would
+ * keep re-picking the same rows every batch (each pass re-stamps their `checkedAt` to
+ * `now`, so they'd cycle to the back of the queue and straight back to the front), so
+ * `checked` would stay pinned at `limit` forever and the sweep would never end.
  */
 export async function runMatteAudit(
 	limit: number = MATTE_AUDIT_BATCH,
+	sweepStartedAt?: Date,
 ): Promise<MatteAuditTally> {
 	return Sentry.startSpan({ name: "runMatteAudit" }, async () => {
 		const db = getDb(env.DB);
@@ -54,7 +62,17 @@ export async function runMatteAudit(
 				cutoutKey: records.professionalAlphaCutoutKey,
 			})
 			.from(records)
-			.where(isNotNull(records.professionalAlphaCutoutKey))
+			.where(
+				and(
+					isNotNull(records.professionalAlphaCutoutKey),
+					sweepStartedAt
+						? or(
+								isNull(records.professionalMatteAuditCheckedAt),
+								lt(records.professionalMatteAuditCheckedAt, sweepStartedAt),
+							)
+						: undefined,
+				),
+			)
 			.orderBy(asc(records.professionalMatteAuditCheckedAt))
 			.limit(limit);
 
@@ -184,7 +202,15 @@ export async function beginMatteAuditSweep(): Promise<{ started: boolean }> {
  */
 export async function stepMatteAuditSweep(): Promise<{ more: boolean }> {
 	const db = getDb(env.DB);
-	const tally = await runMatteAudit();
+	const [state] = await db
+		.select({ startedAt: matteAuditState.startedAt })
+		.from(matteAuditState)
+		.where(eq(matteAuditState.id, AUDIT_STATE_ID))
+		.limit(1);
+	const tally = await runMatteAudit(
+		MATTE_AUDIT_BATCH,
+		state?.startedAt ?? undefined,
+	);
 	const more = tally.checked >= MATTE_AUDIT_BATCH;
 
 	await db

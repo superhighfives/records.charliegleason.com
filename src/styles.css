@@ -443,12 +443,22 @@ a {
      (not 26px) because the cover's own 3deg rotation grows its bounding box
      by several px on this edge too — a smaller translate cleared the inset
      but not that rotated overhang, so the "peek" landed back under the cover
-     and never actually became visible. */
+     and never actually became visible. The extra `scale(0.85)` shrinks the
+     disc itself (on top of the inset above) — the fixed 40px travel distance
+     was tuned to clear that rotation overhang regardless of the disc's own
+     size, so a full-size disc could still end up poking out well past the
+     cover's edge on some records; scaling it down keeps the peek small
+     instead. Tuned against actual measurements (a scaled-down disc measured
+     only a few px past the cover's edge on one record) rather than
+     eyeballed, since the overflow amount varies per record depending on how
+     much margin that record's own matte crop leaves around its visible
+     sleeve. */
   transform: translate(
       calc(40px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
       calc(4px * var(--vinyl-stack-index, 0))
     )
-    rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
+    rotate(calc(-3deg * var(--vinyl-stack-index, 0)))
+    scale(0.85);
   transition-delay: 700ms;
 }
 

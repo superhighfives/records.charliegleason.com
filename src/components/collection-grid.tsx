@@ -409,15 +409,18 @@ export function CollectionGrid({
 	};
 	const isTouch = useIsTouchDevice();
 	const gridElRef = useRef<HTMLDivElement>(null);
+	const prefersReducedMotionRef = usePrefersReducedMotionRef();
 
 	// Keeps the grid scrolled to whichever record the detail panel has open
-	// while paging prev/next inside it, so closing the panel never leaves you
-	// scrolled back to wherever you were when it first opened. Only fires on
-	// a change *between* two already-open records (prevFocusedId starts
-	// non-null) — the initial open from a grid click is skipped, since that
-	// tile is already on screen (you just clicked it) and re-centring it
-	// would nudge the grid visibly mid slide-in, right as the panel that's
-	// meant to hide this motion is still becoming opaque.
+	// while paging prev/next inside it (smoothly — the panel covers most of
+	// the viewport but not all of it, so the motion is visible at the edges
+	// and should read as deliberate rather than a snap), so closing the panel
+	// never leaves you scrolled back to wherever you were when it first
+	// opened. Only fires on a change *between* two already-open records
+	// (prevFocusedId starts non-null) — the initial open from a grid click is
+	// skipped, since that tile is already on screen (you just clicked it) and
+	// re-centring it would nudge the grid visibly mid slide-in, right as the
+	// panel that's meant to hide this motion is still becoming opaque.
 	const prevFocusedIdRef = useRef<number | null>(null);
 	useEffect(() => {
 		const prevFocusedId = prevFocusedIdRef.current;
@@ -433,8 +436,11 @@ export function CollectionGrid({
 		const el = gridElRef.current.querySelector<HTMLElement>(
 			`[data-record-id="${focusedRecordId}"]`,
 		);
-		el?.scrollIntoView({ block: "center" });
-	}, [focusedRecordId]);
+		el?.scrollIntoView({
+			block: "center",
+			behavior: prefersReducedMotionRef.current ? "auto" : "smooth",
+		});
+	}, [focusedRecordId, prefersReducedMotionRef]);
 
 	// Written straight to the DOM (not React state) so the gradient can track
 	// every pointer move at native rate — routing this through a re-render
@@ -452,7 +458,6 @@ export function CollectionGrid({
 	const targetRef = useRef({ x: 0, y: 0 });
 	const currentRef = useRef({ x: 0, y: 0 });
 	const rafRef = useRef<number | null>(null);
-	const prefersReducedMotionRef = usePrefersReducedMotionRef();
 
 	const tick = useCallback(() => {
 		const target = targetRef.current;
