@@ -574,8 +574,24 @@ export function CollectionGrid({
 						return overlaps && sameSize;
 					})
 					.sort((a, b) => a[1].left - b[1].left);
-				const rowTop = Math.min(...row.map(([, r]) => r.top));
-				const rowBottom = Math.max(...row.map(([, r]) => r.bottom));
+				// The leftmost and rightmost tile's rects nudge the row's own
+				// top/bottom by 1px apart (left up, right down) before they feed the
+				// fraction split below. Two side-by-side tiles can render with
+				// sub-pixel-different bounds (CSS Grid rounds fractional column
+				// widths independently per cell), so the "true" 50% boundary
+				// between them isn't always exactly at the row's own midpoint —
+				// close enough that a scroll position dead-centre on the pair
+				// could floor to whichever tile's rect happened to round a hair
+				// short, which is the side you'd see highlighted while scrolling
+				// but not the one that actually opens once you dismiss. This
+				// breaks that tie in the direction it was actually observed to
+				// land wrong, rather than leaving it to sub-pixel rounding.
+				const rowTop = Math.min(
+					...row.map(([, r], i) => r.top + (i === 0 ? -1 : 0)),
+				);
+				const rowBottom = Math.max(
+					...row.map(([, r], i) => r.bottom + (i === row.length - 1 ? 1 : 0)),
+				);
 				const fraction =
 					rowBottom > rowTop ? (centerY - rowTop) / (rowBottom - rowTop) : 0;
 				const index = Math.min(
