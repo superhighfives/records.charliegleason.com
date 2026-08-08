@@ -494,9 +494,9 @@ export function CollectionGrid({
 		// falls within *that row's* own height: at the row's top edge it's the
 		// leftmost tile, at the row's bottom edge the rightmost, and everywhere
 		// between sweeps left-to-right with it. That line sits ahead of the
-		// scroll direction — 60% down the viewport while scrolling down (so a
+		// scroll direction — 55% down the viewport while scrolling down (so a
 		// row's later/rightmost tiles pick up sooner, matching content that's
-		// about to arrive from below), 40% down while scrolling up — rather than
+		// about to arrive from below), 45% down while scrolling up — rather than
 		// a fixed centre, which read as neutral but didn't track which way you
 		// were actually moving. Re-run on every scroll tick (not just on the
 		// observer's enter/exit events) since a tall row can dwell in the band
@@ -509,7 +509,7 @@ export function CollectionGrid({
 			let next: number | null = null;
 			if (inBand.length > 0) {
 				const centerY =
-					window.innerHeight * (scrollDirection === "down" ? 0.6 : 0.4);
+					window.innerHeight * (scrollDirection === "down" ? 0.55 : 0.45);
 				// The band can briefly hold tiles from two different rows at once
 				// (one row's tiles exiting as the next row's are entering) — mixing
 				// their rects together made rowTop/rowBottom span both rows, which
@@ -567,7 +567,7 @@ export function CollectionGrid({
 				updateActive();
 			},
 			// A band spanning the viewport's 20%–80% mark — comfortably covers
-			// both of the reference line's positions above (40%/60%), so a row
+			// both of the reference line's positions above (45%/55%), so a row
 			// is already tracked as "in the band" by the time the line reaches
 			// it, whichever direction it's coming from.
 			{ rootMargin: "-20% 0px -20% 0px", threshold: 0 },
