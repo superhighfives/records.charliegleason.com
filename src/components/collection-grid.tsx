@@ -751,9 +751,15 @@ export function CollectionGrid({
 			// the grid's own first touch doubles as that gesture, so there's no
 			// separate "enable tilt" button to tap through first.
 			const onFirstTouch = () => {
-				requestPermission().then((state) => {
-					if (state === "granted") attach();
-				});
+				// iOS can reject this outside a genuine user gesture (e.g. a
+				// multi-touch or delayed dispatch losing the gesture context) —
+				// tilt is a non-essential enhancement, so fail silently rather
+				// than surface it as an unhandled rejection.
+				requestPermission()
+					.then((state) => {
+						if (state === "granted") attach();
+					})
+					.catch(() => {});
 			};
 			const el = gridElRef.current;
 			el?.addEventListener("touchstart", onFirstTouch, { once: true });
