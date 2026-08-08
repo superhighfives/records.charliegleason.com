@@ -558,7 +558,11 @@ export function RecordPanel({
 							// base `inset-0`): the matte thumbnail's own visible sleeve doesn't
 							// fill its whole square (it has a margin for the drop shadow), so a
 							// full-bleed disc reads as overflowing past the visible artwork
-							// rather than peeking from behind it.
+							// rather than peeking from behind it. The extra `scale` in
+							// `.vinyl-peek--static` below shrinks the disc a bit further still —
+							// the static peek's fixed translate distance (tuned to clear the
+							// cover's own rotation overhang, not just this inset) otherwise still
+							// carried a full-size disc past the cover's edge on some records.
 							className={cn(
 								"inset-[12%] opacity-0",
 								coverReady && "opacity-100 vinyl-peek--static",
