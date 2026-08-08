@@ -450,22 +450,47 @@ export function CollectionGrid({
 
 	// --- Mobile: scroll-driven "active" tile (hover's touch equivalent) ----
 	const [activeId, setActiveId] = useState<number | null>(null);
+	// `records` isn't read in the effect body below, but the observer is
+	// wired up to whatever `[data-record-id]` tiles exist in the DOM right
+	// now — if `records` changes (e.g. more load in), those are new elements
+	// that need observing too, so the effect has to rerun.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: see above
 	useEffect(() => {
 		if (!isTouch || !gridElRef.current) return;
 		const container = gridElRef.current;
-		const intersecting = new Set<number>();
+		// Every tile currently in the band, keyed by id — kept as rects (not
+		// just a Set of ids) so ties within a row can be broken by actual
+		// on-screen position instead of falling back to `records`' static
+		// order, which always resolved to the same (leftmost) column.
+		const intersecting = new Map<number, DOMRectReadOnly>();
 		const observer = new IntersectionObserver(
 			(entries) => {
 				for (const entry of entries) {
 					const id = Number((entry.target as HTMLElement).dataset.recordId);
-					if (entry.isIntersecting) intersecting.add(id);
-					else intersecting.delete(id);
+					if (entry.isIntersecting) {
+						intersecting.set(id, entry.boundingClientRect);
+					} else {
+						intersecting.delete(id);
+					}
 				}
-				// First record in reading order (top-to-bottom, left-to-right —
-				// `records`' own order) among whatever's currently in the band, so
-				// exactly one tile reads as "active" even when a wide row puts
-				// several tiles in the band at once — it resolves to the leftmost.
-				const next = records.find((r) => intersecting.has(r.id))?.id ?? null;
+				// Whichever tile in the band sits closest to the viewport's centre
+				// point wins — ties (same row, several tiles crossing the band at
+				// once) resolve by horizontal distance, so scrolling through a row
+				// sweeps left-to-right across its tiles instead of snapping straight
+				// to the leftmost one every time.
+				const centerX = window.innerWidth / 2;
+				const centerY = window.innerHeight / 2;
+				let next: number | null = null;
+				let bestDistance = Number.POSITIVE_INFINITY;
+				for (const [id, rect] of intersecting) {
+					const dx = rect.left + rect.width / 2 - centerX;
+					const dy = rect.top + rect.height / 2 - centerY;
+					const distance = dx * dx + dy * dy;
+					if (distance < bestDistance) {
+						bestDistance = distance;
+						next = id;
+					}
+				}
 				setActiveId(next);
 			},
 			// A thin horizontal band through the viewport's vertical centre —
