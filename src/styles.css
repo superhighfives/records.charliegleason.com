@@ -255,6 +255,17 @@ pre code {
   color: var(--accent-yellow-strong);
 }
 
+/* Same eyebrow treatment as `.kicker`, but muted and a touch smaller — for
+ * a subtler closing echo of the header's label in the footer, rather than
+ * repeating the brand yellow down there too. */
+.kicker-muted {
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 0.625rem;
+  color: var(--muted-foreground);
+}
+
 button,
 a {
   transition:

@@ -573,6 +573,16 @@ export function CollectionGrid({
 				);
 				next = row[index][0];
 			}
+			// Reuses the same `data-pointer-outside` attribute desktop's
+			// `onPointerLeave`/`Enter` set below — no active tile (scrolled above
+			// the first record or below the last) is mobile's equivalent of the
+			// pointer leaving the grid, and should fade the overlay out at the
+			// same quick pace rather than the long inter-tile linger.
+			if (next == null) {
+				container.setAttribute("data-pointer-outside", "true");
+			} else {
+				container.removeAttribute("data-pointer-outside");
+			}
 			setActiveId(next);
 		}
 

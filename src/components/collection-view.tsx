@@ -199,7 +199,9 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			</Sheet>
 
 			<footer className="mt-16 border-t border-border pt-6 text-xs text-muted-foreground">
-				A corner of{" "}
+				{/* Placeholder copy — duplicated from the header's kicker for now,
+				    to be replaced with real footer wording. */}
+				<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
 				<a
 					href="https://charliegleason.com"
 					className="text-brand-strong underline decoration-brand-strong/60 underline-offset-4 hover:text-foreground"
