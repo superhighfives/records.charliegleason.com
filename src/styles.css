@@ -205,6 +205,39 @@ body {
   );
 }
 
+/* "Has notes" corner flag, folded like a dog-eared page rather than a UI
+ * badge. `clip-path` cuts the triangle; `filter: drop-shadow` (not
+ * `box-shadow`, which clip-path would clip away entirely) casts a shadow
+ * that actually follows the triangle's edge, and the `::after` gradient
+ * darkens toward the fold to suggest the flipped-up corner has depth. */
+.dog-ear {
+  position: absolute;
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+  filter: drop-shadow(1px 2px 2px rgb(0 0 0 / 0.35));
+}
+
+.dog-ear::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    135deg,
+    transparent 55%,
+    rgb(0 0 0 / 0.25) 100%
+  );
+}
+
+/* Same two-stop treatment as `.title-palette` above, but as a flat
+ * corner-to-corner gradient rather than clamped for text legibility — it's
+ * filling a shape, not sitting behind glyphs. */
+.dog-ear-palette {
+  background-image: linear-gradient(
+    135deg,
+    var(--pal-a),
+    var(--pal-b, var(--pal-a))
+  );
+}
+
 code {
   font-family: var(--font-mono);
   font-size: 0.9em;
