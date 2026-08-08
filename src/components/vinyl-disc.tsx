@@ -127,14 +127,21 @@ export function VinylDisc({
 					<circle
 						cx="50"
 						cy="50"
-						r="48"
+						r="49"
 						fill={hasTexture ? `url(#${patternId})` : "currentColor"}
 						fillOpacity={translucent ? 0.65 : undefined}
 						className={hasTexture ? undefined : "text-foreground/70"}
 					/>
 					{/* Overlay: shared "clear vinyl" grooves + sheen art, blended on
 					    top of the fill (see `VINYL_OVERLAY_SRC` above). */}
-					<image href={overlaySrc} x="1" y="1" width="98" height="98" />
+					<image
+						href={overlaySrc}
+						x="1"
+						y="1"
+						width="98"
+						height="98"
+						opacity="0.6"
+					/>
 				</svg>
 			))}
 		</div>

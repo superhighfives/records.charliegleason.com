@@ -176,7 +176,7 @@ function RecordTile({
 								size={record.size}
 								discCount={record.discCount}
 								className={cn(
-									"transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
+									"m-1/16 transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
 									coverReady ? "opacity-100" : "opacity-0",
 								)}
 							/>
@@ -228,7 +228,7 @@ function RecordTile({
 							    hover so it doesn't fight the tooltip/disc for attention
 							    once you're already looking at this tile. */}
 							{hasNotes(record) && (
-								<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-3 rounded-full bg-brand border-1 border-black/50 opacity-100 transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
+								<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
 							)}
 						</div>
 					</button>
@@ -271,7 +271,7 @@ function RecordTile({
 					>
 						<p
 							className={cn(
-								"flex items-center justify-center gap-1.5 text-balance font-serif text-base font-medium leading-tight max-w-(--radix-popper-anchor-width)",
+								"flex items-start justify-center gap-1.5 text-balance font-serif text-base font-medium leading-tight max-w-(--radix-popper-anchor-width)",
 								paletteFrom
 									? "title-palette bg-clip-text text-transparent"
 									: isDefaultColor && "text-brand-strong",
@@ -289,7 +289,7 @@ function RecordTile({
 							    here since the tooltip can be the first place you actually
 							    read the title. */}
 							{hasNotes(record) && (
-								<span className="inline-block size-1.5 shrink-0 rounded-full bg-brand" />
+								<span className="inline-block size-1.5 shrink-0 rounded-full bg-brand mt-1.5" />
 							)}
 							{record.title}
 						</p>
