@@ -458,42 +458,51 @@ export function CollectionGrid({
 	useEffect(() => {
 		if (!isTouch || !gridElRef.current) return;
 		const container = gridElRef.current;
-		// Every tile currently in the band, keyed by id — kept as rects (not
-		// just a Set of ids) so ties within a row can be broken by actual
-		// on-screen position instead of falling back to `records`' static
-		// order, which always resolved to the same (leftmost) column.
-		const intersecting = new Map<number, DOMRectReadOnly>();
+		// Which tiles are currently in the band, and their elements (so we can
+		// re-measure live on scroll — see `onScroll` below). `threshold: 0` only
+		// fires this observer when a tile crosses in/out of the band, not on
+		// every scroll tick in between, so it's just membership tracking.
+		const elements = new Map<number, HTMLElement>();
+		const intersecting = new Set<number>();
+
+		// Several tiles can share the band at once (a wide row). Whichever one
+		// gets picked is decided by where the viewport's vertical centre — a
+		// fixed line on the page — currently falls within *that row's* own
+		// height: at the row's top edge it's the leftmost tile, at the row's
+		// bottom edge the rightmost, and everywhere between sweeps left-to-right
+		// with it. Re-run on every scroll tick (not just on the observer's
+		// enter/exit events) since a tall row can dwell in the band for a while,
+		// and the selection needs to keep tracking the centre line the whole
+		// time it's there, not just jump once when the row enters/leaves.
+		function updateActive() {
+			const inBand = [...intersecting]
+				.map((id) => [id, elements.get(id)?.getBoundingClientRect()] as const)
+				.filter((entry): entry is [number, DOMRect] => entry[1] !== undefined)
+				.sort((a, b) => a[1].left - b[1].left);
+			let next: number | null = null;
+			if (inBand.length > 0) {
+				const rowTop = Math.min(...inBand.map(([, r]) => r.top));
+				const rowBottom = Math.max(...inBand.map(([, r]) => r.bottom));
+				const centerY = window.innerHeight / 2;
+				const fraction =
+					rowBottom > rowTop ? (centerY - rowTop) / (rowBottom - rowTop) : 0;
+				const index = Math.min(
+					inBand.length - 1,
+					Math.max(0, Math.floor(fraction * inBand.length)),
+				);
+				next = inBand[index][0];
+			}
+			setActiveId(next);
+		}
+
 		const observer = new IntersectionObserver(
 			(entries) => {
 				for (const entry of entries) {
 					const id = Number((entry.target as HTMLElement).dataset.recordId);
-					if (entry.isIntersecting) {
-						intersecting.set(id, entry.boundingClientRect);
-					} else {
-						intersecting.delete(id);
-					}
+					if (entry.isIntersecting) intersecting.add(id);
+					else intersecting.delete(id);
 				}
-				// Several tiles can share the band at once (a wide row). Rather than
-				// just picking whichever is centred, split the row's own height into
-				// as many bands as there are tiles and let scroll position within
-				// *that* pick the column — so scrolling through the top of the row
-				// lands on the leftmost tile, the bottom lands on the rightmost, and
-				// everything between sweeps left-to-right in step with the scroll.
-				const inBand = [...intersecting].sort((a, b) => a[1].left - b[1].left);
-				let next: number | null = null;
-				if (inBand.length > 0) {
-					const rowTop = Math.min(...inBand.map(([, r]) => r.top));
-					const rowBottom = Math.max(...inBand.map(([, r]) => r.bottom));
-					const centerY = window.innerHeight / 2;
-					const fraction =
-						rowBottom > rowTop ? (centerY - rowTop) / (rowBottom - rowTop) : 0;
-					const index = Math.min(
-						inBand.length - 1,
-						Math.max(0, Math.floor(fraction * inBand.length)),
-					);
-					next = inBand[index][0];
-				}
-				setActiveId(next);
+				updateActive();
 			},
 			// A thin horizontal band through the viewport's vertical centre —
 			// whichever tile is crossing it is "the one you're looking at".
@@ -502,9 +511,26 @@ export function CollectionGrid({
 		for (const el of container.querySelectorAll<HTMLElement>(
 			"[data-record-id]",
 		)) {
+			const id = Number(el.dataset.recordId);
+			elements.set(id, el);
 			observer.observe(el);
 		}
-		return () => observer.disconnect();
+
+		let rafId: number | null = null;
+		const onScroll = () => {
+			if (rafId !== null || intersecting.size === 0) return;
+			rafId = requestAnimationFrame(() => {
+				rafId = null;
+				updateActive();
+			});
+		};
+		window.addEventListener("scroll", onScroll, { passive: true });
+
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("scroll", onScroll);
+			if (rafId !== null) cancelAnimationFrame(rafId);
+		};
 	}, [isTouch, records]);
 
 	const activeRecord = useMemo(
