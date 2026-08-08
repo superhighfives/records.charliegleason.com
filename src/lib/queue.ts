@@ -656,18 +656,26 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		try {
 			const { more } = await stepMatteAuditSweep();
 			if (more) await enqueueAuditMattes();
+			message.ack();
 		} catch (err) {
+			const willRetry = message.attempts <= MAX_RETRIES;
 			console.error(
-				`[queue] audit-mattes step failed: ${
+				`[queue] audit-mattes step failed (attempt ${message.attempts}, willRetry=${willRetry}): ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);
 			Sentry.captureException(err);
-			// Don't leave the sweep stuck "running" forever with no further messages
-			// coming — flag it stopped so the queue menu doesn't show a phantom sweep.
-			// Best-effort: if this write also fails, log rather than silently swallow —
-			// a double failure here is exactly the kind of thing that would otherwise
-			// leave a permanently "running" sweep with zero trace of why.
+			if (willRetry) {
+				// A transient D1/network blip — same backoff-and-retry the other stages
+				// use, rather than abandoning the sweep on the first hiccup.
+				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
+				return;
+			}
+			// Retries exhausted — don't leave the sweep stuck "running" forever with no
+			// further messages coming; flag it stopped so the queue menu doesn't show a
+			// phantom sweep. Best-effort: if this write also fails, log rather than
+			// silently swallow — a double failure here is exactly the kind of thing that
+			// would otherwise leave a permanently "running" sweep with zero trace of why.
 			await getDb(env.DB)
 				.update(matteAuditState)
 				.set({ running: false, updatedAt: new Date() })
@@ -679,8 +687,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 					);
 					Sentry.captureException(cleanupErr);
 				});
+			message.ack();
 		}
-		message.ack();
 		return;
 	}
 
