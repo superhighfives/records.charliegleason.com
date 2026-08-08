@@ -484,10 +484,17 @@ export function CollectionGrid({
 				// The band can briefly hold tiles from two different rows at once
 				// (one row's tiles exiting as the next row's are entering) — mixing
 				// their rects together made rowTop/rowBottom span both rows, which
-				// threw the fraction (and the picked tile) around wildly. Anchor on
-				// whichever tile's centre is actually closest to the centre line
-				// first, then only consider tiles that share its row — i.e. whose
-				// rect vertically overlaps it — for the left-to-right sweep.
+				// threw the fraction (and the picked tile) around wildly. It also
+				// held a spanning (2×2) tile alongside a row of regular ones sitting
+				// beside it — dense packing means a spanning tile's height matches
+				// two ordinary rows combined, so it vertically overlaps *both*, and
+				// naively grouping by overlap alone pulled it into whichever row's
+				// fraction happened to be closest, making the two small rows blow
+				// through their four tiles almost instantly. Anchor on whichever
+				// tile's centre is actually closest to the centre line first, then
+				// only consider tiles that both overlap it *and* are roughly the
+				// same size — same row, same size class — for the left-to-right
+				// sweep.
 				const anchor = inBand.reduce((closest, entry) => {
 					const [, rect] = entry;
 					const [, closestRect] = closest;
@@ -499,9 +506,14 @@ export function CollectionGrid({
 				});
 				const [, anchorRect] = anchor;
 				const row = inBand
-					.filter(
-						([, r]) => r.top < anchorRect.bottom && r.bottom > anchorRect.top,
-					)
+					.filter(([, r]) => {
+						const overlaps =
+							r.top < anchorRect.bottom && r.bottom > anchorRect.top;
+						const sameSize =
+							r.height / anchorRect.height > 0.5 &&
+							r.height / anchorRect.height < 1.5;
+						return overlaps && sameSize;
+					})
 					.sort((a, b) => a[1].left - b[1].left);
 				const rowTop = Math.min(...row.map(([, r]) => r.top));
 				const rowBottom = Math.max(...row.map(([, r]) => r.bottom));
