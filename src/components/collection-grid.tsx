@@ -148,6 +148,12 @@ function RecordTile({
 			className="group"
 			data-record-id={record.id}
 			data-active={tooltipOpen || scrollActive ? "true" : undefined}
+			// Separate from `data-active` above (which also covers desktop's
+			// tooltip-open state) so the scale-up below only kicks in for
+			// mobile's scroll-driven "hover", not a mouse hover/tooltip on
+			// desktop — that already gets its own pop via `.vinyl-disc`'s hover
+			// transform without the cover itself scaling too.
+			data-scroll-active={scrollActive ? "true" : undefined}
 			style={
 				spanning
 					? { gridColumn: "span 2", gridRow: "span 2", alignSelf: "start" }
@@ -197,8 +203,13 @@ function RecordTile({
 											// disc) — mirroring it here too would round-trip
 											// through a second component's state update, which
 											// can resolve before the browser ever paints the
-											// hidden frame, skipping the fade entirely.
-											"size-full grayscale transition-[opacity,filter] duration-500 ease-out group-hover:grayscale-0 group-data-[active=true]:grayscale-0",
+											// hidden frame, skipping the fade entirely. Scale is
+											// mobile-only (`data-scroll-active`, not the shared
+											// `data-active`) — a gentle zoom standing in for the
+											// pointer-driven spotlight desktop gets instead. The
+											// parent's `overflow-hidden` clips it, so it zooms in
+											// place rather than growing the tile's footprint.
+											"size-full grayscale transition-[opacity,filter,transform] duration-500 ease-out group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[scroll-active=true]:scale-105",
 											matte ? "object-contain" : "object-cover",
 										)}
 										loading="lazy"
