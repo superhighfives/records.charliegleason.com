@@ -308,10 +308,19 @@ a {
  * mouseenter/leave handler wired to every tile. */
 .grid-focus-overlay {
   z-index: 5;
-  /* Fading out (mouse leaves) can snap back quickly — it's the fade *in*
-   * that needs to read as a deliberate settle rather than a flash, see
-   * below. */
-  transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* Fade *out* is a long, deliberate 4s linger by default so hopping between
+   * two tiles — which can briefly clear `:has()` while the pointer crosses
+   * the gap between them — doesn't flash the overlay off and back on. Fade
+   * *in* is quicker (1.2s, see below) so the blur still reads as responsive
+   * to the hover that triggered it; leaving the grid entirely also drops
+   * back to that quick 1.2s (see `data-pointer-outside` further down) since
+   * the long linger only makes sense while still moving between records.
+   * `cubic-bezier(0.16, 1, 0.3, 1)` (used for the fade-in) is an
+   * ease-out-expo curve — nearly all its motion happens in the first
+   * fraction of the duration. That reads fine at ~1s, but stretched to 4s it
+   * front-loads a jerky burst then crawls for the rest, so the default here
+   * uses ease-in-out instead, easing gently at both ends. */
+  transition: opacity 4000ms cubic-bezier(0.65, 0, 0.35, 1);
   /* A hole in the overlay centred on the pointer (`--overlay-x/y`, written
    * on pointer move in collection-grid.tsx) — fully open for the first
    * 140px so the tile right under the cursor is never fogged, then a wide
@@ -335,7 +344,16 @@ a {
 .collection-grid:has(.group:hover, .group[data-active="true"])
   .grid-focus-overlay {
   opacity: 1;
-  transition-duration: 900ms;
+  transition-duration: 1200ms;
+  transition-delay: 0s;
+}
+
+/* Leaving the grid entirely (as opposed to hopping the gap between two
+ * tiles, which also clears `:has()` above but keeps this attribute unset —
+ * see `onPointerLeave`/`Enter` in collection-grid.tsx) fades out at the same
+ * quick pace as the fade-in instead of the long 4s inter-tile linger. */
+.collection-grid[data-pointer-outside="true"] .grid-focus-overlay {
+  transition-duration: 1200ms;
 }
 
 @media (prefers-reduced-motion: reduce) {

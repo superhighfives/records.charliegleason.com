@@ -604,6 +604,23 @@ export function CollectionGrid({
 			onPointerMove={
 				isTouch ? undefined : (e) => setSpotlightTarget(e.clientX, e.clientY)
 			}
+			// `data-pointer-outside` (see `.grid-focus-overlay` in styles.css) tells
+			// the overlay's fade-out whether the pointer left the whole grid or just
+			// hopped the gap between two tiles — `onPointerLeave`/`Enter` (unlike
+			// `onPointerMove`) don't fire for that inner hop since they're the
+			// non-bubbling enter/leave pair, only the outer boundary crossing. Written
+			// straight to the DOM rather than React state — same reasoning as the
+			// spotlight position above, this never needs to trigger a re-render.
+			onPointerLeave={
+				isTouch
+					? undefined
+					: (e) => e.currentTarget.setAttribute("data-pointer-outside", "true")
+			}
+			onPointerEnter={
+				isTouch
+					? undefined
+					: (e) => e.currentTarget.removeAttribute("data-pointer-outside")
+			}
 		>
 			{records.map((record) => (
 				<RecordTile
