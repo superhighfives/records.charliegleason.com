@@ -478,7 +478,15 @@ export function CollectionGrid({
 		// every scroll tick in between, so it's just membership tracking.
 		const elements = new Map<number, HTMLElement>();
 		const intersecting = new Set<number>();
-		let lastScrollY = window.scrollY;
+		// The point direction is last measured from, not just "last frame's
+		// position" — momentum scrolling's deceleration (and touch jitter)
+		// produces tiny back-and-forth deltas even while net movement is one
+		// way, which flipped `scrollDirection` every frame and made the
+		// left/right pick flicker. Direction only updates once the page has
+		// moved DIRECTION_THRESHOLD_PX past this anchor, which absorbs that
+		// noise instead of reacting to every sub-pixel wobble.
+		const DIRECTION_THRESHOLD_PX = 24;
+		let directionAnchorY = window.scrollY;
 		let scrollDirection: "up" | "down" = "down";
 
 		// Several tiles can share the band at once (a wide row). Whichever one
@@ -575,9 +583,13 @@ export function CollectionGrid({
 		let rafId: number | null = null;
 		const onScroll = () => {
 			const currentScrollY = window.scrollY;
-			if (currentScrollY !== lastScrollY) {
-				scrollDirection = currentScrollY > lastScrollY ? "down" : "up";
-				lastScrollY = currentScrollY;
+			const delta = currentScrollY - directionAnchorY;
+			if (delta > DIRECTION_THRESHOLD_PX) {
+				scrollDirection = "down";
+				directionAnchorY = currentScrollY;
+			} else if (delta < -DIRECTION_THRESHOLD_PX) {
+				scrollDirection = "up";
+				directionAnchorY = currentScrollY;
 			}
 			if (rafId !== null || intersecting.size === 0) return;
 			rafId = requestAnimationFrame(() => {
