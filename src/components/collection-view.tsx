@@ -199,8 +199,14 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			</Sheet>
 
 			<footer className="mt-16 border-t border-border pt-6 text-xs text-muted-foreground">
-				{/* Placeholder copy — duplicated from the header's kicker for now,
-				    to be replaced with real footer wording. */}
+				{/* Placeholder copy — duplicated from the header for now, to be
+				    replaced with real footer wording. */}
+				<p className="my-16 max-w-6xl font-serif text-4xl font-medium tracking-tight text-pretty sm:text-7xl lg:text-9xl">
+					<span className="text-brand italic">All</span>{" "}
+					<span className="text-muted-foreground">({data.length})</span>{" "}
+					<span className="text-brand italic">of my records,</span>{" "}
+					photographed, documented, and displayed.
+				</p>
 				<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
 				<a
 					href="https://charliegleason.com"

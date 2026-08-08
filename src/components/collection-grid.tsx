@@ -221,31 +221,14 @@ function RecordTile({
 									<SleevePlaceholder />
 								)}
 							</div>
-							{/* Signals "this one has notes" at rest — a folded corner, like a
-							    dog-eared page, rather than a UI badge. The 2×2 span (when
-							    throttled-eligible, see `computeSpanningIds`) is a size hint,
-							    not everything with notes gets one, so records that stayed 1×1
-							    still need their own affordance. Fades out on hover so it
-							    doesn't fight the tooltip/disc for attention once you're
-							    already looking at this tile. Coloured from the chip's own
-							    extracted palette (`.dog-ear-palette`, same `--pal-a`/`--pal-b`
-							    vars as the tooltip title) when there is one, plain brand
-							    yellow otherwise. */}
+							{/* Signals "this one has notes" at rest — the 2×2 span (when
+							    throttled-eligible, see `computeSpanningIds`) is a size
+							    hint, not everything with notes gets one, so records that
+							    stayed 1×1 still need their own affordance. Fades out on
+							    hover so it doesn't fight the tooltip/disc for attention
+							    once you're already looking at this tile. */}
 							{hasNotes(record) && (
-								<div
-									className={cn(
-										"dog-ear pointer-events-none absolute top-0 left-0 size-7 opacity-100 transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0",
-										paletteFrom ? "dog-ear-palette" : "bg-brand",
-									)}
-									style={
-										paletteFrom
-											? ({
-													"--pal-a": paletteFrom,
-													"--pal-b": paletteTo,
-												} as CSSProperties)
-											: undefined
-									}
-								/>
+								<div className="pointer-events-none absolute top-1/12 left-1/12 size-3 rounded-full bg-brand border-1 border-black/50 opacity-100 shadow-sm transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
 							)}
 						</div>
 					</button>
