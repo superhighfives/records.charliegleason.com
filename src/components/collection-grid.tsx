@@ -478,38 +478,23 @@ export function CollectionGrid({
 		// every scroll tick in between, so it's just membership tracking.
 		const elements = new Map<number, HTMLElement>();
 		const intersecting = new Set<number>();
-		// The point direction is last measured from, not just "last frame's
-		// position" — momentum scrolling's deceleration (and touch jitter)
-		// produces tiny back-and-forth deltas even while net movement is one
-		// way, which flipped `scrollDirection` every frame and made the
-		// left/right pick flicker. Direction only updates once the page has
-		// moved DIRECTION_THRESHOLD_PX past this anchor, which absorbs that
-		// noise instead of reacting to every sub-pixel wobble.
-		const DIRECTION_THRESHOLD_PX = 24;
-		let directionAnchorY = window.scrollY;
-		let scrollDirection: "up" | "down" = "down";
 
 		// Several tiles can share the band at once (a wide row). Whichever one
-		// gets picked is decided by where a reference line on the page currently
-		// falls within *that row's* own height: at the row's top edge it's the
-		// leftmost tile, at the row's bottom edge the rightmost, and everywhere
-		// between sweeps left-to-right with it. That line sits ahead of the
-		// scroll direction — 55% down the viewport while scrolling down (so a
-		// row's later/rightmost tiles pick up sooner, matching content that's
-		// about to arrive from below), 45% down while scrolling up — rather than
-		// a fixed centre, which read as neutral but didn't track which way you
-		// were actually moving. Re-run on every scroll tick (not just on the
-		// observer's enter/exit events) since a tall row can dwell in the band
-		// for a while, and the selection needs to keep tracking the line the
-		// whole time it's there, not just jump once when the row enters/leaves.
+		// gets picked is decided by where the viewport's vertical centre — a
+		// fixed line on the page — currently falls within *that row's* own
+		// height: at the row's top edge it's the leftmost tile, at the row's
+		// bottom edge the rightmost, and everywhere between sweeps left-to-right
+		// with it. Re-run on every scroll tick (not just on the observer's
+		// enter/exit events) since a tall row can dwell in the band for a while,
+		// and the selection needs to keep tracking the centre line the whole
+		// time it's there, not just jump once when the row enters/leaves.
 		function updateActive() {
 			const inBand = [...intersecting]
 				.map((id) => [id, elements.get(id)?.getBoundingClientRect()] as const)
 				.filter((entry): entry is [number, DOMRect] => entry[1] !== undefined);
 			let next: number | null = null;
 			if (inBand.length > 0) {
-				const centerY =
-					window.innerHeight * (scrollDirection === "down" ? 0.55 : 0.45);
+				const centerY = window.innerHeight / 2;
 				// The band can briefly hold tiles from two different rows at once
 				// (one row's tiles exiting as the next row's are entering) — mixing
 				// their rects together made rowTop/rowBottom span both rows, which
@@ -566,11 +551,9 @@ export function CollectionGrid({
 				}
 				updateActive();
 			},
-			// A band spanning the viewport's 20%–80% mark — comfortably covers
-			// both of the reference line's positions above (45%/55%), so a row
-			// is already tracked as "in the band" by the time the line reaches
-			// it, whichever direction it's coming from.
-			{ rootMargin: "-20% 0px -20% 0px", threshold: 0 },
+			// A thin horizontal band through the viewport's vertical centre —
+			// whichever tile is crossing it is "the one you're looking at".
+			{ rootMargin: "-45% 0px -45% 0px", threshold: 0 },
 		);
 		for (const el of container.querySelectorAll<HTMLElement>(
 			"[data-record-id]",
@@ -582,15 +565,6 @@ export function CollectionGrid({
 
 		let rafId: number | null = null;
 		const onScroll = () => {
-			const currentScrollY = window.scrollY;
-			const delta = currentScrollY - directionAnchorY;
-			if (delta > DIRECTION_THRESHOLD_PX) {
-				scrollDirection = "down";
-				directionAnchorY = currentScrollY;
-			} else if (delta < -DIRECTION_THRESHOLD_PX) {
-				scrollDirection = "up";
-				directionAnchorY = currentScrollY;
-			}
 			if (rafId !== null || intersecting.size === 0) return;
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
