@@ -295,7 +295,7 @@ export function CornerEditor({
 
 	// Nudge every selected handle by the same delta, clamped per-corner to the frame.
 	const moveSelected = (dx: number, dy: number) => {
-		if (selected.size === 0) return;
+		if (disabled || selected.size === 0) return;
 		const next = { ...value };
 		for (const quad of QUADS) {
 			next[quad] = value[quad].map((c, i) =>
@@ -527,6 +527,7 @@ export function CornerEditor({
 										h?.quad === quad && h.index === i ? null : h,
 									)
 								}
+								onFocus={() => setSelected(new Set([cornerKey(quad, i)]))}
 							/>
 						)),
 					)}
