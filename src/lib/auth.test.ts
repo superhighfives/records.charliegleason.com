@@ -62,6 +62,30 @@ describe("getAdminSession handshake handling", () => {
 		);
 	});
 
+	it("skips the Set-Cookie header entirely on a handshake with no cookies", async () => {
+		env.CLERK_SECRET_KEY = "sk_test";
+
+		const headers = new Headers();
+		headers.append("Location", "https://clerk.example.com/handshake");
+		authenticateRequest.mockResolvedValue({
+			status: "handshake",
+			headers,
+			toAuth: () => {
+				throw new Error("toAuth should not be called during a handshake");
+			},
+		});
+
+		const result = await getAdminSession();
+
+		expect(result).toBeNull();
+		expect(setResponseStatus).toHaveBeenCalledWith(307);
+		expect(setResponseHeader).toHaveBeenCalledTimes(1);
+		expect(setResponseHeader).toHaveBeenCalledWith(
+			"location",
+			"https://clerk.example.com/handshake",
+		);
+	});
+
 	it("resolves null without touching the response when signed out cleanly", async () => {
 		env.CLERK_SECRET_KEY = "sk_test";
 
