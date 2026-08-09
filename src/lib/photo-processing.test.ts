@@ -380,6 +380,65 @@ describe("detectSleeveCorners", () => {
 		expect(tr[1]).toBeLessThan(tl[1]);
 		expect(br[1]).toBeGreaterThan(bl[1]);
 	});
+
+	/**
+	 * A `size` image with a sharp box everywhere except one side, where the transition from
+	 * `fg` to `bg` is spread linearly over `rampPx` on either side of the true edge — a soft
+	 * shadow or out-of-focus boundary instead of a one-pixel step.
+	 */
+	function rectWithSoftEdge(
+		size: number,
+		bg: [number, number, number],
+		fg: [number, number, number],
+		box: [number, number, number, number],
+		side: "bottom",
+		rampPx: number,
+	): RgbaImage {
+		const data = new Uint8ClampedArray(size * size * 4);
+		const [x0, y0, x1, y1] = box;
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				let rgb: [number, number, number];
+				const inX = x >= x0 && x < x1;
+				if (side === "bottom" && inX && y >= y1 - rampPx && y < y1 + rampPx) {
+					const t = (y - (y1 - rampPx)) / (2 * rampPx);
+					rgb = [0, 1, 2].map((c) => fg[c] + (bg[c] - fg[c]) * t) as [
+						number,
+						number,
+						number,
+					];
+				} else {
+					rgb = x >= x0 && x < x1 && y >= y0 && y < y1 ? fg : bg;
+				}
+				const i = (y * size + x) * 4;
+				data[i] = rgb[0];
+				data[i + 1] = rgb[1];
+				data[i + 2] = rgb[2];
+				data[i + 3] = 255;
+			}
+		}
+		return { data, width: size, height: size };
+	}
+
+	it("finds a boundary blurred by a soft shadow, not just a hard step", () => {
+		// The bottom border isn't a one-pixel step — it ramps from sleeve to background over
+		// 40px either side of the true edge, as a drop shadow or out-of-focus edge would. A
+		// derivative that only compares two adjacent samples dilutes across a ramp this wide
+		// and can miss the side's confidence gate entirely.
+		const img = rectWithSoftEdge(
+			400,
+			[170, 165, 145],
+			[215, 70, 73],
+			[32, 32, 368, 368],
+			"bottom",
+			40,
+		);
+		const c = detectSleeveCorners(img);
+		if (!c) throw new Error("expected a detection");
+		const [, , br, bl] = c;
+		expect(bl[1]).toBeCloseTo(0.92, 1);
+		expect(br[1]).toBeCloseTo(0.92, 1);
+	});
 });
 
 describe("reframeFromCorners", () => {
