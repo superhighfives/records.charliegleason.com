@@ -233,9 +233,12 @@ function subsample<T>(arr: T[], max: number): T[] {
  * Works off EDGES, not colour: the sleeve sits on a background and nearly fills the frame,
  * so its four straight borders are the strongest luminance transitions near the frame. For
  * each side we scan inward from the frame within an outer band and, on every scanline,
- * compare a small reference window at the outer end of the band (background) against one
- * at the inner end (sleeve) — that overall contrast, not a single-pixel derivative, is the
- * scanline's confidence, so a boundary blurred across many samples (a soft shadow under the
+ * compare a small reference window at each end of the band — for the left/top sides that's
+ * background-vs-sleeve, but the right/bottom bands are scanned with `lo`/`hi` reversed, so
+ * there it's sleeve-vs-background; the crossing-finder is symmetric and direction-agnostic,
+ * so which physical thing sits at which end doesn't matter — that overall contrast, not a
+ * single-pixel derivative, is the scanline's confidence, so a boundary blurred across many
+ * samples (a soft shadow under the
  * sleeve, an out-of-focus edge) registers just as strongly as a hard one-pixel step. The
  * edge point itself is taken as the sample closest to the midpoint between those two
  * reference luminances — the middle of the transition, however wide it is. A robust
@@ -276,9 +279,10 @@ export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 	// full count, so thinning for the fit doesn't weaken the confidence gate.
 	const MAX_FIT_POINTS = 256;
 
-	// Number of stride-steps averaged at each end of the band to estimate the background and
-	// sleeve reference luminance for a scanline — smooths out single-sample noise (paper
-	// texture) without needing the boundary between them to be a sharp step.
+	// Number of stride-steps averaged at each end of the band to estimate the two reference
+	// luminances for a scanline (background and sleeve, order depends on scan direction —
+	// see `collect`) — smooths out single-sample noise (paper texture) without needing the
+	// boundary between them to be a sharp step.
 	const REF = 3;
 	// Consecutive stride-steps required on the inner side of the midpoint before a crossing
 	// counts, so one noisy background sample (paper texture) isn't mistaken for the edge.
