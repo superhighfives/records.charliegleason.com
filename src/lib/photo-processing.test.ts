@@ -12,6 +12,7 @@ import {
 	composeMatteWarped,
 	deskewBandPadded,
 	deskewToLevel,
+	despeckleMask,
 	detectSleeveCorners,
 	type EdgeConfidence,
 	edgeDistances,
@@ -974,6 +975,21 @@ describe("keepLargestComponent", () => {
 		const out = keepLargestComponent(mask, w, h);
 		expect(out[5 * w + 5]).toBe(255); // inside the big blob — kept
 		expect(out[17 * w + 17]).toBe(0); // the stray speck — dropped
+	});
+});
+
+describe("despeckleMask", () => {
+	it("erases a lone 1px fleck but keeps an 8×8 block intact", () => {
+		const w = 20;
+		const h = 20;
+		const mask = new Uint8ClampedArray(w * h);
+		for (let y = 2; y < 10; y++)
+			for (let x = 2; x < 10; x++) mask[y * w + x] = 255;
+		mask[16 * w + 16] = 255; // isolated single-pixel fleck
+		const out = despeckleMask(mask, w, h);
+		expect(out[5 * w + 5]).toBe(255); // inside the block — kept
+		expect(out[2 * w + 2]).toBe(255); // block corner — kept
+		expect(out[16 * w + 16]).toBe(0); // the fleck — erased
 	});
 });
 

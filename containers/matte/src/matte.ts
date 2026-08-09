@@ -31,6 +31,7 @@ import {
 	buildTrimapFromBand,
 	clampEdgeOffsets,
 	deskewBandPadded,
+	despeckleMask,
 	EDGE_CONFIDENCE_MIN,
 	edgeDistances,
 	featherMask,
@@ -126,7 +127,11 @@ async function matteAI(
 		fgInset: VETO_FG_INSET,
 	});
 	const feathered = featherMask(
-		keepLargestComponent(raw, content.width, content.height),
+		keepLargestComponent(
+			despeckleMask(raw, content.width, content.height),
+			content.width,
+			content.height,
+		),
 		content.width,
 		content.height,
 		FEATHER,
