@@ -162,6 +162,10 @@ export function CornerEditor({
 	disabled?: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement>(null);
+	// True while a pointer interaction is in flight, so the focus event a mouse
+	// click fires on pointerdown doesn't collapse the selection before endDrag's
+	// shift-click logic runs against it.
+	const pointerInteractionRef = useRef(false);
 	const [drag, setDrag] = useState<DragState | null>(null);
 	// The set of handles selected for keyboard nudging, keyed by `${quad}:${index}`.
 	const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -316,6 +320,7 @@ export function CornerEditor({
 		if (disabled) return;
 		const rect = containerRef.current?.getBoundingClientRect();
 		if (!rect) return;
+		pointerInteractionRef.current = true;
 		const px = e.clientX - rect.left;
 		const py = e.clientY - rect.top;
 		const pts = (quad: QuadKey) =>
@@ -383,6 +388,7 @@ export function CornerEditor({
 			// click) so the arrow-key/Escape handler below actually receives the keys.
 			containerRef.current?.focus();
 		}
+		pointerInteractionRef.current = false;
 		setDrag(null);
 	};
 
@@ -527,7 +533,13 @@ export function CornerEditor({
 										h?.quad === quad && h.index === i ? null : h,
 									)
 								}
-								onFocus={() => setSelected(new Set([cornerKey(quad, i)]))}
+								onFocus={() => {
+									// Skip focus from a pointer interaction — endDrag's shift-click
+									// logic owns selection for that case; only a real Tab focus
+									// (no pointer in flight) should select on its own.
+									if (pointerInteractionRef.current) return;
+									setSelected(new Set([cornerKey(quad, i)]));
+								}}
 							/>
 						)),
 					)}
