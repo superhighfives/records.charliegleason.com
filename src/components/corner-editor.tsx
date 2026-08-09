@@ -412,6 +412,14 @@ export function CornerEditor({
 					e.clientX - drag.startClientX,
 					e.clientY - drag.startClientY,
 				) > CLICK_MOVE_THRESHOLD_PX;
+			// Plain click or drag: this handle becomes the sole selection. If it
+			// wasn't already the only selected handle, drop any stale nudge loupe
+			// still pointing at whatever was selected before. Computed against
+			// `selected` (not inside the setSelected updater) since updaters can
+			// run twice under StrictMode and the clear isn't guaranteed idempotent
+			// forever.
+			if (!e.shiftKey && !(selected.size === 1 && selected.has(key)))
+				clearKeyboardLoupe();
 			setSelected((prev) => {
 				if (e.shiftKey) {
 					const next = new Set(prev);
@@ -425,10 +433,6 @@ export function CornerEditor({
 					}
 					return next;
 				}
-				// Plain click or drag: this handle becomes the sole selection. If it
-				// wasn't already the only selected handle, drop any stale nudge loupe
-				// still pointing at whatever was selected before.
-				if (!(prev.size === 1 && prev.has(key))) clearKeyboardLoupe();
 				return new Set([key]);
 			});
 			// Focus the container (not the button — Safari doesn't focus buttons on
