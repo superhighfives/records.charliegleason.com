@@ -42,7 +42,7 @@ const QUADS = ["outer", "inner"] as const;
 type QuadKey = (typeof QUADS)[number];
 const NUDGE = 0.005; // arrow-key step, as a fraction of the image
 const CORNER_GRAB_PX = 14; // press within this of a corner → grab just that corner
-const EDGE_GRAB_PX = 12; // else within this of an edge → grab the whole edge
+const CLICK_MOVE_THRESHOLD_PX = 4; // pointer moved less than this → treat as a click, not a drag
 const LOUPE_SIZE = 132; // magnifier diameter, px
 const LOUPE_ZOOM = 3; // magnification factor
 const LOUPE_GAP = 20; // gap between the corner and the magnifier, px
@@ -75,37 +75,15 @@ async function decodeDownscaled(src: string, max: number): Promise<RgbaImage> {
 	return { data, width: w, height: h };
 }
 
-/** Distance (px) from point P to segment AB, with the clamped projection parameter t. */
-function segmentDistance(
-	px: number,
-	py: number,
-	ax: number,
-	ay: number,
-	bx: number,
-	by: number,
-): { dist: number; t: number } {
-	const dx = bx - ax;
-	const dy = by - ay;
-	const len2 = dx * dx + dy * dy;
-	let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
-	t = Math.max(0, Math.min(1, t));
-	const cx = ax + t * dx;
-	const cy = ay + t * dy;
-	return { dist: Math.hypot(px - cx, py - cy), t };
-}
+// Key identifying one of the eight corner handles (four per quad), for selection.
+const cornerKey = (quad: QuadKey, index: number) => `${quad}:${index}`;
 
-type DragState =
-	| { kind: "corner"; quad: QuadKey; index: number }
-	| {
-			kind: "edge";
-			quad: QuadKey;
-			a: number;
-			b: number;
-			startA: NormalizedCorner;
-			startB: NormalizedCorner;
-			originX: number;
-			originY: number;
-	  };
+type DragState = {
+	quad: QuadKey;
+	index: number;
+	startClientX: number;
+	startClientY: number;
+};
 
 /**
  * The magnifier loupe: a circular, 3× zoom of the capture centred on `point`
@@ -163,10 +141,11 @@ function Loupe({
  * wholly on the sleeve just inside the edge — the band between is the matting trimap's
  * unknown region, and the dashed overlay shows where the edge search will actually cut
  * inside it. Controlled: `value` is the current {@link CornerBand} and `onChange`
- * reports every move. Three ways to adjust:
+ * reports every move. Ways to adjust:
  *  - drag a corner handle (either quad) to move it precisely;
- *  - drag an edge to slide its two corners together (rigidly);
- *  - click anywhere else to jump the nearest corner to that spot (then keep dragging it).
+ *  - click anywhere else to jump the nearest corner to that spot (then keep dragging it);
+ *  - click a handle (without moving) to select it, shift-click to add/remove from the
+ *    selection, then nudge every selected handle with the arrow keys; Escape deselects.
  */
 export function CornerEditor({
 	src,
@@ -184,6 +163,8 @@ export function CornerEditor({
 }) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [drag, setDrag] = useState<DragState | null>(null);
+	// The set of handles selected for keyboard nudging, keyed by `${quad}:${index}`.
+	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [detecting, setDetecting] = useState(false);
 	// Which handle the loupe magnifies — the hovered/focused one, or the one being
 	// dragged. The rendered image box size, tracked so the magnifier can map
@@ -312,10 +293,25 @@ export function CornerEditor({
 		];
 	};
 
-	// Press anywhere on the image: decide whether the intent is a corner, an edge, or a
-	// click-to-move (across BOTH quads — nearest wins), then start the matching drag
+	// Nudge every selected handle by the same delta, clamped per-corner to the frame.
+	const moveSelected = (dx: number, dy: number) => {
+		if (selected.size === 0) return;
+		const next = { ...value };
+		for (const quad of QUADS) {
+			next[quad] = value[quad].map((c, i) =>
+				selected.has(cornerKey(quad, i))
+					? ([clamp01(c[0] + dx), clamp01(c[1] + dy)] as NormalizedCorner)
+					: c,
+			) as NormalizedCorners;
+		}
+		onChange(next);
+	};
+
+	// Press anywhere on the image: decide whether the intent is a corner drag or a
+	// click-to-move (nearest corner across BOTH quads wins), then grab that corner
 	// (all pointer moves flow to the container via pointer capture, so a fast drag never
-	// outruns the handles).
+	// outruns the handles). Whether this turns into a selection or a drag is decided on
+	// release, based on how far the pointer actually travelled.
 	const onPointerDown = (e: React.PointerEvent) => {
 		if (disabled) return;
 		const rect = containerRef.current?.getBoundingClientRect();
@@ -338,94 +334,81 @@ export function CornerEditor({
 			});
 		}
 
-		// Nearest edge across both quads (distance to the segment, so a click past an
-		// endpoint doesn't count).
-		let edge: { quad: QuadKey; index: number } = { quad: "outer", index: 0 };
-		let edgeDist = Number.POSITIVE_INFINITY;
-		for (const quad of QUADS) {
-			const p = pts(quad);
-			EDGES.forEach(([a, b], k) => {
-				const { dist } = segmentDistance(
-					px,
-					py,
-					p[a][0],
-					p[a][1],
-					p[b][0],
-					p[b][1],
-				);
-				if (dist < edgeDist) {
-					edgeDist = dist;
-					edge = { quad, index: k };
-				}
-			});
-		}
-
 		e.preventDefault();
 		containerRef.current?.setPointerCapture(e.pointerId);
 
-		if (cornerDist <= CORNER_GRAB_PX) {
-			// Grab the corner in place — don't jump it to the (slightly-off) press point.
-			setDrag({ kind: "corner", quad: corner.quad, index: corner.index });
-		} else if (edgeDist <= EDGE_GRAB_PX) {
-			const [a, b] = EDGES[edge.index];
-			setDrag({
-				kind: "edge",
-				quad: edge.quad,
-				a,
-				b,
-				startA: value[edge.quad][a],
-				startB: value[edge.quad][b],
-				originX: e.clientX,
-				originY: e.clientY,
-			});
-		} else {
+		if (cornerDist > CORNER_GRAB_PX) {
 			// Open space: jump the nearest corner here, then keep dragging it.
 			setCorner(corner.quad, corner.index, pointerToNorm(e.clientX, e.clientY));
-			setDrag({ kind: "corner", quad: corner.quad, index: corner.index });
 		}
+		setDrag({
+			quad: corner.quad,
+			index: corner.index,
+			startClientX: e.clientX,
+			startClientY: e.clientY,
+		});
 	};
 
 	const onPointerMove = (e: React.PointerEvent) => {
 		if (!drag) return;
-		if (drag.kind === "corner") {
-			setCorner(drag.quad, drag.index, pointerToNorm(e.clientX, e.clientY));
-			return;
-		}
-		const rect = containerRef.current?.getBoundingClientRect();
-		if (!rect) return;
-		// Translate both endpoints by the same delta, clamped so neither leaves the frame —
-		// keeping the edge rigid rather than letting one corner stick at a wall.
-		let dx = (e.clientX - drag.originX) / rect.width;
-		let dy = (e.clientY - drag.originY) / rect.height;
-		dx = Math.min(
-			Math.min(1 - drag.startA[0], 1 - drag.startB[0]),
-			Math.max(Math.max(-drag.startA[0], -drag.startB[0]), dx),
-		);
-		dy = Math.min(
-			Math.min(1 - drag.startA[1], 1 - drag.startB[1]),
-			Math.max(Math.max(-drag.startA[1], -drag.startB[1]), dy),
-		);
-		const na: NormalizedCorner = [drag.startA[0] + dx, drag.startA[1] + dy];
-		const nb: NormalizedCorner = [drag.startB[0] + dx, drag.startB[1] + dy];
-		onChange({
-			...value,
-			[drag.quad]: value[drag.quad].map((c, i) =>
-				i === drag.a ? na : i === drag.b ? nb : c,
-			) as NormalizedCorners,
-		});
+		setCorner(drag.quad, drag.index, pointerToNorm(e.clientX, e.clientY));
 	};
 
 	const endDrag = (e: React.PointerEvent) => {
 		containerRef.current?.releasePointerCapture?.(e.pointerId);
+		if (drag) {
+			const key = cornerKey(drag.quad, drag.index);
+			const moved =
+				Math.hypot(
+					e.clientX - drag.startClientX,
+					e.clientY - drag.startClientY,
+				) > CLICK_MOVE_THRESHOLD_PX;
+			setSelected((prev) => {
+				if (e.shiftKey) {
+					const next = new Set(prev);
+					if (moved) {
+						// Dragged with shift held: add to the selection, keep the rest.
+						next.add(key);
+					} else if (next.has(key)) {
+						next.delete(key);
+					} else {
+						next.add(key);
+					}
+					return next;
+				}
+				// Plain click or drag: this handle becomes the sole selection.
+				return new Set([key]);
+			});
+			// Focus the container (not the button — Safari doesn't focus buttons on
+			// click) so the arrow-key/Escape handler below actually receives the keys.
+			containerRef.current?.focus();
+		}
 		setDrag(null);
 	};
 
+	const onContainerKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === "Escape") {
+			if (selected.size === 0) return;
+			e.preventDefault();
+			setSelected(new Set());
+			return;
+		}
+		const step: Record<string, NormalizedCorner> = {
+			ArrowLeft: [-NUDGE, 0],
+			ArrowRight: [NUDGE, 0],
+			ArrowUp: [0, -NUDGE],
+			ArrowDown: [0, NUDGE],
+		};
+		const delta = step[e.key];
+		if (!delta || selected.size === 0) return;
+		e.preventDefault();
+		moveSelected(delta[0], delta[1]);
+	};
+
 	const isActive = (quad: QuadKey, i: number) =>
-		drag?.kind === "corner"
-			? drag.quad === quad && drag.index === i
-			: drag?.kind === "edge" &&
-				drag.quad === quad &&
-				(drag.a === i || drag.b === i);
+		drag?.quad === quad && drag.index === i;
+	const isSelected = (quad: QuadKey, i: number) =>
+		selected.has(cornerKey(quad, i));
 
 	// SVG polygon points in a 0..100 viewBox (preserveAspectRatio none → stretches to
 	// the image box); a non-scaling stroke keeps the outlines crisp despite the stretch.
@@ -433,22 +416,29 @@ export function CornerEditor({
 		value[quad].map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
 
 	// Show the magnifier for the corner being dragged, else the hovered/focused one.
-	const loupe = drag?.kind === "corner" ? drag : hover;
+	const loupe = drag ?? hover;
 
 	return (
 		<div className="space-y-2">
 			{/* Wrapper (no clip) so the magnifier can float past the image's edges. */}
 			<div className="relative">
+				{/* biome-ignore lint/a11y/noStaticElementInteractions: custom drag/select
+				    canvas — the handles inside are the real interactive controls; this div
+				    only relays pointer capture and hosts the arrow-key/Escape handler for
+				    whichever handles are selected. */}
 				<div
 					ref={containerRef}
+					tabIndex={-1}
 					className={cn(
 						"relative overflow-hidden rounded-md border bg-muted select-none touch-none",
+						"focus:outline-none",
 						!disabled && "cursor-crosshair",
 					)}
 					onPointerDown={onPointerDown}
 					onPointerMove={onPointerMove}
 					onPointerUp={endDrag}
 					onPointerCancel={endDrag}
+					onKeyDown={onContainerKeyDown}
 				>
 					<img
 						src={src}
@@ -516,6 +506,7 @@ export function CornerEditor({
 								key={`${quad}-${CORNER_LABELS[i]}`}
 								type="button"
 								aria-label={`${CORNER_LABELS[i]} ${quad} corner`}
+								aria-pressed={isSelected(quad, i)}
 								disabled={disabled}
 								className={cn(
 									"absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-background shadow",
@@ -523,10 +514,10 @@ export function CornerEditor({
 									quad === "outer"
 										? "size-3.5 border-brand focus-visible:ring-brand"
 										: "size-3 border-sky-400 focus-visible:ring-sky-400",
-									isActive(quad, i) &&
+									(isActive(quad, i) || isSelected(quad, i)) &&
 										(quad === "outer"
-											? "ring-2 ring-brand"
-											: "ring-2 ring-sky-400"),
+											? "border-brand bg-brand ring-2 ring-brand ring-offset-1"
+											: "border-sky-400 bg-sky-400 ring-2 ring-sky-400 ring-offset-1"),
 									disabled ? "cursor-not-allowed opacity-50" : "cursor-grab",
 								)}
 								style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
@@ -536,21 +527,6 @@ export function CornerEditor({
 										h?.quad === quad && h.index === i ? null : h,
 									)
 								}
-								onKeyDown={(e) => {
-									const d: Record<string, NormalizedCorner> = {
-										ArrowLeft: [-NUDGE, 0],
-										ArrowRight: [NUDGE, 0],
-										ArrowUp: [0, -NUDGE],
-										ArrowDown: [0, NUDGE],
-									};
-									const step = d[e.key];
-									if (!step) return;
-									e.preventDefault();
-									setCorner(quad, i, [
-										clamp01(x + step[0]),
-										clamp01(y + step[1]),
-									]);
-								}}
 							/>
 						)),
 					)}
