@@ -186,7 +186,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			    layered Tailwind utility regardless of class order; inline style
 			    always wins instead. */}
 			<header
-				className="rise-in mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between"
+				className="rise-in sticky top-0 z-50 mb-10 flex flex-col gap-6 border-b border-border bg-background/95 py-3 backdrop-blur-sm sm:flex-row sm:items-end sm:justify-between"
 				style={{ animationDelay: "500ms" }}
 			>
 				<div className="flex items-center gap-4">
@@ -234,7 +234,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			<div className="min-h-[70vh] sm:min-h-[80vh] flex items-center">
 				<p className="rise-in my-16 max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:text-6xl lg:text-8xl">
 					<span className="text-brand italic">All</span>{" "}
-					<span>{numberToWords(data.length)}</span>{" "}
+					<span className="px-[0.1ch]">{numberToWords(data.length)}</span>{" "}
 					<span className="text-brand italic">
 						of my records, photographed, documented, and displayed.
 					</span>
