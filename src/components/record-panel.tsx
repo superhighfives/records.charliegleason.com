@@ -187,6 +187,7 @@ function CoverZoom({
 	className,
 	onOpenChange,
 	onReveal,
+	admin = false,
 }: {
 	coverKey: string | null;
 	matteKey: string | null;
@@ -199,6 +200,10 @@ function CoverZoom({
 	onOpenChange?: (open: boolean) => void;
 	/** Fires once the thumbnail has faded in — see {@link FadeImage}'s `onReady`. */
 	onReveal?: () => void;
+	/** Admin drawer: show the matte's transparency on a checkerboard (mirrors
+	 *  {@link ProPreview}'s edit-page treatment) so alpha fraying is visible
+	 *  without opening the edit page. */
+	admin?: boolean;
 }) {
 	// Matte preferred as the thumbnail; the cover is what the lightbox blows up.
 	const thumbKey = matteKey ?? coverKey;
@@ -221,6 +226,17 @@ function CoverZoom({
 			alt="cover"
 			className={className}
 			onOpenChange={onOpenChange}
+			// A checkerboard behind the matte, so its transparent margin + soft
+			// edges read as transparency (not a solid fill) — mirrors ProPreview.
+			style={
+				admin && matteKey
+					? {
+							backgroundImage:
+								"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
+							backgroundSize: "12px 12px",
+						}
+					: undefined
+			}
 		>
 			<FadeImage
 				src={thumbSrc}
@@ -563,6 +579,7 @@ export function RecordPanel({
 							onOpenChange={setZoomOpen}
 							onReveal={() => setCoverReady(true)}
 							className="relative size-full"
+							admin={admin}
 						/>
 					</div>
 				</div>
