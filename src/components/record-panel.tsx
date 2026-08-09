@@ -502,7 +502,7 @@ export function RecordPanel({
 								Release pinned
 							</span>
 						)}
-						{(discogsHref || record.catno) && (
+						{discogsHref && (
 							<div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
 								{discogsHref && (
 									<div className="space-y-0.5">

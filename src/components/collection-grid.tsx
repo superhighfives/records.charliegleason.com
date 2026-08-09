@@ -86,7 +86,7 @@ function RecordTile({
 	onOpen: (record: PublicRecord) => void;
 	spanning?: boolean;
 	scrollActive?: boolean;
-	onActivate?: (id: number) => void;
+	onActivate?: (id: number | null) => void;
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
@@ -120,6 +120,8 @@ function RecordTile({
 				type="button"
 				onClick={() => onOpen(record)}
 				onPointerEnter={onActivate ? () => onActivate(record.id) : undefined}
+				onFocus={onActivate ? () => onActivate(record.id) : undefined}
+				onBlur={onActivate ? () => onActivate(null) : undefined}
 				className="block w-full cursor-pointer text-left"
 			>
 				<div className="relative aspect-square">
