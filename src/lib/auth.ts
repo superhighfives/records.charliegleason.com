@@ -1,9 +1,40 @@
 import { env } from "cloudflare:workers";
 import { createClerkClient } from "@clerk/backend";
 import { createMiddleware, createServerOnlyFn } from "@tanstack/react-start";
-import { getRequest, setResponseStatus } from "@tanstack/react-start/server";
+import {
+	getRequest,
+	type ResponseHeaderName,
+	setResponseHeader,
+	setResponseStatus,
+} from "@tanstack/react-start/server";
 
 import { isAdmin } from "#/lib/roles";
+
+/**
+ * `clerk.authenticateRequest` can come back `"handshake"` rather than a clean
+ * signed-in/signed-out verdict: the session token is stale (crossing to a
+ * fresh preview subdomain, or enough time has passed since the last visit)
+ * but the client may still be validly authenticated. Clerk's contract is that
+ * the caller forwards a 307 + its `headers` (a `Location` back to Clerk's
+ * handshake endpoint, plus the `Set-Cookie`s that refresh the session) so the
+ * browser can round-trip and come back with a verifiable session. Skipping
+ * this — as `toAuth()` alone does, since it just returns null for a handshake
+ * state — means every request forever reads as "no session": nothing about
+ * that changes on a reload, because the same incomplete round-trip repeats
+ * each time.
+ */
+function forwardHandshake(headers: Headers): void {
+	setResponseStatus(307);
+	const setCookies =
+		typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [];
+	for (const [key, value] of headers.entries()) {
+		if (key.toLowerCase() === "set-cookie") continue;
+		setResponseHeader(key as ResponseHeaderName, value);
+	}
+	if (setCookies.length > 0) {
+		setResponseHeader("Set-Cookie" as ResponseHeaderName, setCookies);
+	}
+}
 
 /**
  * `AdminSessionError`'s message — exported so a client-side error boundary can
@@ -57,6 +88,10 @@ export const getAdminSession = createServerOnlyFn(
 		});
 
 		const requestState = await clerk.authenticateRequest(getRequest());
+		if (requestState.status === "handshake") {
+			forwardHandshake(requestState.headers);
+			return null;
+		}
 		const auth = requestState.toAuth();
 		if (!auth?.userId) return null;
 
@@ -90,6 +125,10 @@ export const authMiddleware = createMiddleware({ type: "function" }).server(
 		});
 
 		const requestState = await clerk.authenticateRequest(getRequest());
+		if (requestState.status === "handshake") {
+			forwardHandshake(requestState.headers);
+			throw new Error("Unauthorized");
+		}
 		const auth = requestState.toAuth();
 
 		if (!auth?.userId) {
