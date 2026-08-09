@@ -40,7 +40,7 @@ const EDGES: Array<[number, number]> = [
 // edge lies in the band between — the dashed overlay shows where the cut will find it.
 const QUADS = ["outer", "inner"] as const;
 type QuadKey = (typeof QUADS)[number];
-const NUDGE = 0.005; // arrow-key step, as a fraction of the image
+const NUDGE = 0.0005; // arrow-key step, as a fraction of the image
 const CORNER_GRAB_PX = 14; // press within this of a corner → grab just that corner
 const CLICK_MOVE_THRESHOLD_PX = 4; // pointer moved less than this → treat as a click, not a drag
 const LOUPE_SIZE = 132; // magnifier diameter, px
