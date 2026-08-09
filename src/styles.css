@@ -152,6 +152,30 @@ body,
   overflow-x: hidden;
 }
 
+/* Neutralise Radix Dialog's body scroll-lock (via `react-remove-scroll`,
+   marked by this attribute on `<body>` while any modal Dialog/Sheet — the
+   record panel — is open). That lock is what made opening a record visibly
+   jerk the grid on iOS Safari: right as it engages, `overflow: hidden` (and
+   a scrollbar-width compensation margin) get forced onto `body`, and iOS
+   recomputes/clamps the page's scroll position against the new, suddenly-
+   locked layout, producing a scroll-then-correct flash before the panel's
+   own slide-in even starts. The record panel already covers the full
+   viewport width on mobile with its own dim/blurred overlay, so losing the
+   lock (letting the grid keep scrolling underneath, invisibly, while it's
+   open) costs nothing visible — Dialog's focus trap, `Escape`, and outside-
+   click dismiss are unaffected; only the scroll lock itself is undone.
+   `html body[...]` (not just `body[...]`) — `react-remove-scroll` injects
+   its own `!important` rule on the identical `body[data-scroll-locked]`
+   selector via a `<style>` tag added to the document at runtime, always
+   *after* this stylesheet, so on tied specificity + tied `!important` its
+   later source order would otherwise win; the extra `html` ancestor bumps
+   this rule's specificity just enough to win regardless of insertion order. */
+html body[data-scroll-locked] {
+  overflow: visible !important;
+  position: static !important;
+  margin-right: 0 !important;
+}
+
 body {
   margin: 0;
   color: var(--foreground);
