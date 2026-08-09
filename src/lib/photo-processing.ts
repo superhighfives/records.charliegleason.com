@@ -230,13 +230,21 @@ function subsample<T>(arr: T[], max: number): T[] {
  * de-skewed instead of boxed by an axis-aligned rectangle — the homography warp downstream
  * already handles an arbitrary quad.
  *
- * Works off EDGES, not colour: the sleeve sits on wood and nearly fills the frame, so its
- * four straight borders are the strongest luminance transitions near the frame. For each
- * side we scan inward from the frame within an outer band and, on every scanline, take the
- * position of the strongest gradient — one candidate edge point per scanline. A robust
+ * Works off EDGES, not colour: the sleeve sits on a background and nearly fills the frame,
+ * so its four straight borders are the strongest luminance transitions near the frame. For
+ * each side we scan inward from the frame within an outer band and, on every scanline,
+ * compare a small reference window at each end of the band — for the left/top sides that's
+ * background-vs-sleeve, but the right/bottom bands are scanned with `lo`/`hi` reversed, so
+ * there it's sleeve-vs-background; the crossing-finder is symmetric and direction-agnostic,
+ * so which physical thing sits at which end doesn't matter — that overall contrast, not a
+ * single-pixel derivative, is the scanline's confidence, so a boundary blurred across many
+ * samples (a soft shadow under the
+ * sleeve, an out-of-focus edge) registers just as strongly as a hard one-pixel step. The
+ * edge point itself is taken as the sample closest to the midpoint between those two
+ * reference luminances — the middle of the transition, however wide it is. A robust
  * Theil–Sen line fit through those points gives that side's line; because each side is
  * fitted independently the result can tilt and keystone. The robust fit and a per-side
- * gradient threshold reject scanlines where the border is worn/occluded or an internal
+ * contrast threshold reject scanlines where the border is worn/occluded or an internal
  * artwork edge (a tree, a horizon) briefly wins, and the outer-band limit keeps the search
  * off deep internal edges entirely. Intersecting the four fitted lines yields the corners.
  * Pure and bounded — strided sampling plus a cap on the points fed to the O(n²) line fit
@@ -271,6 +279,17 @@ export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 	// full count, so thinning for the fit doesn't weaken the confidence gate.
 	const MAX_FIT_POINTS = 256;
 
+	// Number of stride-steps averaged at each end of the band to estimate the two reference
+	// luminances for a scanline (background and sleeve, order depends on scan direction —
+	// see `collect`) — smooths out single-sample noise (paper texture) without needing the
+	// boundary between them to be a sharp step.
+	const REF = 3;
+	// Consecutive stride-steps required on the inner side of the midpoint before a crossing
+	// counts, so one noisy background sample (paper texture) isn't mistaken for the edge.
+	const CONFIRM = 3;
+	const sampleLum = (vertical: boolean, u: number, v: number) =>
+		vertical ? lum(v, u) : lum(u, v);
+
 	// Collect one edge point per scanline for a side, keeping only confident picks. For a
 	// vertical side (left/right) we walk rows and scan x across [lo,hi); points are [y, x]
 	// to fit x = a·y + b. For a horizontal side we walk columns and scan y; points are
@@ -281,33 +300,70 @@ export function detectSleeveCorners(img: RgbaImage): NormalizedCorners | null {
 		hi: number,
 	): { points: Array<[number, number]>; n: number } => {
 		const along = vertical ? height : width;
-		const raw: Array<[number, number, number]> = []; // [u, v, gradient]
-		let maxGrad = 0;
-		// Snap the scan start onto the stride grid so `v` stays an integer. The right/bottom
-		// sides pass `lo = size * (1 - BAND)`, rarely a whole number; adding the integer
-		// `stride` never clears the fraction, and a fractional index into the RGBA buffer
-		// reads back as `undefined` → NaN — which silently zeroes the gradient search for
-		// those sides and bails the whole detector to null on any capture whose size doesn't
-		// happen to make that boundary land on a whole pixel.
+		const raw: Array<[number, number, number]> = []; // [u, v, contrast]
+		let maxContrast = 0;
+		// Snap the scan start/end onto the stride grid so `v` stays an integer. Neither
+		// `lo` (`size * BAND`) nor `hi` (`size * (1 - BAND)`) is reliably a whole number, and
+		// a fractional index into the RGBA buffer reads back as `undefined` → NaN — which
+		// silently zeroes the search for whichever side that lands on and bails the whole
+		// detector to null on any capture whose size doesn't happen to align.
 		const vStart = Math.max(stride, Math.ceil(lo / stride) * stride);
+		const vEnd = Math.floor(hi) - 1;
 		for (let u = 0; u < along; u += stride) {
-			let bestV = -1;
-			let bestG = -1;
-			for (let v = vStart; v < hi; v += stride) {
-				const g = vertical
-					? Math.abs(lum(v, u) - lum(v - stride, u))
-					: Math.abs(lum(u, v) - lum(u, v - stride));
-				if (g > bestG) {
-					bestG = g;
-					bestV = v;
+			let outerSum = 0;
+			let outerN = 0;
+			let innerSum = 0;
+			let innerN = 0;
+			for (let k = 0; k < REF; k++) {
+				const vo = vStart + k * stride;
+				if (vo < hi) {
+					outerSum += sampleLum(vertical, u, vo);
+					outerN++;
+				}
+				const vi = vEnd - k * stride;
+				if (vi >= vStart) {
+					innerSum += sampleLum(vertical, u, vi);
+					innerN++;
 				}
 			}
+			if (outerN === 0 || innerN === 0) continue;
+			const outerLum = outerSum / outerN;
+			const innerLum = innerSum / innerN;
+			const contrast = Math.abs(innerLum - outerLum);
+			const mid = (outerLum + innerLum) / 2;
+			const rising = innerLum >= outerLum;
+
+			// The edge point is the first sample past `vStart` that crosses the midpoint
+			// between the two reference luminances and *stays* on the inner side for
+			// `CONFIRM` samples running — the middle of the transition, whether it's a hard
+			// one-pixel step (which never actually samples the midpoint value, so "closest
+			// sample" would be a coin flip between the two plateaus) or spread across many
+			// (a shadow, an out-of-focus boundary). Requiring a sustained run, not just the
+			// first sample past the midpoint, keeps a single noisy background sample (paper
+			// texture) from being mistaken for the crossing.
+			let bestV = -1;
+			let sawOuterSide = false;
+			let run = 0;
+			for (let v = vStart; v < hi; v += stride) {
+				const s = sampleLum(vertical, u, v);
+				const isInnerSide = rising ? s > mid : s < mid;
+				if (!isInnerSide) {
+					sawOuterSide = true;
+					run = 0;
+					continue;
+				}
+				if (!sawOuterSide) continue;
+				if (run === 0) bestV = v;
+				run++;
+				if (run >= CONFIRM) break;
+			}
+			if (run < CONFIRM) bestV = -1;
 			if (bestV >= 0) {
-				raw.push([u, bestV, bestG]);
-				if (bestG > maxGrad) maxGrad = bestG;
+				raw.push([u, bestV, contrast]);
+				if (contrast > maxContrast) maxContrast = contrast;
 			}
 		}
-		const cutoff = maxGrad * KEEP_FRAC;
+		const cutoff = maxContrast * KEEP_FRAC;
 		const points = raw
 			.filter(([, , g]) => g >= cutoff)
 			.map(([u, v]) => [u, v] as [number, number]);
