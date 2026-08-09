@@ -826,7 +826,8 @@ export function CollectionGrid({
 					onOpen={onOpen}
 					spanning={spanningIds.has(record.id)}
 					active={
-						record.id === focusedRecordId || (isTouch && record.id === activeId)
+						record.id === focusedRecordId ||
+						(isTouch && focusedRecordId == null && record.id === activeId)
 					}
 					onActivate={isTouch ? undefined : setActiveId}
 				/>
