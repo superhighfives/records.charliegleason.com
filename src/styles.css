@@ -444,10 +444,14 @@ a {
      padding on the last column and force a horizontal scrollbar. Capping to a
      fixed px keeps the reveal bounded everywhere. `scale(1.06)` on top of the
      slide sells it as the record actually coming forward, not just sliding
-     sideways behind the same flat plane as the cover. */
+     sideways behind the same flat plane as the cover. The `- 8px *
+     --vinyl-stack-index` term is what actually fans a multi-disc stack open —
+     back layers travel a visibly shorter distance than the front one, so they
+     stay tucked in behind it (nearer the sleeve) instead of overshooting past
+     it; a 1px difference here used to be lost entirely at this scale. */
   transform: translateX(
       calc(
-        min(25%, 64px) * var(--vinyl-scale, 1) - 1px *
+        min(25%, 64px) * var(--vinyl-scale, 1) - 8px *
           var(--vinyl-stack-index, 0)
       )
     )
@@ -481,9 +485,12 @@ a {
      only a few px past the cover's edge on one record) rather than
      eyeballed, since the overflow amount varies per record depending on how
      much margin that record's own matte crop leaves around its visible
-     sleeve. */
+     sleeve. The `- 10px * --vinyl-stack-index` term fans a multi-disc stack:
+     back layers travel less than the front one, so they read as tucked in
+     behind it (nearer the sleeve) rather than peeking out further than the
+     disc in front — a 3px difference was too small to actually see. */
   transform: translate(
-      calc(30px * var(--vinyl-scale, 1) - 3px * var(--vinyl-stack-index, 0)),
+      calc(30px * var(--vinyl-scale, 1) - 10px * var(--vinyl-stack-index, 0)),
       calc(4px * var(--vinyl-stack-index, 0))
     )
     rotate(calc(-3deg * var(--vinyl-stack-index, 0))) scale(1.3);
