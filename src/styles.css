@@ -149,17 +149,7 @@ html,
 body,
 #app {
   min-height: 100dvh;
-  /* `clip`, not `hidden` — either clips horizontal overflow (a peeking vinyl
-     disc, the grid-focus overlay) the same way, but `hidden` (or any
-     non-`visible` overflow) forces the *other* axis's computed value off
-     `visible` too per the CSS Overflow spec's paired-axis rule, even though
-     only `overflow-x` is set here. That silently turned `body` into its own
-     (permanently non-scrolling, since its height always matches its content)
-     scroll container, which hijacked `position: sticky`'s containing block
-     away from the real viewport — a sticky header would compute its "stuck"
-     offset against a box that never actually scrolls, and just scroll away
-     with the page instead of sticking. `clip` doesn't trigger that pairing. */
-  overflow-x: clip;
+  overflow-x: hidden;
 }
 
 body {

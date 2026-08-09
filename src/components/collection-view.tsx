@@ -186,7 +186,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			    layered Tailwind utility regardless of class order; inline style
 			    always wins instead. */}
 			<header
-				className="rise-in sticky top-0 z-50 mb-10 flex flex-col gap-6 border-b border-border bg-background/95 py-3 backdrop-blur-sm sm:flex-row sm:items-end sm:justify-between"
+				className="rise-in mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between"
 				style={{ animationDelay: "500ms" }}
 			>
 				<div className="flex items-center gap-4">
