@@ -78,9 +78,12 @@ async function decodeDownscaled(src: string, max: number): Promise<RgbaImage> {
 
 // Key identifying one of the eight corner handles (four per quad), for selection.
 const cornerKey = (quad: QuadKey, index: number) => `${quad}:${index}`;
+const isQuadKey = (value: string): value is QuadKey =>
+	(QUADS as readonly string[]).includes(value);
 const parseCornerKey = (key: string): { quad: QuadKey; index: number } => {
 	const [quad, index] = key.split(":");
-	return { quad: quad as QuadKey, index: Number(index) };
+	if (!isQuadKey(quad)) throw new Error(`invalid corner key: ${key}`);
+	return { quad, index: Number(index) };
 };
 
 type DragState = {
@@ -573,6 +576,14 @@ export function CornerEditor({
 									// (no pointer in flight) should select on its own.
 									if (pointerInteractionRef.current) return;
 									setSelected(new Set([cornerKey(quad, i)]));
+									// Tabbing to a different handle without nudging it should drop
+									// the previous handle's just-nudged loupe, not leave it pointing
+									// at a corner that's no longer selected.
+									setKeyboardLoupe(null);
+									if (keyboardLoupeTimeoutRef.current != null) {
+										window.clearTimeout(keyboardLoupeTimeoutRef.current);
+										keyboardLoupeTimeoutRef.current = null;
+									}
 								}}
 							/>
 						)),
