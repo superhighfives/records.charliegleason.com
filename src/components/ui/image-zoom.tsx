@@ -1,5 +1,5 @@
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { type ReactNode, useState } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 
 import { FadeImage } from "#/components/fade-image";
 import { SpinningRecord } from "#/components/spinning-record";
@@ -23,6 +23,7 @@ function ImageZoom({
 	src,
 	alt,
 	className,
+	style,
 	children,
 	overlay,
 	onOpenChange,
@@ -32,6 +33,9 @@ function ImageZoom({
 	alt: string;
 	/** Sizes/positions the trigger wrapper; also the positioning context for `overlay`. */
 	className?: string;
+	/** Applied to the trigger wrapper alongside `className` — e.g. a checkerboard
+	 *  backdrop so a transparent trigger image reads as transparency. */
+	style?: CSSProperties;
 	/** Custom trigger content. Defaults to an `<img src>` cropped to the wrapper. */
 	children?: ReactNode;
 	/** Floated over the trigger — e.g. a matte tucked into the corner. */
@@ -46,7 +50,7 @@ function ImageZoom({
 	const loaded = loadedSrc === src;
 	return (
 		<DialogPrimitive.Root onOpenChange={onOpenChange}>
-			<div className={cn("relative", className)}>
+			<div className={cn("relative", className)} style={style}>
 				<DialogPrimitive.Trigger asChild>
 					<button
 						type="button"

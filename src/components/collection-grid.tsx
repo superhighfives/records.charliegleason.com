@@ -66,26 +66,29 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * Title/artist aren't shown on the tile itself — `CollectionGrid` renders
  * one shared, fixed-position bar (`NowShowing`) for whichever record is
  * currently "active", so nothing anchored to the tile has to reposition (or
- * get dismissed) as the page scrolls. `scrollActive` (mobile) is set by
- * `CollectionGrid`'s scroll-driven `IntersectionObserver` for whichever tile
- * is currently centred, since touch devices have no hover to key off — it
- * drives both the shared `data-active` attribute (grayscale→colour, disc
- * peek) and the bar's content. `onActivate` (desktop) reports a plain pointer
- * hover into that same shared "active" state so the bar tracks the mouse
- * instead — desktop's own visual feedback stays purely `:hover`-driven, only
- * the bar's *content* comes from this.
+ * get dismissed) as the page scrolls. `active` is set by `CollectionGrid`
+ * whenever plain pointer hover can't be relied on to say which tile is
+ * "current": mobile's scroll-driven `IntersectionObserver` (touch devices
+ * have no hover to key off), and the record currently open in the detail
+ * panel (so it stays highlighted underneath while the panel covers the
+ * pointer). It drives the shared `data-active` attribute (grayscale→colour,
+ * disc peek, the `grid-focus-overlay` blur) and, for the scroll-driven case,
+ * the bar's content. `onActivate` (desktop) reports a plain pointer hover
+ * into that same shared "active" state so the bar tracks the mouse instead —
+ * desktop's own visual feedback stays purely `:hover`-driven, only the bar's
+ * *content* comes from this.
  */
 function RecordTile({
 	record,
 	onOpen,
 	spanning = false,
-	scrollActive = false,
+	active = false,
 	onActivate,
 }: {
 	record: PublicRecord;
 	onOpen: (record: PublicRecord) => void;
 	spanning?: boolean;
-	scrollActive?: boolean;
+	active?: boolean;
 	onActivate?: (id: number | null) => void;
 }) {
 	const matte = displayMatteKey(record);
@@ -109,7 +112,7 @@ function RecordTile({
 		<div
 			className="group"
 			data-record-id={record.id}
-			data-active={scrollActive ? "true" : undefined}
+			data-active={active ? "true" : undefined}
 			style={
 				spanning
 					? { gridColumn: "span 2", gridRow: "span 2", alignSelf: "start" }
@@ -324,7 +327,9 @@ export function CollectionGrid({
 	// in sync even while the panel covers the grid (e.g. paging prev/next
 	// inside it) so the grid is already scrolled to that tile underneath by
 	// the time the panel closes, instead of leaving you wherever you were
-	// before it opened.
+	// before it opened. Also pins that tile "active" (see `RecordTile`) and
+	// the spotlight over it, since the panel covering the pointer means
+	// nothing would otherwise be hovered.
 	focusedRecordId?: number | null;
 }) {
 	const spanningIds = useMemo(() => computeSpanningIds(records), [records]);
@@ -615,18 +620,26 @@ export function CollectionGrid({
 	const lastActiveRecordRef = useRef<PublicRecord | null>(null);
 	if (activeRecord) lastActiveRecordRef.current = activeRecord;
 
-	// The active tile's on-screen centre is the spotlight's base position on
-	// mobile — there's no cursor, so tilt (below) nudges around this instead
-	// of driving the position outright. Recomputed whenever the active tile
-	// changes, and again on scroll since the *tile* stays active across a
-	// scroll but its on-screen position doesn't.
+	// The pinned tile's on-screen centre is the spotlight's base position
+	// whenever there's no cursor to place it at directly — mobile's
+	// scroll-driven active tile (tilt, below, nudges around this instead of
+	// driving the position outright) and, on any device, the record the
+	// detail panel currently has open (the panel covers the pointer, so a
+	// real hover can't). The panel wins when both are set — pointer-driven
+	// desktop hover can't even reach the grid while the panel's overlay is up
+	// (it intercepts pointer events), so touch's own `activeId` is never
+	// live at the same time regardless. Recomputed whenever the pinned tile
+	// changes, and again on scroll since the *tile* stays pinned across a
+	// scroll (or the panel's own prev/next glide) but its on-screen position
+	// doesn't.
+	const spotlightRecordId = focusedRecordId ?? (isTouch ? activeId : null);
 	const activeCenterRef = useRef({ x: 0, y: 0 });
 	const tiltOffsetRef = useRef({ x: 0, y: 0 });
 
 	const recomputeActiveCenter = useCallback(() => {
-		if (!isTouch || activeId == null || !gridElRef.current) return;
+		if (spotlightRecordId == null || !gridElRef.current) return;
 		const el = gridElRef.current.querySelector<HTMLElement>(
-			`[data-record-id="${activeId}"]`,
+			`[data-record-id="${spotlightRecordId}"]`,
 		);
 		if (!el) return;
 		const rect = el.getBoundingClientRect();
@@ -638,17 +651,20 @@ export function CollectionGrid({
 			activeCenterRef.current.x + tiltOffsetRef.current.x,
 			activeCenterRef.current.y + tiltOffsetRef.current.y,
 		);
-	}, [isTouch, activeId, setSpotlightTarget]);
+	}, [spotlightRecordId, setSpotlightTarget]);
 
 	useEffect(() => {
 		recomputeActiveCenter();
 	}, [recomputeActiveCenter]);
 
 	useEffect(() => {
-		if (!isTouch) return;
+		if (spotlightRecordId == null) return;
 		// rAF-throttled — scroll fires far faster than a `getBoundingClientRect`
 		// read needs to keep up with, and reading layout on every event risks
-		// forcing a synchronous layout mid-scroll.
+		// forcing a synchronous layout mid-scroll. Also covers the panel's own
+		// programmatic prev/next glide (`smoothScrollCenterTo` above), which
+		// fires the same `scroll` event, so the spotlight tracks the tile as
+		// it moves instead of arriving already-settled at the old position.
 		let ticking = false;
 		const onScroll = () => {
 			if (ticking) return;
@@ -660,7 +676,7 @@ export function CollectionGrid({
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
 		return () => window.removeEventListener("scroll", onScroll);
-	}, [isTouch, recomputeActiveCenter]);
+	}, [spotlightRecordId, recomputeActiveCenter]);
 
 	// --- Desktop: keep the active tile in sync with the cursor while
 	// scrolling. A wheel/trackpad scroll moves the page under a stationary
@@ -809,7 +825,9 @@ export function CollectionGrid({
 					record={record}
 					onOpen={onOpen}
 					spanning={spanningIds.has(record.id)}
-					scrollActive={isTouch && record.id === activeId}
+					active={
+						record.id === focusedRecordId || (isTouch && record.id === activeId)
+					}
 					onActivate={isTouch ? undefined : setActiveId}
 				/>
 			))}
