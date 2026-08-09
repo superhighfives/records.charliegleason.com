@@ -472,12 +472,12 @@ a {
   /* The wrapper's own `inset-[12%]` (see record-panel.tsx, ~21px on the 176px
      box) already eats most of a small translate before the disc's edge even
      reaches the wrapper's own bounds — this needs to clear THAT first, then
-     travel a bit further to actually read as peeking past the artwork. 40px
+     travel a bit further to actually read as peeking past the artwork. 30px
      (not 26px) because the cover's own 3deg rotation grows its bounding box
      by several px on this edge too — a smaller translate cleared the inset
      but not that rotated overhang, so the "peek" landed back under the cover
      and never actually became visible. The extra `scale(0.85)` shrinks the
-     disc itself (on top of the inset above) — the fixed 40px travel distance
+     disc itself (on top of the inset above) — the fixed 30px travel distance
      was tuned to clear that rotation overhang regardless of the disc's own
      size, so a full-size disc could still end up poking out well past the
      cover's edge on some records; scaling it down keeps the peek small
