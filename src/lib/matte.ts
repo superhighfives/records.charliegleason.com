@@ -27,6 +27,7 @@ import {
 	buildTrimapFromBand,
 	clampEdgeOffsets,
 	deskewBandPadded,
+	despeckleMask,
 	EDGE_CONFIDENCE_MIN,
 	edgeDistances,
 	featherMask,
@@ -228,9 +229,16 @@ async function matteAI(
 		bgQuad: outer,
 		fgInset: VETO_FG_INSET,
 	});
-	// Largest blob only (drop stray specks), lightly feathered for a clean anti-aliased edge.
+	// Knock out single-pixel speckle (a noisy/soft-focus source photo frays the model's
+	// alpha response right at the boundary) before it can count toward — or fragment —
+	// the largest blob. Then largest blob only (drop stray specks), lightly feathered for
+	// a clean anti-aliased edge.
 	const feathered = featherMask(
-		keepLargestComponent(raw, content.width, content.height),
+		keepLargestComponent(
+			despeckleMask(raw, content.width, content.height),
+			content.width,
+			content.height,
+		),
 		content.width,
 		content.height,
 		FEATHER,

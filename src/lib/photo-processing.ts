@@ -957,6 +957,54 @@ export function keepLargestComponent(
 	return out;
 }
 
+/**
+ * Morphological opening (erode then dilate) with a `radius`-px square structuring
+ * element — knocks out sub-`radius` speckle noise in a raw mask (the matting model's
+ * alpha response to a noisy or soft-focus source photo tends to fray into single-pixel
+ * flecks right at the boundary) without moving the real edge inward/outward the way
+ * blurring or a threshold shift would. Run before {@link keepLargestComponent}: a fleck
+ * chained off the sleeve by a couple of noisy pixels can otherwise survive as (or merge
+ * into) the "largest" blob instead of being erased.
+ */
+export function despeckleMask(
+	mask: Uint8ClampedArray,
+	width: number,
+	height: number,
+	radius = 1,
+): Uint8ClampedArray {
+	if (radius < 1) return mask.slice();
+	const pass = (
+		src: Uint8ClampedArray,
+		combine: (a: number, b: number) => number,
+	): Uint8ClampedArray => {
+		const h = new Uint8ClampedArray(width * height);
+		for (let y = 0; y < height; y++) {
+			const row = y * width;
+			for (let x = 0; x < width; x++) {
+				let v = src[row + x];
+				for (let d = 1; d <= radius; d++) {
+					v = combine(v, src[row + Math.max(0, x - d)]);
+					v = combine(v, src[row + Math.min(width - 1, x + d)]);
+				}
+				h[row + x] = v;
+			}
+		}
+		const out = new Uint8ClampedArray(width * height);
+		for (let x = 0; x < width; x++) {
+			for (let y = 0; y < height; y++) {
+				let v = h[y * width + x];
+				for (let d = 1; d <= radius; d++) {
+					v = combine(v, h[Math.max(0, y - d) * width + x]);
+					v = combine(v, h[Math.min(height - 1, y + d) * width + x]);
+				}
+				out[y * width + x] = v;
+			}
+		}
+		return out;
+	};
+	return pass(pass(mask, Math.min), Math.max);
+}
+
 /** Feather a hard mask edge with a couple of box-blur passes (soft alpha falloff). */
 export function featherMask(
 	mask: Uint8ClampedArray,
@@ -1357,9 +1405,14 @@ const EDGE_PROXIMITY_FALLOFF = 0.7;
  * so the refinement reverts that edge to the admin's picked line rather than trusting a
  * noise peak. Confidence is the peak-to-median ratio of the raw (unweighted) scores
  * across the search band: a real edge is a sharp spike over a flat floor (ratio ≫ 3);
- * dark-mat-on-dark-wood ambiguity reads as a lumpy plateau (ratio → 1–2).
+ * dark-mat-on-dark-wood ambiguity, or a soft-focus/noisy source photo where the
+ * sleeve/background transition itself spans several pixels, reads as a lumpy plateau
+ * (ratio → 1–2). Set a notch above that floor rather than right at it, so a genuinely
+ * blurred edge falls back to the admin's picked line — which the admin drew looking at
+ * the same soft photo — instead of the gradient search locking onto whichever noisy
+ * pixel happened to spike highest.
  */
-export const EDGE_CONFIDENCE_MIN = 3;
+export const EDGE_CONFIDENCE_MIN = 4;
 
 /** Per-edge confidences in edge order (TL→TR, TR→BR, BR→BL, BL→TL). */
 export type EdgeConfidence = [number, number, number, number];
