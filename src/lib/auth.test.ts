@@ -1,32 +1,49 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { setResponseStatus, setResponseHeader } = vi.hoisted(() => ({
-	setResponseStatus: vi.fn(),
-	setResponseHeader: vi.fn(),
-}));
+const { setResponseStatus, setResponseHeader, authenticateRequest } =
+	vi.hoisted(() => ({
+		setResponseStatus: vi.fn(),
+		setResponseHeader: vi.fn(),
+		authenticateRequest: vi.fn(),
+	}));
 
 vi.mock("@tanstack/react-start/server", () => ({
-	getRequest: vi.fn(),
+	getRequest: vi.fn(() => new Request("https://example.com")),
 	setResponseStatus,
 	setResponseHeader,
 }));
 
-import { forwardHandshake } from "./auth";
+vi.mock("@clerk/backend", () => ({
+	createClerkClient: vi.fn(() => ({ authenticateRequest })),
+}));
 
-describe("forwardHandshake", () => {
+import { env } from "cloudflare:workers";
+import { getAdminSession } from "./auth";
+
+describe("getAdminSession handshake handling", () => {
 	afterEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it("sets a 307, forwards non-cookie headers, and batches Set-Cookie via getSetCookie", () => {
+	it("forwards the handshake redirect and resolves null, without evaluating auth", async () => {
+		env.CLERK_SECRET_KEY = "sk_test";
+
 		const headers = new Headers();
 		headers.append("Location", "https://clerk.example.com/handshake");
 		headers.append("X-Custom", "value");
 		headers.append("Set-Cookie", "a=1; Path=/");
 		headers.append("Set-Cookie", "b=2; Path=/");
+		authenticateRequest.mockResolvedValue({
+			status: "handshake",
+			headers,
+			toAuth: () => {
+				throw new Error("toAuth should not be called during a handshake");
+			},
+		});
 
-		forwardHandshake(headers);
+		const result = await getAdminSession();
 
+		expect(result).toBeNull();
 		expect(setResponseStatus).toHaveBeenCalledWith(307);
 		expect(setResponseHeader).toHaveBeenCalledWith(
 			"location",
@@ -45,17 +62,18 @@ describe("forwardHandshake", () => {
 		);
 	});
 
-	it("skips the Set-Cookie header entirely when there are no cookies", () => {
-		const headers = new Headers();
-		headers.append("Location", "https://clerk.example.com/handshake");
+	it("resolves null without touching the response when signed out cleanly", async () => {
+		env.CLERK_SECRET_KEY = "sk_test";
 
-		forwardHandshake(headers);
+		authenticateRequest.mockResolvedValue({
+			status: "signed-out",
+			toAuth: () => null,
+		});
 
-		expect(setResponseStatus).toHaveBeenCalledWith(307);
-		expect(setResponseHeader).toHaveBeenCalledTimes(1);
-		expect(setResponseHeader).toHaveBeenCalledWith(
-			"location",
-			"https://clerk.example.com/handshake",
-		);
+		const result = await getAdminSession();
+
+		expect(result).toBeNull();
+		expect(setResponseStatus).not.toHaveBeenCalled();
+		expect(setResponseHeader).not.toHaveBeenCalled();
 	});
 });
