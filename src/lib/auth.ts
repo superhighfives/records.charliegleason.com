@@ -23,7 +23,7 @@ import { isAdmin } from "#/lib/roles";
  * that changes on a reload, because the same incomplete round-trip repeats
  * each time.
  */
-function forwardHandshake(headers: Headers): void {
+export function forwardHandshake(headers: Headers): void {
 	setResponseStatus(307);
 	const setCookies =
 		typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [];
