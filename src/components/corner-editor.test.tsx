@@ -24,11 +24,30 @@ beforeEach(() => {
 		configurable: true,
 		value: 400,
 	});
+	// jsdom never lays out elements, so getBoundingClientRect is all zeroes by
+	// default — stub a 400x400 box matching clientWidth/clientHeight above so
+	// pointer-position math (which corner a click landed nearest to) works.
+	vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+		width: 400,
+		height: 400,
+		top: 0,
+		left: 0,
+		right: 400,
+		bottom: 400,
+		x: 0,
+		y: 0,
+		toJSON() {},
+	});
+	// jsdom doesn't implement the Pointer Events capture API the container
+	// relies on for drag/click handling.
+	Element.prototype.setPointerCapture = vi.fn();
+	Element.prototype.releasePointerCapture = vi.fn();
 });
 
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 });
 
 const BAND: CornerBand = {
@@ -87,6 +106,39 @@ describe("CornerEditor keyboard loupe", () => {
 		// Tab to a different handle (another real focus) without nudging it — the
 		// previous corner's loupe shouldn't keep pointing at the wrong spot.
 		fireEvent.focus(otherHandle);
+		expect(loupe(container)).toBeNull();
+	});
+
+	it("clears a stale loupe when a different handle is click-selected with the mouse", () => {
+		const { container, getByLabelText } = render(
+			<CornerEditor src="/api/photos/a" value={BAND} onChange={() => {}} />,
+		);
+		const handle = getByLabelText("Top-left outer corner");
+		const otherHandle = getByLabelText("Bottom-right outer corner");
+		const gridContainer = container.querySelector(
+			".cursor-crosshair",
+		) as HTMLElement;
+
+		fireEvent.focus(handle);
+		fireEvent.keyDown(gridContainer, { key: "ArrowRight" });
+		expect(loupe(container)).not.toBeNull();
+
+		// Click-select the other handle: pointerdown sets pointerInteractionRef
+		// (so onFocus's own clear is skipped, same as a real browser's
+		// focus-follows-click), then pointerup with no movement — a plain click —
+		// selects it via endDrag instead of a Tab focus.
+		fireEvent.pointerDown(gridContainer, {
+			clientX: 360,
+			clientY: 360,
+			pointerId: 1,
+		});
+		fireEvent.focus(otherHandle);
+		fireEvent.pointerUp(gridContainer, {
+			clientX: 360,
+			clientY: 360,
+			pointerId: 1,
+		});
+
 		expect(loupe(container)).toBeNull();
 	});
 });

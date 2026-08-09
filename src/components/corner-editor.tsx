@@ -198,6 +198,15 @@ export function CornerEditor({
 				window.clearTimeout(keyboardLoupeTimeoutRef.current);
 		};
 	}, []);
+	// Drops a stale keyboard-nudge loupe whenever selection changes for a reason
+	// other than the nudge itself (tabbing or clicking to a different handle).
+	const clearKeyboardLoupe = () => {
+		setKeyboardLoupe(null);
+		if (keyboardLoupeTimeoutRef.current != null) {
+			window.clearTimeout(keyboardLoupeTimeoutRef.current);
+			keyboardLoupeTimeoutRef.current = null;
+		}
+	};
 	const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 	// The refined-edge overlay: where the server's edge search will snap each edge
 	// inside the band, and how confident it is per edge — so a disagreement (or an
@@ -416,7 +425,10 @@ export function CornerEditor({
 					}
 					return next;
 				}
-				// Plain click or drag: this handle becomes the sole selection.
+				// Plain click or drag: this handle becomes the sole selection. If it
+				// wasn't already the only selected handle, drop any stale nudge loupe
+				// still pointing at whatever was selected before.
+				if (!(prev.size === 1 && prev.has(key))) clearKeyboardLoupe();
 				return new Set([key]);
 			});
 			// Focus the container (not the button — Safari doesn't focus buttons on
@@ -579,11 +591,7 @@ export function CornerEditor({
 									// Tabbing to a different handle without nudging it should drop
 									// the previous handle's just-nudged loupe, not leave it pointing
 									// at a corner that's no longer selected.
-									setKeyboardLoupe(null);
-									if (keyboardLoupeTimeoutRef.current != null) {
-										window.clearTimeout(keyboardLoupeTimeoutRef.current);
-										keyboardLoupeTimeoutRef.current = null;
-									}
+									clearKeyboardLoupe();
 								}}
 							/>
 						)),
