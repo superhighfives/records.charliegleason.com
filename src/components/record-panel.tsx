@@ -86,7 +86,9 @@ export type PanelRecord = Omit<
 function Stat({ label, children }: { label: string; children: ReactNode }) {
 	return (
 		<div className="border border-border p-3">
-			<p className="text-xs text-muted-foreground">{label}</p>
+			<p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+				{label}
+			</p>
 			<p className="mt-0.5 font-medium tabular-nums">{children ?? "—"}</p>
 		</div>
 	);
@@ -518,25 +520,6 @@ export function RecordPanel({
 										</a>
 									</div>
 								)}
-								{record.catno && (
-									<div className="space-y-0.5">
-										<p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-											Catalog
-										</p>
-										<button
-											type="button"
-											onClick={() => copy(record.catno, "catno")}
-											className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-brand"
-										>
-											{record.catno}
-											{copied === "catno" ? (
-												<Check className="size-3" />
-											) : (
-												<Copy className="size-3 text-muted-foreground" />
-											)}
-										</button>
-									</div>
-								)}
 							</div>
 						)}
 					</div>
@@ -605,9 +588,24 @@ export function RecordPanel({
 					<div>
 						<dl className="divide-y divide-border">
 							<Spec label="Genre">{dash(record.genre)}</Spec>
-							<Spec label="Country">{dash(record.country)}</Spec>
 							<Spec label="Label">{dash(record.label)}</Spec>
 							<Spec label="Added">{dash(added)}</Spec>
+							{record.catno && (
+								<Spec label="Cat No.">
+									<button
+										type="button"
+										onClick={() => copy(record.catno, "catno")}
+										className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-brand"
+									>
+										{record.catno}
+										{copied === "catno" ? (
+											<Check className="size-3" />
+										) : (
+											<Copy className="size-3 text-muted-foreground" />
+										)}
+									</button>
+								</Spec>
+							)}
 							{record.copies != null && record.copies > 1 && (
 								<Spec label="Copies">{record.copies} copies</Spec>
 							)}

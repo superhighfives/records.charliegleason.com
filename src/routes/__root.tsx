@@ -64,6 +64,26 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 			},
 		],
 		links: [
+			// Google Fonts as real <link> tags (preconnect + stylesheet) rather than
+			// a CSS `@import` inside styles.css — an `@import` is render-blocking for
+			// the *whole* stylesheet it lives in, so the page's own (Tailwind) rules
+			// only applied once that external font CSS had round-tripped, which read
+			// as a flash of totally unstyled content rather than just a font swap.
+			// Real `<link>` tags load in parallel with everything else; `display=swap`
+			// (already in the URL) still swaps the fallback font in without blocking.
+			{
+				rel: "preconnect",
+				href: "https://fonts.googleapis.com",
+			},
+			{
+				rel: "preconnect",
+				href: "https://fonts.gstatic.com",
+				crossOrigin: "anonymous",
+			},
+			{
+				rel: "stylesheet",
+				href: "https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500;1,9..144,600;1,9..144,700&family=Geist+Mono:wght@400..700&display=swap",
+			},
 			{
 				rel: "stylesheet",
 				href: appCss,
