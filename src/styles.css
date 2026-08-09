@@ -169,11 +169,16 @@ body,
    selector via a `<style>` tag added to the document at runtime, always
    *after* this stylesheet, so on tied specificity + tied `!important` its
    later source order would otherwise win; the extra `html` ancestor bumps
-   this rule's specificity just enough to win regardless of insertion order. */
-html body[data-scroll-locked] {
-  overflow: visible !important;
-  position: static !important;
-  margin-right: 0 !important;
+   this rule's specificity just enough to win regardless of insertion order.
+   Scoped below `sm` (640px, Tailwind's default and `SheetContent`'s own
+   `sm:max-w-md` breakpoint) — above that the panel is a right-hand drawer
+   that leaves the grid visible, so the lock must stay in place there. */
+@media (max-width: 639px) {
+  html body[data-scroll-locked] {
+    overflow: visible !important;
+    position: static !important;
+    margin-right: 0 !important;
+  }
 }
 
 body {
