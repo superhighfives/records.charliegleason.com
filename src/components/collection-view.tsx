@@ -231,17 +231,19 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				</div>
 			</header>
 
-			<div className="min-h-[70vh] sm:min-h-[80vh] flex items-center">
-				<p className="rise-in my-16 max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:text-6xl lg:text-8xl">
-					<span className="text-brand italic">All</span>{" "}
-					<span className="px-[0.1ch]">{numberToWords(data.length)}</span>{" "}
-					<span className="text-brand italic">
-						of my records, photographed, documented, and displayed.
-					</span>
-				</p>
-			</div>
+			{!search.trim() && (
+				<div className="min-h-[70vh] flex items-center">
+					<p className="rise-in my-16 max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:text-6xl lg:text-8xl">
+						<span className="text-brand italic">All</span>{" "}
+						<span className="px-[0.1ch]">{numberToWords(data.length)}</span>{" "}
+						<span className="text-brand italic">
+							of my records, photographed, documented, and displayed.
+						</span>
+					</p>
+				</div>
+			)}
 
-			<div className="fade-in" style={{ animationDelay: "250ms" }}>
+			<div className="fade-in min-h-[70vh]" style={{ animationDelay: "250ms" }}>
 				{data.length === 0 ? (
 					<p className="text-muted-foreground">Nothing here yet.</p>
 				) : filtered.length === 0 ? (
