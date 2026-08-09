@@ -129,7 +129,7 @@ export function VinylDisc({
 						cy="50"
 						r="49"
 						fill={hasTexture ? `url(#${patternId})` : "currentColor"}
-						fillOpacity={translucent ? 0.65 : undefined}
+						fillOpacity={translucent ? 0.45 : undefined}
 						className={hasTexture ? undefined : "text-foreground/70"}
 					/>
 					{/* Overlay: shared "clear vinyl" grooves + sheen art, blended on

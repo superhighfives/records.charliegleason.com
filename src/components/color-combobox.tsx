@@ -268,7 +268,7 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 										aria-label={`Mark ${c.name} translucent`}
 										aria-pressed={c.translucent ?? false}
 										className={cn(
-											"opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+											"whitespace-nowrap opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
 											c.translucent &&
 												"text-brand-strong opacity-100 group-hover:opacity-100",
 										)}

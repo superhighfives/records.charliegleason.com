@@ -1,19 +1,75 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CollectionGrid } from "#/components/collection-grid";
+import { CollectionSkeleton } from "#/components/collection-skeleton";
 import { useCollectionUI } from "#/components/collection-ui";
 import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { emojiSrc } from "#/lib/emoji";
+import { numberToWords } from "#/lib/number-to-words";
 import { recordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
 const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
+
+// Safety net for `useFontsReady` — a slow/failed font fetch (offline,
+// blocked font CDN) shouldn't wedge the page behind the skeleton forever.
+const FONT_READY_TIMEOUT_MS = 2000;
+
+// Every Fraunces face the hero (and header `h1`) actually render with —
+// weight + style, size doesn't matter for triggering the fetch. Keep this in
+// sync with the `font-serif`/`italic`/`font-semibold` combinations used below.
+const CRITICAL_FONTS = [
+	"600 1em Fraunces",
+	"500 1em Fraunces",
+	"italic 500 1em Fraunces",
+];
+
+/**
+ * True once every font in {@link CRITICAL_FONTS} has loaded, or after
+ * {@link FONT_READY_TIMEOUT_MS}. Starts `false` on both server and client
+ * (`document.fonts` doesn't exist during SSR) so hydration matches — the real
+ * content only mounts once this flips, rather than painting text in a
+ * fallback font that then reflows as each custom font swaps in.
+ *
+ * Explicitly `document.fonts.load(...)` each face rather than awaiting the
+ * passive `document.fonts.ready` — `ready` only resolves once every font
+ * *already in flight* has settled, and a font only enters flight once the
+ * browser lays out text that needs it. The loading skeleton (`CollectionSkeleton`)
+ * is a spinner, not text, so nothing on screen had actually requested Fraunces
+ * yet: `ready` was resolving as a same-tick no-op, and the real fetch (and the
+ * reflow it causes) only started once the hero text itself mounted — the
+ * exact flash this hook exists to prevent. Explicit `load()` calls kick off
+ * the request regardless of what's currently rendered.
+ */
+function useFontsReady(): boolean {
+	const [ready, setReady] = useState(false);
+	useEffect(() => {
+		if (typeof document === "undefined" || !("fonts" in document)) {
+			setReady(true);
+			return;
+		}
+		let cancelled = false;
+		const timeout = setTimeout(() => {
+			if (!cancelled) setReady(true);
+		}, FONT_READY_TIMEOUT_MS);
+		Promise.all(CRITICAL_FONTS.map((font) => document.fonts.load(font)))
+			.catch(() => {})
+			.finally(() => {
+				if (!cancelled) setReady(true);
+			});
+		return () => {
+			cancelled = true;
+			clearTimeout(timeout);
+		};
+	}, []);
+	return ready;
+}
 
 /**
  * The public collection: a grid of records with a record drawer overlaid on top.
@@ -26,6 +82,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
 	const navigate = useNavigate();
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
+	const fontsReady = useFontsReady();
 
 	// Whether the open drawer should slide in. True only when this open was an
 	// in-app action — `openRecord` sets the flag before navigating; a direct-nav /
@@ -105,23 +162,46 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 		if (open) animateOpenRef.current = false;
 	}, [open, animateOpenRef]);
 
+	// Reuse the route's own loading skeleton as the font-loading gate too —
+	// see `useFontsReady`. The data-loading and font-loading phases then read
+	// as one continuous skeleton, and the real header/hero/grid only ever
+	// mounts (and starts its own staged `rise-in`/`fade-in`, below) once every
+	// custom font is actually ready to paint with, instead of racing it.
+	if (!fontsReady) return <CollectionSkeleton />;
+
 	return (
 		<div className="w-full px-4 py-10 sm:px-6">
-			<header className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+			{/* Staged reveal on first paint: hero copy, then the grid, then the
+			    header chrome — see the `rise-in`/`fade-in` utilities in styles.css.
+			    Each is a CSS `animation ... both`, so it only ever plays once per
+			    mount (a search keystroke re-rendering this component doesn't
+			    retrigger it) and holds `opacity: 0` for its own delay rather than
+			    flashing in at full opacity before its turn. The grid wrapper uses
+			    `fade-in` (opacity only), not `rise-in` (which also animates
+			    `transform`) — see the comment on `.fade-in` for why a `transform`
+			    on an ancestor of `CollectionGrid` would break its own fixed-position
+			    children. Delays are inline `style`, not a Tailwind arbitrary
+			    `[animation-delay:…]` class — `.rise-in`/`.fade-in` are plain
+			    unlayered CSS (not `@layer utilities`), so they'd always beat a
+			    layered Tailwind utility regardless of class order; inline style
+			    always wins instead. */}
+			<header
+				className="rise-in mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between"
+				style={{ animationDelay: "500ms" }}
+			>
 				<div className="flex items-center gap-4">
 					<a href="https://charliegleason.com" className="block shrink-0">
 						<img
 							src={HERO_EMOJI}
 							alt=""
 							aria-hidden="true"
-							width={56}
-							height={56}
-							className="size-14"
+							width={64}
+							height={64}
+							className="size-16"
 						/>
 						<span className="sr-only">charliegleason.com</span>
 					</a>
 					<div>
-						<p className="kicker mb-1">The collection</p>
 						<h1 className="font-serif text-4xl font-semibold tracking-tight">
 							Records
 						</h1>
@@ -129,7 +209,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 							<span className="font-medium text-foreground tabular-nums">
 								{data.length}
 							</span>{" "}
-							records ·{" "}
+							vinyls ·{" "}
 							<a
 								href="https://charliegleason.com"
 								className="text-brand-strong underline decoration-brand-strong/60 underline-offset-4 hover:text-foreground"
@@ -151,24 +231,31 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				</div>
 			</header>
 
-			<p className="my-16 max-w-6xl font-serif text-4xl font-medium tracking-tight text-pretty sm:text-7xl lg:text-9xl">
-				<span className="text-brand italic">All</span>{" "}
-				<span className="text-muted-foreground">({data.length})</span>{" "}
-				<span className="text-brand italic">of my records,</span> photographed,
-				documented, and displayed.
-			</p>
-
-			{data.length === 0 ? (
-				<p className="text-muted-foreground">Nothing here yet.</p>
-			) : filtered.length === 0 ? (
-				<p className="text-muted-foreground">No records match “{search}”.</p>
-			) : (
-				<CollectionGrid
-					records={filtered}
-					onOpen={openRecord}
-					focusedRecordId={shown?.record.id ?? null}
-				/>
+			{!search.trim() && (
+				<div className="min-h-[70vh] sm:min-h-[75vh] flex items-center">
+					<p className="rise-in my-16 max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:text-6xl lg:text-8xl">
+						<span className="text-brand italic">All</span>{" "}
+						<span className="px-[0.1ch]">{numberToWords(data.length)}</span>{" "}
+						<span className="text-brand italic">
+							of my records, photographed, documented, and displayed.
+						</span>
+					</p>
+				</div>
 			)}
+
+			<div className="fade-in min-h-[70vh]" style={{ animationDelay: "250ms" }}>
+				{data.length === 0 ? (
+					<p className="text-muted-foreground">Nothing here yet.</p>
+				) : filtered.length === 0 ? (
+					<p className="text-muted-foreground">No records match “{search}”.</p>
+				) : (
+					<CollectionGrid
+						records={filtered}
+						onOpen={openRecord}
+						focusedRecordId={shown?.record.id ?? null}
+					/>
+				)}
+			</div>
 
 			<Sheet
 				open={open}
@@ -199,12 +286,9 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			</Sheet>
 
 			<footer className="mt-16 border-t border-border pt-48 text-xs text-muted-foreground">
-				<p className="my-16 max-w-6xl font-serif text-4xl font-medium tracking-tight text-pretty sm:text-5xl lg:text-7xl text-muted-foreground">
-					<span className="italic">Well, that was all</span>{" "}
-					<span>({data.length})</span>{" "}
-					<span className="italic">
-						of my records, photographed, documented, and displayed.
-					</span>
+				<p className="my-16 max-w-6xl font-serif text-4xl font-medium tracking-tight text-pretty sm:text-5xl lg:text-7xl text-muted-foreground italic">
+					Well, that was all {data.length} of my records, photographed,
+					documented, and displayed.
 				</p>
 				<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
 				<a

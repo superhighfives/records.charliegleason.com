@@ -1,23 +1,9 @@
-import {
-	type CSSProperties,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Skeleton } from "#/components/ui/skeleton";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipTrigger,
-} from "#/components/ui/tooltip";
 import { VinylDisc } from "#/components/vinyl-disc";
-import { parseColorPalette } from "#/lib/color-palette";
-import { DEFAULT_COLOR_NAME } from "#/lib/colors";
 import { displayCoverKey, displayMatteKey, photoUrl } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { cn } from "#/lib/utils";
@@ -61,17 +47,14 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
 }
 
 /**
- * One cover tile: the peeking vinyl disc behind the cover, plus a real
- * (Radix, portal-rendered) tooltip carrying the title/artist. `.group` drives
+ * One cover tile: the peeking vinyl disc behind the cover. `.group` drives
  * the hover states (grayscale→colour, the disc slide-out+scale-up, the
- * pencil-badge fade) — both via plain CSS `:hover` for an instant response
- * *and* via `data-active` (set from the tooltip's own open state) so they
- * stay live while the pointer moves onto the (portaled, DOM-detached)
- * tooltip content too — see `tooltipOpen` below. The disc deliberately
- * overflows the tile sideways (and rises above sibling tiles on hover/active
- * — see `.vinyl-peek` in styles.css — so it isn't painted over by the next
- * cell in DOM order), so the cover's own wrapper carries the aspect ratio
- * but not `overflow-hidden` — only the innermost box (just the image) clips.
+ * pencil-badge fade) via plain CSS `:hover` for an instant response. The disc
+ * deliberately overflows the tile sideways (and rises above sibling tiles on
+ * hover/active — see `.vinyl-peek` in styles.css — so it isn't painted over
+ * by the next cell in DOM order), so the cover's own wrapper carries the
+ * aspect ratio but not `overflow-hidden` — only the innermost box (just the
+ * image) clips.
  *
  * Every tile is a perfect square — no text block underneath pushing the tile
  * taller than wide, which is what a 2×2 `spanning` tile needs to actually
@@ -80,31 +63,30 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * grid's default stretch, so a 2×2 tile doesn't get stretched to match a
  * taller row if this one happens to be the shortest tile in it.
  *
- * The tooltip's title uses the same serif treatment (and, where the chip has
- * an extracted palette, the same `.title-palette` gradient — see styles.css)
- * as the record panel's own title (`record-panel.tsx`).
- *
- * `scrollActive` (mobile only) is the touch equivalent of hover — set by
+ * Title/artist aren't shown on the tile itself — `CollectionGrid` renders
+ * one shared, fixed-position bar (`NowShowing`) for whichever record is
+ * currently "active", so nothing anchored to the tile has to reposition (or
+ * get dismissed) as the page scrolls. `scrollActive` (mobile) is set by
  * `CollectionGrid`'s scroll-driven `IntersectionObserver` for whichever tile
- * is currently centred, since touch devices have no hover to key off. It
- * feeds into the same `data-active` attribute the tooltip's own open state
- * already drives, so the grayscale→colour/disc-peek treatment is shared
- * rather than duplicated. `hideTooltip` (also mobile) skips mounting the
- * per-tile Radix tooltip there — `CollectionGrid` renders one shared,
- * fixed-position tooltip instead (see `MobileNowShowing`).
+ * is currently centred, since touch devices have no hover to key off — it
+ * drives both the shared `data-active` attribute (grayscale→colour, disc
+ * peek) and the bar's content. `onActivate` (desktop) reports a plain pointer
+ * hover into that same shared "active" state so the bar tracks the mouse
+ * instead — desktop's own visual feedback stays purely `:hover`-driven, only
+ * the bar's *content* comes from this.
  */
 function RecordTile({
 	record,
 	onOpen,
 	spanning = false,
 	scrollActive = false,
-	hideTooltip = false,
+	onActivate,
 }: {
 	record: PublicRecord;
 	onOpen: (record: PublicRecord) => void;
 	spanning?: boolean;
 	scrollActive?: boolean;
-	hideTooltip?: boolean;
+	onActivate?: (id: number | null) => void;
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
@@ -123,188 +105,130 @@ function RecordTile({
 	const [coverReady, setCoverReady] = useState(
 		() => !cover || isImageDecoded(coverSrc),
 	);
-	// See `.title-palette` in styles.css — a two-stop gradient built from the
-	// chip's extracted palette, clipped through the title glyphs. The default
-	// (Black) chip has no meaningful palette of its own, so it brands the title
-	// in the site accent instead; a chip with a color but no extracted palette
-	// yet (not backfilled) just keeps the plain foreground color.
-	const isDefaultColor = record.colorName === DEFAULT_COLOR_NAME;
-	const palette = isDefaultColor
-		? null
-		: parseColorPalette(record.colorPalette);
-	const paletteFrom = palette?.colors[0];
-	const paletteTo = palette?.colors[1] ?? palette?.colors[0];
-	// Radix keeps the tooltip open while the pointer is over its (portaled,
-	// document-body-level) content too, not just the trigger — but that content
-	// lives outside this tile's DOM subtree, so plain CSS `:hover` on `.group`
-	// can't see it. Mirroring Radix's own open state onto `data-active` lets
-	// `group-data-[active=true]:*` (Tailwind) and `.group[data-active="true"]`
-	// (styles.css) keep the hover look — grayscale→colour, the disc peek — alive
-	// for exactly as long as Radix says the tooltip is open, hovering the
-	// content included.
-	const [tooltipOpen, setTooltipOpen] = useState(false);
 	return (
 		<div
 			className="group"
 			data-record-id={record.id}
-			data-active={tooltipOpen || scrollActive ? "true" : undefined}
-			// Separate from `data-active` above (which also covers desktop's
-			// tooltip-open state) so the scale-up below only kicks in for
-			// mobile's scroll-driven "hover", not a mouse hover/tooltip on
-			// desktop — that already gets its own pop via `.vinyl-disc`'s hover
-			// transform without the cover itself scaling too.
-			data-scroll-active={scrollActive ? "true" : undefined}
+			data-active={scrollActive ? "true" : undefined}
 			style={
 				spanning
 					? { gridColumn: "span 2", gridRow: "span 2", alignSelf: "start" }
 					: undefined
 			}
 		>
-			<Tooltip onOpenChange={setTooltipOpen}>
-				<TooltipTrigger asChild>
-					<button
-						type="button"
-						onClick={() => onOpen(record)}
-						className="block w-full cursor-pointer text-left"
-					>
-						<div className="relative aspect-square">
-							<VinylDisc
-								colorName={record.colorName}
-								textureImageKey={record.colorTextureImageKey}
-								textureStatus={record.colorTextureStatus}
-								translucent={record.colorTranslucent}
-								size={record.size}
-								discCount={record.discCount}
+			<button
+				type="button"
+				onClick={() => onOpen(record)}
+				onPointerEnter={onActivate ? () => onActivate(record.id) : undefined}
+				onFocus={onActivate ? () => onActivate(record.id) : undefined}
+				onBlur={onActivate ? () => onActivate(null) : undefined}
+				className="block w-full cursor-pointer text-left"
+			>
+				<div className="relative aspect-square">
+					<VinylDisc
+						colorName={record.colorName}
+						textureImageKey={record.colorTextureImageKey}
+						textureStatus={record.colorTextureStatus}
+						translucent={record.colorTranslucent}
+						size={record.size}
+						discCount={record.discCount}
+						className={cn(
+							"m-1/16 transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
+							coverReady ? "opacity-100" : "opacity-0",
+						)}
+					/>
+					<div className="absolute inset-0 overflow-hidden">
+						{/* Shown behind the cover while it loads — `-z-10` (rather
+						    than unmounting once ready) so it never has to fight
+						    FadeImage's own opacity for stacking order; the opaque
+						    cover simply paints over it once revealed. Cover-less
+						    tiles skip straight to the placeholder, so no skeleton
+						    for those. */}
+						{cover && !coverReady && (
+							<Skeleton className="absolute inset-0 -z-10 rounded-none" />
+						)}
+						{cover ? (
+							<FadeImage
+								src={coverSrc}
+								alt={`${record.artist} — ${record.title}`}
+								onReady={() => setCoverReady(true)}
 								className={cn(
-									"m-1/16 transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
-									coverReady ? "opacity-100" : "opacity-0",
+									// Fade in on load *and* keep the grayscale→colour
+									// hover — one combined transition property so both
+									// animate. Opacity itself stays driven by FadeImage's
+									// own `loaded` state (via onReady below just for the
+									// disc) — mirroring it here too would round-trip
+									// through a second component's state update, which
+									// can resolve before the browser ever paints the
+									// hidden frame, skipping the fade entirely. Scale is
+									// active-only (mobile's scroll-driven state) — a gentle
+									// zoom standing in for the pointer-driven spotlight
+									// desktop gets instead. The parent's `overflow-hidden`
+									// clips it, so it zooms in place rather than growing
+									// the tile's footprint. Tailwind v4's `scale-*`
+									// compiles to the native CSS `scale` property, not
+									// `transform` — transitioning `transform` here would
+									// silently do nothing to it.
+									"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
+									matte ? "object-contain" : "object-cover",
 								)}
+								loading="lazy"
 							/>
-							<div className="absolute inset-0 overflow-hidden">
-								{/* Shown behind the cover while it loads — `-z-10` (rather
-								    than unmounting once ready) so it never has to fight
-								    FadeImage's own opacity for stacking order; the opaque
-								    cover simply paints over it once revealed. Cover-less
-								    tiles skip straight to the placeholder, so no skeleton
-								    for those. */}
-								{cover && !coverReady && (
-									<Skeleton className="absolute inset-0 -z-10 rounded-none" />
-								)}
-								{cover ? (
-									<FadeImage
-										src={coverSrc}
-										alt={`${record.artist} — ${record.title}`}
-										onReady={() => setCoverReady(true)}
-										className={cn(
-											// Fade in on load *and* keep the grayscale→colour
-											// hover — one combined transition property so both
-											// animate. Opacity itself stays driven by FadeImage's
-											// own `loaded` state (via onReady below just for the
-											// disc) — mirroring it here too would round-trip
-											// through a second component's state update, which
-											// can resolve before the browser ever paints the
-											// hidden frame, skipping the fade entirely. Scale is
-											// mobile-only (`data-scroll-active`, not the shared
-											// `data-active`) — a gentle zoom standing in for the
-											// pointer-driven spotlight desktop gets instead. The
-											// parent's `overflow-hidden` clips it, so it zooms in
-											// place rather than growing the tile's footprint.
-											// Tailwind v4's `scale-*` compiles to the native CSS
-											// `scale` property, not `transform` — transitioning
-											// `transform` here would silently do nothing to it.
-											"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[scroll-active=true]:scale-105",
-											matte ? "object-contain" : "object-cover",
-										)}
-										loading="lazy"
-									/>
-								) : (
-									<SleevePlaceholder />
-								)}
-							</div>
-							{/* Signals "this one has notes" at rest — the 2×2 span (when
-							    throttled-eligible, see `computeSpanningIds`) is a size
-							    hint, not everything with notes gets one, so records that
-							    stayed 1×1 still need their own affordance. Fades out on
-							    hover so it doesn't fight the tooltip/disc for attention
-							    once you're already looking at this tile. */}
-							{hasNotes(record) && (
-								<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
-							)}
-						</div>
-					</button>
-				</TooltipTrigger>
-				{/* A real tooltip (Radix, portal-rendered) rather than an overlay
-				    positioned within the tile — sized to its content and collision-
-				    aware, so a long title wraps instead of truncating and is never
-				    clipped by a neighbouring tile or the viewport edge. Pinned to the
-				    trigger's own width (`--radix-popper-anchor-width`, exposed by
-				    Radix's Popper primitive) rather than sizing to content, so it
-				    always reads as "attached to this cover" instead of a stray,
-				    differently-sized box.
-
-				    The entrance overrides tw-animate-css's `--tw-enter-translate-y`/
-				    `--tw-enter-scale` custom properties directly via inline style
-				    (rather than fighting `TooltipContent`'s default `slide-in-from-
-				    top-2 zoom-in-95` classes through `cn`/`twMerge`, which doesn't
-				    reliably win a specificity tie between two same-weight utility
-				    classes) — inline style always wins for a custom property, no
-				    matter what class-based value also tries to set it. A bigger slide,
-				    no zoom, reads as the tooltip pulling out from *behind* the cover
-				    rather than a generic popover fade.
-
-				    Skipped on mobile (`hideTooltip`) — touch has no hover to trigger
-				    it off, and the fixed bottom bar (`MobileNowShowing`, driven by
-				    scroll instead) replaces it there. */}
-				{!hideTooltip && (
-					<TooltipContent
-						side="bottom"
-						sideOffset={1}
-						className="flex flex-col gap-1 text-center"
-						style={
-							{
-								"--tw-enter-translate-y": "-14px",
-								"--tw-enter-scale": "1",
-								"--tw-exit-translate-y": "-10px",
-								"--tw-exit-scale": "1",
-							} as CSSProperties
-						}
-					>
-						<p
-							className={cn(
-								"flex items-start justify-center gap-1.5 text-balance font-serif text-base font-medium leading-tight max-w-(--radix-popper-anchor-width)",
-								paletteFrom
-									? "title-palette bg-clip-text text-transparent"
-									: isDefaultColor && "text-brand-strong",
-							)}
-							style={
-								paletteFrom
-									? ({
-											"--pal-a": paletteFrom,
-											"--pal-b": paletteTo,
-										} as CSSProperties)
-									: undefined
-							}
-						>
-							{/* Same "has notes" signal as the tile's own corner dot, echoed
-							    here since the tooltip can be the first place you actually
-							    read the title. */}
-							{hasNotes(record) && (
-								<span className="inline-block size-1.5 shrink-0 rounded-full bg-brand mt-1.5" />
-							)}
-							{record.title}
-						</p>
-						<p className="font-mono text-muted-foreground text-xs">
-							{record.artist}
-						</p>
-					</TooltipContent>
-				)}
-			</Tooltip>
+						) : (
+							<SleevePlaceholder />
+						)}
+					</div>
+					{/* Signals "this one has notes" at rest — the 2×2 span (when
+					    throttled-eligible, see `computeSpanningIds`) is a size
+					    hint, not everything with notes gets one, so records that
+					    stayed 1×1 still need their own affordance. Fades out on
+					    hover so it doesn't fight the disc for attention once
+					    you're already looking at this tile. */}
+					{hasNotes(record) && (
+						<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
+					)}
+				</div>
+			</button>
 		</div>
 	);
 }
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
+}
+
+// How long the grid takes to glide a paged-to record into view — see
+// `smoothScrollCenterTo`. Slower than the browser's own native smooth
+// scroll (which has no duration knob to tune in the first place) so paging
+// through the record panel reads as a deliberate glide, not a blink.
+const GRID_SCROLL_DURATION_MS = 900;
+
+// Same ease-out-expo shape used for the grid-focus-overlay's fade-in (see
+// styles.css) — nearly all the motion happens early, settling gently rather
+// than arriving at a constant clip.
+function easeOutExpo(t: number): number {
+	return t >= 1 ? 1 : 1 - 2 ** (-10 * t);
+}
+
+/**
+ * Smoothly scrolls the window so `el` lands at the vertical centre of the
+ * viewport, over `duration` ms. Native `scrollIntoView({behavior:"smooth"})`
+ * can't be slowed down — the browser picks its own (fairly brisk) timing —
+ * so paging through the record panel needs its own rAF-driven tween instead.
+ */
+function smoothScrollCenterTo(el: HTMLElement, duration: number): void {
+	const startY = window.scrollY;
+	const rect = el.getBoundingClientRect();
+	const targetY = startY + rect.top + rect.height / 2 - window.innerHeight / 2;
+	const delta = targetY - startY;
+	if (Math.abs(delta) < 1) return;
+	const startTime = performance.now();
+	function step(now: number) {
+		const t = Math.min(1, (now - startTime) / duration);
+		window.scrollTo(0, startY + delta * easeOutExpo(t));
+		if (t < 1) requestAnimationFrame(step);
+	}
+	requestAnimationFrame(step);
 }
 
 // How much of the remaining distance to the spotlight's target the eased
@@ -382,8 +306,12 @@ function usePrefersReducedMotionRef(): React.RefObject<boolean> {
  * scroll (an `IntersectionObserver` watching a thin band through the
  * viewport's centre) plus device tilt (a small nudge on top of the active
  * tile's own position, since there's no cursor to place the spotlight at).
- * The per-tile Radix tooltip is replaced by one shared, fixed bottom bar
- * (`MobileNowShowing`) that tracks the same active tile.
+ *
+ * Both touch and desktop share one "active tile" concept (`activeId` below)
+ * and one shared, fixed bottom bar (`NowShowing`) showing its title/artist —
+ * touch writes to it via the scroll observer, desktop via a plain pointer
+ * hover. Neither anchors anything to the tile itself (no per-tile popover),
+ * so nothing has to reposition or dismiss as the page scrolls.
  */
 export function CollectionGrid({
 	records,
@@ -436,10 +364,12 @@ export function CollectionGrid({
 		const el = gridElRef.current.querySelector<HTMLElement>(
 			`[data-record-id="${focusedRecordId}"]`,
 		);
-		el?.scrollIntoView({
-			block: "center",
-			behavior: prefersReducedMotionRef.current ? "auto" : "smooth",
-		});
+		if (!el) return;
+		if (prefersReducedMotionRef.current) {
+			el.scrollIntoView({ block: "center", behavior: "auto" });
+		} else {
+			smoothScrollCenterTo(el, GRID_SCROLL_DURATION_MS);
+		}
 	}, [focusedRecordId, prefersReducedMotionRef]);
 
 	// Written straight to the DOM (not React state) so the gradient can track
@@ -458,6 +388,23 @@ export function CollectionGrid({
 	const targetRef = useRef({ x: 0, y: 0 });
 	const currentRef = useRef({ x: 0, y: 0 });
 	const rafRef = useRef<number | null>(null);
+	// Whether the spotlight has ever been given a real position (desktop
+	// pointermove, or mobile's active-tile placement) — see `setSpotlightTarget`
+	// and the desktop scroll-recompute effect further down. Both refs above
+	// start at the arbitrary (0,0) origin; without this flag (a) the very
+	// first real position chases there FROM (0,0) — invisible normally since
+	// the overlay is still fading in from opacity 0 at the same time, but a
+	// visible swoop if the overlay's already fully visible (see next point),
+	// and (b) the scroll-recompute effect would trust (0,0) as a real
+	// last-known cursor position before any pointer event had actually fired
+	// — e.g. load the page and scroll via trackpad without ever moving the
+	// mouse: the browser's own `:hover` still re-targets on scroll (no JS
+	// event required), so the grid-focus-overlay correctly blurs/highlights
+	// off real `:hover`, but this component's own "active" tracking has no
+	// event to key off and was falling back to whatever tile sits at literal
+	// viewport (0,0) instead — a phantom activation disconnected from what
+	// `:hover` was actually showing.
+	const hasPositionedRef = useRef(false);
 
 	const tick = useCallback(() => {
 		const target = targetRef.current;
@@ -483,9 +430,13 @@ export function CollectionGrid({
 	const setSpotlightTarget = useCallback(
 		(x: number, y: number) => {
 			targetRef.current = { x, y };
-			// Reduced motion: jump straight to the target instead of chasing it
-			// frame by frame — the whole point of the eased rAF loop is the chase.
-			if (prefersReducedMotionRef.current) {
+			const firstPosition = !hasPositionedRef.current;
+			hasPositionedRef.current = true;
+			// First-ever position, or reduced motion: jump straight to the target
+			// instead of chasing it frame by frame from the (0,0) default — the
+			// whole point of the eased rAF loop is the chase, but chasing from an
+			// origin that was never a real position is just a glitch, not motion.
+			if (firstPosition || prefersReducedMotionRef.current) {
 				if (rafRef.current != null) {
 					cancelAnimationFrame(rafRef.current);
 					rafRef.current = null;
@@ -656,6 +607,14 @@ export function CollectionGrid({
 		[records, activeId],
 	);
 
+	// Keeps showing the last-active record's content while `NowShowing` fades
+	// out — `activeRecord` itself goes null the instant nothing's hovered/
+	// centred, which would otherwise blank the bar before its own opacity
+	// transition finishes. Same trick `collection-view.tsx` uses to keep the
+	// record panel's body rendered through its own close animation.
+	const lastActiveRecordRef = useRef<PublicRecord | null>(null);
+	if (activeRecord) lastActiveRecordRef.current = activeRecord;
+
 	// The active tile's on-screen centre is the spotlight's base position on
 	// mobile — there's no cursor, so tilt (below) nudges around this instead
 	// of driving the position outright. Recomputed whenever the active tile
@@ -702,6 +661,43 @@ export function CollectionGrid({
 		window.addEventListener("scroll", onScroll, { passive: true });
 		return () => window.removeEventListener("scroll", onScroll);
 	}, [isTouch, recomputeActiveCenter]);
+
+	// --- Desktop: keep the active tile in sync with the cursor while
+	// scrolling. A wheel/trackpad scroll moves the page under a stationary
+	// cursor without firing any pointer event, so the per-tile `onPointerEnter`
+	// that normally drives `activeId` never sees a tile scroll out from under
+	// it — without this, `NowShowing` would keep showing whichever record was
+	// last actually entered, arbitrarily stale once scrolling moves on.
+	// `targetRef` already holds the last real `clientX/Y` from `onPointerMove`
+	// (see the spotlight tracking above), so re-deriving from
+	// `elementFromPoint` at that fixed screen position is the same trick
+	// mobile's `recomputeActiveCenter` uses in reverse (there the tile is
+	// fixed and its on-screen position is re-measured; here the screen
+	// position is fixed and the tile underneath it is re-measured).
+	useEffect(() => {
+		if (isTouch) return;
+		let ticking = false;
+		const onScroll = () => {
+			// No real pointermove has fired yet — `targetRef` is still its (0,0)
+			// default, not a real last-known cursor position (see the comment on
+			// `hasPositionedRef`). Trusting it here would activate whatever tile
+			// happens to sit at literal viewport (0,0), disconnected from
+			// wherever `:hover` (which the browser keeps correctly re-targeted on
+			// scroll with no event needed) is actually showing.
+			if (ticking || !hasPositionedRef.current) return;
+			ticking = true;
+			requestAnimationFrame(() => {
+				ticking = false;
+				const { x, y } = targetRef.current;
+				const el = document
+					.elementFromPoint(x, y)
+					?.closest<HTMLElement>("[data-record-id]");
+				setActiveId(el ? Number(el.dataset.recordId) : null);
+			});
+		};
+		window.addEventListener("scroll", onScroll, { passive: true });
+		return () => window.removeEventListener("scroll", onScroll);
+	}, [isTouch]);
 
 	// --- Mobile: tilt nudges the spotlight around the active tile ----------
 	useEffect(() => {
@@ -788,10 +784,18 @@ export function CollectionGrid({
 			// non-bubbling enter/leave pair, only the outer boundary crossing. Written
 			// straight to the DOM rather than React state — same reasoning as the
 			// spotlight position above, this never needs to trigger a re-render.
+			// Leaving the grid entirely is also the desktop equivalent of mobile's
+			// "scrolled past every tile" — clears `activeId` so `NowShowing`
+			// unmounts instead of showing a stale record. Hopping the gap *between*
+			// two tiles never fires this (see above), so the bar just swaps
+			// straight to the newly-entered tile without flickering off first.
 			onPointerLeave={
 				isTouch
 					? undefined
-					: (e) => e.currentTarget.setAttribute("data-pointer-outside", "true")
+					: (e) => {
+							e.currentTarget.setAttribute("data-pointer-outside", "true");
+							setActiveId(null);
+						}
 			}
 			onPointerEnter={
 				isTouch
@@ -806,7 +810,7 @@ export function CollectionGrid({
 					onOpen={onOpen}
 					spanning={spanningIds.has(record.id)}
 					scrollActive={isTouch && record.id === activeId}
-					hideTooltip={isTouch}
+					onActivate={isTouch ? undefined : setActiveId}
 				/>
 			))}
 			{/* Shared hover backdrop for every tile — see `.grid-focus-overlay` in
@@ -821,25 +825,53 @@ export function CollectionGrid({
 				aria-hidden="true"
 				className="grid-focus-overlay pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
 			/>
-			{isTouch && activeRecord && <MobileNowShowing record={activeRecord} />}
+			{lastActiveRecordRef.current && (
+				<NowShowing
+					record={lastActiveRecordRef.current}
+					visible={activeRecord != null}
+				/>
+			)}
 		</div>
 	);
 }
 
 /**
- * Touch's replacement for the per-tile Radix tooltip: one shared bar fixed to
- * the bottom of the viewport, showing whichever record `CollectionGrid`'s
- * scroll-driven `IntersectionObserver` currently considers "active" — see the
- * comment on `CollectionGrid`. Deliberately plain text (no `.title-palette`
- * gradient like the desktop tooltip) — it swaps records as fast as the user
- * scrolls, and re-parsing a palette gradient into a fixed bar on every scroll
- * tick isn't worth it for a label that's only ever on screen a moment.
+ * One shared bar fixed to the bottom of the viewport, showing whichever
+ * record `CollectionGrid` currently considers "active" (scroll-driven on
+ * touch, hover-driven on desktop) — see the comment on `CollectionGrid`.
+ * Deliberately plain text, no `.title-palette` gradient — it swaps records as
+ * fast as the user scrolls/hovers, and re-parsing a palette gradient into a
+ * fixed bar that often isn't worth it for a label only ever on screen a
+ * moment.
+ *
+ * `visible` drives a plain opacity transition rather than a mount/unmount —
+ * `record` is always the *last* active one (see `lastActiveRecordRef` in
+ * `CollectionGrid`), so when `visible` goes false this keeps rendering that
+ * same content fading out instead of blanking instantly.
  */
-function MobileNowShowing({ record }: { record: PublicRecord }) {
+function NowShowing({
+	record,
+	visible,
+}: {
+	record: PublicRecord;
+	visible: boolean;
+}) {
 	return (
-		<div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
+		<div
+			className={cn(
+				"pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 transition-opacity duration-300 ease-out motion-reduce:transition-none",
+				visible ? "opacity-100" : "opacity-0",
+			)}
+		>
 			<div className="flex max-w-[calc(100%-2rem)] flex-col items-center gap-0.5 rounded-md border bg-popover/95 px-4 py-2 text-center text-popover-foreground shadow-lg backdrop-blur-sm">
-				<p className="text-balance font-serif text-base font-medium leading-tight">
+				<p className="flex items-start justify-center gap-1.5 text-balance font-serif text-base font-medium leading-tight">
+					{/* Same "has notes" signal as the tile's own corner dot — the
+					    corner dot fades out on hover/active, so this is the only
+					    place the signal survives once you're actually looking at
+					    the record. */}
+					{hasNotes(record) && (
+						<span className="mt-1.5 inline-block size-1.5 shrink-0 rounded-full bg-brand" />
+					)}
 					{record.title}
 				</p>
 				<p className="font-mono text-muted-foreground text-xs">
