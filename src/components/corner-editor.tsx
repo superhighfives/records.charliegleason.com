@@ -46,6 +46,7 @@ const CLICK_MOVE_THRESHOLD_PX = 4; // pointer moved less than this → treat as 
 const LOUPE_SIZE = 132; // magnifier diameter, px
 const LOUPE_ZOOM = 3; // magnification factor
 const LOUPE_GAP = 20; // gap between the corner and the magnifier, px
+const KEYBOARD_LOUPE_HOLD_MS = 2000; // how long the loupe stays up after an arrow-key nudge
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
@@ -77,6 +78,10 @@ async function decodeDownscaled(src: string, max: number): Promise<RgbaImage> {
 
 // Key identifying one of the eight corner handles (four per quad), for selection.
 const cornerKey = (quad: QuadKey, index: number) => `${quad}:${index}`;
+const parseCornerKey = (key: string): { quad: QuadKey; index: number } => {
+	const [quad, index] = key.split(":");
+	return { quad: quad as QuadKey, index: Number(index) };
+};
 
 type DragState = {
 	quad: QuadKey;
@@ -176,6 +181,20 @@ export function CornerEditor({
 	const [hover, setHover] = useState<{ quad: QuadKey; index: number } | null>(
 		null,
 	);
+	// Shows the loupe over the last arrow-key-nudged handle for a couple of seconds
+	// after the keys stop, so it stays up even once the mouse (which isn't over the
+	// handle during keyboard nudging) is what would otherwise clear `hover`.
+	const [keyboardLoupe, setKeyboardLoupe] = useState<{
+		quad: QuadKey;
+		index: number;
+	} | null>(null);
+	const keyboardLoupeTimeoutRef = useRef<number | null>(null);
+	useEffect(() => {
+		return () => {
+			if (keyboardLoupeTimeoutRef.current != null)
+				window.clearTimeout(keyboardLoupeTimeoutRef.current);
+		};
+	}, []);
 	const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 	// The refined-edge overlay: where the server's edge search will snap each edge
 	// inside the band, and how confident it is per edge — so a disagreement (or an
@@ -309,6 +328,19 @@ export function CornerEditor({
 			) as NormalizedCorners;
 		}
 		onChange(next);
+
+		// Surface the loupe over one of the just-nudged handles for a couple of
+		// seconds, refreshed on every keypress, so the admin can see where the
+		// corner landed without having to hover it.
+		const firstKey = selected.values().next().value;
+		if (firstKey) {
+			setKeyboardLoupe(parseCornerKey(firstKey));
+			if (keyboardLoupeTimeoutRef.current != null)
+				window.clearTimeout(keyboardLoupeTimeoutRef.current);
+			keyboardLoupeTimeoutRef.current = window.setTimeout(() => {
+				setKeyboardLoupe(null);
+			}, KEYBOARD_LOUPE_HOLD_MS);
+		}
 	};
 
 	// Press anywhere on the image: decide whether the intent is a corner drag or a
@@ -421,8 +453,10 @@ export function CornerEditor({
 	const polyPoints = (quad: QuadKey) =>
 		value[quad].map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
 
-	// Show the magnifier for the corner being dragged, else the hovered/focused one.
-	const loupe = drag ?? hover;
+	// Show the magnifier for the corner being dragged, else the hovered/focused
+	// one, else a just-nudged handle (kept up briefly so it survives the mouse
+	// not being over the handle during keyboard nudging).
+	const loupe = drag ?? hover ?? keyboardLoupe;
 
 	return (
 		<div className="space-y-2">
