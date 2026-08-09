@@ -1,4 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
+import {
+	getResponseHeaders,
+	getResponseStatus,
+} from "@tanstack/react-start/server";
 import { getAdminSession } from "#/lib/auth";
 import { createBackupZipStream } from "#/lib/backup";
 
@@ -13,6 +17,20 @@ export const Route = createFileRoute("/api/admin/backup")({
 		handlers: {
 			GET: async () => {
 				if (!(await getAdminSession())) {
+					// A stale session token (crossing to a fresh preview subdomain, or
+					// enough time since the last visit) makes `getAdminSession` stage a
+					// 307 + Location/Set-Cookie via `forwardHandshake` rather than
+					// resolving a clean signed-out verdict. This route (unlike the
+					// SSR loaders `getAdminSession` is otherwise used from) returns its
+					// own `Response`, so that staged handshake redirect has to be
+					// carried across explicitly — otherwise it's silently dropped in
+					// favour of a hard 401 the browser can never recover from.
+					if (getResponseStatus() === 307) {
+						return new Response(null, {
+							status: 307,
+							headers: getResponseHeaders() as HeadersInit,
+						});
+					}
 					return new Response("Unauthorized", { status: 401 });
 				}
 
