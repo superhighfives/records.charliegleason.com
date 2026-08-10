@@ -288,7 +288,21 @@ body {
 }
 
 .dot-pulse {
-  position: relative;
+  /* No `position` here — every caller already applies Tailwind's `absolute`
+     utility to this element (it's the corner badge/`NowShowing` dot, meant
+     to sit pinned via `top`/`left`). `.dot-pulse::after` below only needs
+     *some* positioned ancestor to anchor to, and `absolute` already qualifies
+     — an earlier version set `position: relative` here too, which doesn't
+     even win by specificity, but this file's rules are unlayered, and
+     unlayered CSS always beats Tailwind's `@layer utilities` regardless of
+     source order or specificity. That silently downgraded the dot from
+     `absolute` to `relative` everywhere, which is mostly invisible on
+     Chrome/Firefox but not on Safari: a `relative`-positioned element's
+     percentage `top` resolves against the containing block's height only if
+     that height counts as "explicitly specified" per spec, and Safari
+     doesn't treat an `aspect-ratio`-derived height as qualifying — so `top`
+     silently resolved to 0, leaving the dot pinned to the tile's left inset
+     but floating at the very top edge instead of inset down into the corner. */
   animation: dot-pulse 2s ease-in-out infinite;
 }
 
