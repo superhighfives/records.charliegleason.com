@@ -172,7 +172,7 @@ function RecordTile({
 									// compiles to the native CSS `scale` property, not
 									// `transform` — transitioning `transform` here would
 									// silently do nothing to it.
-									"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
+									"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
 									matte ? "object-contain" : "object-cover",
 								)}
 								loading="lazy"
@@ -188,16 +188,12 @@ function RecordTile({
 					    hover so it doesn't fight the disc for attention once
 					    you're already looking at this tile. */}
 					{hasNotes(record) && (
-						<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out group-hover:opacity-0 group-data-[active=true]:opacity-0" />
+						<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out pointer-fine:group-hover:opacity-0 group-data-[active=true]:opacity-0" />
 					)}
 				</div>
 			</button>
 		</div>
 	);
-}
-
-function clamp(value: number, min: number, max: number): number {
-	return Math.min(max, Math.max(min, value));
 }
 
 // How long the grid takes to glide a paged-to record into view — see
@@ -252,11 +248,6 @@ const SPOTLIGHT_EASE = 0.09;
 // rest of the way and the animation loop stops — otherwise it'd tick
 // forever, asymptotically approaching but never quite reaching it.
 const SPOTLIGHT_SETTLE_PX = 0.5;
-// How far (px) tilt can nudge the spotlight from the active tile's centre.
-const TILT_MAX_OFFSET_PX = 50;
-// Degrees of tilt (either axis, from the phone's resting orientation) that
-// maps to the full TILT_MAX_OFFSET_PX nudge.
-const TILT_MAX_DEGREES = 30;
 
 /**
  * Touch/no-hover devices (phones, tablets) get the scroll-driven "active
@@ -634,20 +625,18 @@ export function CollectionGrid({
 	if (activeRecord) lastActiveRecordRef.current = activeRecord;
 
 	// The pinned tile's on-screen centre is the spotlight's base position
-	// whenever there's no cursor to place it at directly — mobile's
-	// scroll-driven active tile (tilt, below, nudges around this instead of
-	// driving the position outright) and, on any device, the record the
+	// whenever there's no cursor to place it at directly — the record the
 	// detail panel currently has open (the panel covers the pointer, so a
-	// real hover can't). The panel wins when both are set — pointer-driven
-	// desktop hover can't even reach the grid while the panel's overlay is up
-	// (it intercepts pointer events), so touch's own `activeId` is never
-	// live at the same time regardless. Recomputed whenever the pinned tile
+	// real hover can't). The grid-focus-overlay this drives is desktop-only
+	// (see its `!isTouch` guard below — touch never gets the pointer-fine
+	// hover this is meant to spotlight, and keeping its blur/rAF chase alive
+	// on scroll was a real contributor to iOS Safari scroll jank), so this no
+	// longer has a touch-only branch. Recomputed whenever the pinned tile
 	// changes, and again on scroll since the *tile* stays pinned across a
 	// scroll (or the panel's own prev/next glide) but its on-screen position
 	// doesn't.
-	const spotlightRecordId = focusedRecordId ?? (isTouch ? activeId : null);
+	const spotlightRecordId = focusedRecordId ?? null;
 	const activeCenterRef = useRef({ x: 0, y: 0 });
-	const tiltOffsetRef = useRef({ x: 0, y: 0 });
 
 	const recomputeActiveCenter = useCallback(() => {
 		if (spotlightRecordId == null || !gridElRef.current) return;
@@ -660,10 +649,7 @@ export function CollectionGrid({
 			x: rect.left + rect.width / 2,
 			y: rect.top + rect.height / 2,
 		};
-		setSpotlightTarget(
-			activeCenterRef.current.x + tiltOffsetRef.current.x,
-			activeCenterRef.current.y + tiltOffsetRef.current.y,
-		);
+		setSpotlightTarget(activeCenterRef.current.x, activeCenterRef.current.y);
 	}, [spotlightRecordId, setSpotlightTarget]);
 
 	useEffect(() => {
@@ -727,76 +713,6 @@ export function CollectionGrid({
 		window.addEventListener("scroll", onScroll, { passive: true });
 		return () => window.removeEventListener("scroll", onScroll);
 	}, [isTouch]);
-
-	// --- Mobile: tilt nudges the spotlight around the active tile ----------
-	useEffect(() => {
-		if (!isTouch) return;
-		let calibrated: { beta: number; gamma: number } | null = null;
-		const onOrientation = (e: DeviceOrientationEvent) => {
-			if (e.beta == null || e.gamma == null) return;
-			// Calibrate off however the phone happens to be held when tilt
-			// tracking starts, rather than its absolute angle — a phone resting
-			// in a hand is rarely flat, and an absolute reading would leave the
-			// spotlight permanently off-centre until the phone was levelled.
-			if (!calibrated) calibrated = { beta: e.beta, gamma: e.gamma };
-			const dBeta = clamp(
-				e.beta - calibrated.beta,
-				-TILT_MAX_DEGREES,
-				TILT_MAX_DEGREES,
-			);
-			const dGamma = clamp(
-				e.gamma - calibrated.gamma,
-				-TILT_MAX_DEGREES,
-				TILT_MAX_DEGREES,
-			);
-			tiltOffsetRef.current = {
-				x: (dGamma / TILT_MAX_DEGREES) * TILT_MAX_OFFSET_PX,
-				y: (dBeta / TILT_MAX_DEGREES) * TILT_MAX_OFFSET_PX,
-			};
-			setSpotlightTarget(
-				activeCenterRef.current.x + tiltOffsetRef.current.x,
-				activeCenterRef.current.y + tiltOffsetRef.current.y,
-			);
-		};
-
-		let detach: (() => void) | undefined;
-		const attach = () => {
-			window.addEventListener("deviceorientation", onOrientation);
-			detach = () =>
-				window.removeEventListener("deviceorientation", onOrientation);
-		};
-
-		const requestPermission = (
-			DeviceOrientationEvent as unknown as {
-				requestPermission?: () => Promise<"granted" | "denied">;
-			}
-		).requestPermission;
-		if (typeof requestPermission === "function") {
-			// iOS only grants motion-sensor access from inside a user gesture —
-			// the grid's own first touch doubles as that gesture, so there's no
-			// separate "enable tilt" button to tap through first.
-			const onFirstTouch = () => {
-				// iOS can reject this outside a genuine user gesture (e.g. a
-				// multi-touch or delayed dispatch losing the gesture context) —
-				// tilt is a non-essential enhancement, so fail silently rather
-				// than surface it as an unhandled rejection.
-				requestPermission()
-					.then((state) => {
-						if (state === "granted") attach();
-					})
-					.catch(() => {});
-			};
-			const el = gridElRef.current;
-			el?.addEventListener("touchstart", onFirstTouch, { once: true });
-			return () => {
-				el?.removeEventListener("touchstart", onFirstTouch);
-				detach?.();
-			};
-		}
-
-		attach();
-		return () => detach?.();
-	}, [isTouch, setSpotlightTarget]);
 
 	return (
 		<div
@@ -869,16 +785,24 @@ export function CollectionGrid({
 			    Masked to a radial gradient centred on the eased spotlight position
 			    above (`--overlay-x/y`) so the blur opens up right where the
 			    cursor/active tile is instead of snapping between "sharp tile" and
-			    "blurred everything else" with nothing in between. */}
-			<div
-				ref={overlayRef}
-				aria-hidden="true"
-				className="grid-focus-overlay pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
-			/>
+			    "blurred everything else" with nothing in between. Desktop-only —
+			    there's no cursor to spotlight on touch, and a full-viewport
+			    `backdrop-blur` kept permanently alive (`will-change`, see the CSS)
+			    plus a continuous rAF chase feeding its mask position was a real
+			    contributor to iOS Safari scroll jank for a purely desktop hover
+			    affordance. */}
+			{!isTouch && (
+				<div
+					ref={overlayRef}
+					aria-hidden="true"
+					className="grid-focus-overlay pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
+				/>
+			)}
 			{lastActiveRecordRef.current && (
 				<NowShowing
 					record={lastActiveRecordRef.current}
 					visible={activeRecord != null}
+					isTouch={isTouch}
 				/>
 			)}
 		</div>
@@ -902,9 +826,11 @@ export function CollectionGrid({
 function NowShowing({
 	record,
 	visible,
+	isTouch,
 }: {
 	record: PublicRecord;
 	visible: boolean;
+	isTouch: boolean;
 }) {
 	return (
 		<div
@@ -913,14 +839,28 @@ function NowShowing({
 				visible ? "opacity-100" : "opacity-0",
 			)}
 		>
-			<div className="flex max-w-[calc(100%-2rem)] flex-col items-center gap-0.5 rounded-md border bg-popover/95 px-4 py-2 text-center text-popover-foreground shadow-lg backdrop-blur-sm">
-				<p className="flex items-start justify-center gap-1.5 text-balance font-serif text-base font-medium leading-tight">
+			<div
+				className={cn(
+					"flex max-w-[calc(100%-2rem)] flex-col items-center gap-0.5 rounded-md border bg-popover/95 px-4 py-2 text-center text-popover-foreground shadow-lg",
+					// `backdrop-blur` is a real GPU cost kept alive for as long as this
+					// bar is visible — on touch this bar is up for essentially the
+					// whole time you're scrolling, so on iOS Safari that's a
+					// continuously-composited blur under a constantly repositioned
+					// fixed element. `bg-popover/95` is already close to opaque, so
+					// the blur was buying very little there anyway.
+					!isTouch && "backdrop-blur-sm",
+				)}
+			>
+				<p className="text-balance font-serif text-base font-medium leading-tight">
 					{/* Same "has notes" signal as the tile's own corner dot — the
 					    corner dot fades out on hover/active, so this is the only
 					    place the signal survives once you're actually looking at
-					    the record. */}
+					    the record. A plain inline `<span>` (not a flex item) so it
+					    sits inline with the title text — a flex row here previously
+					    pinned it to the bar's left edge instead of against the text
+					    it's meant to badge. */}
 					{hasNotes(record) && (
-						<span className="mt-1.5 inline-block size-1.5 shrink-0 rounded-full bg-brand" />
+						<span className="mr-1.5 inline-block size-1.5 rounded-full bg-brand align-middle" />
 					)}
 					{record.title}
 				</p>
