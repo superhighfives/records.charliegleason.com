@@ -188,9 +188,13 @@ body,
      portals in as a `<body>` child too (same DOM parent as the page
      content — the `:not()`s below are what tells them apart). Excluding the
      sheet's own slots keeps the panel's own `overflow-y-auto` content
-     (record-panel.tsx) scrollable while the page behind it is frozen. */
-  body[data-scroll-locked]
-    > *:not([data-slot="sheet-overlay"]):not([data-slot="sheet-content"]) {
+     (record-panel.tsx) scrollable while the page behind it is frozen.
+     Radix's `Portal` wraps the overlay/content pair in its own
+     `data-slot="sheet-portal"` div before portaling into `<body>`, so
+     that's the actual direct child to exclude — `sheet-overlay`/
+     `sheet-content` themselves are one level deeper and never direct
+     children of `body` here. */
+  body[data-scroll-locked] > *:not([data-slot="sheet-portal"]) {
     touch-action: none;
     overscroll-behavior: none;
   }
