@@ -84,7 +84,12 @@ export function VinylDisc({
 				"vinyl-peek pointer-events-none absolute inset-0",
 				className,
 			)}
-			style={{ "--vinyl-scale": scale } as React.CSSProperties}
+			style={
+				{
+					"--vinyl-scale": scale,
+					"--vinyl-layers": layers,
+				} as React.CSSProperties
+			}
 			aria-hidden="true"
 		>
 			{/* Back-most layer first so later (front) layers paint over it. */}
@@ -98,8 +103,16 @@ export function VinylDisc({
 					// couldn't out-grow that on a big tile even though it was plenty on
 					// a small one. `inset-[5%]` scales with the tile instead, and 5% is
 					// enough margin to keep even a 3-disc stack's rotated corners from
-					// poking past the tile's own edge at any size.
-					className="vinyl-disc absolute inset-[5%]"
+					// poking past the tile's own edge at any size. `size-[90%]` pairs
+					// with it explicitly rather than leaving width/height to be implied
+					// by the four insets — Safari doesn't derive a replaced element's
+					// (this `<svg>`, sized from its own `viewBox`) box size from `inset`
+					// the way it should per spec, and instead renders it at full
+					// intrinsic/container size regardless of the inset percentages,
+					// which read as the disc being oversized and poking out well past
+					// where the 5% margin should have kept it. An explicit `size-[90%]`
+					// (== 100% - 2×5%) gives Safari a width/height it can't ignore.
+					className="vinyl-disc absolute inset-[5%] size-[90%]"
 					style={{ "--vinyl-stack-index": i } as React.CSSProperties}
 				>
 					<title>{colorName ? `${colorName} vinyl` : "Vinyl record"}</title>

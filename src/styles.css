@@ -255,29 +255,71 @@ body {
 /* "Has notes" corner dot's idle animation — a strong yellow glow that
  * breathes in and out, rather than Tailwind's stock `animate-pulse` (a flat
  * opacity fade), since that also fought the dot's own `group-hover:opacity-0`
- * fade-out (both animating the same property). This only touches `transform`/
- * `box-shadow`, so the hover fade-out still works untouched underneath it —
- * the glow keeps animating, just invisibly, once opacity hits 0. */
+ * fade-out (both animating the same property). Every dot-bearing tile
+ * currently on screen runs this at once, so it only ever touches `transform`/
+ * `opacity` — both compositor-only — never `box-shadow`, which forces a paint
+ * every frame and was measurably janky on iOS Safari once more than a couple
+ * tiles were visible mid-scroll. The glow itself is a separate `::after`
+ * layer (a blurred, oversized copy of the dot) rather than an animated
+ * `box-shadow`, so it composites the same way; `filter: blur()` is set once,
+ * unanimated, so it doesn't itself force a repaint each frame. The hover
+ * fade-out (`group-hover:opacity-0`) still only targets the dot itself, so
+ * the glow keeps animating, just invisibly, once that fires. */
 @keyframes dot-pulse {
   0%,
   100% {
     transform: scale(1);
-    box-shadow: 0 0 0 0
-      color-mix(in oklab, var(--accent-yellow) 70%, transparent);
   }
   50% {
     transform: scale(1.15);
-    box-shadow: 0 0 10px 4px
-      color-mix(in oklab, var(--accent-yellow) 90%, transparent);
+  }
+}
+
+@keyframes dot-pulse-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.7);
   }
 }
 
 .dot-pulse {
+  /* No `position` here — every caller already applies Tailwind's `absolute`
+     utility to this element (it's the corner badge/`NowShowing` dot, meant
+     to sit pinned via `top`/`left`). `.dot-pulse::after` below only needs
+     *some* positioned ancestor to anchor to, and `absolute` already qualifies
+     — an earlier version set `position: relative` here too, which doesn't
+     even win by specificity, but this file's rules are unlayered, and
+     unlayered CSS always beats Tailwind's `@layer utilities` regardless of
+     source order or specificity. That silently downgraded the dot from
+     `absolute` to `relative` everywhere, which is mostly invisible on
+     Chrome/Firefox but not on Safari: a `relative`-positioned element's
+     percentage `top` resolves against the containing block's height only if
+     that height counts as "explicitly specified" per spec, and Safari
+     doesn't treat an `aspect-ratio`-derived height as qualifying — so `top`
+     silently resolved to 0, leaving the dot pinned to the tile's left inset
+     but floating at the very top edge instead of inset down into the corner. */
   animation: dot-pulse 2s ease-in-out infinite;
 }
 
+.dot-pulse::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--accent-yellow) 80%, transparent);
+  filter: blur(4px);
+  animation: dot-pulse-glow 2s ease-in-out infinite;
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .dot-pulse {
+  .dot-pulse,
+  .dot-pulse::after {
     animation: none;
   }
 }
@@ -381,8 +423,21 @@ a {
  * top of it. `data-active` mirrors this for whenever the tooltip is open
  * (including hovering its own portaled content, which plain `:hover` on
  * `.group` can't see — see the comment on `RecordTile`/`tooltipOpen`), so the
- * raised stacking sticks around for exactly as long as the peek itself does. */
-.group:hover,
+ * raised stacking sticks around for exactly as long as the peek itself does.
+ *
+ * The `:hover` half is gated to `(pointer: fine)` — real mouse hardware —
+ * deliberately. iOS Safari applies `:hover` on tap and doesn't reliably clear
+ * it on the next tap elsewhere (no pointerleave fires for a touch), so a
+ * touch-device tap could leave a tile's raised z-index (and the vinyl-disc
+ * reveal below) stuck indefinitely, sometimes on more than one tile at once.
+ * `data-active` — driven explicitly by the grid's own scroll/tap logic on
+ * touch devices — is the only source of truth there instead. */
+@media (pointer: fine) {
+  .group:hover {
+    z-index: 10;
+  }
+}
+
 .group[data-active="true"] {
   z-index: 10;
 }
@@ -459,30 +514,63 @@ a {
 }
 
 .vinyl-disc {
+  /* Positive rotation, growing with `--vinyl-stack-index` — the back-most
+     disc (highest index) tips furthest, matching the fanned "[)))" read the
+     hover/active reveal below opens into. It used to run negative here while
+     the reveal ran positive, so a multi-disc stack visibly flipped direction
+     the instant it slid out instead of the fan just opening wider. */
   transform: translateX(0) scale(1)
-    rotate(calc(-3deg * var(--vinyl-stack-index, 0)));
+    rotate(calc(3deg * var(--vinyl-stack-index, 0)));
   transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.group:hover .vinyl-disc,
+@media (pointer: fine) {
+  .group:hover .vinyl-disc {
+    /* min(25%, 64px): a percentage alone scales with the tile, but on a wide
+       desktop grid 25% of a ~260px tile (~65px) can clear the page's own side
+       padding on the last column and force a horizontal scrollbar. Capping to
+       a fixed px keeps the reveal bounded everywhere. `scale(1.06)` on top of
+       the slide sells it as the record actually coming forward, not just
+       sliding sideways behind the same flat plane as the cover.
+       `--vinyl-layers - 1 - --vinyl-stack-index` counts how many layers sit
+       *behind* this one (0 for the back-most). Subtracting `8px` per layer
+       behind it means the back-most disc always lands at exactly the plain
+       `min(25%, 64px)` distance — the same horizontal footprint a single
+       disc reveals to, regardless of stack size — and every layer in front
+       of it is pulled progressively closer to the sleeve from that same
+       ceiling. The stack still reads as "[)))" fanning open disc by disc,
+       it just fans *within* a single disc's footprint instead of growing
+       past it as more discs are added. */
+    transform: translateX(
+        calc(
+          min(25%, 64px) * var(--vinyl-scale, 1) - 8px *
+            (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+        )
+      )
+      scale(1.06)
+      rotate(
+        calc(
+          6deg - 3deg *
+            (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+        )
+      );
+  }
+}
+
 .group[data-active="true"] .vinyl-disc {
-  /* min(25%, 64px): a percentage alone scales with the tile, but on a wide
-     desktop grid 25% of a ~260px tile (~65px) can clear the page's own side
-     padding on the last column and force a horizontal scrollbar. Capping to a
-     fixed px keeps the reveal bounded everywhere. `scale(1.06)` on top of the
-     slide sells it as the record actually coming forward, not just sliding
-     sideways behind the same flat plane as the cover. The `- 8px *
-     --vinyl-stack-index` term is what actually fans a multi-disc stack open —
-     back layers travel a visibly shorter distance than the front one, so they
-     stay tucked in behind it (nearer the sleeve) instead of overshooting past
-     it; a 1px difference here used to be lost entirely at this scale. */
   transform: translateX(
       calc(
         min(25%, 64px) * var(--vinyl-scale, 1) - 8px *
-          var(--vinyl-stack-index, 0)
+          (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
       )
     )
-    scale(1.06) rotate(calc(6deg - 3deg * var(--vinyl-stack-index, 0)));
+    scale(1.06)
+    rotate(
+      calc(
+        6deg - 3deg *
+          (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+      )
+    );
 }
 
 /*
@@ -512,15 +600,23 @@ a {
      only a few px past the cover's edge on one record) rather than
      eyeballed, since the overflow amount varies per record depending on how
      much margin that record's own matte crop leaves around its visible
-     sleeve. The `- 10px * --vinyl-stack-index` term fans a multi-disc stack:
-     back layers travel less than the front one, so they read as tucked in
-     behind it (nearer the sleeve) rather than peeking out further than the
-     disc in front — a 3px difference was too small to actually see. */
+     sleeve. `--vinyl-layers - 1 - --vinyl-stack-index` (see the equivalent
+     grid-tile comment above) counts how many layers sit behind this one —
+     0 for the back-most — so subtracting `10px` per layer behind it anchors
+     the back-most disc at exactly this same 30px a single disc travels,
+     regardless of stack size, and pulls layers in front of it closer to the
+     sleeve from that same ceiling. Still reads as "[)))" opening wider disc
+     by disc, just capped to one disc's own footprint instead of growing past
+     it as more discs are added — a 3px difference was too small to actually
+     see. */
   transform: translate(
-      calc(30px * var(--vinyl-scale, 1) - 10px * var(--vinyl-stack-index, 0)),
+      calc(
+        30px * var(--vinyl-scale, 1) - 10px *
+          (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+      ),
       calc(4px * var(--vinyl-stack-index, 0))
     )
-    rotate(calc(-3deg * var(--vinyl-stack-index, 0))) scale(1.3);
+    rotate(calc(3deg * var(--vinyl-stack-index, 0))) scale(1.3);
   transition-delay: 700ms;
 }
 
