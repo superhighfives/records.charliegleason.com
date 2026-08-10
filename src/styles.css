@@ -379,6 +379,14 @@ a {
  * mouseenter/leave handler wired to every tile. */
 .grid-focus-overlay {
   z-index: 5;
+  /* Keeps this element's compositing layer (and its backdrop-filter capture)
+   * alive continuously from mount, rather than Chrome creating it lazily the
+   * first time opacity goes from 0 to 1. Without this, the very first hover
+   * after a fresh page load (or after the sheet closes and this remounts)
+   * can fail to blur at all — the layer gets created too late to correctly
+   * capture what's behind it that frame. A later HMR-triggered re-render
+   * masked this by rebuilding the layer tree from scratch. */
+  will-change: opacity, backdrop-filter;
   /* Fade *out* is a long, deliberate 4s linger by default so hopping between
    * two tiles — which can briefly clear `:has()` while the pointer crosses
    * the gap between them — doesn't flash the overlay off and back on. Fade

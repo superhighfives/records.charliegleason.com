@@ -243,7 +243,23 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				</div>
 			)}
 
-			<div className="fade-in min-h-[70vh]" style={{ animationDelay: "250ms" }}>
+			<div
+				className="fade-in min-h-[70vh]"
+				style={{ animationDelay: "250ms" }}
+				// `animation-fill-mode: both` (see `.fade-in`) never really "ends" —
+				// it holds the finished keyframe indefinitely rather than the
+				// animation being removed — which keeps Chrome compositing this
+				// wrapper into its own layer forever. That layer boundary clips
+				// what CollectionGrid's fixed, backdrop-blurred children (the
+				// hover overlay, `NowShowing`) can see behind them to just this
+				// subtree, so the blur silently stops reaching sibling content
+				// (e.g. the hero text above) once composited this way. Explicitly
+				// canceling the animation once it visually completes releases the
+				// layer and restores the correct backdrop-filter reach.
+				onAnimationEnd={(e) => {
+					e.currentTarget.style.animation = "none";
+				}}
+			>
 				{data.length === 0 ? (
 					<p className="text-muted-foreground">Nothing here yet.</p>
 				) : filtered.length === 0 ? (

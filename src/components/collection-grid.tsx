@@ -804,7 +804,25 @@ export function CollectionGrid({
 			className="collection-grid"
 			style={gridStyle}
 			onPointerMove={
-				isTouch ? undefined : (e) => setSpotlightTarget(e.clientX, e.clientY)
+				isTouch
+					? undefined
+					: (e) => {
+							// Covers a gap `onPointerEnter` (below) misses: the record
+							// panel sliding over the grid triggers a real `pointerleave`
+							// (the panel is now what's under the cursor), setting
+							// `data-pointer-outside`. Closing the panel doesn't itself
+							// fire `pointerenter` to clear it — browsers only recompute
+							// hover targets on actual pointer movement across a boundary,
+							// not just because an overlapping element left the DOM — so
+							// without this, the very first gap-hop after closing the
+							// panel stays stuck on the quick fade instead of the long
+							// inter-tile linger. Any move over the grid is proof the
+							// pointer is inside it, so clear it here too.
+							if (e.currentTarget.hasAttribute("data-pointer-outside")) {
+								e.currentTarget.removeAttribute("data-pointer-outside");
+							}
+							setSpotlightTarget(e.clientX, e.clientY);
+						}
 			}
 			// `data-pointer-outside` (see `.grid-focus-overlay` in styles.css) tells
 			// the overlay's fade-out whether the pointer left the whole grid or just

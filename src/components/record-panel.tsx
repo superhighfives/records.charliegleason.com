@@ -208,10 +208,14 @@ function CoverZoom({
 	// Matte preferred as the thumbnail; the cover is what the lightbox blows up.
 	const thumbKey = matteKey ?? coverKey;
 	const zoomKey = coverKey ?? thumbKey;
-	// Two different sizes off the same ~1MB master: the trigger only ever
-	// renders at this `w-44` (176px) rotated thumbnail, but the lightbox it
-	// opens blows the *cover* (not the matte) up to near-fullscreen (90vmin).
-	const thumbSrc = thumbKey ? photoUrl(thumbKey, 350) : null;
+	// 500, not some smaller width tuned to this `w-44` (176px) rotated
+	// thumbnail: it matches the grid tile's own default cover width (see
+	// `collection-grid.tsx`), so this request is a browser cache *hit* off the
+	// tile that opened it (same key, same `?w=`, same URL) rather than a fresh
+	// resize — the whole reason `instant` (below) has anything to show
+	// instantly. A spanning grid tile requests 900 instead, which this still
+	// misses, but that's the minority case.
+	const thumbSrc = thumbKey ? photoUrl(thumbKey, 500) : null;
 	const zoomSrc = zoomKey ? photoUrl(zoomKey, 1600) : null;
 	if (!thumbSrc || !zoomSrc) {
 		return (
@@ -242,6 +246,11 @@ function CoverZoom({
 				src={thumbSrc}
 				alt=""
 				onReady={onReveal}
+				// The grid tile this panel opened from has almost certainly already
+				// loaded this cover — fading it in here just replays a "reveal" for
+				// an image that's already sitting in cache, which reads as an
+				// unwanted flicker/reload rather than a real load-in.
+				instant
 				className={cn(
 					"size-full rotate-3",
 					matteKey
@@ -464,12 +473,12 @@ export function RecordPanel({
 							// caller `opacity-*` class would clobber FadeImage's own
 							// 0→100 fade toggle. Parent × child opacity multiply, so the
 							// image fades 0 → 0.1 on load, then out as `--hero` pins.
-							style={{ opacity: "calc(0.1 * (1 - var(--hero, 0)))" }}
+							style={{ opacity: "calc(1.0 * (1 - var(--hero, 0)))" }}
 						>
 							<FadeImage
 								src={photoUrl(cover, 800)}
 								alt=""
-								className="size-full object-cover mask-b-from-50% mask-b-to-100%"
+								className="size-full object-cover mask-b-from-0% mask-b-to-75%"
 							/>
 						</div>
 					)}
