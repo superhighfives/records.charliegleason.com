@@ -252,7 +252,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 					<CollectionGrid
 						records={filtered}
 						onOpen={openRecord}
-						focusedRecordId={shown?.record.id ?? null}
+						focusedRecordId={selected?.id ?? null}
 					/>
 				)}
 			</div>

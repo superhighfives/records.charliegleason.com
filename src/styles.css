@@ -159,11 +159,11 @@ body,
    a scrollbar-width compensation margin) get forced onto `body`, and iOS
    recomputes/clamps the page's scroll position against the new, suddenly-
    locked layout, producing a scroll-then-correct flash before the panel's
-   own slide-in even starts. The record panel already covers the full
-   viewport width on mobile with its own dim/blurred overlay, so losing the
-   lock (letting the grid keep scrolling underneath, invisibly, while it's
-   open) costs nothing visible — Dialog's focus trap, `Escape`, and outside-
-   click dismiss are unaffected; only the scroll lock itself is undone.
+   own slide-in even starts. `touch-action`/`overscroll-behavior` (rather
+   than `overflow: hidden`) block the actual scroll gesture instead — they
+   don't change layout or trigger iOS's scroll-position reclamp, so the grid
+   is no longer scrollable underneath the panel but the jerk stays fixed.
+   Dialog's focus trap, `Escape`, and outside-click dismiss are unaffected.
    `html body[...]` (not just `body[...]`) — `react-remove-scroll` injects
    its own `!important` rule on the identical `body[data-scroll-locked]`
    selector via a `<style>` tag added to the document at runtime, always
@@ -172,12 +172,14 @@ body,
    this rule's specificity just enough to win regardless of insertion order.
    Scoped below `sm` (640px, Tailwind's default and `SheetContent`'s own
    `sm:max-w-md` breakpoint) — above that the panel is a right-hand drawer
-   that leaves the grid visible, so the lock must stay in place there. */
+   and Radix's own lock (untouched here) already covers it. */
 @media (max-width: 639px) {
   html body[data-scroll-locked] {
     overflow: visible !important;
     position: static !important;
     margin-right: 0 !important;
+    touch-action: none !important;
+    overscroll-behavior: none !important;
   }
 }
 
