@@ -54,6 +54,7 @@ export function FadeImage({
 	onError,
 	onReady,
 	src,
+	instant = false,
 	...props
 }: ComponentPropsWithoutRef<"img"> & {
 	/**
@@ -63,6 +64,15 @@ export function FadeImage({
 	 * e.g. the grid tile fading its vinyl disc in only once the cover is up.
 	 */
 	onReady?: () => void;
+	/**
+	 * Skip the fade entirely — reveal the instant it loads/decodes, no opacity
+	 * transition. For a spot showing an image that's very likely already
+	 * sitting in the browser's cache from being shown elsewhere on the page
+	 * (e.g. the record panel's thumbnail, already visible in the grid tile
+	 * that opened it) — there the fade has nothing real to smooth over, so it
+	 * just reads as an unwanted flicker/reload instead of a reveal.
+	 */
+	instant?: boolean;
 }) {
 	const ref = useRef<HTMLImageElement>(null);
 	// The src we've revealed. Deriving `loaded` from it (rather than storing a
@@ -103,24 +113,34 @@ export function FadeImage({
 	// result is a hard cut instead of a fade, most visible when several images
 	// on a page all finish around the same instant (they cut in unison). A
 	// single rAF can still land before that first paint; two reliably don't.
-	const reveal = useCallback((value: string | undefined) => {
-		requestAnimationFrame(() => {
-			requestAnimationFrame(() => {
-				// `decodedSrcs` is deliberately marked *here*, not at the top of
-				// `reveal`, and only if this instance survived to actually paint the
-				// reveal: a caller that unmounts this instance before the rAF pair
-				// fires (the collection grid remounts every tile once, right after
-				// hydration, when it switches from its plain first-paint markup to
-				// the virtualized one) would otherwise mark the src decoded for an
-				// animation that never played — the *next* mount then reads it back
-				// as "already seen" and skips the fade it's actually showing for the
-				// first time, i.e. exactly the interrupted mount's hard-cut bug.
+	const reveal = useCallback(
+		(value: string | undefined) => {
+			// `decodedSrcs` is deliberately marked here, not at the top of
+			// `reveal`, and only if this instance survived to actually paint the
+			// reveal: a caller that unmounts this instance before the rAF pair
+			// fires (the collection grid remounts every tile once, right after
+			// hydration, when it switches from its plain first-paint markup to
+			// the virtualized one) would otherwise mark the src decoded for an
+			// animation that never played — the *next* mount then reads it back
+			// as "already seen" and skips the fade it's actually showing for the
+			// first time, i.e. exactly the interrupted mount's hard-cut bug.
+			const commit = () => {
 				if (!mountedRef.current) return;
 				if (typeof value === "string") decodedSrcs.add(value);
 				setLoadedSrc(value);
-			});
-		});
-	}, []);
+			};
+			// `instant` has no pre-reveal (opacity-0) frame to protect a paint
+			// of, so it skips straight to committing — the two-rAF bracket below
+			// exists purely to guarantee the browser paints that hidden starting
+			// point before the class flips (see the file doc comment).
+			if (instant) {
+				commit();
+				return;
+			}
+			requestAnimationFrame(() => requestAnimationFrame(commit));
+		},
+		[instant],
+	);
 
 	useEffect(() => {
 		// A cached image can already be complete before `onLoad` is wired up (on
@@ -135,8 +155,9 @@ export function FadeImage({
 			alt={alt}
 			src={src}
 			className={cn(
-				"transition-opacity duration-700 ease-out motion-reduce:transition-none",
-				loaded ? "opacity-100" : "opacity-0",
+				!instant &&
+					"transition-opacity duration-700 ease-out motion-reduce:transition-none",
+				!instant && (loaded ? "opacity-100" : "opacity-0"),
 				className,
 			)}
 			onLoad={(e) => {

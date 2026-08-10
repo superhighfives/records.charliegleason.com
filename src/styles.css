@@ -159,11 +159,8 @@ body,
    a scrollbar-width compensation margin) get forced onto `body`, and iOS
    recomputes/clamps the page's scroll position against the new, suddenly-
    locked layout, producing a scroll-then-correct flash before the panel's
-   own slide-in even starts. The record panel already covers the full
-   viewport width on mobile with its own dim/blurred overlay, so losing the
-   lock (letting the grid keep scrolling underneath, invisibly, while it's
-   open) costs nothing visible — Dialog's focus trap, `Escape`, and outside-
-   click dismiss are unaffected; only the scroll lock itself is undone.
+   own slide-in even starts. Dialog's focus trap, `Escape`, and outside-click
+   dismiss are unaffected.
    `html body[...]` (not just `body[...]`) — `react-remove-scroll` injects
    its own `!important` rule on the identical `body[data-scroll-locked]`
    selector via a `<style>` tag added to the document at runtime, always
@@ -172,12 +169,34 @@ body,
    this rule's specificity just enough to win regardless of insertion order.
    Scoped below `sm` (640px, Tailwind's default and `SheetContent`'s own
    `sm:max-w-md` breakpoint) — above that the panel is a right-hand drawer
-   that leaves the grid visible, so the lock must stay in place there. */
+   and Radix's own lock (untouched here) already covers it. */
 @media (max-width: 639px) {
   html body[data-scroll-locked] {
     overflow: visible !important;
     position: static !important;
     margin-right: 0 !important;
+  }
+
+  /* `touch-action`/`overscroll-behavior` (rather than `overflow: hidden`)
+     block the actual scroll gesture instead of a layout change — they don't
+     trigger iOS's scroll-position reclamp, so this stays jerk-free. Applied
+     to `<body>`'s own direct children (not `body` itself) because
+     `touch-action`'s *used* value is the intersection of a touch's target
+     and every ancestor up to the viewport — an ancestor's `none` can't be
+     widened back by a descendant, so putting it on `body` would also block
+     touch-scrolling *inside* the open record panel, which Radix's Sheet
+     portals in as a `<body>` child too (same DOM parent as the page
+     content — the `:not()`s below are what tells them apart). Excluding the
+     sheet's own slots keeps the panel's own `overflow-y-auto` content
+     (record-panel.tsx) scrollable while the page behind it is frozen.
+     Radix's `Portal` wraps the overlay/content pair in its own
+     `data-slot="sheet-portal"` div before portaling into `<body>`, so
+     that's the actual direct child to exclude — `sheet-overlay`/
+     `sheet-content` themselves are one level deeper and never direct
+     children of `body` here. */
+  body[data-scroll-locked] > *:not([data-slot="sheet-portal"]) {
+    touch-action: none;
+    overscroll-behavior: none;
   }
 }
 
@@ -377,6 +396,14 @@ a {
  * mouseenter/leave handler wired to every tile. */
 .grid-focus-overlay {
   z-index: 5;
+  /* Keeps this element's compositing layer (and its backdrop-filter capture)
+   * alive continuously from mount, rather than Chrome creating it lazily the
+   * first time opacity goes from 0 to 1. Without this, the very first hover
+   * after a fresh page load (or after the sheet closes and this remounts)
+   * can fail to blur at all — the layer gets created too late to correctly
+   * capture what's behind it that frame. A later HMR-triggered re-render
+   * masked this by rebuilding the layer tree from scratch. */
+  will-change: opacity, backdrop-filter;
   /* Fade *out* is a long, deliberate 4s linger by default so hopping between
    * two tiles — which can briefly clear `:has()` while the pointer crosses
    * the gap between them — doesn't flash the overlay off and back on. Fade

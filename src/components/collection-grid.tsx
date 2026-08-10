@@ -206,11 +206,14 @@ function clamp(value: number, min: number, max: number): number {
 // through the record panel reads as a deliberate glide, not a blink.
 const GRID_SCROLL_DURATION_MS = 900;
 
-// Same ease-out-expo shape used for the grid-focus-overlay's fade-in (see
-// styles.css) — nearly all the motion happens early, settling gently rather
-// than arriving at a constant clip.
-function easeOutExpo(t: number): number {
-	return t >= 1 ? 1 : 1 - 2 ** (-10 * t);
+// Ease-in-out-expo, the same overall shape as the grid-focus-overlay's
+// fade-in ease-out-expo (see styles.css) but ramping up gently too rather
+// than starting at full speed — the grid-centring scroll should read as a
+// deliberate glide from a dead stop, not just settle gently at the end.
+function easeInOutExpo(t: number): number {
+	if (t <= 0) return 0;
+	if (t >= 1) return 1;
+	return t < 0.5 ? 2 ** (20 * t - 10) / 2 : (2 - 2 ** (-20 * t + 10)) / 2;
 }
 
 /**
@@ -227,8 +230,15 @@ function smoothScrollCenterTo(el: HTMLElement, duration: number): void {
 	if (Math.abs(delta) < 1) return;
 	const startTime = performance.now();
 	function step(now: number) {
-		const t = Math.min(1, (now - startTime) / duration);
-		window.scrollTo(0, startY + delta * easeOutExpo(t));
+		// Clamp the low end too, not just `t <= 1` — a rAF callback's `now` can
+		// land *before* `startTime` (it reflects when that frame began, which
+		// can precede a `performance.now()` call made moments earlier in the
+		// same commit/effect), making the first frame's `t` slightly negative.
+		// `easeInOutExpo` isn't defined for negative input — it overshoots
+		// backwards — so an unclamped `t` here jerks the scroll away from the
+		// target for one frame before snapping back toward it.
+		const t = Math.min(1, Math.max(0, (now - startTime) / duration));
+		window.scrollTo(0, startY + delta * easeInOutExpo(t));
 		if (t < 1) requestAnimationFrame(step);
 	}
 	requestAnimationFrame(step);
@@ -344,23 +354,26 @@ export function CollectionGrid({
 	const gridElRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotionRef = usePrefersReducedMotionRef();
 
-	// Keeps the grid scrolled to whichever record the detail panel has open
-	// while paging prev/next inside it (smoothly — the panel covers most of
-	// the viewport but not all of it, so the motion is visible at the edges
-	// and should read as deliberate rather than a snap), so closing the panel
-	// never leaves you scrolled back to wherever you were when it first
-	// opened. Only fires on a change *between* two already-open records
-	// (prevFocusedId starts non-null) — the initial open from a grid click is
-	// skipped, since that tile is already on screen (you just clicked it) and
-	// re-centring it would nudge the grid visibly mid slide-in, right as the
-	// panel that's meant to hide this motion is still becoming opaque.
+	// Keeps the grid scrolled to whichever record the detail panel has open —
+	// on the initial open (grid click, or a direct nav to `/records/<id>-…`)
+	// as well as while paging prev/next inside it — so closing the panel
+	// never leaves you scrolled back to wherever you were before it opened,
+	// and a direct-linked record is never left off-screen underneath. The
+	// very first run (mount) warps straight there instead of animating: the
+	// page can still be settling layout (fonts, images) right after load, and
+	// animating over that would read as a stutter rather than a glide. Every
+	// later change (grid click, paging) gets the smooth tween — the panel
+	// covers most of the viewport but not all of it, so the motion is
+	// visible at the edges and should read as deliberate rather than a snap.
 	const prevFocusedIdRef = useRef<number | null>(null);
+	const isFirstScrollRunRef = useRef(true);
 	useEffect(() => {
 		const prevFocusedId = prevFocusedIdRef.current;
+		const isFirstRun = isFirstScrollRunRef.current;
+		isFirstScrollRunRef.current = false;
 		prevFocusedIdRef.current = focusedRecordId ?? null;
 		if (
 			focusedRecordId == null ||
-			prevFocusedId == null ||
 			prevFocusedId === focusedRecordId ||
 			!gridElRef.current
 		) {
@@ -370,7 +383,7 @@ export function CollectionGrid({
 			`[data-record-id="${focusedRecordId}"]`,
 		);
 		if (!el) return;
-		if (prefersReducedMotionRef.current) {
+		if (prefersReducedMotionRef.current || isFirstRun) {
 			el.scrollIntoView({ block: "center", behavior: "auto" });
 		} else {
 			smoothScrollCenterTo(el, GRID_SCROLL_DURATION_MS);
@@ -791,7 +804,25 @@ export function CollectionGrid({
 			className="collection-grid"
 			style={gridStyle}
 			onPointerMove={
-				isTouch ? undefined : (e) => setSpotlightTarget(e.clientX, e.clientY)
+				isTouch
+					? undefined
+					: (e) => {
+							// Covers a gap `onPointerEnter` (below) misses: the record
+							// panel sliding over the grid triggers a real `pointerleave`
+							// (the panel is now what's under the cursor), setting
+							// `data-pointer-outside`. Closing the panel doesn't itself
+							// fire `pointerenter` to clear it — browsers only recompute
+							// hover targets on actual pointer movement across a boundary,
+							// not just because an overlapping element left the DOM — so
+							// without this, the very first gap-hop after closing the
+							// panel stays stuck on the quick fade instead of the long
+							// inter-tile linger. Any move over the grid is proof the
+							// pointer is inside it, so clear it here too.
+							if (e.currentTarget.hasAttribute("data-pointer-outside")) {
+								e.currentTarget.removeAttribute("data-pointer-outside");
+							}
+							setSpotlightTarget(e.clientX, e.clientY);
+						}
 			}
 			// `data-pointer-outside` (see `.grid-focus-overlay` in styles.css) tells
 			// the overlay's fade-out whether the pointer left the whole grid or just
