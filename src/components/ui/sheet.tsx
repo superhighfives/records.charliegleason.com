@@ -36,9 +36,11 @@ function SheetOverlay({
 		<SheetPrimitive.Overlay
 			data-slot="sheet-overlay"
 			className={cn(
-				"fixed inset-0 z-50 bg-white/50 dark:bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-500",
-				enterAnimation &&
-					"data-[state=open]:animate-in data-[state=open]:fade-in-0",
+				// duration-500 is scoped to data-[state=open] to match SheetContent's
+				// open duration below — unscoped, it would also slow the close fade,
+				// leaving the dimmed backdrop visible after the panel has exited.
+				"fixed inset-0 z-50 bg-white/50 dark:bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=open]:duration-500",
+				enterAnimation && "data-[state=open]:animate-in",
 				className,
 			)}
 			{...props}
@@ -76,7 +78,7 @@ function SheetContent({
 			<SheetPrimitive.Content
 				data-slot="sheet-content"
 				className={cn(
-					"fixed z-50 flex flex-col bg-background shadow-lg transition ease-in-out outline-none data-[state=closed]:animate-out data-[state=closed]:duration-300",
+					"fixed z-50 flex flex-col bg-background shadow-lg transition ease-in-out outline-none data-[state=closed]:animate-out data-[state=closed]:duration-500",
 					enterAnimation &&
 						"data-[state=open]:animate-in data-[state=open]:duration-500",
 					side === "right" &&
