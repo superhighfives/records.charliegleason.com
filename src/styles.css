@@ -159,11 +159,8 @@ body,
    a scrollbar-width compensation margin) get forced onto `body`, and iOS
    recomputes/clamps the page's scroll position against the new, suddenly-
    locked layout, producing a scroll-then-correct flash before the panel's
-   own slide-in even starts. `touch-action`/`overscroll-behavior` (rather
-   than `overflow: hidden`) block the actual scroll gesture instead — they
-   don't change layout or trigger iOS's scroll-position reclamp, so the grid
-   is no longer scrollable underneath the panel but the jerk stays fixed.
-   Dialog's focus trap, `Escape`, and outside-click dismiss are unaffected.
+   own slide-in even starts. Dialog's focus trap, `Escape`, and outside-click
+   dismiss are unaffected.
    `html body[...]` (not just `body[...]`) — `react-remove-scroll` injects
    its own `!important` rule on the identical `body[data-scroll-locked]`
    selector via a `<style>` tag added to the document at runtime, always
@@ -178,8 +175,24 @@ body,
     overflow: visible !important;
     position: static !important;
     margin-right: 0 !important;
-    touch-action: none !important;
-    overscroll-behavior: none !important;
+  }
+
+  /* `touch-action`/`overscroll-behavior` (rather than `overflow: hidden`)
+     block the actual scroll gesture instead of a layout change — they don't
+     trigger iOS's scroll-position reclamp, so this stays jerk-free. Applied
+     to `<body>`'s own direct children (not `body` itself) because
+     `touch-action`'s *used* value is the intersection of a touch's target
+     and every ancestor up to the viewport — an ancestor's `none` can't be
+     widened back by a descendant, so putting it on `body` would also block
+     touch-scrolling *inside* the open record panel, which Radix's Sheet
+     portals in as a `<body>` child too (same DOM parent as the page
+     content — the `:not()`s below are what tells them apart). Excluding the
+     sheet's own slots keeps the panel's own `overflow-y-auto` content
+     (record-panel.tsx) scrollable while the page behind it is frozen. */
+  body[data-scroll-locked]
+    > *:not([data-slot="sheet-overlay"]):not([data-slot="sheet-content"]) {
+    touch-action: none;
+    overscroll-behavior: none;
   }
 }
 
