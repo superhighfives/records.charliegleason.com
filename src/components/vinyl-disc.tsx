@@ -84,7 +84,12 @@ export function VinylDisc({
 				"vinyl-peek pointer-events-none absolute inset-0",
 				className,
 			)}
-			style={{ "--vinyl-scale": scale } as React.CSSProperties}
+			style={
+				{
+					"--vinyl-scale": scale,
+					"--vinyl-layers": layers,
+				} as React.CSSProperties
+			}
 			aria-hidden="true"
 		>
 			{/* Back-most layer first so later (front) layers paint over it. */}

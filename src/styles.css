@@ -531,30 +531,46 @@ a {
        padding on the last column and force a horizontal scrollbar. Capping to
        a fixed px keeps the reveal bounded everywhere. `scale(1.06)` on top of
        the slide sells it as the record actually coming forward, not just
-       sliding sideways behind the same flat plane as the cover. The `+ 8px *
-       --vinyl-stack-index` term is what fans a multi-disc stack open — the
-       back-most disc (furthest from the cover, otherwise hidden behind the
-       ones in front of it) travels the furthest to actually clear them, so
-       the stack reads as "[)))" fanning further out disc by disc, rather than
-       every layer converging on the same spot. */
+       sliding sideways behind the same flat plane as the cover.
+       `--vinyl-layers - 1 - --vinyl-stack-index` counts how many layers sit
+       *behind* this one (0 for the back-most). Subtracting `8px` per layer
+       behind it means the back-most disc always lands at exactly the plain
+       `min(25%, 64px)` distance — the same horizontal footprint a single
+       disc reveals to, regardless of stack size — and every layer in front
+       of it is pulled progressively closer to the sleeve from that same
+       ceiling. The stack still reads as "[)))" fanning open disc by disc,
+       it just fans *within* a single disc's footprint instead of growing
+       past it as more discs are added. */
     transform: translateX(
         calc(
-          min(25%, 64px) * var(--vinyl-scale, 1) + 8px *
-            var(--vinyl-stack-index, 0)
+          min(25%, 64px) * var(--vinyl-scale, 1) - 8px *
+            (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
         )
       )
-      scale(1.06) rotate(calc(6deg + 3deg * var(--vinyl-stack-index, 0)));
+      scale(1.06)
+      rotate(
+        calc(
+          6deg - 3deg *
+            (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+        )
+      );
   }
 }
 
 .group[data-active="true"] .vinyl-disc {
   transform: translateX(
       calc(
-        min(25%, 64px) * var(--vinyl-scale, 1) + 8px *
-          var(--vinyl-stack-index, 0)
+        min(25%, 64px) * var(--vinyl-scale, 1) - 8px *
+          (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
       )
     )
-    scale(1.06) rotate(calc(6deg + 3deg * var(--vinyl-stack-index, 0)));
+    scale(1.06)
+    rotate(
+      calc(
+        6deg - 3deg *
+          (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+      )
+    );
 }
 
 /*
@@ -584,13 +600,20 @@ a {
      only a few px past the cover's edge on one record) rather than
      eyeballed, since the overflow amount varies per record depending on how
      much margin that record's own matte crop leaves around its visible
-     sleeve. The `+ 10px * --vinyl-stack-index` term fans a multi-disc stack:
-     back layers (further from the cover, otherwise hidden behind the ones in
-     front of them) travel further than the front one, so the stack reads as
-     "[)))" opening wider disc by disc instead of every layer landing on the
-     same spot — a 3px difference was too small to actually see. */
+     sleeve. `--vinyl-layers - 1 - --vinyl-stack-index` (see the equivalent
+     grid-tile comment above) counts how many layers sit behind this one —
+     0 for the back-most — so subtracting `10px` per layer behind it anchors
+     the back-most disc at exactly this same 30px a single disc travels,
+     regardless of stack size, and pulls layers in front of it closer to the
+     sleeve from that same ceiling. Still reads as "[)))" opening wider disc
+     by disc, just capped to one disc's own footprint instead of growing past
+     it as more discs are added — a 3px difference was too small to actually
+     see. */
   transform: translate(
-      calc(30px * var(--vinyl-scale, 1) + 10px * var(--vinyl-stack-index, 0)),
+      calc(
+        30px * var(--vinyl-scale, 1) - 10px *
+          (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+      ),
       calc(4px * var(--vinyl-stack-index, 0))
     )
     rotate(calc(3deg * var(--vinyl-stack-index, 0))) scale(1.3);
