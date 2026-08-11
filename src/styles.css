@@ -448,6 +448,20 @@ a {
   z-index: 0;
 }
 
+/* TEMP DIAGNOSTIC — not for merge. Testing whether the touch vignette's
+ * "hard cut" is actually the vinyl disc's active-state peek (up to 64px,
+ * `min(25%, 64px)` — see `.group[data-active="true"] .vinyl-disc` below)
+ * overflowing past the grid's own 16px (`px-4`) side padding on the
+ * rightmost column, pushing the document wider than the viewport. Same
+ * `(hover: none) and (pointer: coarse)` query `useIsTouchDevice` uses in
+ * collection-grid.tsx, so this only affects the same devices the vignette
+ * itself targets. */
+@media (hover: none) and (pointer: coarse) {
+  .vinyl-peek {
+    display: none;
+  }
+}
+
 /* Grid items paint in DOM order by default — without this, a disc sliding out
  * to the right gets painted OVER by the next cell in the row instead of on
  * top of it. `data-active` mirrors this for whenever the tooltip is open
