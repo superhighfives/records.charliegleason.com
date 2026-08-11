@@ -514,6 +514,19 @@ export function CollectionGrid({
 		// and the selection needs to keep tracking the centre line the whole
 		// time it's there, not just jump once when the row enters/leaves.
 		function updateActive() {
+			// Gates `.grid-focus-overlay-static` (see styles.css) — it's a plain
+			// `position: fixed` full-viewport overlay with no idea where the grid
+			// itself starts, so without this it happily blurs the page header too
+			// for as long as any of it is still on screen (confirmed on a real
+			// device: the vignette activating mid-scroll blurred the hero text,
+			// not just tiles, for exactly as long as the header hadn't fully
+			// scrolled past the top of the viewport yet). One `getBoundingClientRect`
+			// read alongside the ones `inBand` below already does every scroll
+			// tick, so this doesn't add a new forced layout.
+			container.toggleAttribute(
+				"data-header-cleared",
+				container.getBoundingClientRect().top <= 0,
+			);
 			const inBand = [...intersecting]
 				.map((id) => [id, elements.get(id)?.getBoundingClientRect()] as const)
 				.filter((entry): entry is [number, DOMRect] => entry[1] !== undefined);

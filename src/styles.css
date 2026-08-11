@@ -591,7 +591,13 @@ a {
 
 .collection-grid:has(.group:hover, .group[data-active="true"])
   .grid-focus-overlay,
-.collection-grid:has(.group[data-active="true"])
+/* `[data-header-cleared]` (written in `updateActive` in collection-grid.tsx)
+ * — this overlay is a plain `position: fixed` full-viewport element with no
+ * idea where the grid itself starts, so without this it happily blurs the
+ * page header too for as long as any of it is still on screen, not just
+ * tiles. Desktop's overlay doesn't need the same gate: its clear "hole" is
+ * chased to the hovered *tile*, which by definition isn't the header. */
+.collection-grid[data-header-cleared]:has(.group[data-active="true"])
   .grid-focus-overlay-static {
   opacity: 1;
   transition-duration: 1200ms;
