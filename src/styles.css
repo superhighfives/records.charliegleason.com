@@ -551,28 +551,41 @@ a {
  * composited, no pause/toggle anywhere), so this runs unconditionally the
  * same as desktop's does. */
 .grid-focus-overlay-static {
-  /* `circle at center` (a keyword, not `--overlay-x/y` pixel values) reliably
-   * left a band of totally unblurred content right at the top of the screen
-   * on real iOS Safari — `center` resolves against this element's own box,
-   * and a `position: fixed` box's percentage geometry can end up computed
-   * against a taller virtual viewport than what's actually visible once the
-   * dynamic toolbar has collapsed (confirmed by testing with the mask
-   * removed entirely: the unmasked box's blur *did* reach every edge, so the
-   * box itself was never the problem — only the mask's own keyword-based
-   * centring was). `--overlay-x/y` (set once from `window.visualViewport` in
-   * collection-grid.tsx, not per-frame) sidesteps it by handing the mask a
-   * real pixel centre instead of a keyword for it to miscompute. */
-  mask-image: radial-gradient(
-    circle at var(--overlay-x, 50%) var(--overlay-y, 50%),
-    transparent 0,
-    transparent 140px,
-    black 460px
+  /* A radial-gradient "hole" (the desktop approach) turned out to be doubly
+   * wrong for touch. First, a circle on a portrait phone screen — much
+   * taller than it is wide — reaches its "fully blurred" radius vertically
+   * long before it does horizontally, so the blur maxes out into a flat
+   * band across the *whole width* near the top/bottom while the sides stay
+   * mostly clear: it reads as two hard bars, not a vignette. Switching the
+   * circle's centring from the CSS keyword `center` to real pixel values
+   * (previously here, computed from `window.visualViewport`) fixed an
+   * earlier top-edge clipping bug but not this. Second — and the more
+   * fundamental problem — `backdrop-filter` through a *radial*-gradient
+   * mask on a `will-change`d `position: fixed` element is a known-fragile
+   * combination on real iOS Safari: the backdrop snapshot can get "locked"
+   * to whatever's visible at the exact frame the filter activates, instead
+   * of correctly re-capturing, producing a hard-edged clip right as the
+   * vignette fades in rather than the intended soft ramp.
+   *
+   * A plain top/bottom `linear-gradient` mask sidesteps both: it's
+   * proportional to the viewport by construction (percentages, not a fixed
+   * pixel radius), and linear-gradient masks don't hit the same
+   * backdrop-filter activation bug radial ones do. No JS needed either —
+   * this is why `collection-grid.tsx` no longer sets `--overlay-x/y` on
+   * this element. */
+  mask-image: linear-gradient(
+    to bottom,
+    black 0,
+    transparent 180px,
+    transparent calc(100% - 180px),
+    black 100%
   );
-  -webkit-mask-image: radial-gradient(
-    circle at var(--overlay-x, 50%) var(--overlay-y, 50%),
-    transparent 0,
-    transparent 140px,
-    black 460px
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0,
+    transparent 180px,
+    transparent calc(100% - 180px),
+    black 100%
   );
 }
 
