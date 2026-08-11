@@ -192,7 +192,7 @@ const RecordTile = memo(function RecordTile({
 									// not a toggled utility class. `grayscale` alone is
 									// enough for Tailwind to emit the shared `filter: var(--tw-blur,)
 									// … var(--tw-grayscale,) …` declaration this composes into.
-									"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
+									"size-full grayscale transition-[opacity,filter,scale] duration-1000 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
 									matte ? "object-contain" : "object-cover",
 								)}
 								loading="lazy"
@@ -678,7 +678,13 @@ export function CollectionGrid({
 				el.style.setProperty("--tw-blur", `blur(${blur.toFixed(1)}px)`);
 			}
 			if (debugEl) {
-				debugEl.textContent = `top:${nearTopIds.size} bot:${nearBottomIds.size} id:${id} rectTop:${Math.round(rect.top)} blur:${blur.toFixed(1)}px filter:${getComputedStyle(el).filter.slice(0, 40)}`;
+				const img = el.querySelector("img");
+				const groupFilter = getComputedStyle(el).filter;
+				const imgFilter = img ? getComputedStyle(img).filter : "no-img";
+				const imgTwBlur = img
+					? getComputedStyle(img).getPropertyValue("--tw-blur")
+					: "?";
+				debugEl.textContent = `top:${nearTopIds.size} bot:${nearBottomIds.size} id:${id} rectTop:${Math.round(rect.top)} blur:${blur.toFixed(1)}px\ngroupFilter:${groupFilter.slice(0, 30)}\nimgFilter:${imgFilter.slice(0, 40)}\nimg--tw-blur:${imgTwBlur}`;
 			}
 		}
 		function updateAllEdgeBlur() {
