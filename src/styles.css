@@ -479,8 +479,9 @@ a {
  * popping forward off the page while the rest of the grid recedes behind
  * glass. `:has()` keeps this a single shared, CSS-only toggle rather than a
  * mouseenter/leave handler wired to every tile. Desktop-only — touch's
- * version of this idea is `[data-near-edge]` further down, blurring
- * individual tile images directly (`filter`) instead of a shared
+ * version of this idea is a scroll-driven `--tw-blur` custom property
+ * written directly onto individual tile images (see the comment below this
+ * rule), blurring their own rendered content (`filter`) instead of a shared
  * `backdrop-filter` overlay. Three different `backdrop-filter` + mask
  * variants for touch (a JS-positioned radial hole, a CSS-only radial hole, a
  * plain linear-gradient) all hit the same real-iOS-Safari-only failure: the
@@ -554,23 +555,26 @@ a {
   }
 }
 
-/* Touch's stand-in for the desktop hover backdrop above lives entirely in
- * `RecordTile`'s own className — see its comment for why this is `filter`
- * on individual tile images rather than a shared `backdrop-filter` overlay,
- * and `group-data-[near-edge=true]:blur-xs` there for the actual rule.
- * (Deliberately a Tailwind utility, not raw `filter: blur()` here — this
- * `img` already carries `grayscale`, and Tailwind's filter utilities
- * compose into one `filter` declaration via shared `--tw-*` custom
- * properties; a raw `filter: blur()` would clobber the grayscale instead of
- * combining with it.) `[data-near-edge]` itself is written directly to a
- * tile's own `.group` element by two small `IntersectionObserver`s in
- * collection-grid.tsx watching thin bands at the very top/bottom of the
- * viewport — the same "write straight to the DOM, no React state" approach
- * `data-active`/`data-scrolling` already use, so this never re-renders
- * anything. The `[data-scrolling="true"] img { transition-property: opacity,
- * scale }` rule above already drops `filter` from the animated properties
- * during an active scroll, so this blur snaps instantly while scrolling and
- * only animates once things settle — no separate handling needed here. */
+/* Touch's stand-in for the desktop hover backdrop above needs no rule here
+ * at all — see `RecordTile`'s className comment in collection-grid.tsx.
+ * Short version: two small `IntersectionObserver`s there track which tiles
+ * are near the top/bottom 20% of the viewport, and for exactly those (never
+ * the other ~300) a scroll handler computes a blur amount from how close
+ * each one is to the edge and writes it straight to that tile's own cover
+ * image as an inline `--tw-blur` custom property — no React state, no
+ * re-render, and (deliberately not a Tailwind utility class toggle) no
+ * threshold-triggered snap either: the blur tracks the scroll position
+ * continuously, like scrubbing a timeline, rather than firing a canned
+ * transition once a tile crosses some line. `--tw-blur` specifically (not a
+ * raw `filter: blur()`) because this `img` already carries the `grayscale`
+ * utility, and Tailwind's filter utilities compose into one shared
+ * `filter: var(--tw-blur,) … var(--tw-grayscale,) …` declaration — writing
+ * the custom property directly lets it combine with the existing grayscale
+ * instead of clobbering it. The `[data-scrolling="true"] img
+ * { transition-property: opacity, scale }` rule above already drops `filter`
+ * from the animated properties during an active scroll, so these continuous
+ * updates apply instantly frame to frame with nothing fighting them — no
+ * separate handling needed here. */
 
 .vinyl-disc {
   /* Positive rotation, growing with `--vinyl-stack-index` — the back-most

@@ -185,12 +185,14 @@ const RecordTile = memo(function RecordTile({
 									// the tile's footprint. Tailwind v4's `scale-*`
 									// compiles to the native CSS `scale` property, not
 									// `transform` — transitioning `transform` here would
-									// silently do nothing to it. `group-data-[near-edge=true]:blur-xs`
-									// is touch's stand-in for the desktop hover backdrop's
-									// blur — see the `.grid-focus-overlay` comment in
-									// styles.css for why this is per-tile `filter` instead
-									// of a shared `backdrop-filter` overlay.
-									"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105 group-data-[near-edge=true]:blur-xs",
+									// silently do nothing to it. No class here for the
+									// touch edge-blur (unlike everything else in this
+									// list) — it's a continuous, scroll-driven `--tw-blur`
+									// custom property written directly in collection-grid.tsx,
+									// not a toggled utility class. `grayscale` alone is
+									// enough for Tailwind to emit the shared `filter: var(--tw-blur,)
+									// … var(--tw-grayscale,) …` declaration this composes into.
+									"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
 									matte ? "object-contain" : "object-cover",
 								)}
 								loading="lazy"
@@ -613,24 +615,59 @@ export function CollectionGrid({
 
 		// Touch's stand-in for the desktop hover backdrop's blur — see the
 		// `.grid-focus-overlay` comment in styles.css for why this is `filter`
-		// on individual tile images (`[data-near-edge]`, read by
-		// `group-data-[near-edge=true]:blur-xs` on the cover below) rather than
-		// a shared `backdrop-filter` overlay. Two observers (not one) because a
-		// tile can be near the top band, the bottom band, or neither, and
-		// membership in one must not clobber the other — `updateEdgeBlur` reads
-		// both sets before writing the attribute so a tile near both edges at
-		// once (a very short viewport) still resolves correctly. Written
-		// straight to the DOM, same as `data-active`/`data-scrolling` elsewhere
-		// in this file, so it never triggers a re-render.
+		// on individual tile images rather than a shared `backdrop-filter`
+		// overlay. Scroll-driven and continuous, not a threshold-triggered
+		// toggle-plus-transition: the blur amount is a direct function of how
+		// close a tile is to the viewport edge, so scrubbing the scroll
+		// position scrubs the blur right along with it — the same "no canned
+		// animation" feel `smoothScrollCenterTo`'s rAF tween or the spotlight's
+		// eased chase go for elsewhere in this file, just driven by native
+		// scroll instead of a synthetic one. `--tw-blur` (not a raw `filter:`
+		// declaration) because this `img` already carries the `grayscale`
+		// utility, whose generated CSS composes every Tailwind filter utility
+		// into one shared `filter: var(--tw-blur,) … var(--tw-grayscale,) …`
+		// property — writing `--tw-blur` directly lets the compositor combine
+		// with the existing grayscale instead of clobbering it, without a
+		// second copy of that shared declaration here.
+		const EDGE_ZONE_PX = 260;
+		const MAX_EDGE_BLUR_PX = 6;
+		function blurForDistance(distancePx: number): number {
+			if (distancePx >= EDGE_ZONE_PX) return 0;
+			if (distancePx <= 0) return MAX_EDGE_BLUR_PX;
+			return MAX_EDGE_BLUR_PX * (1 - distancePx / EDGE_ZONE_PX);
+		}
+		// Two observers (not one) because a tile can be near the top band, the
+		// bottom band, or neither, and only IntersectionObserver — not a plain
+		// scroll listener — can cheaply tell us *which* of the (currently
+		// ~300, all mounted) tiles are candidates at all; the continuous part
+		// below only ever measures whatever's currently in these two small
+		// sets, not the whole grid.
 		const nearTopIds = new Set<number>();
 		const nearBottomIds = new Set<number>();
 		function updateEdgeBlur(id: number) {
 			const el = elements.get(id);
 			if (!el) return;
-			el.toggleAttribute(
-				"data-near-edge",
-				nearTopIds.has(id) || nearBottomIds.has(id),
-			);
+			const nearTop = nearTopIds.has(id);
+			const nearBottom = nearBottomIds.has(id);
+			if (!nearTop && !nearBottom) {
+				el.style.removeProperty("--tw-blur");
+				return;
+			}
+			const rect = el.getBoundingClientRect();
+			const topBlur = nearTop ? blurForDistance(rect.top) : 0;
+			const bottomBlur = nearBottom
+				? blurForDistance(window.innerHeight - rect.bottom)
+				: 0;
+			const blur = Math.max(topBlur, bottomBlur);
+			if (blur <= 0) {
+				el.style.removeProperty("--tw-blur");
+			} else {
+				el.style.setProperty("--tw-blur", `blur(${blur.toFixed(1)}px)`);
+			}
+		}
+		function updateAllEdgeBlur() {
+			for (const id of nearTopIds) updateEdgeBlur(id);
+			for (const id of nearBottomIds) updateEdgeBlur(id);
 		}
 		const topEdgeObserver = new IntersectionObserver(
 			(entries) => {
@@ -670,10 +707,13 @@ export function CollectionGrid({
 
 		let rafId: number | null = null;
 		const onScroll = () => {
-			if (rafId !== null || intersecting.size === 0) return;
+			if (rafId !== null) return;
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
-				updateActive();
+				if (intersecting.size > 0) updateActive();
+				if (nearTopIds.size > 0 || nearBottomIds.size > 0) {
+					updateAllEdgeBlur();
+				}
 			});
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
@@ -894,9 +934,10 @@ export function CollectionGrid({
 			    above (`--overlay-x/y`) so the blur opens up right where the
 			    cursor/active tile is instead of snapping between "sharp tile" and
 			    "blurred everything else" with nothing in between. Desktop-only —
-			    touch's stand-in is `group-data-[near-edge=true]:blur-xs` on each
-			    tile's own cover image below, not a shared overlay; see the
-			    `.grid-focus-overlay` comment in styles.css for why. */}
+			    touch's stand-in is the scroll-driven `--tw-blur` custom property
+			    the edge-tracking effect above writes onto each near-edge tile's
+			    own cover image, not a shared overlay; see the `.grid-focus-overlay`
+			    comment in styles.css for why. */}
 			{!isTouch && (
 				<div
 					ref={overlayRef}
