@@ -351,7 +351,7 @@ body {
  * smooth 500ms fade — a fine trade during a fast scroll where it's barely
  * seen anyway — and re-enables the full fade once scrolling settles. */
 .collection-grid[data-scrolling="true"] img {
-  transition-property: opacity;
+  transition-property: opacity, scale;
 }
 
 code {
