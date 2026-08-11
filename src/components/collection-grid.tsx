@@ -619,6 +619,38 @@ export function CollectionGrid({
 		};
 	}, [isTouch, records]);
 
+	// Marks the grid `data-scrolling="true"` for the duration of a scroll
+	// gesture (plus a short settle window after it stops) — see `.collection-grid[data-scrolling="true"]`
+	// in styles.css, which pauses the notes dot's infinite glow animation and
+	// drops the cover's grayscale↔colour `filter` transition to an instant
+	// snap for as long as this is set. Both are continuously-recomposited
+	// GPU work (`filter`/`blur()` far more so than plain `transform`/`opacity`)
+	// that a profiled Chrome CPU trace didn't surface — that trace measures
+	// main-thread JS, not compositor/GPU cost, and a real iOS device's GPU is
+	// far more constrained than a desktop one. With ~300 tiles mounted at
+	// once (no virtualization — see the module doc above for why), any of
+	// them mid-transition/animation during a scroll adds up. Written straight
+	// to the DOM, not React state, for the same reason the spotlight position
+	// and `data-pointer-outside` are — this never needs to trigger a re-render.
+	useEffect(() => {
+		const container = gridElRef.current;
+		if (!container) return;
+		let settleTimeout: number | null = null;
+		const onScroll = () => {
+			container.setAttribute("data-scrolling", "true");
+			if (settleTimeout != null) window.clearTimeout(settleTimeout);
+			settleTimeout = window.setTimeout(() => {
+				container.removeAttribute("data-scrolling");
+				settleTimeout = null;
+			}, 200);
+		};
+		window.addEventListener("scroll", onScroll, { passive: true });
+		return () => {
+			window.removeEventListener("scroll", onScroll);
+			if (settleTimeout != null) window.clearTimeout(settleTimeout);
+		};
+	}, []);
+
 	const activeRecord = useMemo(
 		() => records.find((r) => r.id === activeId) ?? null,
 		[records, activeId],

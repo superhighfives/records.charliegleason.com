@@ -324,6 +324,36 @@ body {
   }
 }
 
+/* Paused for the duration of a scroll gesture (`data-scrolling`, written by
+ * `CollectionGrid`'s scroll listener — see its comment) rather than always
+ * running. `.dot-pulse::after`'s `blur()` glow is real, continuously
+ * recomposited GPU work, and every notes-bearing tile among the (currently
+ * ~300, none of them virtualized) tiles mounted at once runs its own copy —
+ * cheap individually, but adds up on a mobile GPU specifically while it's
+ * also handling the scroll itself. `animation-play-state: paused` (not
+ * `animation: none`) freezes the current frame in place instead of
+ * snapping back to 0%, so nothing visibly jumps when scrolling stops. */
+.collection-grid[data-scrolling="true"] .dot-pulse,
+.collection-grid[data-scrolling="true"] .dot-pulse::after {
+  animation-play-state: paused;
+}
+
+/* Same `data-scrolling` signal, for the grid tile's own cover image —
+ * `RecordTile` transitions `opacity,filter,scale` together (grayscale→colour
+ * on hover/active, alongside the load fade), and `filter` is the expensive
+ * one to animate: unlike `opacity`/`transform`, it can't be handled purely
+ * by the compositor and forces re-rasterizing the image's pixels every
+ * frame of the transition. The active tile changes roughly once per
+ * scrolled row on touch (the `IntersectionObserver`-driven `activeId`), so
+ * during a continuous flick scroll a fresh grayscale↔colour transition can
+ * be kicking off on nearly every frame. Dropping the transition to `opacity`
+ * only while scrolling makes the colour swap an instant snap instead of a
+ * smooth 500ms fade — a fine trade during a fast scroll where it's barely
+ * seen anyway — and re-enables the full fade once scrolling settles. */
+.collection-grid[data-scrolling="true"] img {
+  transition-property: opacity, scale;
+}
+
 code {
   font-family: var(--font-mono);
   font-size: 0.9em;
