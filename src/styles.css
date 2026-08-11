@@ -479,7 +479,8 @@ a {
  * popping forward off the page while the rest of the grid recedes behind
  * glass. `:has()` keeps this a single shared, CSS-only toggle rather than a
  * mouseenter/leave handler wired to every tile. */
-.grid-focus-overlay {
+.grid-focus-overlay,
+.grid-focus-overlay-static {
   z-index: 5;
   /* Keeps this element's compositing layer (and its backdrop-filter capture)
    * alive continuously from mount, rather than Chrome creating it lazily the
@@ -502,6 +503,9 @@ a {
    * front-loads a jerky burst then crawls for the rest, so the default here
    * uses ease-in-out instead, easing gently at both ends. */
   transition: opacity 4000ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.grid-focus-overlay {
   /* A hole in the overlay centred on the pointer (`--overlay-x/y`, written
    * on pointer move in collection-grid.tsx) — fully open for the first
    * 140px so the tile right under the cursor is never fogged, then a wide
@@ -522,8 +526,33 @@ a {
   );
 }
 
+/* Touch's stand-in for `.grid-focus-overlay` — same vignette, but the hole
+ * is pinned dead centre in the viewport rather than chased to a cursor or
+ * active-tile position. No `--overlay-x/y`, no rAF, no scroll listener: a
+ * static `mask-image` never needs recomputing, so the compositor can just
+ * reuse the one rasterised layer for the life of the element — the earlier
+ * per-frame position chase (see the removal note this replaced, in
+ * `collection-grid.tsx`) was the actual iOS Safari scroll-jank contributor,
+ * not the blur itself. */
+.grid-focus-overlay-static {
+  mask-image: radial-gradient(
+    circle at center,
+    transparent 0,
+    transparent 140px,
+    black 460px
+  );
+  -webkit-mask-image: radial-gradient(
+    circle at center,
+    transparent 0,
+    transparent 140px,
+    black 460px
+  );
+}
+
 .collection-grid:has(.group:hover, .group[data-active="true"])
-  .grid-focus-overlay {
+  .grid-focus-overlay,
+.collection-grid:has(.group[data-active="true"])
+  .grid-focus-overlay-static {
   opacity: 1;
   transition-duration: 1200ms;
   transition-delay: 0s;
@@ -532,13 +561,44 @@ a {
 /* Leaving the grid entirely (as opposed to hopping the gap between two
  * tiles, which also clears `:has()` above but keeps this attribute unset —
  * see `onPointerLeave`/`Enter` in collection-grid.tsx) fades out at the same
- * quick pace as the fade-in instead of the long 4s inter-tile linger. */
-.collection-grid[data-pointer-outside="true"] .grid-focus-overlay {
+ * quick pace as the fade-in instead of the long 4s inter-tile linger. Also
+ * covers touch scrolling past the first/last tile — `updateActive` in
+ * collection-grid.tsx sets the same attribute when nothing's in the
+ * intersection band. */
+.collection-grid[data-pointer-outside="true"] .grid-focus-overlay,
+.collection-grid[data-pointer-outside="true"] .grid-focus-overlay-static {
   transition-duration: 1200ms;
 }
 
+/* Same `data-scrolling` signal as the dot-pulse glow and cover filter
+ * transition above — `backdrop-filter: blur()` is expensive to composite on
+ * iOS Safari regardless of whether its mask position is moving (measured: a
+ * real Simulator scroll went from ~20-40ms worst-frame without this static
+ * vignette to ~80ms with it, static mask included, because touch's
+ * `IntersectionObserver`-driven `activeId` means *some* tile is active for
+ * nearly the whole scroll, so the `:has()` rule above keeps this composited
+ * almost continuously). Forced fully off for the scroll's duration —
+ * `!important` because `data-scrolling` and `data-active` are both true at
+ * once here, and the `:has()` rule above is one compound selector more
+ * specific than a plain attribute-selector override can beat (same reason
+ * `body[data-scroll-locked]` needs it elsewhere in this file). The focus
+ * vignette doesn't need to track a fast flick anyway, only where you land —
+ * the normal opacity transition takes back over the instant scrolling
+ * settles, so it fades in around whichever tile you stopped on. */
+.collection-grid[data-scrolling="true"] .grid-focus-overlay-static {
+  opacity: 0 !important;
+  /* Not just invisible — actually dropping the filter itself, since an
+   * opacity-0 layer isn't guaranteed to skip the (expensive) blur
+   * computation that produces its pixels before compositing them at 0
+   * alpha. */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  transition: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .grid-focus-overlay {
+  .grid-focus-overlay,
+  .grid-focus-overlay-static {
     transition: none;
   }
 }

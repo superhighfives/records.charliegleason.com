@@ -838,16 +838,27 @@ export function CollectionGrid({
 			    above (`--overlay-x/y`) so the blur opens up right where the
 			    cursor/active tile is instead of snapping between "sharp tile" and
 			    "blurred everything else" with nothing in between. Desktop-only —
-			    there's no cursor to spotlight on touch, and a full-viewport
-			    `backdrop-blur` kept permanently alive (`will-change`, see the CSS)
-			    plus a continuous rAF chase feeding its mask position was a real
-			    contributor to iOS Safari scroll jank for a purely desktop hover
-			    affordance. */}
+			    touch gets `.grid-focus-overlay-static` below instead, since a
+			    continuous rAF chase feeding this element's mask position (to
+			    track a cursor that doesn't exist on touch) was a real contributor
+			    to iOS Safari scroll jank. */}
 			{!isTouch && (
 				<div
 					ref={overlayRef}
 					aria-hidden="true"
 					className="grid-focus-overlay pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
+				/>
+			)}
+			{/* Touch's version of the same vignette — see
+			    `.grid-focus-overlay-static` in styles.css. No ref, no pointer/scroll
+			    listeners: the hole is pinned to the viewport centre in CSS alone,
+			    so this needs nothing from JS beyond the `data-active`/
+			    `data-pointer-outside` attributes `RecordTile`/the IntersectionObserver
+			    band-tracking above already maintain for other reasons. */}
+			{isTouch && (
+				<div
+					aria-hidden="true"
+					className="grid-focus-overlay-static pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
 				/>
 			)}
 			{lastActiveRecordRef.current && (
