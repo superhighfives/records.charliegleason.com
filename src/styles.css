@@ -448,20 +448,6 @@ a {
   z-index: 0;
 }
 
-/* TEMP DIAGNOSTIC — not for merge. Testing whether the touch vignette's
- * "hard cut" is actually the vinyl disc's active-state peek (up to 64px,
- * `min(25%, 64px)` — see `.group[data-active="true"] .vinyl-disc` below)
- * overflowing past the grid's own 16px (`px-4`) side padding on the
- * rightmost column, pushing the document wider than the viewport. Same
- * `(hover: none) and (pointer: coarse)` query `useIsTouchDevice` uses in
- * collection-grid.tsx, so this only affects the same devices the vignette
- * itself targets. */
-@media (hover: none) and (pointer: coarse) {
-  .vinyl-peek {
-    display: none;
-  }
-}
-
 /* Grid items paint in DOM order by default — without this, a disc sliding out
  * to the right gets painted OVER by the next cell in the row instead of on
  * top of it. `data-active` mirrors this for whenever the tooltip is open
@@ -492,9 +478,19 @@ a {
  * below the hovered one (z-index: 10, above) — so the hovered vinyl reads as
  * popping forward off the page while the rest of the grid recedes behind
  * glass. `:has()` keeps this a single shared, CSS-only toggle rather than a
- * mouseenter/leave handler wired to every tile. */
-.grid-focus-overlay,
-.grid-focus-overlay-static {
+ * mouseenter/leave handler wired to every tile. Desktop-only — touch's
+ * version of this idea is `[data-near-edge]` further down, blurring
+ * individual tile images directly (`filter`) instead of a shared
+ * `backdrop-filter` overlay. Three different `backdrop-filter` + mask
+ * variants for touch (a JS-positioned radial hole, a CSS-only radial hole, a
+ * plain linear-gradient) all hit the same real-iOS-Safari-only failure: the
+ * backdrop snapshot gets "locked" to whatever's visible at the exact frame
+ * the filter activates instead of correctly re-capturing, producing a
+ * hard-edged clip right as it fades in. `filter` blurs an element's own
+ * rendered content — a fundamentally different, much better-supported
+ * rendering path that doesn't share this bug, at the cost of not being a
+ * true frosted-glass-over-everything effect. */
+.grid-focus-overlay {
   z-index: 5;
   /* Keeps this element's compositing layer (and its backdrop-filter capture)
    * alive continuously from mount, rather than Chrome creating it lazily the
@@ -517,9 +513,6 @@ a {
    * front-loads a jerky burst then crawls for the rest, so the default here
    * uses ease-in-out instead, easing gently at both ends. */
   transition: opacity 4000ms cubic-bezier(0.65, 0, 0.35, 1);
-}
-
-.grid-focus-overlay {
   /* A hole in the overlay centred on the pointer (`--overlay-x/y`, written
    * on pointer move in collection-grid.tsx) — fully open for the first
    * 140px so the tile right under the cursor is never fogged, then a wide
@@ -540,79 +533,8 @@ a {
   );
 }
 
-/* Touch's stand-in for `.grid-focus-overlay` — same vignette, but the hole
- * is pinned dead centre in the viewport rather than chased to a cursor or
- * active-tile position. No `--overlay-x/y`, no rAF, no scroll listener: a
- * static `mask-image` never needs recomputing, so the compositor can just
- * reuse the one rasterised layer for the life of the element.
- *
- * That alone wasn't enough, though — measured in a real iOS Simulator
- * scroll, a static mask at the same `blur(8px)` (Tailwind's
- * `backdrop-blur-sm`) desktop uses still cost ~80ms worst-frame, because
- * touch's `IntersectionObserver`-driven `activeId` means *some* tile is
- * active for nearly the whole scroll, so the `:has()` rule below keeps this
- * composited almost continuously (unlike desktop, where it's only live
- * during a hover pause). Pausing it during scroll (via the same
- * `data-scrolling` signal the dot-pulse glow and cover filter transition
- * use elsewhere in this file) fixed the perf but broke the vignette
- * outright — killing and recreating `backdrop-filter` every scroll gesture
- * reliably hit the exact failure the `.grid-focus-overlay` `will-change`
- * comment warns about (a layer created too late to capture what's behind it
- * that frame just doesn't blur), so it stopped reappearing once scrolling
- * settled. Dropping to `blur(4px)` (`backdrop-blur-xs`) instead — half the
- * radius, since gaussian blur cost scales with it — turned out to be
- * *cheaper* than pausing at all (~40ms worst-frame, continuously
- * composited, no pause/toggle anywhere), so this runs unconditionally the
- * same as desktop's does. */
-.grid-focus-overlay-static {
-  /* A radial-gradient "hole" (the desktop approach) turned out to be doubly
-   * wrong for touch. First, a circle on a portrait phone screen — much
-   * taller than it is wide — reaches its "fully blurred" radius vertically
-   * long before it does horizontally, so the blur maxes out into a flat
-   * band across the *whole width* near the top/bottom while the sides stay
-   * mostly clear: it reads as two hard bars, not a vignette. Switching the
-   * circle's centring from the CSS keyword `center` to real pixel values
-   * (previously here, computed from `window.visualViewport`) fixed an
-   * earlier top-edge clipping bug but not this. Second — and the more
-   * fundamental problem — `backdrop-filter` through a *radial*-gradient
-   * mask on a `will-change`d `position: fixed` element is a known-fragile
-   * combination on real iOS Safari: the backdrop snapshot can get "locked"
-   * to whatever's visible at the exact frame the filter activates, instead
-   * of correctly re-capturing, producing a hard-edged clip right as the
-   * vignette fades in rather than the intended soft ramp.
-   *
-   * A plain top/bottom `linear-gradient` mask sidesteps both: it's
-   * proportional to the viewport by construction (percentages, not a fixed
-   * pixel radius), and linear-gradient masks don't hit the same
-   * backdrop-filter activation bug radial ones do. No JS needed either —
-   * this is why `collection-grid.tsx` no longer sets `--overlay-x/y` on
-   * this element. */
-  mask-image: linear-gradient(
-    to bottom,
-    black 0,
-    transparent 180px,
-    transparent calc(100% - 180px),
-    black 100%
-  );
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    black 0,
-    transparent 180px,
-    transparent calc(100% - 180px),
-    black 100%
-  );
-}
-
 .collection-grid:has(.group:hover, .group[data-active="true"])
-  .grid-focus-overlay,
-/* `[data-header-cleared]` (written in `updateActive` in collection-grid.tsx)
- * — this overlay is a plain `position: fixed` full-viewport element with no
- * idea where the grid itself starts, so without this it happily blurs the
- * page header too for as long as any of it is still on screen, not just
- * tiles. Desktop's overlay doesn't need the same gate: its clear "hole" is
- * chased to the hovered *tile*, which by definition isn't the header. */
-.collection-grid[data-header-cleared]:has(.group[data-active="true"])
-  .grid-focus-overlay-static {
+  .grid-focus-overlay {
   opacity: 1;
   transition-duration: 1200ms;
   transition-delay: 0s;
@@ -621,21 +543,34 @@ a {
 /* Leaving the grid entirely (as opposed to hopping the gap between two
  * tiles, which also clears `:has()` above but keeps this attribute unset —
  * see `onPointerLeave`/`Enter` in collection-grid.tsx) fades out at the same
- * quick pace as the fade-in instead of the long 4s inter-tile linger. Also
- * covers touch scrolling past the first/last tile — `updateActive` in
- * collection-grid.tsx sets the same attribute when nothing's in the
- * intersection band. */
-.collection-grid[data-pointer-outside="true"] .grid-focus-overlay,
-.collection-grid[data-pointer-outside="true"] .grid-focus-overlay-static {
+ * quick pace as the fade-in instead of the long 4s inter-tile linger. */
+.collection-grid[data-pointer-outside="true"] .grid-focus-overlay {
   transition-duration: 1200ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .grid-focus-overlay,
-  .grid-focus-overlay-static {
+  .grid-focus-overlay {
     transition: none;
   }
 }
+
+/* Touch's stand-in for the desktop hover backdrop above lives entirely in
+ * `RecordTile`'s own className — see its comment for why this is `filter`
+ * on individual tile images rather than a shared `backdrop-filter` overlay,
+ * and `group-data-[near-edge=true]:blur-xs` there for the actual rule.
+ * (Deliberately a Tailwind utility, not raw `filter: blur()` here — this
+ * `img` already carries `grayscale`, and Tailwind's filter utilities
+ * compose into one `filter` declaration via shared `--tw-*` custom
+ * properties; a raw `filter: blur()` would clobber the grayscale instead of
+ * combining with it.) `[data-near-edge]` itself is written directly to a
+ * tile's own `.group` element by two small `IntersectionObserver`s in
+ * collection-grid.tsx watching thin bands at the very top/bottom of the
+ * viewport — the same "write straight to the DOM, no React state" approach
+ * `data-active`/`data-scrolling` already use, so this never re-renders
+ * anything. The `[data-scrolling="true"] img { transition-property: opacity,
+ * scale }` rule above already drops `filter` from the animated properties
+ * during an active scroll, so this blur snaps instantly while scrolling and
+ * only animates once things settle — no separate handling needed here. */
 
 .vinyl-disc {
   /* Positive rotation, growing with `--vinyl-stack-index` — the back-most

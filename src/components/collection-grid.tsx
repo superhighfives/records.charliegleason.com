@@ -185,8 +185,12 @@ const RecordTile = memo(function RecordTile({
 									// the tile's footprint. Tailwind v4's `scale-*`
 									// compiles to the native CSS `scale` property, not
 									// `transform` — transitioning `transform` here would
-									// silently do nothing to it.
-									"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
+									// silently do nothing to it. `group-data-[near-edge=true]:blur-xs`
+									// is touch's stand-in for the desktop hover backdrop's
+									// blur — see the `.grid-focus-overlay` comment in
+									// styles.css for why this is per-tile `filter` instead
+									// of a shared `backdrop-filter` overlay.
+									"size-full grayscale transition-[opacity,filter,scale] duration-500 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105 group-data-[near-edge=true]:blur-xs",
 									matte ? "object-contain" : "object-cover",
 								)}
 								loading="lazy"
@@ -514,19 +518,6 @@ export function CollectionGrid({
 		// and the selection needs to keep tracking the centre line the whole
 		// time it's there, not just jump once when the row enters/leaves.
 		function updateActive() {
-			// Gates `.grid-focus-overlay-static` (see styles.css) — it's a plain
-			// `position: fixed` full-viewport overlay with no idea where the grid
-			// itself starts, so without this it happily blurs the page header too
-			// for as long as any of it is still on screen (confirmed on a real
-			// device: the vignette activating mid-scroll blurred the hero text,
-			// not just tiles, for exactly as long as the header hadn't fully
-			// scrolled past the top of the viewport yet). One `getBoundingClientRect`
-			// read alongside the ones `inBand` below already does every scroll
-			// tick, so this doesn't add a new forced layout.
-			container.toggleAttribute(
-				"data-header-cleared",
-				container.getBoundingClientRect().top <= 0,
-			);
 			const inBand = [...intersecting]
 				.map((id) => [id, elements.get(id)?.getBoundingClientRect()] as const)
 				.filter((entry): entry is [number, DOMRect] => entry[1] !== undefined);
@@ -619,12 +610,62 @@ export function CollectionGrid({
 			// whichever tile is crossing it is "the one you're looking at".
 			{ rootMargin: "-45% 0px -45% 0px", threshold: 0 },
 		);
+
+		// Touch's stand-in for the desktop hover backdrop's blur — see the
+		// `.grid-focus-overlay` comment in styles.css for why this is `filter`
+		// on individual tile images (`[data-near-edge]`, read by
+		// `group-data-[near-edge=true]:blur-xs` on the cover below) rather than
+		// a shared `backdrop-filter` overlay. Two observers (not one) because a
+		// tile can be near the top band, the bottom band, or neither, and
+		// membership in one must not clobber the other — `updateEdgeBlur` reads
+		// both sets before writing the attribute so a tile near both edges at
+		// once (a very short viewport) still resolves correctly. Written
+		// straight to the DOM, same as `data-active`/`data-scrolling` elsewhere
+		// in this file, so it never triggers a re-render.
+		const nearTopIds = new Set<number>();
+		const nearBottomIds = new Set<number>();
+		function updateEdgeBlur(id: number) {
+			const el = elements.get(id);
+			if (!el) return;
+			el.toggleAttribute(
+				"data-near-edge",
+				nearTopIds.has(id) || nearBottomIds.has(id),
+			);
+		}
+		const topEdgeObserver = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const id = Number((entry.target as HTMLElement).dataset.recordId);
+					if (entry.isIntersecting) nearTopIds.add(id);
+					else nearTopIds.delete(id);
+					updateEdgeBlur(id);
+				}
+			},
+			// The top 20% of the viewport — shrinks the observed root by 80% off
+			// the bottom, leaving only that top slice as the intersection area.
+			{ rootMargin: "0px 0px -80% 0px", threshold: 0 },
+		);
+		const bottomEdgeObserver = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const id = Number((entry.target as HTMLElement).dataset.recordId);
+					if (entry.isIntersecting) nearBottomIds.add(id);
+					else nearBottomIds.delete(id);
+					updateEdgeBlur(id);
+				}
+			},
+			// The bottom 20% of the viewport, mirroring the top band above.
+			{ rootMargin: "-80% 0px 0px 0px", threshold: 0 },
+		);
+
 		for (const el of container.querySelectorAll<HTMLElement>(
 			"[data-record-id]",
 		)) {
 			const id = Number(el.dataset.recordId);
 			elements.set(id, el);
 			observer.observe(el);
+			topEdgeObserver.observe(el);
+			bottomEdgeObserver.observe(el);
 		}
 
 		let rafId: number | null = null;
@@ -639,6 +680,8 @@ export function CollectionGrid({
 
 		return () => {
 			observer.disconnect();
+			topEdgeObserver.disconnect();
+			bottomEdgeObserver.disconnect();
 			window.removeEventListener("scroll", onScroll);
 			if (rafId !== null) cancelAnimationFrame(rafId);
 		};
@@ -851,29 +894,14 @@ export function CollectionGrid({
 			    above (`--overlay-x/y`) so the blur opens up right where the
 			    cursor/active tile is instead of snapping between "sharp tile" and
 			    "blurred everything else" with nothing in between. Desktop-only —
-			    touch gets `.grid-focus-overlay-static` below instead, since a
-			    continuous rAF chase feeding this element's mask position (to
-			    track a cursor that doesn't exist on touch) was a real contributor
-			    to iOS Safari scroll jank. */}
+			    touch's stand-in is `group-data-[near-edge=true]:blur-xs` on each
+			    tile's own cover image below, not a shared overlay; see the
+			    `.grid-focus-overlay` comment in styles.css for why. */}
 			{!isTouch && (
 				<div
 					ref={overlayRef}
 					aria-hidden="true"
 					className="grid-focus-overlay pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
-				/>
-			)}
-			{/* Touch's version of the same vignette — see
-			    `.grid-focus-overlay-static` in styles.css. No JS at all: the fade
-			    edges are plain percentage-based linear gradients, not a pixel-
-			    positioned radial one, so there's no centre to compute or write.
-			    Visibility/fade timing comes from the same `data-active`/
-			    `data-pointer-outside` attributes `RecordTile`/the
-			    IntersectionObserver band-tracking above already maintain for
-			    other reasons. */}
-			{isTouch && (
-				<div
-					aria-hidden="true"
-					className="grid-focus-overlay-static pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-xs dark:bg-black/50"
 				/>
 			)}
 			{lastActiveRecordRef.current && (
