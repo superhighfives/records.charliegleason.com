@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
@@ -77,8 +77,16 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * into that same shared "active" state so the bar tracks the mouse instead —
  * desktop's own visual feedback stays purely `:hover`-driven, only the bar's
  * *content* comes from this.
+ *
+ * Wrapped in `memo` — `CollectionGrid` re-renders on every scroll tick on
+ * touch (the IntersectionObserver-driven `activeId`, see below), and without
+ * this every one of the (currently ~300) tiles would re-render along with
+ * it even though at most one or two actually have a changed `active` prop.
+ * That was the dominant cost behind the iOS scroll jank this was chasing —
+ * a profiled scroll showed React's `performWorkUntilDeadline` alone eating
+ * ~4s of main-thread time across a 4s scroll.
  */
-function RecordTile({
+const RecordTile = memo(function RecordTile({
 	record,
 	onOpen,
 	spanning = false,
@@ -194,7 +202,7 @@ function RecordTile({
 			</button>
 		</div>
 	);
-}
+});
 
 // How long the grid takes to glide a paged-to record into view — see
 // `smoothScrollCenterTo`. Slower than the browser's own native smooth
