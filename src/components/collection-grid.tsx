@@ -644,6 +644,19 @@ export function CollectionGrid({
 		// sets, not the whole grid.
 		const nearTopIds = new Set<number>();
 		const nearBottomIds = new Set<number>();
+		// TEMP DIAGNOSTIC — not for merge. `?debug=1` shows a live readout of
+		// what this effect is actually doing on the device it's running on,
+		// so a screenshot can prove/disprove whether the JS runs and what
+		// values it computes without relying on eyeballing blur in a photo.
+		const debugEl = window.location.search.includes("debug")
+			? (() => {
+					const el = document.createElement("div");
+					el.style.cssText =
+						"position:fixed;top:0;left:0;z-index:99999;background:black;color:lime;font:11px monospace;padding:4px 8px;white-space:pre;pointer-events:none";
+					document.body.appendChild(el);
+					return el;
+				})()
+			: null;
 		function updateEdgeBlur(id: number) {
 			const el = elements.get(id);
 			if (!el) return;
@@ -663,6 +676,9 @@ export function CollectionGrid({
 				el.style.removeProperty("--tw-blur");
 			} else {
 				el.style.setProperty("--tw-blur", `blur(${blur.toFixed(1)}px)`);
+			}
+			if (debugEl) {
+				debugEl.textContent = `top:${nearTopIds.size} bot:${nearBottomIds.size} id:${id} rectTop:${Math.round(rect.top)} blur:${blur.toFixed(1)}px filter:${getComputedStyle(el).filter.slice(0, 40)}`;
 			}
 		}
 		function updateAllEdgeBlur() {
@@ -724,6 +740,7 @@ export function CollectionGrid({
 			bottomEdgeObserver.disconnect();
 			window.removeEventListener("scroll", onScroll);
 			if (rafId !== null) cancelAnimationFrame(rafId);
+			debugEl?.remove();
 		};
 	}, [isTouch, records]);
 
