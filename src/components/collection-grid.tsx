@@ -858,7 +858,7 @@ export function CollectionGrid({
 			{isTouch && (
 				<div
 					aria-hidden="true"
-					className="grid-focus-overlay-static pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
+					className="grid-focus-overlay-static pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-xs dark:bg-black/50"
 				/>
 			)}
 			{lastActiveRecordRef.current && (

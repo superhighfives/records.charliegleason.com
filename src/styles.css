@@ -530,10 +530,26 @@ a {
  * is pinned dead centre in the viewport rather than chased to a cursor or
  * active-tile position. No `--overlay-x/y`, no rAF, no scroll listener: a
  * static `mask-image` never needs recomputing, so the compositor can just
- * reuse the one rasterised layer for the life of the element — the earlier
- * per-frame position chase (see the removal note this replaced, in
- * `collection-grid.tsx`) was the actual iOS Safari scroll-jank contributor,
- * not the blur itself. */
+ * reuse the one rasterised layer for the life of the element.
+ *
+ * That alone wasn't enough, though — measured in a real iOS Simulator
+ * scroll, a static mask at the same `blur(8px)` (Tailwind's
+ * `backdrop-blur-sm`) desktop uses still cost ~80ms worst-frame, because
+ * touch's `IntersectionObserver`-driven `activeId` means *some* tile is
+ * active for nearly the whole scroll, so the `:has()` rule below keeps this
+ * composited almost continuously (unlike desktop, where it's only live
+ * during a hover pause). Pausing it during scroll (via the same
+ * `data-scrolling` signal the dot-pulse glow and cover filter transition
+ * use elsewhere in this file) fixed the perf but broke the vignette
+ * outright — killing and recreating `backdrop-filter` every scroll gesture
+ * reliably hit the exact failure the `.grid-focus-overlay` `will-change`
+ * comment warns about (a layer created too late to capture what's behind it
+ * that frame just doesn't blur), so it stopped reappearing once scrolling
+ * settled. Dropping to `blur(4px)` (`backdrop-blur-xs`) instead — half the
+ * radius, since gaussian blur cost scales with it — turned out to be
+ * *cheaper* than pausing at all (~40ms worst-frame, continuously
+ * composited, no pause/toggle anywhere), so this runs unconditionally the
+ * same as desktop's does. */
 .grid-focus-overlay-static {
   mask-image: radial-gradient(
     circle at center,
@@ -568,32 +584,6 @@ a {
 .collection-grid[data-pointer-outside="true"] .grid-focus-overlay,
 .collection-grid[data-pointer-outside="true"] .grid-focus-overlay-static {
   transition-duration: 1200ms;
-}
-
-/* Same `data-scrolling` signal as the dot-pulse glow and cover filter
- * transition above — `backdrop-filter: blur()` is expensive to composite on
- * iOS Safari regardless of whether its mask position is moving (measured: a
- * real Simulator scroll went from ~20-40ms worst-frame without this static
- * vignette to ~80ms with it, static mask included, because touch's
- * `IntersectionObserver`-driven `activeId` means *some* tile is active for
- * nearly the whole scroll, so the `:has()` rule above keeps this composited
- * almost continuously). Forced fully off for the scroll's duration —
- * `!important` because `data-scrolling` and `data-active` are both true at
- * once here, and the `:has()` rule above is one compound selector more
- * specific than a plain attribute-selector override can beat (same reason
- * `body[data-scroll-locked]` needs it elsewhere in this file). The focus
- * vignette doesn't need to track a fast flick anyway, only where you land —
- * the normal opacity transition takes back over the instant scrolling
- * settles, so it fades in around whichever tile you stopped on. */
-.collection-grid[data-scrolling="true"] .grid-focus-overlay-static {
-  opacity: 0 !important;
-  /* Not just invisible — actually dropping the filter itself, since an
-   * opacity-0 layer isn't guaranteed to skip the (expensive) blur
-   * computation that produces its pixels before compositing them at 0
-   * alpha. */
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  transition: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
