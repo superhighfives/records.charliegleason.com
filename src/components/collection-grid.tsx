@@ -148,7 +148,13 @@ const RecordTile = memo(function RecordTile({
 							coverReady ? "opacity-100" : "opacity-0",
 						)}
 					/>
-					<div className="absolute inset-0 overflow-hidden">
+					{/* `content-visibility: auto` — see the module doc above for why this
+					    is scoped to the cover's own wrapper rather than the whole tile.
+					    Sized purely by `inset-0` against the already-sized `aspect-square`
+					    parent, not by its own content, so this doesn't need a
+					    `contain-intrinsic-size` fallback the way an intrinsically-sized
+					    element would. */}
+					<div className="absolute inset-0 overflow-hidden [content-visibility:auto]">
 						{/* Shown behind the cover while it loads — `-z-10` (rather
 						    than unmounting once ready) so it never has to fight
 						    FadeImage's own opacity for stacking order; the opaque
@@ -184,6 +190,7 @@ const RecordTile = memo(function RecordTile({
 									matte ? "object-contain" : "object-cover",
 								)}
 								loading="lazy"
+								decoding="async"
 							/>
 						) : (
 							<SleevePlaceholder />
@@ -307,11 +314,16 @@ function usePrefersReducedMotionRef(): React.RefObject<boolean> {
  * below rather than continuing to fill them — visually a dead rectangle, no
  * matter how large the batch. A single grid has no such boundary. Perf for
  * the (currently few-hundred-record) collection comes from `loading="lazy"`
- * on covers alone — a per-tile `content-visibility: auto` was tried too, but
- * it implies `contain: paint`, which clips a tile's descendants to its own
- * box and defeats the vinyl disc's deliberate peek past the tile's edge (see
- * `.vinyl-peek` in styles.css, which already made — and documented — this
- * same call once before).
+ * plus `decoding="async"` on covers, and `content-visibility: auto` on each
+ * tile's cover wrapper (see `RecordTile` below) — applying it to the *whole*
+ * tile was tried once and reverted: it implies `contain: paint`, which clips
+ * a tile's descendants to its own box and defeats the vinyl disc's deliberate
+ * peek past the tile's edge (see `.vinyl-peek` in styles.css). Scoped to just
+ * the cover's own `overflow-hidden` wrapper instead — a sibling of the disc,
+ * not an ancestor — it gets the same win (measured via a real iOS Simulator
+ * scroll: worst frame ~120ms → ~20-40ms, main-thread long tasks stayed at
+ * zero throughout, so the cost was decode/style/layout work the browser can
+ * now skip for offscreen tiles, not JS) without touching the peek at all.
  *
  * On touch devices (`useIsTouchDevice`), hover's whole job — which tile is
  * "active", and where the spotlight backdrop sits — is instead driven by
