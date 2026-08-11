@@ -658,33 +658,39 @@ export function CollectionGrid({
 				})()
 			: null;
 		function updateEdgeBlur(id: number) {
-			const el = elements.get(id);
-			if (!el) return;
+			const group = elements.get(id);
+			if (!group) return;
+			// Tailwind's Preflight resets `--tw-blur` (and every other filter
+			// variable) directly on *every* element via a `*, :before, :after,
+			// ::backdrop { --tw-blur: initial; … }` rule — a value specified
+			// directly on an element, even `initial`, always wins over
+			// inheriting one from an ancestor. So this has to be written on the
+			// `<img>` itself, not `.group`: setting it on the wrapper (as this
+			// used to) silently did nothing, since the image's own reset shadows
+			// whatever the parent has.
+			const img = group.querySelector("img");
+			if (!img) return;
 			const nearTop = nearTopIds.has(id);
 			const nearBottom = nearBottomIds.has(id);
 			if (!nearTop && !nearBottom) {
-				el.style.removeProperty("--tw-blur");
+				img.style.removeProperty("--tw-blur");
 				return;
 			}
-			const rect = el.getBoundingClientRect();
+			const rect = group.getBoundingClientRect();
 			const topBlur = nearTop ? blurForDistance(rect.top) : 0;
 			const bottomBlur = nearBottom
 				? blurForDistance(window.innerHeight - rect.bottom)
 				: 0;
 			const blur = Math.max(topBlur, bottomBlur);
 			if (blur <= 0) {
-				el.style.removeProperty("--tw-blur");
+				img.style.removeProperty("--tw-blur");
 			} else {
-				el.style.setProperty("--tw-blur", `blur(${blur.toFixed(1)}px)`);
+				img.style.setProperty("--tw-blur", `blur(${blur.toFixed(1)}px)`);
 			}
 			if (debugEl) {
-				const img = el.querySelector("img");
-				const groupFilter = getComputedStyle(el).filter;
-				const imgFilter = img ? getComputedStyle(img).filter : "no-img";
-				const imgTwBlur = img
-					? getComputedStyle(img).getPropertyValue("--tw-blur")
-					: "?";
-				debugEl.textContent = `top:${nearTopIds.size} bot:${nearBottomIds.size} id:${id} rectTop:${Math.round(rect.top)} blur:${blur.toFixed(1)}px\ngroupFilter:${groupFilter.slice(0, 30)}\nimgFilter:${imgFilter.slice(0, 40)}\nimg--tw-blur:${imgTwBlur}`;
+				const imgFilter = getComputedStyle(img).filter;
+				const imgTwBlur = getComputedStyle(img).getPropertyValue("--tw-blur");
+				debugEl.textContent = `top:${nearTopIds.size} bot:${nearBottomIds.size} id:${id} rectTop:${Math.round(rect.top)} blur:${blur.toFixed(1)}px\nimgFilter:${imgFilter.slice(0, 40)}\nimg--tw-blur:${imgTwBlur}`;
 			}
 		}
 		function updateAllEdgeBlur() {
