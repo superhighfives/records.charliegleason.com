@@ -551,14 +551,25 @@ a {
  * composited, no pause/toggle anywhere), so this runs unconditionally the
  * same as desktop's does. */
 .grid-focus-overlay-static {
+  /* `circle at center` (a keyword, not `--overlay-x/y` pixel values) reliably
+   * left a band of totally unblurred content right at the top of the screen
+   * on real iOS Safari — `center` resolves against this element's own box,
+   * and a `position: fixed` box's percentage geometry can end up computed
+   * against a taller virtual viewport than what's actually visible once the
+   * dynamic toolbar has collapsed (confirmed by testing with the mask
+   * removed entirely: the unmasked box's blur *did* reach every edge, so the
+   * box itself was never the problem — only the mask's own keyword-based
+   * centring was). `--overlay-x/y` (set once from `window.visualViewport` in
+   * collection-grid.tsx, not per-frame) sidesteps it by handing the mask a
+   * real pixel centre instead of a keyword for it to miscompute. */
   mask-image: radial-gradient(
-    circle at center,
+    circle at var(--overlay-x, 50%) var(--overlay-y, 50%),
     transparent 0,
     transparent 140px,
     black 460px
   );
   -webkit-mask-image: radial-gradient(
-    circle at center,
+    circle at var(--overlay-x, 50%) var(--overlay-y, 50%),
     transparent 0,
     transparent 140px,
     black 460px

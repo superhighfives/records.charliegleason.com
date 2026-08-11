@@ -407,6 +407,41 @@ export function CollectionGrid({
 	// value none of them actually read.
 	const overlayRef = useRef<HTMLDivElement>(null);
 
+	// Touch's static vignette (`.grid-focus-overlay-static`) needs its own
+	// true-pixel viewport centre. It used to rely on the CSS keyword `center`
+	// (resolved against the overlay's own `position: fixed` box), but that
+	// reliably left a band of completely unblurred content at the top of the
+	// screen on real iOS Safari once the dynamic toolbar had collapsed —
+	// confirmed by testing with the mask removed entirely, which showed the
+	// box itself always covers the true viewport correctly, so only the
+	// mask's own keyword-based centring was wrong. Handing it real pixel
+	// values instead sidesteps whatever Safari gets wrong internally.
+	// `visualViewport` (not `innerWidth`/`innerHeight`) because it's the API
+	// actually built to track the visible area through toolbar/keyboard
+	// changes. Set once on mount and again on resize — never on scroll, so
+	// this doesn't reintroduce the per-frame chase that made the desktop
+	// overlay's `--overlay-x/y` a real scroll-jank contributor for touch.
+	const staticOverlayRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (!isTouch) return;
+		const el = staticOverlayRef.current;
+		if (!el) return;
+		const setCenter = () => {
+			const vv = window.visualViewport;
+			const width = vv?.width ?? window.innerWidth;
+			const height = vv?.height ?? window.innerHeight;
+			el.style.setProperty("--overlay-x", `${width / 2}px`);
+			el.style.setProperty("--overlay-y", `${height / 2}px`);
+		};
+		setCenter();
+		window.visualViewport?.addEventListener("resize", setCenter);
+		window.addEventListener("resize", setCenter);
+		return () => {
+			window.visualViewport?.removeEventListener("resize", setCenter);
+			window.removeEventListener("resize", setCenter);
+		};
+	}, [isTouch]);
+
 	// --- Eased spotlight position -------------------------------------------
 	// `target` is where the spotlight is headed (the pointer on desktop; the
 	// active tile's centre plus a tilt nudge on mobile — both set below);
@@ -850,13 +885,15 @@ export function CollectionGrid({
 				/>
 			)}
 			{/* Touch's version of the same vignette — see
-			    `.grid-focus-overlay-static` in styles.css. No ref, no pointer/scroll
-			    listeners: the hole is pinned to the viewport centre in CSS alone,
-			    so this needs nothing from JS beyond the `data-active`/
-			    `data-pointer-outside` attributes `RecordTile`/the IntersectionObserver
-			    band-tracking above already maintain for other reasons. */}
+			    `.grid-focus-overlay-static` in styles.css and the `staticOverlayRef`
+			    effect above. No pointer/scroll listeners, just a one-off (plus
+			    resize) viewport-centre write — everything else (visibility,
+			    fade timing) comes from the same `data-active`/`data-pointer-outside`
+			    attributes `RecordTile`/the IntersectionObserver band-tracking above
+			    already maintain for other reasons. */}
 			{isTouch && (
 				<div
+					ref={staticOverlayRef}
 					aria-hidden="true"
 					className="grid-focus-overlay-static pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-xs dark:bg-black/50"
 				/>
