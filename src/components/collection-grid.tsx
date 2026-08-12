@@ -186,9 +186,14 @@ const RecordTile = memo(function RecordTile({
 						    FadeImage's own opacity for stacking order; the opaque
 						    cover simply paints over it once revealed. Cover-less
 						    tiles skip straight to the placeholder, so no skeleton
-						    for those. */}
+						    for those. Same `inset-[5%] size-[90%] rounded-full` as the
+						    disc mask above, rather than a plain rectangle — the two
+						    only ever show one at a time (this while `!coverReady`,
+						    the mask once ready), so matching their shape reads as one
+						    consistent loading affordance instead of two different
+						    ones handing off. */}
 						{cover && !coverReady && (
-							<Skeleton className="absolute inset-0 -z-10 rounded-none" />
+							<Skeleton className="absolute inset-[5%] size-[90%] -z-10 rounded-full" />
 						)}
 						{cover ? (
 							<FadeImage
@@ -714,7 +719,7 @@ export function CollectionGrid({
 		// and only the remaining outer band ramps at all, over a much shorter
 		// distance than before, so the ramp itself reads as quick rather than
 		// gradual. A trapezoid, not a triangle.
-		const AMBIENT_CORE_RATIO = 0.4;
+		const AMBIENT_CORE_RATIO = 0.75;
 		function ambientProgress(tileCenterY: number, tileHeight: number): number {
 			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
 			const falloffPx = tileHeight * AMBIENT_FALLOFF_RATIO;
@@ -811,6 +816,13 @@ export function CollectionGrid({
 			for (const disc of setters.discs) {
 				disc.setTransform(discTransformAt(disc, progress));
 			}
+			// Matches `.group:hover`/`.group[data-active="true"]`'s own
+			// `z-index: 10` in styles.css (see `.vinyl-peek` there) — without
+			// it, a peeking disc paints *under* the next cell in DOM order
+			// instead of on top of it, same as hover/pinned already handle.
+			// This tile isn't marked `data-active` (that's the panel-pinned
+			// state, explicitly excluded above), so it needs its own bump.
+			group.style.zIndex = progress > 0 ? "10" : "";
 		}
 		// A tile's own membership in "currently near the centre" used to be
 		// tracked by `IntersectionObserver`s — one thin band for the active
