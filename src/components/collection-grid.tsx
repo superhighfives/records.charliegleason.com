@@ -887,7 +887,33 @@ export function CollectionGrid({
 		}
 		let ambientRafId: number | null = null;
 		function ambientTick() {
-			const targets = updateActive(scanTiles()).highlights;
+			const tiles = scanTiles();
+			const targets = updateActive(tiles).highlights;
+			// `highlights` only ever has entries for the anchor's own row (the
+			// column-exclusivity gate that keeps two tiles sharing a row's
+			// identical vertical distance from lighting up together) — every
+			// *other* in-band tile falls straight to a target of 0 the instant
+			// it stops being that row, regardless of how close it actually
+			// still is. That's invisible for a normal tile (its own falloff,
+			// scaled to its own height, has usually already faded it close to
+			// 0 by then anyway) but not for a 2×2 spanning tile: its falloff
+			// radius is scaled to *its* height too, so it's still
+			// substantially lit at the exact moment a different row's tile
+			// takes over the anchor — forcing that straight to 0 is a real
+			// jump, not just an easing-smoothed one. Filling in each
+			// non-anchor tile's own natural, continuous `ambientProgress`
+			// instead (rather than 0) lets it keep decaying on its own curve
+			// — for normal tiles this is usually already ~0, a no-op; for a
+			// spanning tile it's a proper fade instead of a snap.
+			for (const [el, rect] of tiles) {
+				const id = Number(el.dataset.recordId);
+				if (targets.has(id)) continue;
+				const natural = ambientProgress(
+					rect.top + rect.height / 2,
+					rect.height,
+				);
+				if (natural > 0) targets.set(id, natural);
+			}
 			const ids = new Set<number>([
 				...targets.keys(),
 				...ambientCurrent.keys(),
