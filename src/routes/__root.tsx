@@ -126,7 +126,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body className="flex min-h-dvh flex-col">
 				<ClerkProvider>
-					{import.meta.env.DEV && <ScrollPerfHud />}
+					<ScrollPerfHud />
 					{/* A flex-1 column so a route's content (or a full-height ErrorScreen,
 					    which fills with `flex-1`) grows to the available space — the same
 					    shell the admin layout provides via its own <main>. The collection
