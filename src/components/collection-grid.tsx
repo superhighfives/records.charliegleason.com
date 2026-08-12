@@ -540,7 +540,10 @@ export function CollectionGrid({
 		// already has to handle a band holding more than one row at once, so
 		// a wider candidate list here (shared with the ambient effect's own
 		// per-frame scan) is exactly what it was built for.
-		function updateActive(tiles: Array<[HTMLElement, DOMRect]>): number | null {
+		function updateActive(tiles: Array<[HTMLElement, DOMRect]>): {
+			activeId: number | null;
+			highlights: Map<number, number>;
+		} {
 			const centerYForBand = window.innerHeight / 2;
 			const bandHalfPx = window.innerHeight * 0.05;
 			const inBand = tiles
@@ -553,6 +556,7 @@ export function CollectionGrid({
 					([el, r]) => [Number(el.dataset.recordId), r] as [number, DOMRect],
 				);
 			let next: number | null = null;
+			const highlights = new Map<number, number>();
 			if (inBand.length > 0) {
 				const centerY = window.innerHeight / 2;
 				// The band can briefly hold tiles from two different rows at once
@@ -614,6 +618,34 @@ export function CollectionGrid({
 					Math.max(0, Math.floor(fraction * row.length)),
 				);
 				next = row[index][0];
+
+				// `NowShowing`'s title above hard-switches at `index`'s own
+				// boundary, but the *visual* highlight below shouldn't — every
+				// tile in this row shares the same vertical centre, so `fraction`
+				// crossing a column boundary is the row's own falloff (see
+				// `ambientProgress`) at its single highest point (dead centre,
+				// `dist === 0`): flipping the whole progress value discretely
+				// right there reads as an abrupt snap between the two tiles
+				// instead of a handoff, rather than the gradual row-to-row
+				// crossfade `ambientProgress` already gives for free. Blending
+				// across columns using the same `fraction` that already sweeps
+				// continuously left-to-right fixes that the same way: each
+				// tile's own share of the row's vertical progress fades in as
+				// `fraction` approaches its column's centre and back out toward
+				// its neighbours', mirroring the vertical case one level down.
+				const rowCenterY = (rowTop + rowBottom) / 2;
+				const verticalProgress = ambientProgress(rowCenterY, anchorRect.height);
+				const slotWidth = 1 / row.length;
+				for (let i = 0; i < row.length; i++) {
+					const [id] = row[i];
+					const slotCenter = (i + 0.5) * slotWidth;
+					const colDist = Math.abs(fraction - slotCenter);
+					const colWeight = Math.max(
+						0,
+						1 - colDist / (slotWidth * COLUMN_FALLOFF_RATIO),
+					);
+					highlights.set(id, verticalProgress * colWeight);
+				}
 			}
 			// Reuses the same `data-pointer-outside` attribute desktop's
 			// `onPointerLeave`/`Enter` set below — no active tile (scrolled above
@@ -626,7 +658,7 @@ export function CollectionGrid({
 				container.removeAttribute("data-pointer-outside");
 			}
 			setActiveId(next);
-			return next;
+			return { activeId: next, highlights };
 		}
 
 		// Touch's stand-in for desktop's `:hover`-driven grayscale/scale/peek —
@@ -655,10 +687,17 @@ export function CollectionGrid({
 		// though — every tile at the same vertical position shares the exact
 		// same distance from centre, so on a normal 2-column row both tiles
 		// would read the identical progress and light up together. Only the
-		// single tile `updateActive` already picks (the same one `NowShowing`
-		// shows the title for, via its own row/left-right sweep) ever gets a
-		// nonzero progress below — everything else in the scanned band is
-		// forced to rest regardless of its own distance.
+		// tile(s) `updateActive`'s own row/left-right sweep is currently
+		// weighted toward (the `highlights` map it returns — see its own
+		// comment for why that's occasionally more than one tile mid-handoff,
+		// not just the single `activeId`/`NowShowing` pick) ever get a nonzero
+		// progress below — everything else in the scanned band is forced to
+		// rest regardless of its own distance. `COLUMN_FALLOFF_RATIO` is that
+		// blend's horizontal counterpart to `AMBIENT_FALLOFF_RATIO` below —
+		// 1 fades a tile out exactly by the time its immediate neighbour's own
+		// slot centre is reached, so a row wider than 2 columns still never
+		// blends across more than its two nearest tiles at once.
+		const COLUMN_FALLOFF_RATIO = 1;
 		const AMBIENT_FALLOFF_RATIO = 0.62;
 		function ambientProgress(tileCenterY: number, tileHeight: number): number {
 			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
@@ -739,20 +778,13 @@ export function CollectionGrid({
 			const peakRotate = 6 - 3 * (disc.layers - 1 - disc.stackIndex);
 			return `translateX(${maxTx * progress}px) scale(${1 + 0.06 * progress}) rotate(${restRotate + (peakRotate - restRotate) * progress}deg)`;
 		}
-		function updateAmbientForRect(
-			group: HTMLElement,
-			rect: DOMRect,
-			isHighlighted: boolean,
-		) {
+		function updateAmbientForRect(group: HTMLElement, progress: number) {
 			const setters = getSetters(group);
 			if (!setters) return;
 			// The record panel's pinned tile is a discrete "this one
 			// specifically" state (see the `active` prop comment below) —
 			// don't fight it with the ambient effect.
 			if (group.dataset.active === "true") return;
-			const progress = isHighlighted
-				? ambientProgress(rect.top + rect.height / 2, rect.height)
-				: 0;
 			setters.setFilter?.(`grayscale(${1 - progress})`);
 			setters.setScale?.(String(1 + 0.05 * progress));
 			for (const disc of setters.discs) {
@@ -802,16 +834,16 @@ export function CollectionGrid({
 		}
 		function updateAllAmbient(
 			tiles: Array<[HTMLElement, DOMRect]>,
-			highlightedId: number | null,
+			highlights: Map<number, number>,
 		) {
-			for (const [el, rect] of tiles) {
+			for (const [el] of tiles) {
 				const id = Number(el.dataset.recordId);
-				updateAmbientForRect(el, rect, id === highlightedId);
+				updateAmbientForRect(el, highlights.get(id) ?? 0);
 			}
 		}
 
 		const initialTiles = scanTiles();
-		updateAllAmbient(initialTiles, updateActive(initialTiles));
+		updateAllAmbient(initialTiles, updateActive(initialTiles).highlights);
 
 		let rafId: number | null = null;
 		const onScroll = () => {
@@ -819,7 +851,7 @@ export function CollectionGrid({
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
 				const tiles = scanTiles();
-				updateAllAmbient(tiles, updateActive(tiles));
+				updateAllAmbient(tiles, updateActive(tiles).highlights);
 			});
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
