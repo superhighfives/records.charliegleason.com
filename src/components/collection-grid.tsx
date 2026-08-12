@@ -1,3 +1,4 @@
+import gsap from "gsap";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
@@ -154,9 +155,7 @@ const RecordTile = memo(function RecordTile({
 					    parent, not by its own content, so this doesn't need a
 					    `contain-intrinsic-size` fallback the way an intrinsically-sized
 					    element would. */}
-					{/* TEMP: content-visibility stripped to test whether it's
-					    conflicting with animation-timeline: view(). */}
-					<div className="absolute inset-0 overflow-hidden">
+					<div className="absolute inset-0 overflow-hidden [content-visibility:auto]">
 						{/* Shown behind the cover while it loads — `-z-10` (rather
 						    than unmounting once ready) so it never has to fight
 						    FadeImage's own opacity for stacking order; the opaque
@@ -609,26 +608,153 @@ export function CollectionGrid({
 			{ rootMargin: "-45% 0px -45% 0px", threshold: 0 },
 		);
 
+		// Touch's stand-in for desktop's `:hover`-driven grayscale/scale/peek —
+		// see the `.group[data-active="true"] .vinyl-disc` comment in
+		// styles.css for the two things already tried and abandoned here (a
+		// shared `backdrop-filter` overlay, a pure-CSS `animation-timeline:
+		// view()` version of this exact effect that turned out to never
+		// actually bind to real scroll position despite `CSS.supports`
+		// reporting it valid). GSAP's `quickSetter` gives a cheap, cached
+		// direct-write function per property per element — called from the
+		// same rAF-throttled scroll handler below, only for tiles currently
+		// intersecting the viewport at all (`ambientIds`), so this costs
+		// nothing for the ~300 tiles that aren't. Progress is a tile's own
+		// *centre* distance from the viewport's centre, not an edge-clipping
+		// metric — unlike this branch's earlier `filter: blur()` attempt, a
+		// tall 2×2 spanning tile has one well-defined centre point regardless
+		// of its height, so it doesn't have the "which edge is it near"
+		// ambiguity that made spanning tiles read as permanently blurred.
+		const AMBIENT_FALLOFF_PX = window.innerHeight * 0.55;
+		function ambientProgress(tileCenterY: number): number {
+			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
+			return Math.max(0, Math.min(1, 1 - dist / AMBIENT_FALLOFF_PX));
+		}
+		type DiscSetter = {
+			setTransform: (v: string) => void;
+			stackIndex: number;
+			layers: number;
+			vinylScale: number;
+			width: number;
+		};
+		type TileSetters = {
+			setFilter: ((v: string) => void) | null;
+			setScale: ((v: string) => void) | null;
+			discs: DiscSetter[];
+		};
+		const setterCache = new Map<number, TileSetters>();
+		function getSetters(id: number): TileSetters | null {
+			const cached = setterCache.get(id);
+			if (cached) return cached;
+			const group = elements.get(id);
+			if (!group) return null;
+			const img = group.querySelector("img");
+			const discs = Array.from(
+				group.querySelectorAll<SVGSVGElement>(".vinyl-disc"),
+			).map((disc) => {
+				const wrapper = disc.closest<HTMLElement>(".vinyl-peek");
+				const wrapperStyle = wrapper && getComputedStyle(wrapper);
+				return {
+					setTransform: gsap.quickSetter(disc, "transform") as (
+						v: string,
+					) => void,
+					stackIndex:
+						Number(disc.style.getPropertyValue("--vinyl-stack-index")) || 0,
+					layers: Number(wrapperStyle?.getPropertyValue("--vinyl-layers")) || 1,
+					vinylScale:
+						Number(wrapperStyle?.getPropertyValue("--vinyl-scale")) || 1,
+					width: disc.getBoundingClientRect().width,
+				};
+			});
+			const entry: TileSetters = {
+				setFilter: img
+					? (gsap.quickSetter(img, "filter") as (v: string) => void)
+					: null,
+				setScale: img
+					? (gsap.quickSetter(img, "scale") as (v: string) => void)
+					: null,
+				discs,
+			};
+			setterCache.set(id, entry);
+			return entry;
+		}
+		function discTransformAt(disc: DiscSetter, progress: number): string {
+			if (progress <= 0) {
+				return `translateX(0px) scale(1) rotate(${3 * disc.stackIndex}deg)`;
+			}
+			const maxTx =
+				Math.min(disc.width * 0.25, 64) * disc.vinylScale -
+				8 * (disc.layers - 1 - disc.stackIndex);
+			const restRotate = 3 * disc.stackIndex;
+			const peakRotate = 6 - 3 * (disc.layers - 1 - disc.stackIndex);
+			return `translateX(${maxTx * progress}px) scale(${1 + 0.06 * progress}) rotate(${restRotate + (peakRotate - restRotate) * progress}deg)`;
+		}
+		function updateAmbient(id: number) {
+			const group = elements.get(id);
+			const setters = getSetters(id);
+			if (!group || !setters) return;
+			// The record panel's pinned tile is a discrete "this one
+			// specifically" state (see the `active` prop comment below) —
+			// don't fight it with the ambient effect.
+			if (group.dataset.active === "true") return;
+			const rect = group.getBoundingClientRect();
+			const progress = ambientProgress(rect.top + rect.height / 2);
+			setters.setFilter?.(`grayscale(${1 - progress})`);
+			setters.setScale?.(String(1 + 0.05 * progress));
+			for (const disc of setters.discs) {
+				disc.setTransform(discTransformAt(disc, progress));
+			}
+		}
+		const ambientIds = new Set<number>();
+		function updateAllAmbient() {
+			for (const id of ambientIds) updateAmbient(id);
+		}
+		const ambientObserver = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const id = Number((entry.target as HTMLElement).dataset.recordId);
+					if (entry.isIntersecting) {
+						ambientIds.add(id);
+						updateAmbient(id);
+					} else {
+						ambientIds.delete(id);
+						// Reset to rest state on the way out — otherwise a tile
+						// scrolled fast enough to skip straight past `progress`
+						// ever reaching 0 could leave stale inline styles behind.
+						const setters = getSetters(id);
+						setters?.setFilter?.("grayscale(1)");
+						setters?.setScale?.("1");
+						for (const disc of setters?.discs ?? []) {
+							disc.setTransform(discTransformAt(disc, 0));
+						}
+					}
+				}
+			},
+			{ rootMargin: "0px", threshold: 0 },
+		);
+
 		for (const el of container.querySelectorAll<HTMLElement>(
 			"[data-record-id]",
 		)) {
 			const id = Number(el.dataset.recordId);
 			elements.set(id, el);
 			observer.observe(el);
+			ambientObserver.observe(el);
 		}
 
 		let rafId: number | null = null;
 		const onScroll = () => {
-			if (rafId !== null || intersecting.size === 0) return;
+			if (rafId !== null) return;
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
-				updateActive();
+				if (intersecting.size > 0) updateActive();
+				if (ambientIds.size > 0) updateAllAmbient();
 			});
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
 
 		return () => {
 			observer.disconnect();
+			ambientObserver.disconnect();
 			window.removeEventListener("scroll", onScroll);
 			if (rafId !== null) cancelAnimationFrame(rafId);
 		};
@@ -829,16 +955,13 @@ export function CollectionGrid({
 					spanning={spanningIds.has(record.id)}
 					// Only the record panel's pinned tile (its own discrete "this one
 					// specifically" state, unrelated to scroll) — touch's own
-					// "whichever tile is centred" look is no longer driven by this at
-					// all, since `activeId`-driven `data-active` fought with the
-					// ambient `animation-timeline: view()` treatment in styles.css
-					// (CSS Animations outrank a plain author rule like
-					// `group-data-[active=true]:grayscale-0` in the cascade
-					// regardless of selector specificity, so the two competed for the
-					// same `filter`/`scale` properties). `activeId` itself still
-					// drives `NowShowing`'s content below — nothing about *that* part
-					// needed the tile's own `data-active` at all, it was only ever
-					// reusing the same field.
+					// "whichever tile is centred" look is driven by the ambient
+					// GSAP effect above instead, which explicitly skips any tile
+					// with `data-active="true"` so the two don't fight over the
+					// same `filter`/`scale` properties. `activeId` itself still
+					// drives `NowShowing`'s content below — nothing about *that*
+					// part needed the tile's own `data-active` at all, it was only
+					// ever reusing the same field.
 					active={record.id === focusedRecordId}
 					onActivate={isTouch ? undefined : setActiveId}
 				/>
