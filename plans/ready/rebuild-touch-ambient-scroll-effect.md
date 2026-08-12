@@ -7,6 +7,30 @@ updated: 2026-08-12
 
 # Rebuild the touch ambient scroll effect
 
+> **2026-08-12 update — read before executing this plan.** Two commits landed
+> on the branch after this plan was written (`ea030a4` "Fix touch ambient
+> state freeze, colWeight plateau squash, and reduced-motion gate", `5a77d9a`
+> "Reach the pinned-tile ambient reset, cover disc-mask on hover/pinned, and
+> scope reduced-motion gate to animation only") that took the **opposite**
+> direction from Option A below: instead of removing the disc mask and the
+> cover-fade replay mechanism, they fixed further bugs in them and *extended*
+> the mask to cover desktop hover/pinned too (it previously only had touch JS
+> coverage — a real gap the automated PR review round 33 caught). That work
+> looks sound and is landing via the PR's own review cycle, not a rebuild.
+>
+> **Before executing the Tasks checklist below as written** (specifically
+> "remove the disc mask" / "remove `syncCoverFade`"), re-check the PR's
+> current review state and commit log — the specific removal tasks may
+> already be moot, or may need to be renegotiated with whoever's continuing
+> that work. The root-cause diagnosis in *Context* below (content-visibility
+> paint-catchup timing racing against everything trying to synchronize with
+> it) is still believed accurate and worth keeping in mind even if the
+> concrete Option A recommendation built on it needs revisiting — if the
+> incremental fixes keep converging (narrower, more specific bugs each
+> round) rather than surfacing new categories of the same race, that's real
+> evidence the rebuild may no longer be necessary. Confirm with the user
+> before ripping anything out either way.
+
 ## Goal
 
 Replace the touch-only scroll-driven "ambient" effect in `CollectionGrid`
