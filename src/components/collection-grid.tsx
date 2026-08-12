@@ -699,10 +699,26 @@ export function CollectionGrid({
 		// blends across more than its two nearest tiles at once.
 		const COLUMN_FALLOFF_RATIO = 1;
 		const AMBIENT_FALLOFF_RATIO = 0.62;
+		// A tile used to reach full colour the *instant* it passed dead centre
+		// and immediately start fading again — dist===0 was a single point, not
+		// a range, so a linear `1 - dist/falloff` ramp reads as constantly
+		// easing in and out with no moment of "fully there" (the classic
+		// slow-in/slow-out tent shape). `AMBIENT_CORE_RATIO` carves out a flat
+		// plateau at the *middle* of that same falloff radius — full colour for
+		// as long as a tile stays within it, not just at the exact centre —
+		// and only the remaining outer band ramps at all, over a much shorter
+		// distance than before, so the ramp itself reads as quick rather than
+		// gradual. A trapezoid, not a triangle.
+		const AMBIENT_CORE_RATIO = 0.4;
 		function ambientProgress(tileCenterY: number, tileHeight: number): number {
 			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
 			const falloffPx = tileHeight * AMBIENT_FALLOFF_RATIO;
-			return Math.max(0, Math.min(1, 1 - dist / falloffPx));
+			const corePx = falloffPx * AMBIENT_CORE_RATIO;
+			if (dist <= corePx) return 1;
+			return Math.max(
+				0,
+				Math.min(1, 1 - (dist - corePx) / (falloffPx - corePx)),
+			);
 		}
 		type DiscSetter = {
 			setTransform: (v: string) => void;
