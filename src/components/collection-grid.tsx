@@ -185,13 +185,7 @@ const RecordTile = memo(function RecordTile({
 									// the tile's footprint. Tailwind v4's `scale-*`
 									// compiles to the native CSS `scale` property, not
 									// `transform` — transitioning `transform` here would
-									// silently do nothing to it. No class here for the
-									// touch edge-blur (unlike everything else in this
-									// list) — it's a continuous, scroll-driven `--tw-blur`
-									// custom property written directly in collection-grid.tsx,
-									// not a toggled utility class. `grayscale` alone is
-									// enough for Tailwind to emit the shared `filter: var(--tw-blur,)
-									// … var(--tw-grayscale,) …` declaration this composes into.
+									// silently do nothing to it.
 									"size-full grayscale transition-[opacity,filter,scale] duration-1000 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
 									matte ? "object-contain" : "object-cover",
 								)}
@@ -613,163 +607,28 @@ export function CollectionGrid({
 			{ rootMargin: "-45% 0px -45% 0px", threshold: 0 },
 		);
 
-		// Touch's stand-in for the desktop hover backdrop's blur — see the
-		// `.grid-focus-overlay` comment in styles.css for why this is `filter`
-		// on individual tile images rather than a shared `backdrop-filter`
-		// overlay. Scroll-driven and continuous, not a threshold-triggered
-		// toggle-plus-transition: the blur amount is a direct function of how
-		// close a tile is to the viewport edge, so scrubbing the scroll
-		// position scrubs the blur right along with it — the same "no canned
-		// animation" feel `smoothScrollCenterTo`'s rAF tween or the spotlight's
-		// eased chase go for elsewhere in this file, just driven by native
-		// scroll instead of a synthetic one. `--tw-blur` (not a raw `filter:`
-		// declaration) because this `img` already carries the `grayscale`
-		// utility, whose generated CSS composes every Tailwind filter utility
-		// into one shared `filter: var(--tw-blur,) … var(--tw-grayscale,) …`
-		// property — writing `--tw-blur` directly lets the compositor combine
-		// with the existing grayscale instead of clobbering it, without a
-		// second copy of that shared declaration here.
-		// How many px of a tile have to have already scrolled *past* the
-		// viewport edge (not merely be near it) before it's fully blurred.
-		// Based on clipped amount rather than raw distance-to-edge — the first
-		// version used `blurForDistance(rect.top)` directly, which blurred a
-		// tile the instant its edge came within this many px of the viewport
-		// edge regardless of how tall the tile was. A 2×2 spanning tile can
-		// be taller than this zone doubled, so its top edge could sit inside
-		// the top zone and its bottom edge inside the bottom zone
-		// *simultaneously* while the tile was still fully on screen and
-		// nowhere near actually leaving — the whole thing read as blurred.
-		// Measuring clipped px instead means a fully visible tile — however
-		// tall — is never blurred; only the part that's actually scrolled out
-		// of view drives it, which is also the more literally correct "this
-		// is at the edge of what you can see" signal to begin with.
-		const EDGE_ZONE_PX = 140;
-		const MAX_EDGE_BLUR_PX = 6;
-		function blurForClippedPx(clippedPx: number): number {
-			if (clippedPx <= 0) return 0;
-			if (clippedPx >= EDGE_ZONE_PX) return MAX_EDGE_BLUR_PX;
-			return MAX_EDGE_BLUR_PX * (clippedPx / EDGE_ZONE_PX);
-		}
-		// Two observers (not one) because a tile can be near the top band, the
-		// bottom band, or neither, and only IntersectionObserver — not a plain
-		// scroll listener — can cheaply tell us *which* of the (currently
-		// ~300, all mounted) tiles are candidates at all; the continuous part
-		// below only ever measures whatever's currently in these two small
-		// sets, not the whole grid.
-		const nearTopIds = new Set<number>();
-		const nearBottomIds = new Set<number>();
-		// TEMP DIAGNOSTIC — not for merge. `?debug=1` shows a live readout of
-		// what this effect is actually doing on the device it's running on,
-		// so a screenshot can prove/disprove whether the JS runs and what
-		// values it computes without relying on eyeballing blur in a photo.
-		const debugEl = window.location.search.includes("debug")
-			? (() => {
-					const el = document.createElement("div");
-					el.style.cssText =
-						"position:fixed;top:0;left:0;z-index:99999;background:black;color:lime;font:11px monospace;padding:4px 8px;white-space:pre;pointer-events:none";
-					document.body.appendChild(el);
-					return el;
-				})()
-			: null;
-		function updateEdgeBlur(id: number) {
-			const group = elements.get(id);
-			if (!group) return;
-			// Tailwind's Preflight resets `--tw-blur` (and every other filter
-			// variable) directly on *every* element via a `*, :before, :after,
-			// ::backdrop { --tw-blur: initial; … }` rule — a value specified
-			// directly on an element, even `initial`, always wins over
-			// inheriting one from an ancestor. So this has to be written on the
-			// `<img>` itself, not `.group`: setting it on the wrapper (as this
-			// used to) silently did nothing, since the image's own reset shadows
-			// whatever the parent has.
-			const img = group.querySelector("img");
-			if (!img) return;
-			const nearTop = nearTopIds.has(id);
-			const nearBottom = nearBottomIds.has(id);
-			if (!nearTop && !nearBottom) {
-				img.style.removeProperty("--tw-blur");
-				return;
-			}
-			const rect = group.getBoundingClientRect();
-			const topClipped = nearTop ? Math.max(0, -rect.top) : 0;
-			const bottomClipped = nearBottom
-				? Math.max(0, rect.bottom - window.innerHeight)
-				: 0;
-			const blur = Math.max(
-				blurForClippedPx(topClipped),
-				blurForClippedPx(bottomClipped),
-			);
-			if (blur <= 0) {
-				img.style.removeProperty("--tw-blur");
-			} else {
-				img.style.setProperty("--tw-blur", `blur(${blur.toFixed(1)}px)`);
-			}
-			if (debugEl) {
-				const imgFilter = getComputedStyle(img).filter;
-				const imgTwBlur = getComputedStyle(img).getPropertyValue("--tw-blur");
-				debugEl.textContent = `top:${nearTopIds.size} bot:${nearBottomIds.size} id:${id} rectTop:${Math.round(rect.top)} blur:${blur.toFixed(1)}px\nimgFilter:${imgFilter.slice(0, 40)}\nimg--tw-blur:${imgTwBlur}`;
-			}
-		}
-		function updateAllEdgeBlur() {
-			for (const id of nearTopIds) updateEdgeBlur(id);
-			for (const id of nearBottomIds) updateEdgeBlur(id);
-		}
-		const topEdgeObserver = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					const id = Number((entry.target as HTMLElement).dataset.recordId);
-					if (entry.isIntersecting) nearTopIds.add(id);
-					else nearTopIds.delete(id);
-					updateEdgeBlur(id);
-				}
-			},
-			// The top 20% of the viewport — shrinks the observed root by 80% off
-			// the bottom, leaving only that top slice as the intersection area.
-			{ rootMargin: "0px 0px -80% 0px", threshold: 0 },
-		);
-		const bottomEdgeObserver = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					const id = Number((entry.target as HTMLElement).dataset.recordId);
-					if (entry.isIntersecting) nearBottomIds.add(id);
-					else nearBottomIds.delete(id);
-					updateEdgeBlur(id);
-				}
-			},
-			// The bottom 20% of the viewport, mirroring the top band above.
-			{ rootMargin: "-80% 0px 0px 0px", threshold: 0 },
-		);
-
 		for (const el of container.querySelectorAll<HTMLElement>(
 			"[data-record-id]",
 		)) {
 			const id = Number(el.dataset.recordId);
 			elements.set(id, el);
 			observer.observe(el);
-			topEdgeObserver.observe(el);
-			bottomEdgeObserver.observe(el);
 		}
 
 		let rafId: number | null = null;
 		const onScroll = () => {
-			if (rafId !== null) return;
+			if (rafId !== null || intersecting.size === 0) return;
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
-				if (intersecting.size > 0) updateActive();
-				if (nearTopIds.size > 0 || nearBottomIds.size > 0) {
-					updateAllEdgeBlur();
-				}
+				updateActive();
 			});
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
 
 		return () => {
 			observer.disconnect();
-			topEdgeObserver.disconnect();
-			bottomEdgeObserver.disconnect();
 			window.removeEventListener("scroll", onScroll);
 			if (rafId !== null) cancelAnimationFrame(rafId);
-			debugEl?.remove();
 		};
 	}, [isTouch, records]);
 
@@ -980,10 +839,11 @@ export function CollectionGrid({
 			    above (`--overlay-x/y`) so the blur opens up right where the
 			    cursor/active tile is instead of snapping between "sharp tile" and
 			    "blurred everything else" with nothing in between. Desktop-only —
-			    touch's stand-in is the scroll-driven `--tw-blur` custom property
-			    the edge-tracking effect above writes onto each near-edge tile's
-			    own cover image, not a shared overlay; see the `.grid-focus-overlay`
-			    comment in styles.css for why. */}
+			    touch has no equivalent. Several attempts at one (a shared
+			    backdrop-filter overlay, then a per-tile filter: blur() driven by
+			    scroll position) each hit real problems specific to touch/iOS —
+			    see the `.grid-focus-overlay` comment in styles.css for the
+			    history — so touch just doesn't get this affordance for now. */}
 			{!isTouch && (
 				<div
 					ref={overlayRef}

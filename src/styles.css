@@ -478,19 +478,18 @@ a {
  * below the hovered one (z-index: 10, above) — so the hovered vinyl reads as
  * popping forward off the page while the rest of the grid recedes behind
  * glass. `:has()` keeps this a single shared, CSS-only toggle rather than a
- * mouseenter/leave handler wired to every tile. Desktop-only — touch's
- * version of this idea is a scroll-driven `--tw-blur` custom property
- * written directly onto individual tile images (see the comment below this
- * rule), blurring their own rendered content (`filter`) instead of a shared
- * `backdrop-filter` overlay. Three different `backdrop-filter` + mask
- * variants for touch (a JS-positioned radial hole, a CSS-only radial hole, a
- * plain linear-gradient) all hit the same real-iOS-Safari-only failure: the
- * backdrop snapshot gets "locked" to whatever's visible at the exact frame
- * the filter activates instead of correctly re-capturing, producing a
- * hard-edged clip right as it fades in. `filter` blurs an element's own
- * rendered content — a fundamentally different, much better-supported
- * rendering path that doesn't share this bug, at the cost of not being a
- * true frosted-glass-over-everything effect. */
+ * mouseenter/leave handler wired to every tile. Desktop-only — touch has no
+ * equivalent. Several attempts at one were tried and abandoned: a shared
+ * `backdrop-filter` overlay (three mask variants — a JS-positioned radial
+ * hole, a CSS-only radial hole, a plain linear-gradient — all hit the same
+ * real-iOS-Safari-only failure, where the backdrop snapshot gets "locked" to
+ * whatever's visible at the exact frame the filter activates instead of
+ * correctly re-capturing, producing a hard-edged clip right as it fades in),
+ * then a per-tile `filter: blur()` driven by scroll position (works, avoids
+ * that bug, but a plain per-element filter can't apply a gradient *within*
+ * one element — a tall 2×2 spanning tile clipped at either edge reads as
+ * uniformly blurred rather than just its clipped portion, which looked worse
+ * than no effect at all). Touch just doesn't get this affordance for now. */
 .grid-focus-overlay {
   z-index: 5;
   /* Keeps this element's compositing layer (and its backdrop-filter capture)
@@ -554,27 +553,6 @@ a {
     transition: none;
   }
 }
-
-/* Touch's stand-in for the desktop hover backdrop above needs no rule here
- * at all — see `RecordTile`'s className comment in collection-grid.tsx.
- * Short version: two small `IntersectionObserver`s there track which tiles
- * are near the top/bottom 20% of the viewport, and for exactly those (never
- * the other ~300) a scroll handler computes a blur amount from how close
- * each one is to the edge and writes it straight to that tile's own cover
- * image as an inline `--tw-blur` custom property — no React state, no
- * re-render, and (deliberately not a Tailwind utility class toggle) no
- * threshold-triggered snap either: the blur tracks the scroll position
- * continuously, like scrubbing a timeline, rather than firing a canned
- * transition once a tile crosses some line. `--tw-blur` specifically (not a
- * raw `filter: blur()`) because this `img` already carries the `grayscale`
- * utility, and Tailwind's filter utilities compose into one shared
- * `filter: var(--tw-blur,) … var(--tw-grayscale,) …` declaration — writing
- * the custom property directly lets it combine with the existing grayscale
- * instead of clobbering it. The `[data-scrolling="true"] img
- * { transition-property: opacity, scale }` rule above already drops `filter`
- * from the animated properties during an active scroll, so these continuous
- * updates apply instantly frame to frame with nothing fighting them — no
- * separate handling needed here. */
 
 .vinyl-disc {
   /* Positive rotation, growing with `--vinyl-stack-index` — the back-most
