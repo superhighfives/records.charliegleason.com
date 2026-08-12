@@ -861,10 +861,15 @@ export function CollectionGrid({
 		// This band only decides which tiles are worth examining at all — it's
 		// deliberately generous (a fixed fraction of the viewport, not tied to
 		// `AMBIENT_FALLOFF_RATIO`) so it comfortably covers a tall 2×2
-		// spanning tile on any device. A tile outside that falloff reads as
-		// fully rest regardless of how wide this band is, so a little slack
-		// here costs nothing beyond a few extra no-op writes.
-		const CANDIDATE_BAND_PX = window.innerHeight * 0.5;
+		// spanning tile on any device, and — see `syncCoverFade` below — the
+		// *whole* on-screen viewport with room either side, not just the area
+		// near dead centre `ambientProgress`'s own per-tile falloff actually
+		// lights up. A tile outside that falloff reads as fully rest
+		// regardless of how wide this band is, so a little slack here costs
+		// nothing beyond a few extra no-op writes — `getBoundingClientRect`
+		// is already read for every tile in the grid each scroll frame
+		// regardless of this constant's value.
+		const CANDIDATE_BAND_PX = window.innerHeight * 1.5;
 		function scanTiles(): Array<[HTMLElement, DOMRect]> {
 			const centerY = window.innerHeight / 2;
 			const tiles: Array<[HTMLElement, DOMRect]> = [];
@@ -961,14 +966,74 @@ export function CollectionGrid({
 		}
 		ambientTick();
 
+		// A cover this session has already loaded once (see `FadeImage`'s own
+		// `decodedSrcs` cache) mounts straight at `opacity-100` forever after
+		// — no CSS transition ever runs for a *revisit*, since the opacity
+		// value itself never actually changes. That's invisible as long as
+		// content-visibility repaints the tile in step with it becoming
+		// relevant again, but (see the disc-mask fix above for the same
+		// underlying gap, live-confirmed there) that repaint can genuinely
+		// lag becoming relevant by a beat, especially scrolling back over a
+		// burst of previously-seen tiles at once. With no opacity change to
+		// hide behind, that lag reads as a flicker/pop-in — never noticed
+		// scrolling forward into new territory (a first-ever load has a real
+		// 0→1 transition to play), but obvious scrolling back over tiles
+		// already visited this session.
+		//
+		// Tracks each tile's own relevant/not-relevant transitions, and on
+		// the "became relevant again" edge, replays a real fade for any img
+		// that's already fully opaque (still-loading images already have a
+		// genuine transition in flight — interrupting that would be worse).
+		// Disabling the transition for the instant `opacity: 0` write, then
+		// waiting two real frames before restoring it (same bracket
+		// `FadeImage` itself uses, for the same reason: a single write can
+		// resolve within the same paint as the one before it) is what makes
+		// the *return* to 1 an actual animated transition instead of a
+		// second instant snap.
+		const coverWasRelevant = new Set<number>();
+		function syncCoverFade(tiles: Array<[HTMLElement, DOMRect]>) {
+			for (const [el] of tiles) {
+				const img = el.querySelector<HTMLImageElement>("img");
+				if (!img) continue;
+				const id = Number(el.dataset.recordId);
+				const relevant =
+					typeof img.checkVisibility !== "function" ||
+					img.checkVisibility({ contentVisibilityAuto: true });
+				if (!relevant) {
+					coverWasRelevant.delete(id);
+					continue;
+				}
+				if (coverWasRelevant.has(id)) continue;
+				coverWasRelevant.add(id);
+				if (getComputedStyle(img).opacity !== "1") continue;
+				img.style.transition = "none";
+				img.style.opacity = "0";
+				requestAnimationFrame(() => {
+					requestAnimationFrame(() => {
+						img.style.transition = "";
+						img.style.opacity = "";
+					});
+				});
+			}
+		}
+		syncCoverFade(scanTiles());
+
+		let coverFadeRafId: number | null = null;
 		const onScroll = () => {
 			if (ambientRafId == null)
 				ambientRafId = requestAnimationFrame(ambientTick);
+			if (coverFadeRafId == null) {
+				coverFadeRafId = requestAnimationFrame(() => {
+					coverFadeRafId = null;
+					syncCoverFade(scanTiles());
+				});
+			}
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
 
 		return () => {
 			if (ambientRafId !== null) cancelAnimationFrame(ambientRafId);
+			if (coverFadeRafId !== null) cancelAnimationFrame(coverFadeRafId);
 			window.removeEventListener("scroll", onScroll);
 		};
 	}, [isTouch, records]);
