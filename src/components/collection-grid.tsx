@@ -545,7 +545,8 @@ export function CollectionGrid({
 	// that need observing too, so the effect has to rerun.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: see above
 	useEffect(() => {
-		if (!isTouch || !gridElRef.current) return;
+		if (!isTouch || !gridElRef.current || prefersReducedMotionRef.current)
+			return;
 		const container = gridElRef.current;
 
 		// Several tiles can share the band at once (a wide row). Whichever one
@@ -686,11 +687,9 @@ export function CollectionGrid({
 					const colWeight =
 						row.length === 1
 							? 1
-							: Math.max(
-									0,
-									1 -
-										Math.abs(fraction - (i + 0.5) * slotWidth) /
-											(slotWidth * COLUMN_FALLOFF_RATIO),
+							: trapezoidWeight(
+									Math.abs(fraction - (i + 0.5) * slotWidth),
+									slotWidth * COLUMN_FALLOFF_RATIO,
 								);
 					highlights.set(id, verticalProgress * colWeight);
 				}
@@ -747,6 +746,22 @@ export function CollectionGrid({
 		// blends across more than its two nearest tiles at once.
 		const COLUMN_FALLOFF_RATIO = 1;
 		const AMBIENT_FALLOFF_RATIO = 0.62;
+		// Shared trapezoid shape — flat plateau at `1` for `dist <= falloff *
+		// AMBIENT_CORE_RATIO`, linear ramp to `0` over the remaining outer band.
+		// `ambientProgress` below uses this for the vertical falloff; the column
+		// crossfade (`colWeight`) uses the exact same shape so a multi-tile row
+		// gets the same "hold at full colour" dwell the vertical axis does,
+		// instead of a plain linear ramp that only ever peaks at a single
+		// instant — that mismatch flattened the vertical plateau right back
+		// into a momentary peak for any row wider than one tile.
+		function trapezoidWeight(dist: number, falloffDist: number): number {
+			const corePx = falloffDist * AMBIENT_CORE_RATIO;
+			if (dist <= corePx) return 1;
+			return Math.max(
+				0,
+				Math.min(1, 1 - (dist - corePx) / (falloffDist - corePx)),
+			);
+		}
 		// A tile used to reach full colour the *instant* it passed dead centre
 		// and immediately start fading again — dist===0 was a single point, not
 		// a range, so a linear `1 - dist/falloff` ramp reads as constantly
@@ -761,12 +776,7 @@ export function CollectionGrid({
 		function ambientProgress(tileCenterY: number, tileHeight: number): number {
 			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
 			const falloffPx = tileHeight * AMBIENT_FALLOFF_RATIO;
-			const corePx = falloffPx * AMBIENT_CORE_RATIO;
-			if (dist <= corePx) return 1;
-			return Math.max(
-				0,
-				Math.min(1, 1 - (dist - corePx) / (falloffPx - corePx)),
-			);
+			return trapezoidWeight(dist, falloffPx);
 		}
 		type DiscSetter = {
 			setTransform: (v: string) => void;
@@ -847,8 +857,25 @@ export function CollectionGrid({
 			if (!setters) return;
 			// The record panel's pinned tile is a discrete "this one
 			// specifically" state (see the `active` prop comment below) —
-			// don't fight it with the ambient effect.
-			if (group.dataset.active === "true") return;
+			// don't fight it with the ambient effect. Clearing the inline
+			// styles this function itself last wrote (rather than just
+			// early-returning and leaving them in place) matters here: an
+			// inline `style.filter`/`scale`/disc transform beats the CSS
+			// `.group[data-active="true"] .vinyl-disc` rule on specificity, so
+			// leaving them set froze the tile at whatever partial ambient
+			// value was last painted the instant it became pinned, instead of
+			// letting CSS show its own full "pinned" look.
+			if (group.dataset.active === "true") {
+				setters.setFilter?.("");
+				setters.setScale?.("");
+				for (const disc of setters.discs) {
+					disc.setTransform("");
+				}
+				group.style.zIndex = "";
+				const mask = group.querySelector<HTMLElement>(".disc-mask");
+				if (mask) mask.style.opacity = "";
+				return;
+			}
 			setters.setFilter?.(`grayscale(${1 - progress})`);
 			setters.setScale?.(String(1 + 0.05 * progress));
 			for (const disc of setters.discs) {
@@ -970,6 +997,23 @@ export function CollectionGrid({
 			]);
 			let stillEasing = false;
 			for (const id of ids) {
+				const el = container.querySelector<HTMLElement>(
+					`[data-record-id="${id}"]`,
+				);
+				if (el?.dataset.active === "true") {
+					// While the record panel has this tile pinned,
+					// `updateAmbientForRect` no-ops every DOM write (CSS's own
+					// `.group[data-active="true"]` rule shows the pinned look
+					// instead) — but the scroll position, and so `targets`,
+					// keeps changing underneath. Freezing `ambientCurrent` at
+					// `1` here (matching that CSS look) rather than letting it
+					// keep chasing `target` unseen means that when the panel
+					// closes and DOM writes resume, easing resumes from where
+					// the tile visually was, instead of snapping to wherever
+					// it had silently drifted to while pinned.
+					ambientCurrent.set(id, 1);
+					continue;
+				}
 				const target = targets.get(id) ?? 0;
 				const current = ambientCurrent.get(id) ?? 0;
 				const delta = target - current;
