@@ -153,29 +153,21 @@ const RecordTile = memo(function RecordTile({
 					    Sized purely by `inset-0` against the already-sized `aspect-square`
 					    parent, not by its own content, so this doesn't need a
 					    `contain-intrinsic-size` fallback the way an intrinsically-sized
-					    element would. `bg-background` gives this wrapper its own opaque
-					    backdrop, independent of whether the `<img>` inside has actually
-					    painted yet — without it, a tile whose cover already loaded once
-					    this session (so `coverReady`, and with it the peeking `VinylDisc`
-					    sibling's `opacity-100`, is permanently true, no `Skeleton` to fall
-					    back on) could flash that disc, full-size and unobstructed, for a
-					    frame or two on a fast scroll back over it: this wrapper's own
-					    `content-visibility` skip has real layout/paint work to redo on
-					    becoming relevant again, and a burst of many tiles doing that at
-					    once can fall behind the always-rendered (never skipped) disc
-					    sitting right behind it. Gated to `coverReady` rather than
-					    applied unconditionally — while still loading, this wrapper is
-					    *supposed* to stay see-through, so the `Skeleton` behind it and
-					    the disc's own faint 10%-opacity preview (see `VinylDisc` above)
-					    both read through; an unconditional opaque backdrop blanked out
-					    that entire loading-state animation instead of just insuring
-					    against the scroll-back race. */}
-					<div
-						className={cn(
-							"absolute inset-0 overflow-hidden [content-visibility:auto]",
-							coverReady && "bg-background",
-						)}
-					>
+					    element would. On a fast scroll back to a tile whose cover
+					    already loaded once this session (so `coverReady`, and with it
+					    the peeking `VinylDisc` sibling's `opacity-100`, mounts already
+					    true — no `Skeleton` loading state to fall back on), this
+					    wrapper's own skip has real layout/paint work to redo on
+					    becoming relevant again, and can briefly fall behind the
+					    always-rendered (never skipped) disc sitting right behind it —
+					    see the touch effect below (`syncDiscVisibility`), which is what
+					    actually guards against that now, gating the *disc's* own
+					    visibility on this wrapper's real `checkVisibility` state rather
+					    than papering over it with an opaque backdrop here (which used to
+					    also blank out the legitimate loading-state animation — the
+					    `Skeleton` and the disc's own faint 10%-opacity preview — any
+					    time it was applied unconditionally). */}
+					<div className="cv-wrapper absolute inset-0 overflow-hidden [content-visibility:auto]">
 						{/* Shown behind the cover while it loads — `-z-10` (rather
 						    than unmounting once ready) so it never has to fight
 						    FadeImage's own opacity for stacking order; the opaque
@@ -825,12 +817,13 @@ export function CollectionGrid({
 		// This band only decides which tiles are worth examining at all — it's
 		// deliberately generous (a fixed fraction of the viewport, not tied to
 		// `AMBIENT_FALLOFF_RATIO`) so it comfortably covers a tall 2×2
-		// spanning tile on any device. `ambientProgress`'s own per-tile
-		// falloff is what actually keeps the *visible* highlight tight to one
-		// row — a tile outside that reads as fully rest regardless of how
-		// wide this band is, so a little slack here costs nothing beyond a
-		// few extra no-op writes.
-		const AMBIENT_BAND_PX = window.innerHeight * 0.5;
+		// spanning tile on any device, and — see `syncDiscVisibility` below —
+		// the *whole* on-screen viewport with room either side, not just the
+		// area near dead centre `ambientProgress`'s own per-tile falloff
+		// actually lights up. A tile outside that falloff reads as fully rest
+		// regardless of how wide this band is, so a little slack here costs
+		// nothing beyond a few extra no-op writes.
+		const CANDIDATE_BAND_PX = window.innerHeight * 1.5;
 		function scanTiles(): Array<[HTMLElement, DOMRect]> {
 			const centerY = window.innerHeight / 2;
 			const tiles: Array<[HTMLElement, DOMRect]> = [];
@@ -839,8 +832,8 @@ export function CollectionGrid({
 			)) {
 				const rect = el.getBoundingClientRect();
 				if (
-					rect.bottom < centerY - AMBIENT_BAND_PX ||
-					rect.top > centerY + AMBIENT_BAND_PX
+					rect.bottom < centerY - CANDIDATE_BAND_PX ||
+					rect.top > centerY + CANDIDATE_BAND_PX
 				) {
 					continue;
 				}
@@ -857,9 +850,61 @@ export function CollectionGrid({
 				updateAmbientForRect(el, highlights.get(id) ?? 0);
 			}
 		}
+		// The vinyl disc behind each cover is never skipped by
+		// `content-visibility` (see the cover wrapper's own comment above for
+		// why it can't be), so its opacity is otherwise driven purely by
+		// React's `coverReady` state — which, for a cover this session has
+		// already shown once, mounts true immediately regardless of whether
+		// the *cover* has actually repainted after its own wrapper comes back
+		// from being skipped. An always-opaque cover backdrop used to paper
+		// over that gap, but it also blocked the legitimate loading-state
+		// preview (see the wrapper's own comment) any time it was applied
+		// unconditionally, and only partially fixed it when gated. Forcing
+		// the disc invisible via a direct style override whenever its own
+		// cover wrapper reports itself still skipped —
+		// `checkVisibility({contentVisibilityAuto:true})`, the same real
+		// signal `FadeImage`'s own flicker fix already relies on, not a
+		// distance guess — targets the actual gap directly instead: hidden
+		// only for as long as the browser says the cover genuinely hasn't
+		// caught up yet, visible the rest of the time regardless of
+		// `coverReady`'s own timing.
+		//
+		// `checkVisibility` reporting "no longer skipped" isn't quite the
+		// same instant as "has actually painted a frame" though — confirmed
+		// live (a fast fling still showed a beat of unclipped, full-size
+		// discs even with the check above alone). The two-rAF gap mirrors
+		// `FadeImage`'s own reveal bracket for the same reason: it takes a
+		// real paint to know the previous one happened. Re-checking
+		// relevance right before actually clearing the override (rather than
+		// clearing unconditionally once scheduled) keeps this correct if the
+		// tile scrolls back out of relevance again during that gap — the
+		// disc simply stays hidden, and the next scroll-driven pass either
+		// re-hides it explicitly or schedules a fresh reveal attempt.
+		function syncDiscVisibility(tiles: Array<[HTMLElement, DOMRect]>) {
+			for (const [el] of tiles) {
+				const wrapper = el.querySelector<HTMLElement>(".cv-wrapper");
+				const disc = el.querySelector<HTMLElement>(".vinyl-peek");
+				if (!wrapper || !disc) continue;
+				const isRelevant = () =>
+					typeof wrapper.checkVisibility !== "function" ||
+					wrapper.checkVisibility({ contentVisibilityAuto: true });
+				if (!isRelevant()) {
+					disc.style.visibility = "hidden";
+					continue;
+				}
+				if (disc.style.visibility === "hidden") {
+					requestAnimationFrame(() => {
+						requestAnimationFrame(() => {
+							if (isRelevant()) disc.style.visibility = "";
+						});
+					});
+				}
+			}
+		}
 
 		const initialTiles = scanTiles();
 		updateAllAmbient(initialTiles, updateActive(initialTiles).highlights);
+		syncDiscVisibility(initialTiles);
 
 		let rafId: number | null = null;
 		const onScroll = () => {
@@ -868,6 +913,7 @@ export function CollectionGrid({
 				rafId = null;
 				const tiles = scanTiles();
 				updateAllAmbient(tiles, updateActive(tiles).highlights);
+				syncDiscVisibility(tiles);
 			});
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
