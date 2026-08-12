@@ -153,8 +153,18 @@ const RecordTile = memo(function RecordTile({
 					    Sized purely by `inset-0` against the already-sized `aspect-square`
 					    parent, not by its own content, so this doesn't need a
 					    `contain-intrinsic-size` fallback the way an intrinsically-sized
-					    element would. */}
-					<div className="absolute inset-0 overflow-hidden [content-visibility:auto]">
+					    element would. `bg-background` gives this wrapper its own opaque
+					    backdrop, independent of whether the `<img>` inside has actually
+					    painted yet — without it, a tile whose cover already loaded once
+					    this session (so `coverReady`, and with it the peeking `VinylDisc`
+					    sibling's `opacity-100`, is permanently true, no `Skeleton` to fall
+					    back on) could flash that disc, full-size and unobstructed, for a
+					    frame or two on a fast scroll back over it: this wrapper's own
+					    `content-visibility` skip has real layout/paint work to redo on
+					    becoming relevant again, and a burst of many tiles doing that at
+					    once can fall behind the always-rendered (never skipped) disc
+					    sitting right behind it. */}
+					<div className="absolute inset-0 overflow-hidden bg-background [content-visibility:auto]">
 						{/* Shown behind the cover while it loads — `-z-10` (rather
 						    than unmounting once ready) so it never has to fight
 						    FadeImage's own opacity for stacking order; the opaque
@@ -497,26 +507,40 @@ export function CollectionGrid({
 	useEffect(() => {
 		if (!isTouch || !gridElRef.current) return;
 		const container = gridElRef.current;
-		// Which tiles are currently in the band, and their elements (so we can
-		// re-measure live on scroll — see `onScroll` below). `threshold: 0` only
-		// fires this observer when a tile crosses in/out of the band, not on
-		// every scroll tick in between, so it's just membership tracking.
-		const elements = new Map<number, HTMLElement>();
-		const intersecting = new Set<number>();
 
 		// Several tiles can share the band at once (a wide row). Whichever one
 		// gets picked is decided by where the viewport's vertical centre — a
 		// fixed line on the page — currently falls within *that row's* own
 		// height: at the row's top edge it's the leftmost tile, at the row's
 		// bottom edge the rightmost, and everywhere between sweeps left-to-right
-		// with it. Re-run on every scroll tick (not just on the observer's
-		// enter/exit events) since a tall row can dwell in the band for a while,
-		// and the selection needs to keep tracking the centre line the whole
-		// time it's there, not just jump once when the row enters/leaves.
-		function updateActive() {
-			const inBand = [...intersecting]
-				.map((id) => [id, elements.get(id)?.getBoundingClientRect()] as const)
-				.filter((entry): entry is [number, DOMRect] => entry[1] !== undefined);
+		// with it. Re-run on every scroll tick (not just on enter/exit) since a
+		// tall row can dwell in the band for a while, and the selection needs to
+		// keep tracking the centre line the whole time it's there, not just jump
+		// once when the row enters/leaves.
+		//
+		// `tiles` is a fresh `getBoundingClientRect` measurement, not
+		// `IntersectionObserver` membership — this used to be driven by a very
+		// thin (`-45% 0px -45% 0px`) observer band, which a fast fling could
+		// skip a tile clean across within a single check interval, missing
+		// both its enter *and* exit and leaving `NowShowing` stuck on
+		// whatever was last actually observed (confirmed live: the title bar
+		// showing a record two rows away from what was actually centred after
+		// a quick flick). Anchoring on the closest-to-centre tile below
+		// already has to handle a band holding more than one row at once, so
+		// a wider candidate list here (shared with the ambient effect's own
+		// per-frame scan) is exactly what it was built for.
+		function updateActive(tiles: Array<[HTMLElement, DOMRect]>) {
+			const centerYForBand = window.innerHeight / 2;
+			const bandHalfPx = window.innerHeight * 0.05;
+			const inBand = tiles
+				.filter(
+					([, r]) =>
+						r.top < centerYForBand + bandHalfPx &&
+						r.bottom > centerYForBand - bandHalfPx,
+				)
+				.map(
+					([el, r]) => [Number(el.dataset.recordId), r] as [number, DOMRect],
+				);
 			let next: number | null = null;
 			if (inBand.length > 0) {
 				const centerY = window.innerHeight / 2;
@@ -592,20 +616,6 @@ export function CollectionGrid({
 			}
 			setActiveId(next);
 		}
-
-		const observer = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					const id = Number((entry.target as HTMLElement).dataset.recordId);
-					if (entry.isIntersecting) intersecting.add(id);
-					else intersecting.delete(id);
-				}
-				updateActive();
-			},
-			// A thin horizontal band through the viewport's vertical centre —
-			// whichever tile is crossing it is "the one you're looking at".
-			{ rootMargin: "-45% 0px -45% 0px", threshold: 0 },
-		);
 
 		// Touch's stand-in for desktop's `:hover`-driven grayscale/scale/peek —
 		// see the `.group[data-active="true"] .vinyl-disc` comment in
@@ -716,24 +726,24 @@ export function CollectionGrid({
 				disc.setTransform(discTransformAt(disc, progress));
 			}
 		}
-		// A tile's own membership in the "currently ambient" set used to be
-		// tracked by a second `IntersectionObserver` (`rootMargin: "0px"`).
-		// On real WebKit that observer's entries were unreliable at this scale
-		// (~300 observed elements) — some tiles simply never received an
-		// enter callback despite being visibly on-screen, leaving them stuck
-		// at their CSS rest state forever (confirmed live: two tiles at the
-		// *same* distance from centre, one animating correctly, one frozen).
-		// Chrome's implementation didn't reproduce this, which is exactly the
-		// kind of gap `animation-timeline: view()` also fell into — so this
-		// measures directly instead of trusting observer delivery. A tile's
-		// own `getBoundingClientRect()` is cheap, and reading it for every
-		// tile once per scroll frame (batched reads, then batched writes —
-		// no interleaving) is what the effect already did per-tracked-tile
-		// anyway; this just removes the unreliable membership layer on top.
+		// A tile's own membership in "currently near the centre" used to be
+		// tracked by `IntersectionObserver`s — one thin band for the active
+		// tile, one wider one for the ambient effect. On real WebKit both were
+		// unreliable at this scale (~300 observed elements): the ambient one
+		// left some tiles stuck at their CSS rest state forever (confirmed
+		// live — two tiles at the *same* distance from centre, one animating,
+		// one frozen), and the active one's thin `-45%` band could get
+		// skipped clean across by a fast fling within a single check
+		// interval, missing both its enter and exit and leaving `NowShowing`
+		// stuck on a stale record. A single `getBoundingClientRect` scan of
+		// every tile, once per scroll frame (batched reads, then batched
+		// writes — no interleaving), replaces both — cheap enough to run
+		// unconditionally, and correct regardless of how observer delivery
+		// batches on any given browser.
 		const AMBIENT_BAND_PX = AMBIENT_FALLOFF_PX * 1.4;
-		function updateAllAmbient() {
+		function scanTiles(): Array<[HTMLElement, DOMRect]> {
 			const centerY = window.innerHeight / 2;
-			const inBand: Array<[HTMLElement, DOMRect]> = [];
+			const tiles: Array<[HTMLElement, DOMRect]> = [];
 			for (const el of container.querySelectorAll<HTMLElement>(
 				"[data-record-id]",
 			)) {
@@ -744,33 +754,31 @@ export function CollectionGrid({
 				) {
 					continue;
 				}
-				inBand.push([el, rect]);
+				tiles.push([el, rect]);
 			}
-			for (const [el, rect] of inBand) updateAmbientForRect(el, rect);
+			return tiles;
+		}
+		function updateAllAmbient(tiles: Array<[HTMLElement, DOMRect]>) {
+			for (const [el, rect] of tiles) updateAmbientForRect(el, rect);
 		}
 
-		for (const el of container.querySelectorAll<HTMLElement>(
-			"[data-record-id]",
-		)) {
-			const id = Number(el.dataset.recordId);
-			elements.set(id, el);
-			observer.observe(el);
-		}
-		updateAllAmbient();
+		const initialTiles = scanTiles();
+		updateActive(initialTiles);
+		updateAllAmbient(initialTiles);
 
 		let rafId: number | null = null;
 		const onScroll = () => {
 			if (rafId !== null) return;
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
-				if (intersecting.size > 0) updateActive();
-				updateAllAmbient();
+				const tiles = scanTiles();
+				updateActive(tiles);
+				updateAllAmbient(tiles);
 			});
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
 
 		return () => {
-			observer.disconnect();
 			window.removeEventListener("scroll", onScroll);
 			if (rafId !== null) cancelAnimationFrame(rafId);
 		};

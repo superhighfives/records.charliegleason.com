@@ -137,6 +137,30 @@ export function FadeImage({
 				commit();
 				return;
 			}
+			// Same reasoning applies if this image's tile is currently being
+			// skipped by an ancestor's `content-visibility: auto` (see the
+			// collection grid's cover wrapper) — nothing is going to paint the
+			// pre-reveal frame or the transition regardless of how many rAFs
+			// this waits for, so committing now vs. two frames from now makes
+			// no visible difference *while skipped*. What it does fix: on a
+			// fast scroll, a src that finishes loading while its tile is still
+			// skipped would otherwise sit mid-fade-in when the tile becomes
+			// relevant again moments later, and the browser has no in-between
+			// frames to animate through — it just snaps straight to the final
+			// opacity, reading as a flick-in instead of a fade. Committing
+			// immediately here means that snap happens to the *correct*, fully
+			// revealed state, which is indistinguishable from "this had
+			// already faded in before you scrolled to it" — because, as far as
+			// paint is concerned, it had. `checkVisibility` isn't universally
+			// supported; where it's missing this just always attempts the
+			// fade, same as before.
+			if (
+				typeof ref.current?.checkVisibility === "function" &&
+				!ref.current.checkVisibility({ contentVisibilityAuto: true })
+			) {
+				commit();
+				return;
+			}
 			requestAnimationFrame(() => requestAnimationFrame(commit));
 		},
 		[instant],
