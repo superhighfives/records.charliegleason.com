@@ -498,6 +498,18 @@ export function CollectionGrid({
 	useEffect(() => {
 		if (!isTouch || !gridElRef.current) return;
 		const container = gridElRef.current;
+		// TEMP DIAGNOSTIC — not for merge.
+		const dbg = window as unknown as {
+			__ambientDebug?: Record<string, number>;
+		};
+		dbg.__ambientDebug ??= {
+			effectRuns: 0,
+			scrollCalls: 0,
+			ambientUpdateCalls: 0,
+			lastAmbientIdsSize: 0,
+			ambientObserverFires: 0,
+		};
+		dbg.__ambientDebug.effectRuns++;
 		// Which tiles are currently in the band, and their elements (so we can
 		// re-measure live on scroll — see `onScroll` below). `threshold: 0` only
 		// fires this observer when a tile crosses in/out of the band, not on
@@ -706,10 +718,16 @@ export function CollectionGrid({
 		}
 		const ambientIds = new Set<number>();
 		function updateAllAmbient() {
+			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
+			dbg.__ambientDebug!.ambientUpdateCalls++;
+			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
+			dbg.__ambientDebug!.lastAmbientIdsSize = ambientIds.size;
 			for (const id of ambientIds) updateAmbient(id);
 		}
 		const ambientObserver = new IntersectionObserver(
 			(entries) => {
+				// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
+				dbg.__ambientDebug!.ambientObserverFires++;
 				for (const entry of entries) {
 					const id = Number((entry.target as HTMLElement).dataset.recordId);
 					if (entry.isIntersecting) {
@@ -743,6 +761,8 @@ export function CollectionGrid({
 
 		let rafId: number | null = null;
 		const onScroll = () => {
+			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
+			dbg.__ambientDebug!.scrollCalls++;
 			if (rafId !== null) return;
 			rafId = requestAnimationFrame(() => {
 				rafId = null;

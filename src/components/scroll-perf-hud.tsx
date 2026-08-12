@@ -7,6 +7,13 @@ export function ScrollPerfHud() {
 	useEffect(() => {
 		let raf: number;
 		const tick = () => {
+			const dbg =
+				(
+					window as unknown as {
+						__ambientDebug?: Record<string, number>;
+					}
+				).__ambientDebug ?? {};
+			const dbgLine = `effectRuns:${dbg.effectRuns ?? "?"} scrollCalls:${dbg.scrollCalls ?? "?"} obsFires:${dbg.ambientObserverFires ?? "?"} updateCalls:${dbg.ambientUpdateCalls ?? "?"} idsSize:${dbg.lastAmbientIdsSize ?? "?"}`;
 			const tiles = Array.from(
 				document.querySelectorAll<HTMLElement>("[data-record-id]"),
 			).filter((el) => {
@@ -14,22 +21,17 @@ export function ScrollPerfHud() {
 				return r.bottom > 0 && r.top < window.innerHeight;
 			});
 			const vpCenter = window.innerHeight / 2;
-			const lines = tiles.slice(0, 5).map((tile) => {
+			const lines = tiles.slice(0, 3).map((tile) => {
 				const img = tile.querySelector("img");
-				const disc = tile.querySelector<SVGSVGElement>(".vinyl-disc");
 				const rect = tile.getBoundingClientRect();
-				const tileCenter = rect.top + rect.height / 2;
-				const distFromCenter = Math.round(tileCenter - vpCenter);
+				const distFromCenter = Math.round(
+					rect.top + rect.height / 2 - vpCenter,
+				);
 				const filter = img ? getComputedStyle(img).filter : "no-img";
-				const imgInlineStyle = img?.getAttribute("style") ?? "no-style-attr";
-				const discTransform = disc
-					? getComputedStyle(disc).transform
-					: "no-disc";
 				const id = tile.dataset.recordId;
-				const active = tile.dataset.active ?? "false";
-				return `id:${id} distC:${distFromCenter} active:${active}\n  filter:${filter.slice(0, 25)}\n  discT:${discTransform.slice(0, 30)}\n  imgStyle:${imgInlineStyle.slice(0, 40)}`;
+				return `id:${id} distC:${distFromCenter} filter:${filter.slice(0, 20)}`;
 			});
-			setText(lines.join("\n"));
+			setText([dbgLine, ...lines].join("\n"));
 			raf = requestAnimationFrame(tick);
 		};
 		raf = requestAnimationFrame(tick);
@@ -45,7 +47,7 @@ export function ScrollPerfHud() {
 				zIndex: 99999,
 				background: "black",
 				color: "lime",
-				font: "8px monospace",
+				font: "9px monospace",
 				padding: "4px 8px",
 				whiteSpace: "pre",
 				pointerEvents: "none",
