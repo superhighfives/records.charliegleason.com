@@ -709,18 +709,13 @@ export function CollectionGrid({
 			const peakRotate = 6 - 3 * (disc.layers - 1 - disc.stackIndex);
 			return `translateX(${maxTx * progress}px) scale(${1 + 0.06 * progress}) rotate(${restRotate + (peakRotate - restRotate) * progress}deg)`;
 		}
-		function updateAmbient(id: number, groupOverride?: HTMLElement) {
-			const group =
-				groupOverride ??
-				container.querySelector<HTMLElement>(`[data-record-id="${id}"]`);
-			if (!group) return;
+		function updateAmbientForRect(group: HTMLElement, rect: DOMRect) {
 			const setters = getSetters(group);
 			if (!setters) return;
 			// The record panel's pinned tile is a discrete "this one
 			// specifically" state (see the `active` prop comment below) —
 			// don't fight it with the ambient effect.
 			if (group.dataset.active === "true") return;
-			const rect = group.getBoundingClientRect();
 			const progress = ambientProgress(rect.top + rect.height / 2);
 			setters.setFilter?.(`grayscale(${1 - progress})`);
 			setters.setScale?.(String(1 + 0.05 * progress));
@@ -728,40 +723,38 @@ export function CollectionGrid({
 				disc.setTransform(discTransformAt(disc, progress));
 			}
 		}
-		const ambientIds = new Set<number>();
+		// A tile's own membership in the "currently ambient" set used to be
+		// tracked by a second `IntersectionObserver` (`rootMargin: "0px"`).
+		// On real WebKit that observer's entries were unreliable at this scale
+		// (~300 observed elements) — some tiles simply never received an
+		// enter callback despite being visibly on-screen, leaving them stuck
+		// at their CSS rest state forever (confirmed live: two tiles at the
+		// *same* distance from centre, one animating correctly, one frozen).
+		// Chrome's implementation didn't reproduce this, which is exactly the
+		// kind of gap `animation-timeline: view()` also fell into — so this
+		// measures directly instead of trusting observer delivery. A tile's
+		// own `getBoundingClientRect()` is cheap, and reading it for every
+		// tile once per scroll frame (batched reads, then batched writes —
+		// no interleaving) is what the effect already did per-tracked-tile
+		// anyway; this just removes the unreliable membership layer on top.
+		const AMBIENT_BAND_PX = AMBIENT_FALLOFF_PX * 1.4;
 		function updateAllAmbient() {
-			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
-			dbg.__ambientDebug!.ambientUpdateCalls++;
-			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
-			dbg.__ambientDebug!.lastAmbientIdsSize = ambientIds.size;
-			for (const id of ambientIds) updateAmbient(id);
-		}
-		const ambientObserver = new IntersectionObserver(
-			(entries) => {
-				// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
-				dbg.__ambientDebug!.ambientObserverFires++;
-				for (const entry of entries) {
-					const target = entry.target as HTMLElement;
-					const id = Number(target.dataset.recordId);
-					if (entry.isIntersecting) {
-						ambientIds.add(id);
-						updateAmbient(id, target);
-					} else {
-						ambientIds.delete(id);
-						// Reset to rest state on the way out — otherwise a tile
-						// scrolled fast enough to skip straight past `progress`
-						// ever reaching 0 could leave stale inline styles behind.
-						const setters = getSetters(target);
-						setters?.setFilter?.("grayscale(1)");
-						setters?.setScale?.("1");
-						for (const disc of setters?.discs ?? []) {
-							disc.setTransform(discTransformAt(disc, 0));
-						}
-					}
+			const centerY = window.innerHeight / 2;
+			const inBand: Array<[HTMLElement, DOMRect]> = [];
+			for (const el of container.querySelectorAll<HTMLElement>(
+				"[data-record-id]",
+			)) {
+				const rect = el.getBoundingClientRect();
+				if (
+					rect.bottom < centerY - AMBIENT_BAND_PX ||
+					rect.top > centerY + AMBIENT_BAND_PX
+				) {
+					continue;
 				}
-			},
-			{ rootMargin: "0px", threshold: 0 },
-		);
+				inBand.push([el, rect]);
+			}
+			for (const [el, rect] of inBand) updateAmbientForRect(el, rect);
+		}
 
 		for (const el of container.querySelectorAll<HTMLElement>(
 			"[data-record-id]",
@@ -769,8 +762,8 @@ export function CollectionGrid({
 			const id = Number(el.dataset.recordId);
 			elements.set(id, el);
 			observer.observe(el);
-			ambientObserver.observe(el);
 		}
+		updateAllAmbient();
 
 		let rafId: number | null = null;
 		const onScroll = () => {
@@ -780,14 +773,13 @@ export function CollectionGrid({
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
 				if (intersecting.size > 0) updateActive();
-				if (ambientIds.size > 0) updateAllAmbient();
+				updateAllAmbient();
 			});
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
 
 		return () => {
 			observer.disconnect();
-			ambientObserver.disconnect();
 			window.removeEventListener("scroll", onScroll);
 			if (rafId !== null) cancelAnimationFrame(rafId);
 		};
