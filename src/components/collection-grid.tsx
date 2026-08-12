@@ -660,12 +660,15 @@ export function CollectionGrid({
 			setScale: ((v: string) => void) | null;
 			discs: DiscSetter[];
 		};
-		const setterCache = new Map<number, TileSetters>();
-		function getSetters(id: number): TileSetters | null {
-			const cached = setterCache.get(id);
-			if (cached) return cached;
-			const group = elements.get(id);
-			if (!group) return null;
+		// Deliberately NOT cached by id — this used to be, but that meant a
+		// tile whose DOM node gets replaced for any reason (this session hit
+		// several real "stale reference" bugs elsewhere) would silently keep
+		// writing to a detached element forever while the live one sat
+		// untouched at its CSS rest state. A fresh `querySelector` for a single
+		// element is cheap enough that there is no real cost to always doing
+		// it — this only ever runs for the handful of tiles currently in
+		// `ambientIds`, not all ~300.
+		function getSetters(group: HTMLElement): TileSetters | null {
 			const img = group.querySelector("img");
 			const discs = Array.from(
 				group.querySelectorAll<SVGSVGElement>(".vinyl-disc"),
@@ -693,7 +696,6 @@ export function CollectionGrid({
 					: null,
 				discs,
 			};
-			setterCache.set(id, entry);
 			return entry;
 		}
 		function discTransformAt(disc: DiscSetter, progress: number): string {
@@ -707,10 +709,13 @@ export function CollectionGrid({
 			const peakRotate = 6 - 3 * (disc.layers - 1 - disc.stackIndex);
 			return `translateX(${maxTx * progress}px) scale(${1 + 0.06 * progress}) rotate(${restRotate + (peakRotate - restRotate) * progress}deg)`;
 		}
-		function updateAmbient(id: number) {
-			const group = elements.get(id);
-			const setters = getSetters(id);
-			if (!group || !setters) return;
+		function updateAmbient(id: number, groupOverride?: HTMLElement) {
+			const group =
+				groupOverride ??
+				container.querySelector<HTMLElement>(`[data-record-id="${id}"]`);
+			if (!group) return;
+			const setters = getSetters(group);
+			if (!setters) return;
 			// The record panel's pinned tile is a discrete "this one
 			// specifically" state (see the `active` prop comment below) —
 			// don't fight it with the ambient effect.
@@ -736,16 +741,17 @@ export function CollectionGrid({
 				// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
 				dbg.__ambientDebug!.ambientObserverFires++;
 				for (const entry of entries) {
-					const id = Number((entry.target as HTMLElement).dataset.recordId);
+					const target = entry.target as HTMLElement;
+					const id = Number(target.dataset.recordId);
 					if (entry.isIntersecting) {
 						ambientIds.add(id);
-						updateAmbient(id);
+						updateAmbient(id, target);
 					} else {
 						ambientIds.delete(id);
 						// Reset to rest state on the way out — otherwise a tile
 						// scrolled fast enough to skip straight past `progress`
 						// ever reaching 0 could leave stale inline styles behind.
-						const setters = getSetters(id);
+						const setters = getSetters(target);
 						setters?.setFilter?.("grayscale(1)");
 						setters?.setScale?.("1");
 						for (const disc of setters?.discs ?? []) {
