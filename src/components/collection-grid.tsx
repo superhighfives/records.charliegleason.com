@@ -863,32 +863,68 @@ export function CollectionGrid({
 			}
 			return tiles;
 		}
-		function updateAllAmbient(
-			tiles: Array<[HTMLElement, DOMRect]>,
-			highlights: Map<number, number>,
-		) {
-			for (const [el] of tiles) {
-				const id = Number(el.dataset.recordId);
-				updateAmbientForRect(el, highlights.get(id) ?? 0);
-			}
+		// `updateActive`'s `highlights` map is a *target*, sampled once per
+		// scroll frame — during a fast fling, the actual scroll position can
+		// move several steps' worth of the (now quite steep, see
+		// `AMBIENT_CORE_RATIO`) trapezoid between two consecutive samples,
+		// so writing that target straight to `filter`/`scale`/the disc's own
+		// transform read as an abrupt snap rather than an animation, the
+		// same problem the eased spotlight position above solves for a
+		// different property. `ambientCurrent` is this effect's own
+		// equivalent of `currentRef` there — the per-tile value actually
+		// painted, chasing its target by a fraction of the remaining
+		// distance every animation frame (`AMBIENT_PROGRESS_EASE`) instead
+		// of jumping straight to it, so even a big single-frame jump in the
+		// target still reads as continuous motion.
+		const AMBIENT_PROGRESS_EASE = 0.35;
+		const AMBIENT_SETTLE_EPSILON = 0.01;
+		const ambientCurrent = new Map<number, number>();
+		function applyAmbientProgress(id: number, progress: number) {
+			const el = container.querySelector<HTMLElement>(
+				`[data-record-id="${id}"]`,
+			);
+			if (el) updateAmbientForRect(el, progress);
 		}
-		const initialTiles = scanTiles();
-		updateAllAmbient(initialTiles, updateActive(initialTiles).highlights);
+		let ambientRafId: number | null = null;
+		function ambientTick() {
+			const targets = updateActive(scanTiles()).highlights;
+			const ids = new Set<number>([
+				...targets.keys(),
+				...ambientCurrent.keys(),
+			]);
+			let stillEasing = false;
+			for (const id of ids) {
+				const target = targets.get(id) ?? 0;
+				const current = ambientCurrent.get(id) ?? 0;
+				const delta = target - current;
+				if (Math.abs(delta) < AMBIENT_SETTLE_EPSILON) {
+					if (target === 0) {
+						ambientCurrent.delete(id);
+						if (current !== 0) applyAmbientProgress(id, 0);
+					} else {
+						ambientCurrent.set(id, target);
+						applyAmbientProgress(id, target);
+					}
+					continue;
+				}
+				const next = current + delta * AMBIENT_PROGRESS_EASE;
+				ambientCurrent.set(id, next);
+				applyAmbientProgress(id, next);
+				stillEasing = true;
+			}
+			ambientRafId = stillEasing ? requestAnimationFrame(ambientTick) : null;
+		}
+		ambientTick();
 
-		let rafId: number | null = null;
 		const onScroll = () => {
-			if (rafId !== null) return;
-			rafId = requestAnimationFrame(() => {
-				rafId = null;
-				const tiles = scanTiles();
-				updateAllAmbient(tiles, updateActive(tiles).highlights);
-			});
+			if (ambientRafId == null)
+				ambientRafId = requestAnimationFrame(ambientTick);
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
 
 		return () => {
+			if (ambientRafId !== null) cancelAnimationFrame(ambientRafId);
 			window.removeEventListener("scroll", onScroll);
-			if (rafId !== null) cancelAnimationFrame(rafId);
 		};
 	}, [isTouch, records]);
 
