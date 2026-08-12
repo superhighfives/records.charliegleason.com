@@ -137,17 +137,68 @@ export function FadeImage({
 				commit();
 				return;
 			}
+			// Same reasoning applies if this image's tile is currently being
+			// skipped by an ancestor's `content-visibility: auto` (see the
+			// collection grid's cover wrapper) — nothing is going to paint the
+			// pre-reveal frame or the transition regardless of how many rAFs
+			// this waits for, so committing now vs. two frames from now makes
+			// no visible difference *while skipped*. What it does fix: on a
+			// fast scroll, a src that finishes loading while its tile is still
+			// skipped would otherwise sit mid-fade-in when the tile becomes
+			// relevant again moments later, and the browser has no in-between
+			// frames to animate through — it just snaps straight to the final
+			// opacity, reading as a flick-in instead of a fade. Committing
+			// immediately here means that snap happens to the *correct*, fully
+			// revealed state, which is indistinguishable from "this had
+			// already faded in before you scrolled to it" — because, as far as
+			// paint is concerned, it had. `checkVisibility` isn't universally
+			// supported; where it's missing this just always attempts the
+			// fade, same as before.
+			if (
+				typeof ref.current?.checkVisibility === "function" &&
+				!ref.current.checkVisibility({ contentVisibilityAuto: true })
+			) {
+				commit();
+				return;
+			}
 			requestAnimationFrame(() => requestAnimationFrame(commit));
 		},
 		[instant],
 	);
 
+	// `img.decode()` resolves only once the image is actually decoded and
+	// paintable — unlike `load` (fires once the *network* fetch is done) or
+	// `complete` (can be true mid-decode too), which `decoding="async"`
+	// explicitly allows the browser to keep decoding *after* either of those
+	// fire. Revealing straight off `load`/`complete` started the opacity
+	// transition's clock immediately, but decode could still finish partway
+	// through it — the image had nothing to paint until that later instant,
+	// at which point the transition was already partway elapsed, so the
+	// first frame anyone actually saw was already mid-fade (confirmed live,
+	// frame by frame: freshly-scrolled-into-view covers jumped straight to
+	// ~70% opacity instead of starting at 0%). Falls back to revealing
+	// directly if `decode` isn't available or rejects (a broken image, same
+	// as the existing `onError` path) — same as before for either case.
+	const revealAfterDecode = useCallback(
+		(img: HTMLImageElement | null, value: string | undefined) => {
+			if (typeof img?.decode === "function") {
+				img
+					.decode()
+					.then(() => reveal(value))
+					.catch(() => reveal(value));
+			} else {
+				reveal(value);
+			}
+		},
+		[reveal],
+	);
+
 	useEffect(() => {
 		// A cached image can already be complete before `onLoad` is wired up (on
 		// mount, or right after a src swap), in which case the event never fires —
-		// reveal it via the same rAF-bracketed path as everything else.
-		if (ref.current?.complete) reveal(src);
-	}, [src, reveal]);
+		// reveal it via the same decode-then-rAF-bracketed path as everything else.
+		if (ref.current?.complete) revealAfterDecode(ref.current, src);
+	}, [src, revealAfterDecode]);
 
 	return (
 		<img
@@ -161,7 +212,7 @@ export function FadeImage({
 				className,
 			)}
 			onLoad={(e) => {
-				reveal(src);
+				revealAfterDecode(e.currentTarget, src);
 				onLoad?.(e);
 			}}
 			onError={(e) => {

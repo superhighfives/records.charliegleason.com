@@ -478,7 +478,18 @@ a {
  * below the hovered one (z-index: 10, above) — so the hovered vinyl reads as
  * popping forward off the page while the rest of the grid recedes behind
  * glass. `:has()` keeps this a single shared, CSS-only toggle rather than a
- * mouseenter/leave handler wired to every tile. */
+ * mouseenter/leave handler wired to every tile. Desktop-only — touch has no
+ * equivalent. Several attempts at one were tried and abandoned: a shared
+ * `backdrop-filter` overlay (three mask variants — a JS-positioned radial
+ * hole, a CSS-only radial hole, a plain linear-gradient — all hit the same
+ * real-iOS-Safari-only failure, where the backdrop snapshot gets "locked" to
+ * whatever's visible at the exact frame the filter activates instead of
+ * correctly re-capturing, producing a hard-edged clip right as it fades in),
+ * then a per-tile `filter: blur()` driven by scroll position (works, avoids
+ * that bug, but a plain per-element filter can't apply a gradient *within*
+ * one element — a tall 2×2 spanning tile clipped at either edge reads as
+ * uniformly blurred rather than just its clipped portion, which looked worse
+ * than no effect at all). Touch just doesn't get this affordance for now. */
 .grid-focus-overlay {
   z-index: 5;
   /* Keeps this element's compositing layer (and its backdrop-filter capture)
@@ -602,6 +613,46 @@ a {
       )
     );
 }
+
+/* `.disc-mask` (see its own comment in collection-grid.tsx) covers the disc's
+ * *rest* silhouette so a transparent cover doesn't show a dark crescent where
+ * there's no art. The touch ambient effect already yields it via inline
+ * `opacity` for any nonzero scroll-driven progress, but desktop's hover and
+ * the pinned `data-active` look are pure-CSS, driven by the same
+ * `.vinyl-disc` transforms above — without a matching rule here the mask
+ * stays opaque through both, cutting into the exact peek it exists to
+ * protect. Same transition timing as `.vinyl-disc` so the mask clears in
+ * step with the disc sliding out from under it, not before or after. */
+.disc-mask {
+  transition: opacity 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (pointer: fine) {
+  .group:hover .disc-mask {
+    opacity: 0;
+  }
+}
+
+.group[data-active="true"] .disc-mask {
+  opacity: 0;
+}
+
+/* Touch's stand-in for desktop's `:hover`-driven reveal above was, for a
+ * while, a pure-CSS `animation-timeline: view()` version of this same idea —
+ * each tile driving its own grayscale/scale/peek from its own scroll
+ * position, no JS at all. Abandoned after `CSS.supports("animation-timeline:
+ * view()")` turned out to only confirm the property *parses*, not that it
+ * *works*: verified live via `Element.getAnimations()` against real
+ * `getBoundingClientRect()` data that every tile's animation was
+ * permanently stuck at its 50% (peak) keyframe regardless of actual scroll
+ * position — not a tunable bug, the timeline just never bound to real
+ * scroll offset in this environment. GSAP's ScrollTrigger drives this now
+ * instead — see the touch effect in `collection-grid.tsx`, which computes
+ * continuous progress from each candidate tile's distance to viewport
+ * centre (not an edge-clipping metric, so — unlike this branch's earlier
+ * `filter: blur()` attempt — a tall 2×2 spanning tile's single well-defined
+ * centre point doesn't have the "which edge is it near" ambiguity that made
+ * spanning tiles read as permanently blurred). */
 
 /*
  * The record detail panel has no hover affordance for its disc (a static
