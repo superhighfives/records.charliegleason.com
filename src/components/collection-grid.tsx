@@ -1,4 +1,3 @@
-import gsap from "gsap";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
@@ -498,19 +497,6 @@ export function CollectionGrid({
 	useEffect(() => {
 		if (!isTouch || !gridElRef.current) return;
 		const container = gridElRef.current;
-		// TEMP DIAGNOSTIC — not for merge.
-		const dbg = window as unknown as {
-			__ambientDebug?: Record<string, number>;
-		};
-		dbg.__ambientDebug ??= {
-			effectRuns: 0,
-			scrollCalls: 0,
-			ambientUpdateCalls: 0,
-			lastAmbientIdsSize: 0,
-			ambientObserverFires: 0,
-			innerHeightAtMount: window.innerHeight,
-		};
-		dbg.__ambientDebug.effectRuns++;
 		// Which tiles are currently in the band, and their elements (so we can
 		// re-measure live on scroll — see `onScroll` below). `threshold: 0` only
 		// fires this observer when a tile crosses in/out of the band, not on
@@ -623,29 +609,23 @@ export function CollectionGrid({
 
 		// Touch's stand-in for desktop's `:hover`-driven grayscale/scale/peek —
 		// see the `.group[data-active="true"] .vinyl-disc` comment in
-		// styles.css for the two things already tried and abandoned here (a
-		// shared `backdrop-filter` overlay, a pure-CSS `animation-timeline:
-		// view()` version of this exact effect that turned out to never
-		// actually bind to real scroll position despite `CSS.supports`
-		// reporting it valid). GSAP's `quickSetter` gives a cheap, cached
-		// direct-write function per property per element — called from the
-		// same rAF-throttled scroll handler below, only for tiles currently
-		// intersecting the viewport at all (`ambientIds`), so this costs
-		// nothing for the ~300 tiles that aren't. Progress is a tile's own
+		// styles.css for the things already tried and abandoned here (a shared
+		// `backdrop-filter` overlay, a pure-CSS `animation-timeline: view()`
+		// version of this exact effect that turned out to never actually bind
+		// to real scroll position despite `CSS.supports` reporting it valid,
+		// and — see `getSetters` below — `gsap.quickSetter`, which crashed on
+		// the SVG discs on real WebKit). Direct style writes from the same
+		// rAF-throttled scroll handler below, only for tiles within
+		// `AMBIENT_BAND_PX` of the viewport centre, keep this cheap for the
+		// ~300 tiles that are nowhere near it. Progress is a tile's own
 		// *centre* distance from the viewport's centre, not an edge-clipping
 		// metric — unlike this branch's earlier `filter: blur()` attempt, a
 		// tall 2×2 spanning tile has one well-defined centre point regardless
 		// of its height, so it doesn't have the "which edge is it near"
 		// ambiguity that made spanning tiles read as permanently blurred.
 		const AMBIENT_FALLOFF_PX = window.innerHeight * 0.55;
-		// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
-		dbg.__ambientDebug!.falloffPx = AMBIENT_FALLOFF_PX;
 		function ambientProgress(tileCenterY: number): number {
 			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
-			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
-			dbg.__ambientDebug!.lastDist = dist;
-			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
-			dbg.__ambientDebug!.lastInnerHeight = window.innerHeight;
 			return Math.max(0, Math.min(1, 1 - dist / AMBIENT_FALLOFF_PX));
 		}
 		type DiscSetter = {
@@ -669,16 +649,25 @@ export function CollectionGrid({
 		// it — this only ever runs for the handful of tiles currently in
 		// `ambientIds`, not all ~300.
 		function getSetters(group: HTMLElement): TileSetters | null {
-			const img = group.querySelector("img");
+			const img = group.querySelector<HTMLImageElement>("img");
 			const discs = Array.from(
 				group.querySelectorAll<SVGSVGElement>(".vinyl-disc"),
 			).map((disc) => {
 				const wrapper = disc.closest<HTMLElement>(".vinyl-peek");
 				const wrapperStyle = wrapper && getComputedStyle(wrapper);
 				return {
-					setTransform: gsap.quickSetter(disc, "transform") as (
-						v: string,
-					) => void,
+					// Plain direct writes, not `gsap.quickSetter` — GSAP's SVG
+					// transform handling falls back to writing individual
+					// `scaleX`/`scaleY` *attributes* on some WebKit builds, and
+					// tries to set them as a single `setAttribute('scaleX,scaleY',
+					// …)` call, which throws `InvalidCharacterError` (confirmed
+					// live: this crashed the whole route on the iOS Simulator).
+					// We're not tweening here — every frame already computes its
+					// own final value — so a plain assignment does exactly what
+					// `quickSetter` did, without going through that path at all.
+					setTransform: (v: string) => {
+						disc.style.transform = v;
+					},
 					stackIndex:
 						Number(disc.style.getPropertyValue("--vinyl-stack-index")) || 0,
 					layers: Number(wrapperStyle?.getPropertyValue("--vinyl-layers")) || 1,
@@ -689,10 +678,14 @@ export function CollectionGrid({
 			});
 			const entry: TileSetters = {
 				setFilter: img
-					? (gsap.quickSetter(img, "filter") as (v: string) => void)
+					? (v: string) => {
+							img.style.filter = v;
+						}
 					: null,
 				setScale: img
-					? (gsap.quickSetter(img, "scale") as (v: string) => void)
+					? (v: string) => {
+							img.style.scale = v;
+						}
 					: null,
 				discs,
 			};
@@ -767,8 +760,6 @@ export function CollectionGrid({
 
 		let rafId: number | null = null;
 		const onScroll = () => {
-			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
-			dbg.__ambientDebug!.scrollCalls++;
 			if (rafId !== null) return;
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
@@ -981,7 +972,7 @@ export function CollectionGrid({
 					// Only the record panel's pinned tile (its own discrete "this one
 					// specifically" state, unrelated to scroll) — touch's own
 					// "whichever tile is centred" look is driven by the ambient
-					// GSAP effect above instead, which explicitly skips any tile
+					// scroll effect above instead, which explicitly skips any tile
 					// with `data-active="true"` so the two don't fight over the
 					// same `filter`/`scale` properties. `activeId` itself still
 					// drives `NowShowing`'s content below — nothing about *that*

@@ -7,7 +7,6 @@ import {
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { CollectionUIProvider } from "../components/collection-ui";
-import { ScrollPerfHud } from "../components/scroll-perf-hud";
 import { Toaster } from "../components/ui/sonner";
 import ClerkProvider from "../integrations/clerk/provider";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
@@ -116,28 +115,6 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 // wrong palette. Mirrors charliegleason.com's class-based dark mode.
 const themeScript = `(function(){try{var t=localStorage.getItem('theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.classList.toggle('dark',d);}catch(e){}})();`;
 
-// TEMP DIAGNOSTIC — not for merge. Surfaces uncaught errors directly in the
-// page (as text, not console) since the iOS Simulator has no easy remote
-// console access from here.
-const errorCatcherScript = `(function(){
-	function show(msg){
-		var el = document.getElementById('__err_hud');
-		if(!el){
-			el = document.createElement('div');
-			el.id = '__err_hud';
-			el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;background:red;color:white;font:10px monospace;padding:6px;white-space:pre-wrap;max-height:40vh;overflow:auto;';
-			document.documentElement.appendChild(el);
-		}
-		el.textContent += msg + '\\n---\\n';
-	}
-	window.addEventListener('error', function(e){
-		show('ERR: ' + e.message + ' @ ' + e.filename + ':' + e.lineno + ':' + e.colno + '\\n' + (e.error && e.error.stack || ''));
-	});
-	window.addEventListener('unhandledrejection', function(e){
-		show('REJECTION: ' + (e.reason && (e.reason.stack || e.reason.message || e.reason)));
-	});
-})();`;
-
 function RootDocument({ children }: { children: React.ReactNode }) {
 	return (
 		<html lang="en" suppressHydrationWarning>
@@ -145,12 +122,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				<HeadContent />
 				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: tiny inline theme bootstrap, no user input */}
 				<script dangerouslySetInnerHTML={{ __html: themeScript }} />
-				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: TEMP DIAGNOSTIC */}
-				<script dangerouslySetInnerHTML={{ __html: errorCatcherScript }} />
 			</head>
 			<body className="flex min-h-dvh flex-col">
 				<ClerkProvider>
-					<ScrollPerfHud />
 					{/* A flex-1 column so a route's content (or a full-height ErrorScreen,
 					    which fills with `flex-1`) grows to the available space — the same
 					    shell the admin layout provides via its own <main>. The collection
