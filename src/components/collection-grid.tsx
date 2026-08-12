@@ -508,6 +508,7 @@ export function CollectionGrid({
 			ambientUpdateCalls: 0,
 			lastAmbientIdsSize: 0,
 			ambientObserverFires: 0,
+			innerHeightAtMount: window.innerHeight,
 		};
 		dbg.__ambientDebug.effectRuns++;
 		// Which tiles are currently in the band, and their elements (so we can
@@ -637,8 +638,14 @@ export function CollectionGrid({
 		// of its height, so it doesn't have the "which edge is it near"
 		// ambiguity that made spanning tiles read as permanently blurred.
 		const AMBIENT_FALLOFF_PX = window.innerHeight * 0.55;
+		// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
+		dbg.__ambientDebug!.falloffPx = AMBIENT_FALLOFF_PX;
 		function ambientProgress(tileCenterY: number): number {
 			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
+			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
+			dbg.__ambientDebug!.lastDist = dist;
+			// biome-ignore lint/style/noNonNullAssertion: TEMP DIAGNOSTIC
+			dbg.__ambientDebug!.lastInnerHeight = window.innerHeight;
 			return Math.max(0, Math.min(1, 1 - dist / AMBIENT_FALLOFF_PX));
 		}
 		type DiscSetter = {

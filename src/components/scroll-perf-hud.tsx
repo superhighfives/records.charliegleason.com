@@ -13,7 +13,7 @@ export function ScrollPerfHud() {
 						__ambientDebug?: Record<string, number>;
 					}
 				).__ambientDebug ?? {};
-			const dbgLine = `effectRuns:${dbg.effectRuns ?? "?"} scrollCalls:${dbg.scrollCalls ?? "?"} obsFires:${dbg.ambientObserverFires ?? "?"} updateCalls:${dbg.ambientUpdateCalls ?? "?"} idsSize:${dbg.lastAmbientIdsSize ?? "?"}`;
+			const dbgLine = `effectRuns:${dbg.effectRuns ?? "?"} scrollCalls:${dbg.scrollCalls ?? "?"} obsFires:${dbg.ambientObserverFires ?? "?"} updateCalls:${dbg.ambientUpdateCalls ?? "?"} idsSize:${dbg.lastAmbientIdsSize ?? "?"}\nfalloffPx:${dbg.falloffPx ?? "?"} innerHAtMount:${dbg.innerHeightAtMount ?? "?"} lastInnerH:${dbg.lastInnerHeight ?? "?"} lastDist:${dbg.lastDist ?? "?"}`;
 			const tiles = Array.from(
 				document.querySelectorAll<HTMLElement>("[data-record-id]"),
 			).filter((el) => {
