@@ -648,12 +648,31 @@ export function CollectionGrid({
 				const slotWidth = 1 / row.length;
 				for (let i = 0; i < row.length; i++) {
 					const [id] = row[i];
-					const slotCenter = (i + 0.5) * slotWidth;
-					const colDist = Math.abs(fraction - slotCenter);
-					const colWeight = Math.max(
-						0,
-						1 - colDist / (slotWidth * COLUMN_FALLOFF_RATIO),
-					);
+					// A "row" of exactly one tile (a 2×2 spanning tile with no
+					// same-size neighbour beside it, most often) has nothing to
+					// blend against — the column blend below exists purely to
+					// crossfade between *multiple* tiles sharing a row, and
+					// applying it to a lone tile just attenuates it toward 0
+					// near the ends of its own vertical span for no reason,
+					// disagreeing with the unattenuated value the fallback
+					// below computes for the same tile the instant it's *not*
+					// the anchor. That mismatch, right at the anchor/non-anchor
+					// boundary, is what read as flickering in and out instead
+					// of a clean fade — a spanning tile's own height makes it
+					// overlap two rows at once (see the anchor-picking comment
+					// above), so which one wins as "the" anchor can wobble near
+					// that boundary; keeping both paths in agreement here means
+					// that wobble no longer has any visible value change to
+					// reveal it.
+					const colWeight =
+						row.length === 1
+							? 1
+							: Math.max(
+									0,
+									1 -
+										Math.abs(fraction - (i + 0.5) * slotWidth) /
+											(slotWidth * COLUMN_FALLOFF_RATIO),
+								);
 					highlights.set(id, verticalProgress * colWeight);
 				}
 			}
