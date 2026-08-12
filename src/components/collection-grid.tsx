@@ -625,18 +625,28 @@ export function CollectionGrid({
 		// to real scroll position despite `CSS.supports` reporting it valid,
 		// and — see `getSetters` below — `gsap.quickSetter`, which crashed on
 		// the SVG discs on real WebKit). Direct style writes from the same
-		// rAF-throttled scroll handler below, only for tiles within
-		// `AMBIENT_BAND_PX` of the viewport centre, keep this cheap for the
-		// ~300 tiles that are nowhere near it. Progress is a tile's own
-		// *centre* distance from the viewport's centre, not an edge-clipping
-		// metric — unlike this branch's earlier `filter: blur()` attempt, a
-		// tall 2×2 spanning tile has one well-defined centre point regardless
-		// of its height, so it doesn't have the "which edge is it near"
-		// ambiguity that made spanning tiles read as permanently blurred.
-		const AMBIENT_FALLOFF_PX = window.innerHeight * 0.55;
-		function ambientProgress(tileCenterY: number): number {
+		// rAF-throttled scroll handler below, only for tiles near the viewport
+		// centre, keep this cheap for the ~300 tiles that are nowhere near it.
+		//
+		// Progress is a tile's own *centre* distance from the viewport's
+		// centre, not an edge-clipping metric — unlike this branch's earlier
+		// `filter: blur()` attempt, a tall 2×2 spanning tile has one
+		// well-defined centre point regardless of its height, so it doesn't
+		// have the "which edge is it near" ambiguity that made spanning tiles
+		// read as permanently blurred. The falloff distance is a fraction of
+		// *that tile's own* height, not a fixed viewport-relative constant —
+		// scaling with the tile means one row highlighted at a time regardless
+		// of column count/tile size, rather than a falloff wide enough to
+		// span several rows on a dense grid. `AMBIENT_FALLOFF_RATIO` below 0.5
+		// leaves a beat of "nothing highlighted" while scrolling exactly
+		// between two rows' centres; comfortably above it and adjacent rows
+		// would both read as highlighted at once. 0.62 leaves a brief, subtle
+		// crossfade at that midpoint without ever making two rows compete.
+		const AMBIENT_FALLOFF_RATIO = 0.62;
+		function ambientProgress(tileCenterY: number, tileHeight: number): number {
 			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
-			return Math.max(0, Math.min(1, 1 - dist / AMBIENT_FALLOFF_PX));
+			const falloffPx = tileHeight * AMBIENT_FALLOFF_RATIO;
+			return Math.max(0, Math.min(1, 1 - dist / falloffPx));
 		}
 		type DiscSetter = {
 			setTransform: (v: string) => void;
@@ -719,7 +729,7 @@ export function CollectionGrid({
 			// specifically" state (see the `active` prop comment below) —
 			// don't fight it with the ambient effect.
 			if (group.dataset.active === "true") return;
-			const progress = ambientProgress(rect.top + rect.height / 2);
+			const progress = ambientProgress(rect.top + rect.height / 2, rect.height);
 			setters.setFilter?.(`grayscale(${1 - progress})`);
 			setters.setScale?.(String(1 + 0.05 * progress));
 			for (const disc of setters.discs) {
@@ -740,7 +750,16 @@ export function CollectionGrid({
 		// writes — no interleaving), replaces both — cheap enough to run
 		// unconditionally, and correct regardless of how observer delivery
 		// batches on any given browser.
-		const AMBIENT_BAND_PX = AMBIENT_FALLOFF_PX * 1.4;
+		//
+		// This band only decides which tiles are worth examining at all — it's
+		// deliberately generous (a fixed fraction of the viewport, not tied to
+		// `AMBIENT_FALLOFF_RATIO`) so it comfortably covers a tall 2×2
+		// spanning tile on any device. `ambientProgress`'s own per-tile
+		// falloff is what actually keeps the *visible* highlight tight to one
+		// row — a tile outside that reads as fully rest regardless of how
+		// wide this band is, so a little slack here costs nothing beyond a
+		// few extra no-op writes.
+		const AMBIENT_BAND_PX = window.innerHeight * 0.5;
 		function scanTiles(): Array<[HTMLElement, DOMRect]> {
 			const centerY = window.innerHeight / 2;
 			const tiles: Array<[HTMLElement, DOMRect]> = [];
