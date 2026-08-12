@@ -614,6 +614,74 @@ a {
     );
 }
 
+/* Touch's stand-in for desktop's `:hover`-driven reveal above — instead of
+ * one JS-computed "active" tile (which drove `data-active`, fighting the
+ * `backdrop-filter`/`filter` blur attempts earlier in this file's history
+ * and, worse, the ambient CSS animation below — CSS Animations outrank a
+ * plain author rule like `group-data-[active=true]:grayscale-0` in the
+ * cascade regardless of selector specificity, so the two competed for the
+ * same `filter`/`scale` properties whenever they overlapped), every tile
+ * animates independently, driven purely by its own scroll position via
+ * `animation-timeline: view()` — no JS, no scroll listener, no rAF, nothing
+ * on the main thread at all: the compositor interpolates these directly
+ * from scroll offset every frame. The peak (50%) keyframe reuses the exact
+ * values `.group[data-active="true"]` above and desktop's `:hover` use, so
+ * whichever tile is nearest the viewport centre reads the same as an
+ * explicit "active" tile always did — it's just continuous now instead of
+ * snapping in/out at a threshold, reading as a focus wave sweeping through
+ * the grid as you scroll rather than one tile blinking on then off.
+ * `:not([data-active="true"])` excludes the record panel's pinned tile —
+ * that's a discrete "this one specifically, regardless of scroll position"
+ * state (see the `active` prop comment in collection-grid.tsx), and letting
+ * the ambient animation also run on it would fight that pin exactly the way
+ * it fought the old JS-driven data-active. */
+@media (hover: none) and (pointer: coarse) {
+  @keyframes tile-cover-ambient {
+    0%,
+    100% {
+      filter: grayscale(1);
+      scale: 1;
+    }
+    50% {
+      filter: grayscale(0);
+      scale: 1.05;
+    }
+  }
+
+  .group:not([data-active="true"]) img {
+    animation: tile-cover-ambient linear both;
+    animation-timeline: view();
+  }
+
+  @keyframes tile-disc-ambient {
+    0%,
+    100% {
+      transform: translateX(0) scale(1)
+        rotate(calc(3deg * var(--vinyl-stack-index, 0)));
+    }
+    50% {
+      transform: translateX(
+          calc(
+            min(25%, 64px) * var(--vinyl-scale, 1) - 8px *
+              (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+          )
+        )
+        scale(1.06)
+        rotate(
+          calc(
+            6deg - 3deg *
+              (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+          )
+        );
+    }
+  }
+
+  .group:not([data-active="true"]) .vinyl-disc {
+    animation: tile-disc-ambient linear both;
+    animation-timeline: view();
+  }
+}
+
 /*
  * The record detail panel has no hover affordance for its disc (a static
  * thumbnail, not a hoverable grid tile — see record-panel.tsx), so instead of

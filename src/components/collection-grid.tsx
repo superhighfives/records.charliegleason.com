@@ -825,10 +825,19 @@ export function CollectionGrid({
 					record={record}
 					onOpen={onOpen}
 					spanning={spanningIds.has(record.id)}
-					active={
-						record.id === focusedRecordId ||
-						(isTouch && focusedRecordId == null && record.id === activeId)
-					}
+					// Only the record panel's pinned tile (its own discrete "this one
+					// specifically" state, unrelated to scroll) — touch's own
+					// "whichever tile is centred" look is no longer driven by this at
+					// all, since `activeId`-driven `data-active` fought with the
+					// ambient `animation-timeline: view()` treatment in styles.css
+					// (CSS Animations outrank a plain author rule like
+					// `group-data-[active=true]:grayscale-0` in the cascade
+					// regardless of selector specificity, so the two competed for the
+					// same `filter`/`scale` properties). `activeId` itself still
+					// drives `NowShowing`'s content below — nothing about *that* part
+					// needed the tile's own `data-active` at all, it was only ever
+					// reusing the same field.
+					active={record.id === focusedRecordId}
 					onActivate={isTouch ? undefined : setActiveId}
 				/>
 			))}
