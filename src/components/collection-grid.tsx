@@ -156,7 +156,7 @@ const RecordTile = memo(function RecordTile({
 					    to the same `inset-[5%] size-[90%]` circle `VinylDisc`'s own SVGs
 					    draw into, comfortably covering the disc regardless of its
 					    per-layer rotation (a circle's rendered extent doesn't change
-					    when rotated around its own centre).
+					    when rotated around its own centre) *at rest*.
 					    Deliberately a *sibling* of the `content-visibility` wrapper
 					    below, not a descendant of it — content-visibility only skips
 					    rendering *inside* the element that has it, so this paints
@@ -167,11 +167,20 @@ const RecordTile = memo(function RecordTile({
 					    above — means it only ever appears exactly when the disc also
 					    does, so the legitimate loading-state look (`Skeleton` plus the
 					    disc's own faint 10%-opacity preview, both while `!coverReady`)
-					    is untouched. */}
+					    is untouched.
+					    `disc-mask` is a JS hook, not styling — it's *static*, so once
+					    the touch ambient effect below starts sliding the disc sideways
+					    (the peek reveal) this would otherwise sit fixed on top of the
+					    disc's old rest position, covering part of its new one and
+					    reading as a dark crescent cut out of the cover rather than a
+					    clean peek. `updateAmbientForRect` hides it for any nonzero
+					    progress and restores it once a tile settles back to rest,
+					    so it's only ever in the disc's way while the disc itself isn't
+					    moving. */}
 					{coverReady && (
 						<div
 							aria-hidden="true"
-							className="absolute inset-[5%] size-[90%] rounded-full bg-muted"
+							className="disc-mask absolute inset-[5%] size-[90%] rounded-full bg-muted"
 						/>
 					)}
 					{/* `content-visibility: auto` — see the module doc above for why this
@@ -842,6 +851,13 @@ export function CollectionGrid({
 			// This tile isn't marked `data-active` (that's the panel-pinned
 			// state, explicitly excluded above), so it needs its own bump.
 			group.style.zIndex = progress > 0 ? "10" : "";
+			// The disc mask (see its own comment in the JSX above) only
+			// exists to cover the disc's *rest* silhouette — once the disc
+			// itself starts sliding, the mask has to get out of the way or it
+			// sits fixed on top of the disc's new position, cutting a dark
+			// crescent out of it instead of a clean peek.
+			const mask = group.querySelector<HTMLElement>(".disc-mask");
+			if (mask) mask.style.opacity = progress > 0 ? "0" : "";
 		}
 		// A tile's own membership in "currently near the centre" used to be
 		// tracked by `IntersectionObserver`s — one thin band for the active
