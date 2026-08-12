@@ -166,12 +166,39 @@ export function FadeImage({
 		[instant],
 	);
 
+	// `img.decode()` resolves only once the image is actually decoded and
+	// paintable — unlike `load` (fires once the *network* fetch is done) or
+	// `complete` (can be true mid-decode too), which `decoding="async"`
+	// explicitly allows the browser to keep decoding *after* either of those
+	// fire. Revealing straight off `load`/`complete` started the opacity
+	// transition's clock immediately, but decode could still finish partway
+	// through it — the image had nothing to paint until that later instant,
+	// at which point the transition was already partway elapsed, so the
+	// first frame anyone actually saw was already mid-fade (confirmed live,
+	// frame by frame: freshly-scrolled-into-view covers jumped straight to
+	// ~70% opacity instead of starting at 0%). Falls back to revealing
+	// directly if `decode` isn't available or rejects (a broken image, same
+	// as the existing `onError` path) — same as before for either case.
+	const revealAfterDecode = useCallback(
+		(img: HTMLImageElement | null, value: string | undefined) => {
+			if (typeof img?.decode === "function") {
+				img
+					.decode()
+					.then(() => reveal(value))
+					.catch(() => reveal(value));
+			} else {
+				reveal(value);
+			}
+		},
+		[reveal],
+	);
+
 	useEffect(() => {
 		// A cached image can already be complete before `onLoad` is wired up (on
 		// mount, or right after a src swap), in which case the event never fires —
-		// reveal it via the same rAF-bracketed path as everything else.
-		if (ref.current?.complete) reveal(src);
-	}, [src, reveal]);
+		// reveal it via the same decode-then-rAF-bracketed path as everything else.
+		if (ref.current?.complete) revealAfterDecode(ref.current, src);
+	}, [src, revealAfterDecode]);
 
 	return (
 		<img
@@ -185,7 +212,7 @@ export function FadeImage({
 				className,
 			)}
 			onLoad={(e) => {
-				reveal(src);
+				revealAfterDecode(e.currentTarget, src);
 				onLoad?.(e);
 			}}
 			onError={(e) => {

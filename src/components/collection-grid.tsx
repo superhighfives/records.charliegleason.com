@@ -157,6 +157,16 @@ const RecordTile = memo(function RecordTile({
 					    draw into, comfortably covering the disc regardless of its
 					    per-layer rotation (a circle's rendered extent doesn't change
 					    when rotated around its own centre) *at rest*.
+					    `bg-background`, not `bg-muted` — every cover in this collection
+					    turned out to be served through the same alpha-transparent,
+					    object-contain path (confirmed live: every tile's `<img>` src is
+					    `/api/photos/alpha/…`), not a rare matte-only exception, so this
+					    mask shows through *constantly*, not just at a ragged edge here
+					    and there. `bg-muted`'s own tone reads as a visibly different,
+					    contrasting grey circle sitting on top of the art; `bg-background`
+					    matches the page's own backdrop, so wherever it does show through
+					    it reads as "the page behind a transparent image" — which is what
+					    it actually is — instead of a distinct overlay.
 					    Deliberately a *sibling* of the `content-visibility` wrapper
 					    below, not a descendant of it — content-visibility only skips
 					    rendering *inside* the element that has it, so this paints
@@ -180,7 +190,7 @@ const RecordTile = memo(function RecordTile({
 					{coverReady && (
 						<div
 							aria-hidden="true"
-							className="disc-mask absolute inset-[5%] size-[90%] rounded-full bg-muted"
+							className="disc-mask absolute inset-[5%] size-[90%] rounded-full bg-background"
 						/>
 					)}
 					{/* `content-visibility: auto` — see the module doc above for why this
@@ -1006,6 +1016,20 @@ export function CollectionGrid({
 		// resolve within the same paint as the one before it) is what makes
 		// the *return* to 1 an actual animated transition instead of a
 		// second instant snap.
+		//
+		// The disc has to replay in lockstep with the cover, not just the
+		// cover alone — confirmed live (sampling computed opacity every
+		// frame): the disc's own opacity is driven by React's `coverReady`
+		// state, which this whole mechanism deliberately never touches (only
+		// the img's inline style), so it just sat at its already-settled 1
+		// the entire time the cover was forced back down to 0 and fading
+		// back in — a few hundred ms of the disc showing fully revealed
+		// through a transparent cover, exactly the "vinyl comes in too
+		// early" symptom. `VinylDisc`'s own delay-700 exists to give a real
+		// (slow, first-ever, over the network) cover load a head start
+		// before revealing the disc; this replay only ever fires for an
+		// image that's already cached and just needs to repaint, so there's
+		// no slow load to wait out — reveal both together instead.
 		const coverWasRelevant = new Set<number>();
 		function syncCoverFade(tiles: Array<[HTMLElement, DOMRect]>) {
 			for (const [el] of tiles) {
@@ -1022,12 +1046,31 @@ export function CollectionGrid({
 				if (coverWasRelevant.has(id)) continue;
 				coverWasRelevant.add(id);
 				if (getComputedStyle(img).opacity !== "1") continue;
+				const disc = el.querySelector<HTMLElement>(".vinyl-peek");
 				img.style.transition = "none";
 				img.style.opacity = "0";
+				if (disc) {
+					disc.style.transition = "none";
+					disc.style.opacity = "0";
+				}
 				requestAnimationFrame(() => {
 					requestAnimationFrame(() => {
 						img.style.transition = "";
 						img.style.opacity = "";
+						if (disc) {
+							// Explicit, not cleared back to the CSS class's own
+							// `delay-700` — that delay exists to give a real,
+							// slow, first-ever network load a head start before
+							// revealing the disc, which doesn't apply here (this
+							// only ever replays for an image that's already
+							// cached, just catching up on a repaint), and
+							// clearing straight to the class would reintroduce
+							// a mismatch in the other direction: the disc
+							// sitting invisible for 700ms *after* the cover has
+							// already finished fading back in.
+							disc.style.transition = "opacity 700ms ease-out";
+							disc.style.opacity = "";
+						}
 					});
 				});
 			}
