@@ -545,8 +545,7 @@ export function CollectionGrid({
 	// that need observing too, so the effect has to rerun.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: see above
 	useEffect(() => {
-		if (!isTouch || !gridElRef.current || prefersReducedMotionRef.current)
-			return;
+		if (!isTouch || !gridElRef.current) return;
 		const container = gridElRef.current;
 
 		// Several tiles can share the band at once (a wide row). Whichever one
@@ -966,6 +965,17 @@ export function CollectionGrid({
 		function ambientTick() {
 			const tiles = scanTiles();
 			const targets = updateActive(tiles).highlights;
+			// `updateActive` above (via `setActiveId`) is what drives
+			// `NowShowing`'s content on touch — not itself motion, so it
+			// still needs to run under reduced motion. Everything below this
+			// point is the ambient colour/scale/peek animation itself
+			// (`ambientCurrent` easing, `applyAmbientProgress`'s DOM writes,
+			// the recursive rAF loop that drives it), which reduced motion
+			// asks to skip entirely rather than just slow down.
+			if (prefersReducedMotionRef.current) {
+				ambientRafId = null;
+				return;
+			}
 			// `highlights` only ever has entries for the anchor's own row (the
 			// column-exclusivity gate that keeps two tiles sharing a row's
 			// identical vertical distance from lighting up together) — every
@@ -1002,7 +1012,8 @@ export function CollectionGrid({
 				);
 				if (el?.dataset.active === "true") {
 					// While the record panel has this tile pinned,
-					// `updateAmbientForRect` no-ops every DOM write (CSS's own
+					// `updateAmbientForRect` clears the inline ambient styles
+					// this effect last wrote (CSS's own
 					// `.group[data-active="true"]` rule shows the pinned look
 					// instead) — but the scroll position, and so `targets`,
 					// keeps changing underneath. Freezing `ambientCurrent` at
@@ -1010,8 +1021,15 @@ export function CollectionGrid({
 					// keep chasing `target` unseen means that when the panel
 					// closes and DOM writes resume, easing resumes from where
 					// the tile visually was, instead of snapping to wherever
-					// it had silently drifted to while pinned.
+					// it had silently drifted to while pinned. Still has to
+					// actually call `applyAmbientProgress` here (not just
+					// update the easing map) — that's the only call site
+					// that reaches `updateAmbientForRect`'s own pinned-tile
+					// branch above, which clears the inline styles this
+					// effect last wrote so the CSS `[data-active="true"]`
+					// rule can show through unfought.
 					ambientCurrent.set(id, 1);
+					applyAmbientProgress(id, 1);
 					continue;
 				}
 				const target = targets.get(id) ?? 0;

@@ -614,6 +614,29 @@ a {
     );
 }
 
+/* `.disc-mask` (see its own comment in collection-grid.tsx) covers the disc's
+ * *rest* silhouette so a transparent cover doesn't show a dark crescent where
+ * there's no art. The touch ambient effect already yields it via inline
+ * `opacity` for any nonzero scroll-driven progress, but desktop's hover and
+ * the pinned `data-active` look are pure-CSS, driven by the same
+ * `.vinyl-disc` transforms above — without a matching rule here the mask
+ * stays opaque through both, cutting into the exact peek it exists to
+ * protect. Same transition timing as `.vinyl-disc` so the mask clears in
+ * step with the disc sliding out from under it, not before or after. */
+.disc-mask {
+  transition: opacity 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (pointer: fine) {
+  .group:hover .disc-mask {
+    opacity: 0;
+  }
+}
+
+.group[data-active="true"] .disc-mask {
+  opacity: 0;
+}
+
 /* Touch's stand-in for desktop's `:hover`-driven reveal above was, for a
  * while, a pure-CSS `animation-timeline: view()` version of this same idea —
  * each tile driving its own grayscale/scale/peek from its own scroll
