@@ -41,7 +41,12 @@ export function ServerError({ error }: Partial<ErrorComponentProps> = {}) {
 			emoji="%F0%9F%AB%A0"
 			code="Error 500"
 			heading="Something's warped"
-			message="A server error knocked the needle off the groove. This one's on me — try again in a moment."
+			message={
+				// TEMP DIAGNOSTIC — surfaces the real error message/stack instead of
+				// the friendly copy, so it's visible in a screenshot without a
+				// console. Not for merge.
+				`${error?.message ?? "no message"}\n${error?.stack ?? "no stack"}`
+			}
 		/>
 	);
 }
