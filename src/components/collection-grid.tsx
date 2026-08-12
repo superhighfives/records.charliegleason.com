@@ -163,8 +163,19 @@ const RecordTile = memo(function RecordTile({
 					    `content-visibility` skip has real layout/paint work to redo on
 					    becoming relevant again, and a burst of many tiles doing that at
 					    once can fall behind the always-rendered (never skipped) disc
-					    sitting right behind it. */}
-					<div className="absolute inset-0 overflow-hidden bg-background [content-visibility:auto]">
+					    sitting right behind it. Gated to `coverReady` rather than
+					    applied unconditionally — while still loading, this wrapper is
+					    *supposed* to stay see-through, so the `Skeleton` behind it and
+					    the disc's own faint 10%-opacity preview (see `VinylDisc` above)
+					    both read through; an unconditional opaque backdrop blanked out
+					    that entire loading-state animation instead of just insuring
+					    against the scroll-back race. */}
+					<div
+						className={cn(
+							"absolute inset-0 overflow-hidden [content-visibility:auto]",
+							coverReady && "bg-background",
+						)}
+					>
 						{/* Shown behind the cover while it loads — `-z-10` (rather
 						    than unmounting once ready) so it never has to fight
 						    FadeImage's own opacity for stacking order; the opaque
@@ -529,7 +540,7 @@ export function CollectionGrid({
 		// already has to handle a band holding more than one row at once, so
 		// a wider candidate list here (shared with the ambient effect's own
 		// per-frame scan) is exactly what it was built for.
-		function updateActive(tiles: Array<[HTMLElement, DOMRect]>) {
+		function updateActive(tiles: Array<[HTMLElement, DOMRect]>): number | null {
 			const centerYForBand = window.innerHeight / 2;
 			const bandHalfPx = window.innerHeight * 0.05;
 			const inBand = tiles
@@ -615,6 +626,7 @@ export function CollectionGrid({
 				container.removeAttribute("data-pointer-outside");
 			}
 			setActiveId(next);
+			return next;
 		}
 
 		// Touch's stand-in for desktop's `:hover`-driven grayscale/scale/peek —
@@ -635,13 +647,18 @@ export function CollectionGrid({
 		// have the "which edge is it near" ambiguity that made spanning tiles
 		// read as permanently blurred. The falloff distance is a fraction of
 		// *that tile's own* height, not a fixed viewport-relative constant —
-		// scaling with the tile means one row highlighted at a time regardless
-		// of column count/tile size, rather than a falloff wide enough to
-		// span several rows on a dense grid. `AMBIENT_FALLOFF_RATIO` below 0.5
-		// leaves a beat of "nothing highlighted" while scrolling exactly
-		// between two rows' centres; comfortably above it and adjacent rows
-		// would both read as highlighted at once. 0.62 leaves a brief, subtle
-		// crossfade at that midpoint without ever making two rows compete.
+		// scaling with the tile keeps the transition itself proportioned to
+		// row spacing, rather than a falloff wide enough to span several rows
+		// on a dense grid.
+		//
+		// This alone doesn't guarantee only one *record* is ever highlighted,
+		// though — every tile at the same vertical position shares the exact
+		// same distance from centre, so on a normal 2-column row both tiles
+		// would read the identical progress and light up together. Only the
+		// single tile `updateActive` already picks (the same one `NowShowing`
+		// shows the title for, via its own row/left-right sweep) ever gets a
+		// nonzero progress below — everything else in the scanned band is
+		// forced to rest regardless of its own distance.
 		const AMBIENT_FALLOFF_RATIO = 0.62;
 		function ambientProgress(tileCenterY: number, tileHeight: number): number {
 			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
@@ -722,14 +739,20 @@ export function CollectionGrid({
 			const peakRotate = 6 - 3 * (disc.layers - 1 - disc.stackIndex);
 			return `translateX(${maxTx * progress}px) scale(${1 + 0.06 * progress}) rotate(${restRotate + (peakRotate - restRotate) * progress}deg)`;
 		}
-		function updateAmbientForRect(group: HTMLElement, rect: DOMRect) {
+		function updateAmbientForRect(
+			group: HTMLElement,
+			rect: DOMRect,
+			isHighlighted: boolean,
+		) {
 			const setters = getSetters(group);
 			if (!setters) return;
 			// The record panel's pinned tile is a discrete "this one
 			// specifically" state (see the `active` prop comment below) —
 			// don't fight it with the ambient effect.
 			if (group.dataset.active === "true") return;
-			const progress = ambientProgress(rect.top + rect.height / 2, rect.height);
+			const progress = isHighlighted
+				? ambientProgress(rect.top + rect.height / 2, rect.height)
+				: 0;
 			setters.setFilter?.(`grayscale(${1 - progress})`);
 			setters.setScale?.(String(1 + 0.05 * progress));
 			for (const disc of setters.discs) {
@@ -777,13 +800,18 @@ export function CollectionGrid({
 			}
 			return tiles;
 		}
-		function updateAllAmbient(tiles: Array<[HTMLElement, DOMRect]>) {
-			for (const [el, rect] of tiles) updateAmbientForRect(el, rect);
+		function updateAllAmbient(
+			tiles: Array<[HTMLElement, DOMRect]>,
+			highlightedId: number | null,
+		) {
+			for (const [el, rect] of tiles) {
+				const id = Number(el.dataset.recordId);
+				updateAmbientForRect(el, rect, id === highlightedId);
+			}
 		}
 
 		const initialTiles = scanTiles();
-		updateActive(initialTiles);
-		updateAllAmbient(initialTiles);
+		updateAllAmbient(initialTiles, updateActive(initialTiles));
 
 		let rafId: number | null = null;
 		const onScroll = () => {
@@ -791,8 +819,7 @@ export function CollectionGrid({
 			rafId = requestAnimationFrame(() => {
 				rafId = null;
 				const tiles = scanTiles();
-				updateActive(tiles);
-				updateAllAmbient(tiles);
+				updateAllAmbient(tiles, updateActive(tiles));
 			});
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
