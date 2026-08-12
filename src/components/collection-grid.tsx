@@ -154,7 +154,9 @@ const RecordTile = memo(function RecordTile({
 					    parent, not by its own content, so this doesn't need a
 					    `contain-intrinsic-size` fallback the way an intrinsically-sized
 					    element would. */}
-					<div className="absolute inset-0 overflow-hidden [content-visibility:auto]">
+					{/* TEMP: content-visibility stripped to test whether it's
+					    conflicting with animation-timeline: view(). */}
+					<div className="absolute inset-0 overflow-hidden">
 						{/* Shown behind the cover while it loads — `-z-10` (rather
 						    than unmounting once ready) so it never has to fight
 						    FadeImage's own opacity for stacking order; the opaque
