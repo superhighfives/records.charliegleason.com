@@ -629,12 +629,26 @@ export function CollectionGrid({
 		// property — writing `--tw-blur` directly lets the compositor combine
 		// with the existing grayscale instead of clobbering it, without a
 		// second copy of that shared declaration here.
-		const EDGE_ZONE_PX = 260;
+		// How many px of a tile have to have already scrolled *past* the
+		// viewport edge (not merely be near it) before it's fully blurred.
+		// Based on clipped amount rather than raw distance-to-edge — the first
+		// version used `blurForDistance(rect.top)` directly, which blurred a
+		// tile the instant its edge came within this many px of the viewport
+		// edge regardless of how tall the tile was. A 2×2 spanning tile can
+		// be taller than this zone doubled, so its top edge could sit inside
+		// the top zone and its bottom edge inside the bottom zone
+		// *simultaneously* while the tile was still fully on screen and
+		// nowhere near actually leaving — the whole thing read as blurred.
+		// Measuring clipped px instead means a fully visible tile — however
+		// tall — is never blurred; only the part that's actually scrolled out
+		// of view drives it, which is also the more literally correct "this
+		// is at the edge of what you can see" signal to begin with.
+		const EDGE_ZONE_PX = 140;
 		const MAX_EDGE_BLUR_PX = 6;
-		function blurForDistance(distancePx: number): number {
-			if (distancePx >= EDGE_ZONE_PX) return 0;
-			if (distancePx <= 0) return MAX_EDGE_BLUR_PX;
-			return MAX_EDGE_BLUR_PX * (1 - distancePx / EDGE_ZONE_PX);
+		function blurForClippedPx(clippedPx: number): number {
+			if (clippedPx <= 0) return 0;
+			if (clippedPx >= EDGE_ZONE_PX) return MAX_EDGE_BLUR_PX;
+			return MAX_EDGE_BLUR_PX * (clippedPx / EDGE_ZONE_PX);
 		}
 		// Two observers (not one) because a tile can be near the top band, the
 		// bottom band, or neither, and only IntersectionObserver — not a plain
@@ -677,11 +691,14 @@ export function CollectionGrid({
 				return;
 			}
 			const rect = group.getBoundingClientRect();
-			const topBlur = nearTop ? blurForDistance(rect.top) : 0;
-			const bottomBlur = nearBottom
-				? blurForDistance(window.innerHeight - rect.bottom)
+			const topClipped = nearTop ? Math.max(0, -rect.top) : 0;
+			const bottomClipped = nearBottom
+				? Math.max(0, rect.bottom - window.innerHeight)
 				: 0;
-			const blur = Math.max(topBlur, bottomBlur);
+			const blur = Math.max(
+				blurForClippedPx(topClipped),
+				blurForClippedPx(bottomClipped),
+			);
 			if (blur <= 0) {
 				img.style.removeProperty("--tw-blur");
 			} else {
