@@ -13,6 +13,7 @@ const REASON_LABELS: Record<MatteAuditReasonCode, string> = {
 	edge: "edge overrun",
 	sparse: "under-cropped (mostly transparent)",
 	inside: "hole inside the cover",
+	notch: "cut into the cover",
 };
 
 /** Turn a comma-joined `professionalMatteAuditReason` ("tint,edge") into a human,

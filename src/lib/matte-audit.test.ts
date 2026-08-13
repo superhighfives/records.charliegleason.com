@@ -110,10 +110,12 @@ describe("runMatteAudit", () => {
 			edgeScore: 0,
 			coverageScore: 1,
 			insideScore: 1,
+			notchScore: 0,
 			tintSuspect: false,
 			edgeSuspect: false,
 			sparseSuspect: false,
 			insideSuspect: true,
+			notchSuspect: false,
 		});
 
 		const result = await runMatteAudit();

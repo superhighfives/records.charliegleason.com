@@ -2195,6 +2195,7 @@ export const MATTE_AUDIT_REASON_CODES = [
 	"edge",
 	"sparse",
 	"inside",
+	"notch",
 ] as const;
 export type MatteAuditReasonCode = (typeof MATTE_AUDIT_REASON_CODES)[number];
 
@@ -2217,6 +2218,7 @@ export const MATTE_AUDIT_FIX_REASON_CODES: readonly MatteAuditReasonCode[] = [
 	"edge",
 	"sparse",
 	"inside",
+	"notch",
 ];
 
 /** True when a comma-joined `professionalMatteAuditReason` contains at least one
@@ -2254,10 +2256,19 @@ export interface MatteQualityAssessment {
 	 * the sleeve itself, always fully opaque, so any transparency there is a hole punched
 	 * through the middle of the cover art rather than a crop issue. */
 	insideScore: number;
+	/** Fraction of the sleeve's own opaque bounding box that's transparent. A record sleeve
+	 * is a full square, so it fills its bounding box completely (bar hairline corner wear);
+	 * a bite cut into it — a straight notch or a diagonal corner crop — leaves a transparent
+	 * chunk *inside* that box. Measured against the bounding box rather than a fixed inset so
+	 * it's independent of however wide the shadow margin is, and it catches the edge/corner
+	 * crops that fall in the gap the `edge` (outer 1.5% ring) and `inside` (8%-inset box)
+	 * checks leave uncovered. 0 when there's no opaque content at all. */
+	notchScore: number;
 	tintSuspect: boolean;
 	edgeSuspect: boolean;
 	sparseSuspect: boolean;
 	insideSuspect: boolean;
+	notchSuspect: boolean;
 }
 
 /** "Near black" luma cutoff (0..255) for the tint check's shadow sample. */
@@ -2283,13 +2294,23 @@ const AUDIT_INSIDE_INSET_FRAC = 0.08;
  * punch-through hole — a real sleeve is always fully opaque there, so even a small
  * transparent fraction this deep inside the crop is a defect, not noise. */
 const AUDIT_INSIDE_ALPHA_SUSPECT_FRAC = 0.005;
+/** Fraction of the sleeve's opaque bounding box that must be transparent before a render is
+ * flagged for a cut into the cover. Sits well above the ~0.1% four legitimately rounded/worn
+ * sleeve corners carve out of the box, and well below the several-percent-plus a real
+ * straight notch or diagonal corner crop produces. */
+const AUDIT_NOTCH_SUSPECT_FRAC = 0.02;
+/** Minimum opaque bounding-box area (as a fraction of the canvas) before the notch score is
+ * trusted. A near-empty render has no meaningful box to reason about — that's the `sparse`
+ * under-crop check's job, not this one — so below this the notch score stays at 0. */
+const AUDIT_NOTCH_MIN_BOX_FRAC = 0.25;
 
 /**
  * Cheap, non-AI pixel scan of a rendered matte (or any RGBA square with a transparent
  * margin) for the regression classes the matte pipeline has produced in the past: an
  * invented colour cast on a dark, low-key cover, the AI matte's alpha overrunning the
- * certified crop into the canvas's outer shadow margin, and an under-crop that keeps only a
- * thin sliver of the sleeve instead of the whole thing. Pure pixel statistics, no model
+ * certified crop into the canvas's outer shadow margin, an under-crop that keeps only a
+ * thin sliver of the sleeve instead of the whole thing, and a bite cut into the cover
+ * (a notch or diagonal corner crop in the boundary band). Pure pixel statistics, no model
  * calls — meant to run over every stored matte cheaply so the admin can shortlist
  * likely-bad renders instead of eyeballing the whole collection. Not exhaustive (a subtle
  * case can still slip through, and a genuinely near-black, hard-edged cover could
@@ -2301,9 +2322,19 @@ export function assessMatteQuality(img: RgbaImage): MatteQualityAssessment {
 	let spreadSum = 0;
 	let shadowN = 0;
 	let opaqueN = 0;
+	let minX = width;
+	let maxX = -1;
+	let minY = height;
+	let maxY = -1;
 	for (let p = 0; p < width * height; p++) {
 		if (data[p * 4 + 3] < 16) continue;
 		opaqueN++;
+		const x = p % width;
+		const y = (p / width) | 0;
+		if (x < minX) minX = x;
+		if (x > maxX) maxX = x;
+		if (y < minY) minY = y;
+		if (y > maxY) maxY = y;
 		const r = data[p * 4];
 		const g = data[p * 4 + 1];
 		const b = data[p * 4 + 2];
@@ -2352,14 +2383,29 @@ export function assessMatteQuality(img: RgbaImage): MatteQualityAssessment {
 	const insideScore = insideN > 0 ? insideTransparent / insideN : 0;
 	const insideSuspect = insideScore > AUDIT_INSIDE_ALPHA_SUSPECT_FRAC;
 
+	// Notch: a bite cut into the cover. A record sleeve is a full square, so it fills its
+	// own opaque bounding box; the fraction of that box left transparent is how much has
+	// been cut out of it (a straight edge notch or a diagonal corner crop). Measuring
+	// against the box rather than a fixed inset keeps this independent of the shadow
+	// margin's width, and it catches the edge/corner crops that fall between the `edge`
+	// ring and the `inside` box.
+	const boxArea = maxX >= minX ? (maxX - minX + 1) * (maxY - minY + 1) : 0;
+	const notchScore =
+		boxArea >= width * height * AUDIT_NOTCH_MIN_BOX_FRAC
+			? (boxArea - opaqueN) / boxArea
+			: 0;
+	const notchSuspect = notchScore > AUDIT_NOTCH_SUSPECT_FRAC;
+
 	return {
 		tintScore,
 		edgeScore,
 		coverageScore,
 		insideScore,
+		notchScore,
 		tintSuspect,
 		edgeSuspect,
 		sparseSuspect,
 		insideSuspect,
+		notchSuspect,
 	};
 }

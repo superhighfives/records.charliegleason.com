@@ -1175,12 +1175,12 @@ describe("composeMatte", () => {
 
 describe("assessMatteQuality", () => {
 	const size = 200;
+	const margin = 10;
 
 	/** A clean matte: a near-black, perfectly neutral opaque square with a transparent
 	 * margin — no cast, no edge overrun. */
 	function cleanMatte(): RgbaImage {
 		const data = new Uint8ClampedArray(size * size * 4);
-		const margin = 10;
 		for (let y = 0; y < size; y++)
 			for (let x = 0; x < size; x++) {
 				const i = (y * size + x) * 4;
@@ -1198,6 +1198,50 @@ describe("assessMatteQuality", () => {
 		expect(a.edgeSuspect).toBe(false);
 		expect(a.sparseSuspect).toBe(false);
 		expect(a.insideSuspect).toBe(false);
+		expect(a.notchSuspect).toBe(false);
+		expect(a.notchScore).toBeCloseTo(0, 5);
+	});
+
+	it("flags a straight notch cut into an edge of the cover", () => {
+		const img = cleanMatte();
+		const { data, width } = img;
+		// Bite a rectangular chunk out of the right edge of the sleeve — the sleeve is a
+		// full square, so this transparent gap inside its bounding box is a cut into the
+		// cover, exactly the class Audit Covers used to miss between the edge and inside
+		// checks.
+		for (let y = 60; y < 140; y++)
+			for (let x = 150; x < size - margin; x++) {
+				data[(y * width + x) * 4 + 3] = 0;
+			}
+		const a = assessMatteQuality(img);
+		expect(a.notchSuspect).toBe(true);
+	});
+
+	it("flags a diagonal crop taken off a corner of the cover", () => {
+		const img = cleanMatte();
+		const { data, width } = img;
+		// Slice the bottom-right corner off on a diagonal — the adjacent corners keep the
+		// bounding box a full square, so the missing triangle reads as a notch.
+		for (let y = 140; y < size - margin; y++)
+			for (let x = 140; x < size - margin; x++) {
+				if (x - 140 + (y - 140) > 49) data[(y * width + x) * 4 + 3] = 0;
+			}
+		const a = assessMatteQuality(img);
+		expect(a.notchSuspect).toBe(true);
+	});
+
+	it("doesn't flag a thin under-crop sliver as a notch", () => {
+		// A sliver's bounding box is too small to trust a notch reading — that's the
+		// sparse check's job, not this one.
+		const data = new Uint8ClampedArray(size * size * 4);
+		for (let y = 90; y < 110; y++)
+			for (let x = 0; x < size; x++) {
+				const i = (y * size + x) * 4;
+				data[i] = data[i + 1] = data[i + 2] = 12;
+				data[i + 3] = 255;
+			}
+		const a = assessMatteQuality({ data, width: size, height: size });
+		expect(a.notchSuspect).toBe(false);
 	});
 
 	it("flags an under-crop that keeps only a thin sliver of the sleeve", () => {
@@ -1300,6 +1344,7 @@ describe("hasMatteAuditFixReason", () => {
 		expect(hasMatteAuditFixReason("edge")).toBe(true);
 		expect(hasMatteAuditFixReason("sparse")).toBe(true);
 		expect(hasMatteAuditFixReason("inside")).toBe(true);
+		expect(hasMatteAuditFixReason("notch")).toBe(true);
 	});
 
 	it("is true when a fix-worthy code is mixed with tint", () => {

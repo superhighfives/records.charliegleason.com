@@ -111,6 +111,7 @@ export async function runMatteAudit(
 					assessment.edgeSuspect ? "edge" : null,
 					assessment.sparseSuspect ? "sparse" : null,
 					assessment.insideSuspect ? "inside" : null,
+					assessment.notchSuspect ? "notch" : null,
 				].filter((r): r is MatteAuditReasonCode => r != null);
 				if (reasons.length > 0) suspects++;
 				await db
