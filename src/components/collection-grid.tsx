@@ -68,8 +68,9 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * currently "active", so nothing anchored to the tile has to reposition (or
  * get dismissed) as the page scrolls. `active` is set by `CollectionGrid`
  * whenever plain pointer hover can't be relied on to say which tile is
- * "current": mobile's scroll-driven `IntersectionObserver` (touch devices
- * have no hover to key off), and the record currently open in the detail
+ * "current": mobile's scroll-driven rAF scan (a `getBoundingClientRect`
+ * sweep per frame; touch devices have no hover to key off), and the record
+ * currently open in the detail
  * panel (so it stays highlighted underneath while the panel covers the
  * pointer). It drives the shared `data-active` attribute (grayscale→colour,
  * disc peek, the `grid-focus-overlay` blur) and, for the scroll-driven case,
@@ -78,13 +79,27 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * desktop's own visual feedback stays purely `:hover`-driven, only the bar's
  * *content* comes from this.
  *
- * Wrapped in `memo` — `CollectionGrid` re-renders on every scroll tick on
- * touch (the IntersectionObserver-driven `activeId`, see below), and without
- * this every one of the (currently ~300) tiles would re-render along with
- * it even though at most one or two actually have a changed `active` prop.
- * That was the dominant cost behind the iOS scroll jank this was chasing —
- * a profiled scroll showed React's `performWorkUntilDeadline` alone eating
- * ~4s of main-thread time across a 4s scroll.
+ * Wrapped in `memo` — `CollectionGrid` re-renders on scroll-driven state
+ * changes on touch (`activeId`, the content window), and without this every
+ * one of the (currently ~300) tiles would re-render along with it even
+ * though at most a handful actually have a changed prop. That was the
+ * dominant cost behind the iOS scroll jank this was chasing — a profiled
+ * scroll showed React's `performWorkUntilDeadline` alone eating ~4s of
+ * main-thread time across a 4s scroll.
+ *
+ * On touch (`isTouch`), the tile's *content* is windowed: `contentMounted`
+ * false swaps the cover/disc subtree for a cheap static placeholder circle
+ * while the outer grid slot (same span, same square box) stays mounted, so
+ * dense auto-flow placement — which depends on every earlier child — never
+ * changes as the window moves. See the windowing comment in
+ * `CollectionGrid`. The touch variant also drops two desktop-only
+ * mechanisms outright: the `[content-visibility:auto]` cover wrapper (a
+ * windowed tile that's mounted should always be genuinely painted — the
+ * async paint catch-up that attribute schedules is exactly the unobservable
+ * clock the old touch effect kept losing races against) and the
+ * `.disc-mask` circle (on touch the disc rests at opacity 0 and is faded in
+ * by the ambient loop as it peeks, so there's no rest-state silhouette to
+ * hide behind the alpha-transparent covers).
  */
 const RecordTile = memo(function RecordTile({
 	record,
@@ -92,12 +107,25 @@ const RecordTile = memo(function RecordTile({
 	spanning = false,
 	active = false,
 	onActivate,
+	isTouch = false,
+	contentMounted = true,
+	onCoverReady,
 }: {
 	record: PublicRecord;
 	onOpen: (record: PublicRecord) => void;
 	spanning?: boolean;
 	active?: boolean;
 	onActivate?: (id: number | null) => void;
+	isTouch?: boolean;
+	/** Touch windowing — false renders the placeholder instead of the cover. */
+	contentMounted?: boolean;
+	/**
+	 * Fires (post-commit) whenever this tile's cover becomes ready while its
+	 * content is mounted — wakes the touch ambient loop so a cover that
+	 * finishes decoding after scrolling has settled still gets its reveal,
+	 * without the loop having to poll for it.
+	 */
+	onCoverReady?: () => void;
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
@@ -106,21 +134,31 @@ const RecordTile = memo(function RecordTile({
 	// 2x without shipping the ~1MB master. A spanning (2×2) tile is roughly
 	// double that, so it gets a correspondingly larger request.
 	const coverSrc = cover ? photoUrl(cover, spanning ? 900 : 500) : undefined;
-	// Keep the peeking vinyl disc faint (10%) until the cover is up, then fade it to
-	// full in step with the cover — so a slow/lazy tile never flashes a bold disc
-	// behind a not-yet-loaded (now background-less) cover. No cover at all → the
-	// placeholder is there immediately, so the disc shows straight away. Seeded from
-	// `FadeImage`'s own decoded-src cache too, so a cover the grid has already shown
-	// this session (e.g. scrolling back to a tile the browser had unloaded) mounts
-	// the disc at full opacity instead of replaying the fade the cover itself skips.
+	// Desktop: fades the disc in behind the cover once it's up (see the
+	// `VinylDisc` className below). Touch: read by the ambient loop as its
+	// eligibility gate (`data-cover-ready` on the group) — a tile whose cover
+	// hasn't actually loaded is never asked to animate, so a disc can't peek
+	// out from behind a cover that isn't there. Seeded from `FadeImage`'s own
+	// decoded-src cache so a cover the grid has already shown this session
+	// (e.g. its content remounting as the touch window scrolls back over it)
+	// counts as ready the instant it mounts, matching the fade the cover
+	// itself skips.
 	const [coverReady, setCoverReady] = useState(
 		() => !cover || isImageDecoded(coverSrc),
 	);
+	// See `onCoverReady`'s prop comment. `contentMounted` is a dependency on
+	// purpose: a remount of already-ready content (the window scrolling back
+	// over this tile) needs to wake the loop too, not just the first-ever
+	// decode.
+	useEffect(() => {
+		if (coverReady && contentMounted) onCoverReady?.();
+	}, [coverReady, contentMounted, onCoverReady]);
 	return (
 		<div
 			className="group"
 			data-record-id={record.id}
 			data-active={active ? "true" : undefined}
+			data-cover-ready={coverReady ? "true" : undefined}
 			style={
 				spanning
 					? { gridColumn: "span 2", gridRow: "span 2", alignSelf: "start" }
@@ -136,124 +174,141 @@ const RecordTile = memo(function RecordTile({
 				className="block w-full cursor-pointer text-left"
 			>
 				<div className="relative aspect-square">
-					<VinylDisc
-						colorName={record.colorName}
-						textureImageKey={record.colorTextureImageKey}
-						textureStatus={record.colorTextureStatus}
-						translucent={record.colorTranslucent}
-						size={record.size}
-						discCount={record.discCount}
-						className={cn(
-							"m-1/16 transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
-							coverReady ? "opacity-100" : "opacity-0",
-						)}
-					/>
-					{/* Masks the disc's own rest-state silhouette once `coverReady` —
-					    a plain circle, not the cover wrapper's full square box, since
-					    the covers themselves have a transparent, ragged photographed
-					    edge that a square backdrop could never fully sit behind (there's
-					    always some sliver of the tile a rectangular mask misses). Sized
-					    to the same `inset-[5%] size-[90%]` circle `VinylDisc`'s own SVGs
-					    draw into, comfortably covering the disc regardless of its
-					    per-layer rotation (a circle's rendered extent doesn't change
-					    when rotated around its own centre) *at rest*.
-					    `bg-background`, not `bg-muted` — every cover in this collection
-					    turned out to be served through the same alpha-transparent,
-					    object-contain path (confirmed live: every tile's `<img>` src is
-					    `/api/photos/alpha/…`), not a rare matte-only exception, so this
-					    mask shows through *constantly*, not just at a ragged edge here
-					    and there. `bg-muted`'s own tone reads as a visibly different,
-					    contrasting grey circle sitting on top of the art; `bg-background`
-					    matches the page's own backdrop, so wherever it does show through
-					    it reads as "the page behind a transparent image" — which is what
-					    it actually is — instead of a distinct overlay.
-					    Deliberately a *sibling* of the `content-visibility` wrapper
-					    below, not a descendant of it — content-visibility only skips
-					    rendering *inside* the element that has it, so this paints
-					    reliably every time regardless of whether that wrapper's own
-					    subtree (the actual cover photo) has caught up yet on a fast
-					    scroll back to a previously-skipped tile. Gating it on
-					    `coverReady` — the same flag driving the disc's own opacity
-					    above — means it only ever appears exactly when the disc also
-					    does, so the legitimate loading-state look (`Skeleton` plus the
-					    disc's own faint 10%-opacity preview, both while `!coverReady`)
-					    is untouched.
-					    `disc-mask` is a JS hook, not styling — it's *static*, so once
-					    the touch ambient effect below starts sliding the disc sideways
-					    (the peek reveal) this would otherwise sit fixed on top of the
-					    disc's old rest position, covering part of its new one and
-					    reading as a dark crescent cut out of the cover rather than a
-					    clean peek. `updateAmbientForRect` hides it for any nonzero
-					    progress and restores it once a tile settles back to rest,
-					    so it's only ever in the disc's way while the disc itself isn't
-					    moving. */}
-					{coverReady && (
+					{contentMounted ? (
+						<>
+							<VinylDisc
+								colorName={record.colorName}
+								textureImageKey={record.colorTextureImageKey}
+								textureStatus={record.colorTextureStatus}
+								translucent={record.colorTranslucent}
+								size={record.size}
+								discCount={record.discCount}
+								className={
+									// Touch: rests fully invisible — the ambient loop fades
+									// it in (inline `opacity` on `.vinyl-peek`) in step with
+									// the peek itself, so there's never a rest-state disc
+									// silhouette showing through the alpha-transparent
+									// covers, and nothing for a disc mask to hide. No
+									// transition classes: the loop is the only easing (see
+									// `[data-touch]` in styles.css). Desktop: kept faded
+									// out until the cover is up, then revealed on a delay
+									// so a slow first-ever load never flashes a bold disc
+									// behind a not-yet-loaded cover.
+									isTouch
+										? "m-1/16 opacity-0"
+										: cn(
+												"m-1/16 transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
+												coverReady ? "opacity-100" : "opacity-0",
+											)
+								}
+							/>
+							{/* Desktop only: masks the disc's rest-state silhouette once
+							    `coverReady` — the covers are alpha-transparent with ragged
+							    edges (the whole collection is served via
+							    `/api/photos/alpha/…`, `object-contain`), so without this
+							    the resting disc shows through them constantly. A circle
+							    matching the `inset-[5%] size-[90%]` box the disc's own
+							    SVGs draw into, in `bg-background` so wherever it shows
+							    through it reads as the page behind a transparent image
+							    (which it is) rather than a distinct overlay. CSS clears
+							    it on hover/pinned in step with the disc sliding out (see
+							    `.disc-mask` in styles.css). Touch doesn't render it at
+							    all — the disc rests at opacity 0 there instead (see the
+							    `VinylDisc` className above), which is the whole reason
+							    the touch path has no mask-timing races left to lose. */}
+							{!isTouch && coverReady && (
+								<div
+									aria-hidden="true"
+									className="disc-mask absolute inset-[5%] size-[90%] rounded-full bg-background"
+								/>
+							)}
+							{/* Desktop keeps `content-visibility: auto` on the cover's own
+							    wrapper (a sibling of the disc, so the peek is never
+							    clipped by its implied `contain: paint`) — with all ~300
+							    tiles' content permanently mounted there, letting the
+							    browser skip offscreen covers is a real win. Touch
+							    deliberately drops it: the content window below already
+							    keeps only the few dozen near-viewport tiles mounted, and
+							    a mounted tile being *always genuinely painted* is what
+							    makes the ambient effect race-free — content-visibility's
+							    async catch-up after a fast scroll-back was the
+							    unobservable clock behind every prior artifact. Sized
+							    purely by `inset-0` against the already-sized
+							    `aspect-square` parent, so no `contain-intrinsic-size`
+							    fallback is needed. */}
+							<div
+								className={cn(
+									"absolute inset-0 overflow-hidden",
+									!isTouch && "[content-visibility:auto]",
+								)}
+							>
+								{/* Shown behind the cover while it loads — `-z-10` (rather
+								    than unmounting once ready) so it never has to fight
+								    FadeImage's own opacity for stacking order; the opaque
+								    cover simply paints over it once revealed. Cover-less
+								    tiles skip straight to the placeholder, so no skeleton
+								    for those. Same circle as the windowing placeholder and
+								    (desktop) disc mask, so every not-yet-content state
+								    reads as one consistent affordance. */}
+								{cover && !coverReady && (
+									<Skeleton className="absolute inset-[5%] size-[90%] -z-10 rounded-full" />
+								)}
+								{cover ? (
+									<FadeImage
+										src={coverSrc}
+										alt={`${record.artist} — ${record.title}`}
+										onReady={() => setCoverReady(true)}
+										className={cn(
+											// Fade in on load *and* keep the grayscale→colour
+											// hover — one combined transition property so both
+											// animate. Opacity itself stays driven by FadeImage's
+											// own `loaded` state (via onReady below just for the
+											// disc) — mirroring it here too would round-trip
+											// through a second component's state update, which
+											// can resolve before the browser ever paints the
+											// hidden frame, skipping the fade entirely. Scale is
+											// active-only (the panel-pinned tile) — a gentle
+											// zoom standing in for the pointer-driven spotlight
+											// desktop gets instead. The parent's `overflow-hidden`
+											// clips it, so it zooms in place rather than growing
+											// the tile's footprint. Tailwind v4's `scale-*`
+											// compiles to the native CSS `scale` property, not
+											// `transform` — transitioning `transform` here would
+											// silently do nothing to it. On touch, `[data-touch]`
+											// in styles.css narrows the transition to opacity
+											// only — filter/scale there are driven per-frame by
+											// the ambient loop, whose easing a CSS transition
+											// would smooth *again*, lagging it.
+											"size-full grayscale transition-[opacity,filter,scale] duration-1000 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
+											matte ? "object-contain" : "object-cover",
+										)}
+										loading="lazy"
+										decoding="async"
+									/>
+								) : (
+									<SleevePlaceholder />
+								)}
+							</div>
+							{/* Signals "this one has notes" at rest — the 2×2 span (when
+							    throttled-eligible, see `computeSpanningIds`) is a size
+							    hint, not everything with notes gets one, so records that
+							    stayed 1×1 still need their own affordance. Fades out on
+							    hover so it doesn't fight the disc for attention once
+							    you're already looking at this tile. */}
+							{hasNotes(record) && (
+								<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out pointer-fine:group-hover:opacity-0 group-data-[active=true]:opacity-0" />
+							)}
+						</>
+					) : (
+						// Windowed-out placeholder (touch only): the same circle the
+						// loading skeleton uses, minus the pulse animation — it's only
+						// ever glimpsed mid-fling, and ~250 of these are mounted at
+						// once, so it must cost nothing to keep around. Static markup,
+						// no image, no SVG, no animation.
 						<div
 							aria-hidden="true"
-							className="disc-mask absolute inset-[5%] size-[90%] rounded-full bg-background"
+							className="absolute inset-[5%] size-[90%] rounded-full bg-muted/40"
 						/>
-					)}
-					{/* `content-visibility: auto` — see the module doc above for why this
-					    is scoped to the cover's own wrapper rather than the whole tile.
-					    Sized purely by `inset-0` against the already-sized `aspect-square`
-					    parent, not by its own content, so this doesn't need a
-					    `contain-intrinsic-size` fallback the way an intrinsically-sized
-					    element would. */}
-					<div className="absolute inset-0 overflow-hidden [content-visibility:auto]">
-						{/* Shown behind the cover while it loads — `-z-10` (rather
-						    than unmounting once ready) so it never has to fight
-						    FadeImage's own opacity for stacking order; the opaque
-						    cover simply paints over it once revealed. Cover-less
-						    tiles skip straight to the placeholder, so no skeleton
-						    for those. Same `inset-[5%] size-[90%] rounded-full` as the
-						    disc mask above, rather than a plain rectangle — the two
-						    only ever show one at a time (this while `!coverReady`,
-						    the mask once ready), so matching their shape reads as one
-						    consistent loading affordance instead of two different
-						    ones handing off. */}
-						{cover && !coverReady && (
-							<Skeleton className="absolute inset-[5%] size-[90%] -z-10 rounded-full" />
-						)}
-						{cover ? (
-							<FadeImage
-								src={coverSrc}
-								alt={`${record.artist} — ${record.title}`}
-								onReady={() => setCoverReady(true)}
-								className={cn(
-									// Fade in on load *and* keep the grayscale→colour
-									// hover — one combined transition property so both
-									// animate. Opacity itself stays driven by FadeImage's
-									// own `loaded` state (via onReady below just for the
-									// disc) — mirroring it here too would round-trip
-									// through a second component's state update, which
-									// can resolve before the browser ever paints the
-									// hidden frame, skipping the fade entirely. Scale is
-									// active-only (mobile's scroll-driven state) — a gentle
-									// zoom standing in for the pointer-driven spotlight
-									// desktop gets instead. The parent's `overflow-hidden`
-									// clips it, so it zooms in place rather than growing
-									// the tile's footprint. Tailwind v4's `scale-*`
-									// compiles to the native CSS `scale` property, not
-									// `transform` — transitioning `transform` here would
-									// silently do nothing to it.
-									"size-full grayscale transition-[opacity,filter,scale] duration-1000 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
-									matte ? "object-contain" : "object-cover",
-								)}
-								loading="lazy"
-								decoding="async"
-							/>
-						) : (
-							<SleevePlaceholder />
-						)}
-					</div>
-					{/* Signals "this one has notes" at rest — the 2×2 span (when
-					    throttled-eligible, see `computeSpanningIds`) is a size
-					    hint, not everything with notes gets one, so records that
-					    stayed 1×1 still need their own affordance. Fades out on
-					    hover so it doesn't fight the disc for attention once
-					    you're already looking at this tile. */}
-					{hasNotes(record) && (
-						<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out pointer-fine:group-hover:opacity-0 group-data-[active=true]:opacity-0" />
 					)}
 				</div>
 			</button>
@@ -352,6 +407,82 @@ function usePrefersReducedMotionRef(): React.RefObject<boolean> {
 	return ref;
 }
 
+// --- Touch scroll system: constants + pure helpers -------------------------
+// (Used only by the touch effect in `CollectionGrid` — see its comment.)
+
+// How far past the viewport (in viewport heights) tile content stays mounted
+// on touch, in each direction. Generous enough that ordinary scrolling never
+// catches the window's edge; a violent fling can outrun it, which shows the
+// static placeholder circle for a beat — the honest loading affordance, and
+// vastly cheaper than keeping all ~300 covers alive.
+const WINDOW_MARGIN_VH = 1.5;
+// How far the page must scroll (in viewport heights) before window membership
+// is recomputed. Recomputing (and the React re-render it can trigger) a few
+// times per screenful instead of every frame keeps the scroll loop itself
+// allocation- and commit-free almost all the time; the margin above is wide
+// enough that membership genuinely can't change meaningfully within one
+// hysteresis step.
+const WINDOW_HYSTERESIS_VH = 0.4;
+// Tiles further than this (in viewport heights) from the viewport's centre
+// aren't examined by the ambient pass at all. Deliberately generous — a tile
+// outside `ambientProgress`'s own falloff reads as fully at rest regardless,
+// so slack here costs only arithmetic.
+const CANDIDATE_BAND_VH = 1.5;
+
+// A tile used to reach full colour the *instant* it passed dead centre and
+// immediately start fading again — dist===0 was a single point, not a range,
+// so a linear `1 - dist/falloff` ramp reads as constantly easing in and out
+// with no moment of "fully there". `AMBIENT_CORE_RATIO` carves out a flat
+// plateau at the middle of the falloff radius — full colour for as long as a
+// tile stays within it — and only the remaining outer band ramps at all, so
+// the ramp itself reads as quick rather than gradual. A trapezoid, not a
+// triangle. `AMBIENT_FALLOFF_RATIO` scales the falloff to the tile's *own*
+// height, keeping the transition proportioned to row spacing rather than a
+// fixed viewport constant that could span several rows of a dense grid.
+const AMBIENT_FALLOFF_RATIO = 0.62;
+const AMBIENT_CORE_RATIO = 0.75;
+// The column crossfade's horizontal counterpart to `AMBIENT_FALLOFF_RATIO` —
+// 1 fades a tile out exactly by the time its immediate neighbour's own slot
+// centre is reached, so a row wider than 2 columns still never blends across
+// more than its two nearest tiles at once.
+const COLUMN_FALLOFF_RATIO = 1;
+// `updateActive`'s targets are sampled once per frame — during a fast fling
+// the scroll position can move several steps' worth of the steep trapezoid
+// between two samples, so writing targets straight to the DOM read as a snap.
+// Each tile's painted value chases its target by this fraction of the
+// remaining distance per frame instead (the same pattern as the desktop
+// spotlight's SPOTLIGHT_EASE), settling once within the epsilon.
+const AMBIENT_PROGRESS_EASE = 0.35;
+const AMBIENT_SETTLE_EPSILON = 0.01;
+// The disc's opacity ramps in ahead of its slide — fully opaque by half the
+// tile's progress — so it materialises while still mostly behind the cover
+// and is solid by the time the peek is prominent, rather than a ghost disc
+// sliding around. (On touch the disc rests at opacity 0; see `RecordTile`.)
+const DISC_FADE_LEAD = 2;
+
+// Shared trapezoid shape — flat plateau at `1` for `dist <= falloff *
+// AMBIENT_CORE_RATIO`, linear ramp to `0` over the remaining outer band.
+// `ambientProgress` uses this for the vertical falloff; the column crossfade
+// (`colWeight` in the touch effect) uses the exact same shape so a multi-tile
+// row gets the same "hold at full colour" dwell the vertical axis does.
+export function trapezoidWeight(dist: number, falloffDist: number): number {
+	const corePx = falloffDist * AMBIENT_CORE_RATIO;
+	if (dist <= corePx) return 1;
+	return Math.max(0, Math.min(1, 1 - (dist - corePx) / (falloffDist - corePx)));
+}
+
+// Progress is a tile's own *centre* distance from the viewport's centre, not
+// an edge-clipping metric — a tall 2×2 spanning tile has one well-defined
+// centre point regardless of its height, so there's no "which edge is it
+// near" ambiguity.
+export function ambientProgress(
+	tileCenterY: number,
+	tileHeight: number,
+): number {
+	const dist = Math.abs(tileCenterY - window.innerHeight / 2);
+	return trapezoidWeight(dist, tileHeight * AMBIENT_FALLOFF_RATIO);
+}
+
 /**
  * The record grid: one continuous CSS grid with `grid-auto-flow: dense`, so
  * the browser's own placement algorithm packs every tile — no gaps, because
@@ -362,30 +493,31 @@ function usePrefersReducedMotionRef(): React.RefObject<boolean> {
  * zero gaps: a batch boundary falling mid-row leaves that row's remaining
  * cells empty in the first grid, with the next batch starting a fresh row
  * below rather than continuing to fill them — visually a dead rectangle, no
- * matter how large the batch. A single grid has no such boundary. Perf for
- * the (currently few-hundred-record) collection comes from `loading="lazy"`
- * plus `decoding="async"` on covers, and `content-visibility: auto` on each
- * tile's cover wrapper (see `RecordTile` below) — applying it to the *whole*
- * tile was tried once and reverted: it implies `contain: paint`, which clips
- * a tile's descendants to its own box and defeats the vinyl disc's deliberate
- * peek past the tile's edge (see `.vinyl-peek` in styles.css). Scoped to just
- * the cover's own `overflow-hidden` wrapper instead — a sibling of the disc,
- * not an ancestor — it gets the same win (measured via a real iOS Simulator
- * scroll: worst frame ~120ms → ~20-40ms, main-thread long tasks stayed at
- * zero throughout, so the cost was decode/style/layout work the browser can
- * now skip for offscreen tiles, not JS) without touching the peek at all.
+ * matter how large the batch. A single grid has no such boundary, and the
+ * current touch windowing keeps it that way by never unmounting a grid
+ * *child* at all — only each slot's content (see `RecordTile` and the touch
+ * effect below), so auto-placement input is identical no matter where the
+ * window sits.
+ *
+ * Desktop perf for the (currently few-hundred-record) collection comes from
+ * `loading="lazy"` plus `decoding="async"` on covers, and `content-
+ * visibility: auto` on each tile's cover wrapper — applying it to the
+ * *whole* tile was tried once and reverted: it implies `contain: paint`,
+ * which clips a tile's descendants to its own box and defeats the vinyl
+ * disc's deliberate peek past the tile's edge (see `.vinyl-peek` in
+ * styles.css). Scoped to just the cover's own `overflow-hidden` wrapper — a
+ * sibling of the disc, not an ancestor — it gets the same win without
+ * touching the peek. Touch gets real content windowing instead and drops
+ * content-visibility entirely; see the touch effect below for why.
  *
  * On touch devices (`useIsTouchDevice`), hover's whole job — which tile is
- * "active", and where the spotlight backdrop sits — is instead driven by
- * scroll (an `IntersectionObserver` watching a thin band through the
- * viewport's centre) plus device tilt (a small nudge on top of the active
- * tile's own position, since there's no cursor to place the spotlight at).
- *
- * Both touch and desktop share one "active tile" concept (`activeId` below)
- * and one shared, fixed bottom bar (`NowShowing`) showing its title/artist —
- * touch writes to it via the scroll observer, desktop via a plain pointer
- * hover. Neither anchors anything to the tile itself (no per-tile popover),
- * so nothing has to reposition or dismiss as the page scrolls.
+ * "active", plus the grayscale→colour/scale/disc-peek reveal — is driven by
+ * one scroll-fed rAF loop (the touch effect below). Both touch and desktop
+ * share one "active tile" concept (`activeId` below) and one shared, fixed
+ * bottom bar (`NowShowing`) showing its title/artist — touch writes to it
+ * from the scroll loop, desktop via a plain pointer hover. Neither anchors
+ * anything to the tile itself (no per-tile popover), so nothing has to
+ * reposition or dismiss as the page scrolls.
  */
 export function CollectionGrid({
 	records,
@@ -537,108 +669,179 @@ export function CollectionGrid({
 		[],
 	);
 
-	// --- Mobile: scroll-driven "active" tile (hover's touch equivalent) ----
+	// --- Shared "active tile" state (NowShowing's content) -------------------
 	const [activeId, setActiveId] = useState<number | null>(null);
-	// `records` isn't read in the effect body below, but the observer is
-	// wired up to whatever `[data-record-id]` tiles exist in the DOM right
-	// now — if `records` changes (e.g. more load in), those are new elements
-	// that need observing too, so the effect has to rerun.
+
+	// `?perf` — dev-only frame meter (see `PerfMeter` below). Read in an
+	// effect, not during render, so SSR and first client render stay
+	// identical for hydration.
+	const [showPerf, setShowPerf] = useState(false);
+	useEffect(() => {
+		setShowPerf(new URLSearchParams(window.location.search).has("perf"));
+	}, []);
+
+	// --- Touch: windowed content + one-clock scroll system -------------------
+	// Which records currently have their full tile content (cover, discs)
+	// mounted — `null` means all of them (desktop, and touch before its first
+	// measurement). Written by the touch effect below; a tile outside the
+	// window renders a static placeholder instead (see `RecordTile`).
+	const [mountedIds, setMountedIds] = useState<Set<number> | null>(null);
+	// Lets tile content wake the touch loop without a scroll event — a cover
+	// finishing its decode (or remounting already-decoded) after scrolling has
+	// settled still needs one more pass so its reveal can play. Routed through
+	// a ref so the callback handed to every tile stays referentially stable
+	// for `memo`.
+	const requestTickRef = useRef<(() => void) | null>(null);
+	const handleCoverReady = useCallback(() => requestTickRef.current?.(), []);
+
+	// The touch scroll system. One rAF loop is the *only* clock: it computes
+	// window membership, the active tile, and every tile's ambient progress
+	// (grayscale→colour, scale, disc peek + disc opacity), easing each painted
+	// value toward its target and writing styles directly to the DOM. Nothing
+	// else — no CSS transition (see `[data-touch]` in styles.css), no React
+	// state, no content-visibility catch-up, no IntersectionObserver delivery
+	// — participates in the per-frame animation, which is the load-bearing
+	// design decision: the previous incarnation had five independent timing
+	// systems that could not observe each other, and every artifact it ever
+	// produced came down to two of them disagreeing about a tile's state.
+	//
+	// Layout is read in exactly two places: a one-batch measurement of every
+	// tile (`measure`, re-run only when layout can actually change — records,
+	// container resize) and a single container rect per frame to convert the
+	// cached offsets to viewport space. The per-frame work is pure arithmetic
+	// over ~300 cached entries plus style writes on the handful of tiles near
+	// the centre — no forced layout, no allocation churn, no querySelectorAll.
+	//
+	// `records` isn't read in the effect body, but a records change means new
+	// tile elements in the DOM that need measuring, so the effect must re-run.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: see above
 	useEffect(() => {
 		if (!isTouch || !gridElRef.current) return;
 		const container = gridElRef.current;
 
-		// Several tiles can share the band at once (a wide row). Whichever one
-		// gets picked is decided by where the viewport's vertical centre — a
-		// fixed line on the page — currently falls within *that row's* own
-		// height: at the row's top edge it's the leftmost tile, at the row's
-		// bottom edge the rightmost, and everywhere between sweeps left-to-right
-		// with it. Re-run on every scroll tick (not just on enter/exit) since a
-		// tall row can dwell in the band for a while, and the selection needs to
-		// keep tracking the centre line the whole time it's there, not just jump
-		// once when the row enters/leaves.
-		//
-		// `tiles` is a fresh `getBoundingClientRect` measurement, not
-		// `IntersectionObserver` membership — this used to be driven by a very
-		// thin (`-45% 0px -45% 0px`) observer band, which a fast fling could
-		// skip a tile clean across within a single check interval, missing
-		// both its enter *and* exit and leaving `NowShowing` stuck on
-		// whatever was last actually observed (confirmed live: the title bar
-		// showing a record two rows away from what was actually centred after
-		// a quick flick). Anchoring on the closest-to-centre tile below
-		// already has to handle a band holding more than one row at once, so
-		// a wider candidate list here (shared with the ambient effect's own
-		// per-frame scan) is exactly what it was built for.
-		function updateActive(tiles: Array<[HTMLElement, DOMRect]>): {
-			activeId: number | null;
-			highlights: Map<number, number>;
-		} {
-			const centerYForBand = window.innerHeight / 2;
+		type TileInfo = {
+			el: HTMLElement;
+			id: number;
+			/** Offsets from the grid container's own top/left edge. */
+			top: number;
+			left: number;
+			width: number;
+			height: number;
+		};
+		let tiles: TileInfo[] = [];
+		const tileById = new Map<number, TileInfo>();
+		// Container-relative scroll offset at the last window recompute.
+		// Infinity forces `updateWindow` on the next tick regardless of
+		// hysteresis (fresh measurement = membership must be recomputed).
+		let lastWindowTop = Infinity;
+
+		function measure() {
+			const containerRect = container.getBoundingClientRect();
+			tiles = [];
+			tileById.clear();
+			for (const el of container.querySelectorAll<HTMLElement>(
+				"[data-record-id]",
+			)) {
+				const r = el.getBoundingClientRect();
+				const info: TileInfo = {
+					el,
+					id: Number(el.dataset.recordId),
+					top: r.top - containerRect.top,
+					left: r.left - containerRect.left,
+					width: r.width,
+					height: r.height,
+				};
+				tiles.push(info);
+				tileById.set(info.id, info);
+			}
+			lastWindowTop = Infinity;
+		}
+
+		function updateWindow(scrollTop: number) {
+			const margin = window.innerHeight * WINDOW_MARGIN_VH;
+			const windowTop = scrollTop - margin;
+			const windowBottom = scrollTop + window.innerHeight + margin;
+			const next = new Set<number>();
+			for (const t of tiles) {
+				if (t.top < windowBottom && t.top + t.height > windowTop) {
+					next.add(t.id);
+				}
+			}
+			// Only commit genuinely different membership — the hysteresis in
+			// `tick` already throttles how often this runs, and returning the
+			// previous set when nothing changed skips the React render entirely.
+			setMountedIds((prev) => {
+				if (prev && prev.size === next.size) {
+					let same = true;
+					for (const id of next) {
+						if (!prev.has(id)) {
+							same = false;
+							break;
+						}
+					}
+					if (same) return prev;
+				}
+				return next;
+			});
+		}
+
+		// A tile near the viewport centre this frame — `top`/`bottom` are
+		// viewport-relative, derived from the cached container-relative offsets.
+		type Candidate = { info: TileInfo; top: number; bottom: number };
+
+		// Which tile is "active" (NowShowing's content), and the target
+		// highlight weight for each tile in the active row. Several tiles can
+		// share the centre band at once (a wide row): whichever gets picked is
+		// decided by where the viewport's vertical centre currently falls
+		// within *that row's* own height — at the row's top edge the leftmost
+		// tile, at the bottom edge the rightmost, sweeping left-to-right in
+		// between — so a single continuous scroll walks the whole collection
+		// tile by tile, not row by row.
+		function updateActive(candidates: Candidate[]): Map<number, number> {
+			const centerY = window.innerHeight / 2;
 			const bandHalfPx = window.innerHeight * 0.05;
-			const inBand = tiles
-				.filter(
-					([, r]) =>
-						r.top < centerYForBand + bandHalfPx &&
-						r.bottom > centerYForBand - bandHalfPx,
-				)
-				.map(
-					([el, r]) => [Number(el.dataset.recordId), r] as [number, DOMRect],
-				);
-			let next: number | null = null;
+			const inBand = candidates.filter(
+				(c) => c.top < centerY + bandHalfPx && c.bottom > centerY - bandHalfPx,
+			);
 			const highlights = new Map<number, number>();
+			let next: number | null = null;
 			if (inBand.length > 0) {
-				const centerY = window.innerHeight / 2;
 				// The band can briefly hold tiles from two different rows at once
-				// (one row's tiles exiting as the next row's are entering) — mixing
-				// their rects together made rowTop/rowBottom span both rows, which
-				// threw the fraction (and the picked tile) around wildly. It also
-				// held a spanning (2×2) tile alongside a row of regular ones sitting
-				// beside it — dense packing means a spanning tile's height matches
-				// two ordinary rows combined, so it vertically overlaps *both*, and
-				// naively grouping by overlap alone pulled it into whichever row's
-				// fraction happened to be closest, making the two small rows blow
-				// through their four tiles almost instantly. Anchor on whichever
-				// tile's centre is actually closest to the centre line first, then
-				// only consider tiles that both overlap it *and* are roughly the
-				// same size — same row, same size class — for the left-to-right
-				// sweep.
+				// (one row exiting as the next enters), and a 2×2 spanning tile
+				// vertically overlaps *two* ordinary rows — mixing those rects
+				// together threw the row fraction (and the picked tile) around
+				// wildly. Anchor on whichever tile's centre is closest to the
+				// centre line, then only treat tiles that overlap it *and* are
+				// roughly the same size — same row, same size class — as the row.
 				const anchor = inBand.reduce((closest, entry) => {
-					const [, rect] = entry;
-					const [, closestRect] = closest;
-					const dist = Math.abs(rect.top + rect.height / 2 - centerY);
+					const dist = Math.abs((entry.top + entry.bottom) / 2 - centerY);
 					const closestDist = Math.abs(
-						closestRect.top + closestRect.height / 2 - centerY,
+						(closest.top + closest.bottom) / 2 - centerY,
 					);
 					return dist < closestDist ? entry : closest;
 				});
-				const [, anchorRect] = anchor;
+				const anchorHeight = anchor.bottom - anchor.top;
 				const row = inBand
-					.filter(([, r]) => {
-						const overlaps =
-							r.top < anchorRect.bottom && r.bottom > anchorRect.top;
-						const sameSize =
-							r.height / anchorRect.height > 0.5 &&
-							r.height / anchorRect.height < 1.5;
+					.filter((c) => {
+						const overlaps = c.top < anchor.bottom && c.bottom > anchor.top;
+						const h = c.bottom - c.top;
+						const sameSize = h / anchorHeight > 0.5 && h / anchorHeight < 1.5;
 						return overlaps && sameSize;
 					})
-					.sort((a, b) => a[1].left - b[1].left);
-				// The leftmost and rightmost tile's rects nudge the row's own
-				// top/bottom by 1px apart (left up, right down) before they feed the
-				// fraction split below. Two side-by-side tiles can render with
-				// sub-pixel-different bounds (CSS Grid rounds fractional column
-				// widths independently per cell), so the "true" 50% boundary
-				// between them isn't always exactly at the row's own midpoint —
-				// close enough that a scroll position dead-centre on the pair
-				// could floor to whichever tile's rect happened to round a hair
-				// short, which is the side you'd see highlighted while scrolling
-				// but not the one that actually opens once you dismiss. This
-				// breaks that tie in the direction it was actually observed to
-				// land wrong, rather than leaving it to sub-pixel rounding.
+					.sort((a, b) => a.info.left - b.info.left);
+				// The leftmost/rightmost tiles nudge the row's top/bottom by 1px
+				// (left up, right down) before the fraction split below. CSS Grid
+				// rounds fractional column widths independently per cell, so two
+				// side-by-side tiles can have sub-pixel-different bounds — a
+				// scroll position dead-centre on the pair could floor to
+				// whichever tile's rect rounded a hair short, highlighting one
+				// tile while opening the other. This breaks the tie in the
+				// direction it was observed to land wrong.
 				const rowTop = Math.min(
-					...row.map(([, r], i) => r.top + (i === 0 ? -1 : 0)),
+					...row.map((c, i) => c.top + (i === 0 ? -1 : 0)),
 				);
 				const rowBottom = Math.max(
-					...row.map(([, r], i) => r.bottom + (i === row.length - 1 ? 1 : 0)),
+					...row.map((c, i) => c.bottom + (i === row.length - 1 ? 1 : 0)),
 				);
 				const fraction =
 					rowBottom > rowTop ? (centerY - rowTop) / (rowBottom - rowTop) : 0;
@@ -646,43 +849,26 @@ export function CollectionGrid({
 					row.length - 1,
 					Math.max(0, Math.floor(fraction * row.length)),
 				);
-				next = row[index][0];
+				next = row[index].info.id;
 
-				// `NowShowing`'s title above hard-switches at `index`'s own
-				// boundary, but the *visual* highlight below shouldn't — every
-				// tile in this row shares the same vertical centre, so `fraction`
-				// crossing a column boundary is the row's own falloff (see
-				// `ambientProgress`) at its single highest point (dead centre,
-				// `dist === 0`): flipping the whole progress value discretely
-				// right there reads as an abrupt snap between the two tiles
-				// instead of a handoff, rather than the gradual row-to-row
-				// crossfade `ambientProgress` already gives for free. Blending
-				// across columns using the same `fraction` that already sweeps
-				// continuously left-to-right fixes that the same way: each
-				// tile's own share of the row's vertical progress fades in as
-				// `fraction` approaches its column's centre and back out toward
-				// its neighbours', mirroring the vertical case one level down.
+				// NowShowing hard-switches at `index`'s boundary, but the visual
+				// highlight shouldn't — every tile in the row shares the same
+				// vertical distance from centre, so a discrete flip right at the
+				// falloff's peak reads as a snap. Blend across columns with the
+				// same trapezoid the vertical axis uses: each tile's share of
+				// the row's vertical progress fades in as `fraction` approaches
+				// its column's centre and out toward its neighbours'.
 				const rowCenterY = (rowTop + rowBottom) / 2;
-				const verticalProgress = ambientProgress(rowCenterY, anchorRect.height);
+				const verticalProgress = ambientProgress(rowCenterY, anchorHeight);
 				const slotWidth = 1 / row.length;
 				for (let i = 0; i < row.length; i++) {
-					const [id] = row[i];
-					// A "row" of exactly one tile (a 2×2 spanning tile with no
-					// same-size neighbour beside it, most often) has nothing to
-					// blend against — the column blend below exists purely to
-					// crossfade between *multiple* tiles sharing a row, and
-					// applying it to a lone tile just attenuates it toward 0
-					// near the ends of its own vertical span for no reason,
-					// disagreeing with the unattenuated value the fallback
-					// below computes for the same tile the instant it's *not*
-					// the anchor. That mismatch, right at the anchor/non-anchor
-					// boundary, is what read as flickering in and out instead
-					// of a clean fade — a spanning tile's own height makes it
-					// overlap two rows at once (see the anchor-picking comment
-					// above), so which one wins as "the" anchor can wobble near
-					// that boundary; keeping both paths in agreement here means
-					// that wobble no longer has any visible value change to
-					// reveal it.
+					// A "row" of exactly one tile (typically a 2×2 spanning tile
+					// with no same-size neighbour) has nothing to blend against —
+					// attenuating a lone tile toward 0 near the ends of its own
+					// span just disagreed with the unattenuated natural-progress
+					// value computed for the same tile the instant it stopped
+					// being the anchor, which read as flicker right at that
+					// boundary.
 					const colWeight =
 						row.length === 1
 							? 1
@@ -690,488 +876,231 @@ export function CollectionGrid({
 									Math.abs(fraction - (i + 0.5) * slotWidth),
 									slotWidth * COLUMN_FALLOFF_RATIO,
 								);
-					highlights.set(id, verticalProgress * colWeight);
+					highlights.set(row[i].info.id, verticalProgress * colWeight);
 				}
-			}
-			// Reuses the same `data-pointer-outside` attribute desktop's
-			// `onPointerLeave`/`Enter` set below — no active tile (scrolled above
-			// the first record or below the last) is mobile's equivalent of the
-			// pointer leaving the grid, and should fade the overlay out at the
-			// same quick pace rather than the long inter-tile linger.
-			if (next == null) {
-				container.setAttribute("data-pointer-outside", "true");
-			} else {
-				container.removeAttribute("data-pointer-outside");
 			}
 			setActiveId(next);
-			return { activeId: next, highlights };
+			return highlights;
 		}
 
-		// Touch's stand-in for desktop's `:hover`-driven grayscale/scale/peek —
-		// see the `.group[data-active="true"] .vinyl-disc` comment in
-		// styles.css for the things already tried and abandoned here (a shared
-		// `backdrop-filter` overlay, a pure-CSS `animation-timeline: view()`
-		// version of this exact effect that turned out to never actually bind
-		// to real scroll position despite `CSS.supports` reporting it valid,
-		// and — see `getSetters` below — `gsap.quickSetter`, which crashed on
-		// the SVG discs on real WebKit). Direct style writes from the same
-		// rAF-throttled scroll handler below, only for tiles near the viewport
-		// centre, keep this cheap for the ~300 tiles that are nowhere near it.
-		//
-		// Progress is a tile's own *centre* distance from the viewport's
-		// centre, not an edge-clipping metric — unlike this branch's earlier
-		// `filter: blur()` attempt, a tall 2×2 spanning tile has one
-		// well-defined centre point regardless of its height, so it doesn't
-		// have the "which edge is it near" ambiguity that made spanning tiles
-		// read as permanently blurred. The falloff distance is a fraction of
-		// *that tile's own* height, not a fixed viewport-relative constant —
-		// scaling with the tile keeps the transition itself proportioned to
-		// row spacing, rather than a falloff wide enough to span several rows
-		// on a dense grid.
-		//
-		// This alone doesn't guarantee only one *record* is ever highlighted,
-		// though — every tile at the same vertical position shares the exact
-		// same distance from centre, so on a normal 2-column row both tiles
-		// would read the identical progress and light up together. Only the
-		// tile(s) `updateActive`'s own row/left-right sweep is currently
-		// weighted toward (the `highlights` map it returns — see its own
-		// comment for why that's occasionally more than one tile mid-handoff,
-		// not just the single `activeId`/`NowShowing` pick) ever get a nonzero
-		// progress below — everything else in the scanned band is forced to
-		// rest regardless of its own distance. `COLUMN_FALLOFF_RATIO` is that
-		// blend's horizontal counterpart to `AMBIENT_FALLOFF_RATIO` below —
-		// 1 fades a tile out exactly by the time its immediate neighbour's own
-		// slot centre is reached, so a row wider than 2 columns still never
-		// blends across more than its two nearest tiles at once.
-		const COLUMN_FALLOFF_RATIO = 1;
-		const AMBIENT_FALLOFF_RATIO = 0.62;
-		// Shared trapezoid shape — flat plateau at `1` for `dist <= falloff *
-		// AMBIENT_CORE_RATIO`, linear ramp to `0` over the remaining outer band.
-		// `ambientProgress` below uses this for the vertical falloff; the column
-		// crossfade (`colWeight`) uses the exact same shape so a multi-tile row
-		// gets the same "hold at full colour" dwell the vertical axis does,
-		// instead of a plain linear ramp that only ever peaks at a single
-		// instant — that mismatch flattened the vertical plateau right back
-		// into a momentary peak for any row wider than one tile.
-		function trapezoidWeight(dist: number, falloffDist: number): number {
-			const corePx = falloffDist * AMBIENT_CORE_RATIO;
-			if (dist <= corePx) return 1;
-			return Math.max(
-				0,
-				Math.min(1, 1 - (dist - corePx) / (falloffDist - corePx)),
-			);
-		}
-		// A tile used to reach full colour the *instant* it passed dead centre
-		// and immediately start fading again — dist===0 was a single point, not
-		// a range, so a linear `1 - dist/falloff` ramp reads as constantly
-		// easing in and out with no moment of "fully there" (the classic
-		// slow-in/slow-out tent shape). `AMBIENT_CORE_RATIO` carves out a flat
-		// plateau at the *middle* of that same falloff radius — full colour for
-		// as long as a tile stays within it, not just at the exact centre —
-		// and only the remaining outer band ramps at all, over a much shorter
-		// distance than before, so the ramp itself reads as quick rather than
-		// gradual. A trapezoid, not a triangle.
-		const AMBIENT_CORE_RATIO = 0.75;
-		function ambientProgress(tileCenterY: number, tileHeight: number): number {
-			const dist = Math.abs(tileCenterY - window.innerHeight / 2);
-			const falloffPx = tileHeight * AMBIENT_FALLOFF_RATIO;
-			return trapezoidWeight(dist, falloffPx);
-		}
-		type DiscSetter = {
-			setTransform: (v: string) => void;
-			stackIndex: number;
-			layers: number;
-			vinylScale: number;
-			width: number;
-		};
-		type TileSetters = {
-			setFilter: ((v: string) => void) | null;
-			setScale: ((v: string) => void) | null;
-			discs: DiscSetter[];
-		};
-		// Deliberately NOT cached by id — this used to be, but that meant a
-		// tile whose DOM node gets replaced for any reason (this session hit
-		// several real "stale reference" bugs elsewhere) would silently keep
-		// writing to a detached element forever while the live one sat
-		// untouched at its CSS rest state. A fresh `querySelector` for a single
-		// element is cheap enough that there is no real cost to always doing
-		// it — this only ever runs for the handful of tiles currently in
-		// `ambientIds`, not all ~300.
-		function getSetters(group: HTMLElement): TileSetters | null {
-			const img = group.querySelector<HTMLImageElement>("img");
-			const discs = Array.from(
-				group.querySelectorAll<SVGSVGElement>(".vinyl-disc"),
-			).map((disc) => {
-				const wrapper = disc.closest<HTMLElement>(".vinyl-peek");
-				const wrapperStyle = wrapper && getComputedStyle(wrapper);
-				return {
-					// Plain direct writes, not `gsap.quickSetter` — GSAP's SVG
-					// transform handling falls back to writing individual
-					// `scaleX`/`scaleY` *attributes* on some WebKit builds, and
-					// tries to set them as a single `setAttribute('scaleX,scaleY',
-					// …)` call, which throws `InvalidCharacterError` (confirmed
-					// live: this crashed the whole route on the iOS Simulator).
-					// We're not tweening here — every frame already computes its
-					// own final value — so a plain assignment does exactly what
-					// `quickSetter` did, without going through that path at all.
-					setTransform: (v: string) => {
-						disc.style.transform = v;
-					},
-					stackIndex:
-						Number(disc.style.getPropertyValue("--vinyl-stack-index")) || 0,
-					layers: Number(wrapperStyle?.getPropertyValue("--vinyl-layers")) || 1,
-					vinylScale:
-						Number(wrapperStyle?.getPropertyValue("--vinyl-scale")) || 1,
-					width: disc.getBoundingClientRect().width,
-				};
-			});
-			const entry: TileSetters = {
-				setFilter: img
-					? (v: string) => {
-							img.style.filter = v;
-						}
-					: null,
-				setScale: img
-					? (v: string) => {
-							img.style.scale = v;
-						}
-					: null,
-				discs,
-			};
-			return entry;
-		}
-		function discTransformAt(disc: DiscSetter, progress: number): string {
-			if (progress <= 0) {
-				return `translateX(0px) scale(1) rotate(${3 * disc.stackIndex}deg)`;
+		// Everything a frame writes is computed from inline data (the CSS vars
+		// React sets on the disc elements) plus the cached tile width — writing
+		// a frame never reads layout.
+		function applyAmbient(info: TileInfo, progress: number) {
+			const el = info.el;
+			const img = el.querySelector<HTMLImageElement>("img");
+			if (img) {
+				img.style.filter = `grayscale(${1 - progress})`;
+				img.style.scale = String(1 + 0.05 * progress);
 			}
-			const maxTx =
-				Math.min(disc.width * 0.25, 64) * disc.vinylScale -
-				8 * (disc.layers - 1 - disc.stackIndex);
-			const restRotate = 3 * disc.stackIndex;
-			const peakRotate = 6 - 3 * (disc.layers - 1 - disc.stackIndex);
-			return `translateX(${maxTx * progress}px) scale(${1 + 0.06 * progress}) rotate(${restRotate + (peakRotate - restRotate) * progress}deg)`;
-		}
-		function updateAmbientForRect(group: HTMLElement, progress: number) {
-			const setters = getSetters(group);
-			if (!setters) return;
-			// The record panel's pinned tile is a discrete "this one
-			// specifically" state (see the `active` prop comment below) —
-			// don't fight it with the ambient effect. Clearing the inline
-			// styles this function itself last wrote (rather than just
-			// early-returning and leaving them in place) matters here: an
-			// inline `style.filter`/`scale`/disc transform beats the CSS
-			// `.group[data-active="true"] .vinyl-disc` rule on specificity, so
-			// leaving them set froze the tile at whatever partial ambient
-			// value was last painted the instant it became pinned, instead of
-			// letting CSS show its own full "pinned" look.
-			if (group.dataset.active === "true") {
-				setters.setFilter?.("");
-				setters.setScale?.("");
-				for (const disc of setters.discs) {
-					disc.setTransform("");
+			const peek = el.querySelector<HTMLElement>(".vinyl-peek");
+			if (peek) {
+				peek.style.opacity = String(Math.min(1, progress * DISC_FADE_LEAD));
+				const layers =
+					Number(peek.style.getPropertyValue("--vinyl-layers")) || 1;
+				const vinylScale =
+					Number(peek.style.getPropertyValue("--vinyl-scale")) || 1;
+				// `.vinyl-disc` renders at `size-[90%]` of the tile.
+				const discWidth = info.width * 0.9;
+				for (const disc of peek.querySelectorAll<SVGSVGElement>(
+					".vinyl-disc",
+				)) {
+					const stackIndex =
+						Number(disc.style.getPropertyValue("--vinyl-stack-index")) || 0;
+					// Same shape as desktop's `.group:hover .vinyl-disc` rule in
+					// styles.css (see its comment for the min()/stack math), with
+					// `progress` sweeping rest → full reveal.
+					const maxTx =
+						Math.min(discWidth * 0.25, 64) * vinylScale -
+						8 * (layers - 1 - stackIndex);
+					const restRotate = 3 * stackIndex;
+					const peakRotate = 6 - 3 * (layers - 1 - stackIndex);
+					disc.style.transform = `translateX(${maxTx * progress}px) scale(${1 + 0.06 * progress}) rotate(${restRotate + (peakRotate - restRotate) * progress}deg)`;
 				}
-				group.style.zIndex = "";
-				const mask = group.querySelector<HTMLElement>(".disc-mask");
-				if (mask) mask.style.opacity = "";
-				return;
 			}
-			setters.setFilter?.(`grayscale(${1 - progress})`);
-			setters.setScale?.(String(1 + 0.05 * progress));
-			for (const disc of setters.discs) {
-				disc.setTransform(discTransformAt(disc, progress));
-			}
-			// Matches `.group:hover`/`.group[data-active="true"]`'s own
-			// `z-index: 10` in styles.css (see `.vinyl-peek` there) — without
-			// it, a peeking disc paints *under* the next cell in DOM order
-			// instead of on top of it, same as hover/pinned already handle.
-			// This tile isn't marked `data-active` (that's the panel-pinned
-			// state, explicitly excluded above), so it needs its own bump.
-			group.style.zIndex = progress > 0 ? "10" : "";
-			// The disc mask (see its own comment in the JSX above) only
-			// exists to cover the disc's *rest* silhouette — once the disc
-			// itself starts sliding, the mask has to get out of the way or it
-			// sits fixed on top of the disc's new position, cutting a dark
-			// crescent out of it instead of a clean peek.
-			const mask = group.querySelector<HTMLElement>(".disc-mask");
-			if (mask) mask.style.opacity = progress > 0 ? "0" : "";
+			// Matches hover/pinned `z-index: 10` (see `.vinyl-peek` in
+			// styles.css) so the peeking disc paints over the next cell in DOM
+			// order instead of under it.
+			el.style.zIndex = "10";
 		}
-		// A tile's own membership in "currently near the centre" used to be
-		// tracked by `IntersectionObserver`s — one thin band for the active
-		// tile, one wider one for the ambient effect. On real WebKit both were
-		// unreliable at this scale (~300 observed elements): the ambient one
-		// left some tiles stuck at their CSS rest state forever (confirmed
-		// live — two tiles at the *same* distance from centre, one animating,
-		// one frozen), and the active one's thin `-45%` band could get
-		// skipped clean across by a fast fling within a single check
-		// interval, missing both its enter and exit and leaving `NowShowing`
-		// stuck on a stale record. A single `getBoundingClientRect` scan of
-		// every tile, once per scroll frame (batched reads, then batched
-		// writes — no interleaving), replaces both — cheap enough to run
-		// unconditionally, and correct regardless of how observer delivery
-		// batches on any given browser.
-		//
-		// This band only decides which tiles are worth examining at all — it's
-		// deliberately generous (a fixed fraction of the viewport, not tied to
-		// `AMBIENT_FALLOFF_RATIO`) so it comfortably covers a tall 2×2
-		// spanning tile on any device, and — see `syncCoverFade` below — the
-		// *whole* on-screen viewport with room either side, not just the area
-		// near dead centre `ambientProgress`'s own per-tile falloff actually
-		// lights up. A tile outside that falloff reads as fully rest
-		// regardless of how wide this band is, so a little slack here costs
-		// nothing beyond a few extra no-op writes — `getBoundingClientRect`
-		// is already read for every tile in the grid each scroll frame
-		// regardless of this constant's value.
-		const CANDIDATE_BAND_PX = window.innerHeight * 1.5;
-		function scanTiles(): Array<[HTMLElement, DOMRect]> {
-			const centerY = window.innerHeight / 2;
-			const tiles: Array<[HTMLElement, DOMRect]> = [];
-			for (const el of container.querySelectorAll<HTMLElement>(
-				"[data-record-id]",
-			)) {
-				const rect = el.getBoundingClientRect();
-				if (
-					rect.bottom < centerY - CANDIDATE_BAND_PX ||
-					rect.top > centerY + CANDIDATE_BAND_PX
-				) {
-					continue;
+
+		function clearAmbient(info: TileInfo) {
+			const el = info.el;
+			const img = el.querySelector<HTMLImageElement>("img");
+			if (img) {
+				img.style.filter = "";
+				img.style.scale = "";
+			}
+			const peek = el.querySelector<HTMLElement>(".vinyl-peek");
+			if (peek) {
+				peek.style.opacity = "";
+				for (const disc of peek.querySelectorAll<SVGSVGElement>(
+					".vinyl-disc",
+				)) {
+					disc.style.transform = "";
 				}
-				tiles.push([el, rect]);
 			}
-			return tiles;
+			el.style.zIndex = "";
 		}
-		// `updateActive`'s `highlights` map is a *target*, sampled once per
-		// scroll frame — during a fast fling, the actual scroll position can
-		// move several steps' worth of the (now quite steep, see
-		// `AMBIENT_CORE_RATIO`) trapezoid between two consecutive samples,
-		// so writing that target straight to `filter`/`scale`/the disc's own
-		// transform read as an abrupt snap rather than an animation, the
-		// same problem the eased spotlight position above solves for a
-		// different property. `ambientCurrent` is this effect's own
-		// equivalent of `currentRef` there — the per-tile value actually
-		// painted, chasing its target by a fraction of the remaining
-		// distance every animation frame (`AMBIENT_PROGRESS_EASE`) instead
-		// of jumping straight to it, so even a big single-frame jump in the
-		// target still reads as continuous motion.
-		const AMBIENT_PROGRESS_EASE = 0.35;
-		const AMBIENT_SETTLE_EPSILON = 0.01;
+
 		const ambientCurrent = new Map<number, number>();
-		function applyAmbientProgress(id: number, progress: number) {
-			const el = container.querySelector<HTMLElement>(
-				`[data-record-id="${id}"]`,
-			);
-			if (el) updateAmbientForRect(el, progress);
-		}
-		let ambientRafId: number | null = null;
-		function ambientTick() {
-			const tiles = scanTiles();
-			const targets = updateActive(tiles).highlights;
-			// `updateActive` above (via `setActiveId`) is what drives
-			// `NowShowing`'s content on touch — not itself motion, so it
-			// still needs to run under reduced motion. Everything below this
-			// point is the ambient colour/scale/peek animation itself
-			// (`ambientCurrent` easing, `applyAmbientProgress`'s DOM writes,
-			// the recursive rAF loop that drives it), which reduced motion
-			// asks to skip entirely rather than just slow down.
-			if (prefersReducedMotionRef.current) {
-				ambientRafId = null;
-				return;
+		let rafId: number | null = null;
+
+		function tick() {
+			rafId = null;
+			// The only per-frame layout read: where the grid sits in the
+			// viewport right now. Converts every cached offset to viewport
+			// space, and automatically absorbs anything above the grid changing
+			// height.
+			const containerTop = container.getBoundingClientRect().top;
+			const vh = window.innerHeight;
+			const centerY = vh / 2;
+			const scrollTop = -containerTop;
+
+			if (Math.abs(scrollTop - lastWindowTop) > vh * WINDOW_HYSTERESIS_VH) {
+				lastWindowTop = scrollTop;
+				updateWindow(scrollTop);
 			}
-			// `highlights` only ever has entries for the anchor's own row (the
-			// column-exclusivity gate that keeps two tiles sharing a row's
-			// identical vertical distance from lighting up together) — every
-			// *other* in-band tile falls straight to a target of 0 the instant
-			// it stops being that row, regardless of how close it actually
-			// still is. That's invisible for a normal tile (its own falloff,
-			// scaled to its own height, has usually already faded it close to
-			// 0 by then anyway) but not for a 2×2 spanning tile: its falloff
-			// radius is scaled to *its* height too, so it's still
-			// substantially lit at the exact moment a different row's tile
-			// takes over the anchor — forcing that straight to 0 is a real
-			// jump, not just an easing-smoothed one. Filling in each
-			// non-anchor tile's own natural, continuous `ambientProgress`
-			// instead (rather than 0) lets it keep decaying on its own curve
-			// — for normal tiles this is usually already ~0, a no-op; for a
-			// spanning tile it's a proper fade instead of a snap.
-			for (const [el, rect] of tiles) {
-				const id = Number(el.dataset.recordId);
-				if (targets.has(id)) continue;
+
+			const band = vh * CANDIDATE_BAND_VH;
+			const candidates: Candidate[] = [];
+			for (const t of tiles) {
+				const top = containerTop + t.top;
+				const bottom = top + t.height;
+				if (bottom < centerY - band || top > centerY + band) continue;
+				candidates.push({ info: t, top, bottom });
+			}
+
+			const targets = updateActive(candidates);
+
+			// `updateActive` (via `setActiveId`) drives NowShowing's content —
+			// not itself motion, so it still runs under reduced motion.
+			// Everything below is the ambient animation, which reduced motion
+			// skips entirely.
+			if (prefersReducedMotionRef.current) return;
+
+			// `targets` only has entries for the anchor's own row — every other
+			// candidate falls to 0 the instant it stops being that row,
+			// regardless of how close it still is. Invisible for a normal tile
+			// (its own falloff has already faded it out by then) but a real
+			// jump for a 2×2 spanning tile, whose taller falloff radius keeps
+			// it substantially lit when a neighbouring row takes over. Filling
+			// in each non-row tile's own natural progress lets it decay on its
+			// own continuous curve instead.
+			for (const c of candidates) {
+				if (targets.has(c.info.id)) continue;
 				const natural = ambientProgress(
-					rect.top + rect.height / 2,
-					rect.height,
+					(c.top + c.bottom) / 2,
+					c.bottom - c.top,
 				);
-				if (natural > 0) targets.set(id, natural);
+				if (natural > 0) targets.set(c.info.id, natural);
 			}
+
+			let stillEasing = false;
 			const ids = new Set<number>([
 				...targets.keys(),
 				...ambientCurrent.keys(),
 			]);
-			let stillEasing = false;
 			for (const id of ids) {
-				const el = container.querySelector<HTMLElement>(
-					`[data-record-id="${id}"]`,
-				);
-				if (el?.dataset.active === "true") {
-					// While the record panel has this tile pinned,
-					// `updateAmbientForRect` clears the inline ambient styles
-					// this effect last wrote (CSS's own
-					// `.group[data-active="true"]` rule shows the pinned look
-					// instead) — but the scroll position, and so `targets`,
-					// keeps changing underneath. Freezing `ambientCurrent` at
-					// `1` here (matching that CSS look) rather than letting it
-					// keep chasing `target` unseen means that when the panel
-					// closes and DOM writes resume, easing resumes from where
-					// the tile visually was, instead of snapping to wherever
-					// it had silently drifted to while pinned. Still has to
-					// actually call `applyAmbientProgress` here (not just
-					// update the easing map) — that's the only call site
-					// that reaches `updateAmbientForRect`'s own pinned-tile
-					// branch above, which clears the inline styles this
-					// effect last wrote so the CSS `[data-active="true"]`
-					// rule can show through unfought.
-					ambientCurrent.set(id, 1);
-					applyAmbientProgress(id, 1);
+				const info = tileById.get(id);
+				if (!info) {
+					ambientCurrent.delete(id);
 					continue;
 				}
-				const target = targets.get(id) ?? 0;
+				// The record panel's pinned tile is a discrete "this one
+				// specifically" state, shown by CSS's own `[data-active="true"]`
+				// rules — clear the inline styles this loop wrote (they beat the
+				// CSS on specificity) so the pinned look shows through, and
+				// freeze the eased value at 1 (matching that look) so easing
+				// resumes from where the tile visually was when it unpins,
+				// instead of wherever it silently drifted.
+				if (info.el.dataset.active === "true") {
+					ambientCurrent.set(id, 1);
+					clearAmbient(info);
+					continue;
+				}
+				let target = targets.get(id) ?? 0;
+				// The settled-gate: a tile is only eligible to animate once its
+				// cover has actually decoded (`data-cover-ready`, written by
+				// React state whose commit *is* the paint on this path — no
+				// content-visibility means no async catch-up to race). Until
+				// then it rests, whatever its distance says — a disc must never
+				// peek out from behind a cover that isn't there. The eased
+				// approach below turns the gate opening into a fade-in, not a
+				// pop.
+				if (target > 0 && info.el.dataset.coverReady !== "true") target = 0;
 				const current = ambientCurrent.get(id) ?? 0;
 				const delta = target - current;
+				let next: number;
 				if (Math.abs(delta) < AMBIENT_SETTLE_EPSILON) {
-					if (target === 0) {
-						ambientCurrent.delete(id);
-						if (current !== 0) applyAmbientProgress(id, 0);
-					} else {
-						ambientCurrent.set(id, target);
-						applyAmbientProgress(id, target);
-					}
-					continue;
+					next = target;
+				} else {
+					next = current + delta * AMBIENT_PROGRESS_EASE;
+					stillEasing = true;
 				}
-				const next = current + delta * AMBIENT_PROGRESS_EASE;
-				ambientCurrent.set(id, next);
-				applyAmbientProgress(id, next);
-				stillEasing = true;
+				if (next <= 0) {
+					ambientCurrent.delete(id);
+					if (current !== 0) clearAmbient(info);
+				} else {
+					ambientCurrent.set(id, next);
+					applyAmbient(info, next);
+				}
 			}
-			ambientRafId = stillEasing ? requestAnimationFrame(ambientTick) : null;
+			// Keep ticking only while something is still easing — scroll events
+			// (and `requestTickRef` wake-ups) restart the loop otherwise.
+			if (stillEasing) rafId = requestAnimationFrame(tick);
 		}
-		ambientTick();
 
-		// A cover this session has already loaded once (see `FadeImage`'s own
-		// `decodedSrcs` cache) mounts straight at `opacity-100` forever after
-		// — no CSS transition ever runs for a *revisit*, since the opacity
-		// value itself never actually changes. That's invisible as long as
-		// content-visibility repaints the tile in step with it becoming
-		// relevant again, but (see the disc-mask fix above for the same
-		// underlying gap, live-confirmed there) that repaint can genuinely
-		// lag becoming relevant by a beat, especially scrolling back over a
-		// burst of previously-seen tiles at once. With no opacity change to
-		// hide behind, that lag reads as a flicker/pop-in — never noticed
-		// scrolling forward into new territory (a first-ever load has a real
-		// 0→1 transition to play), but obvious scrolling back over tiles
-		// already visited this session.
-		//
-		// Tracks each tile's own relevant/not-relevant transitions, and on
-		// the "became relevant again" edge, replays a real fade for any img
-		// that's already fully opaque (still-loading images already have a
-		// genuine transition in flight — interrupting that would be worse).
-		// Disabling the transition for the instant `opacity: 0` write, then
-		// waiting two real frames before restoring it (same bracket
-		// `FadeImage` itself uses, for the same reason: a single write can
-		// resolve within the same paint as the one before it) is what makes
-		// the *return* to 1 an actual animated transition instead of a
-		// second instant snap.
-		//
-		// The disc has to replay in lockstep with the cover, not just the
-		// cover alone — confirmed live (sampling computed opacity every
-		// frame): the disc's own opacity is driven by React's `coverReady`
-		// state, which this whole mechanism deliberately never touches (only
-		// the img's inline style), so it just sat at its already-settled 1
-		// the entire time the cover was forced back down to 0 and fading
-		// back in — a few hundred ms of the disc showing fully revealed
-		// through a transparent cover, exactly the "vinyl comes in too
-		// early" symptom. `VinylDisc`'s own delay-700 exists to give a real
-		// (slow, first-ever, over the network) cover load a head start
-		// before revealing the disc; this replay only ever fires for an
-		// image that's already cached and just needs to repaint, so there's
-		// no slow load to wait out — reveal both together instead.
-		const coverWasRelevant = new Set<number>();
-		function syncCoverFade(tiles: Array<[HTMLElement, DOMRect]>) {
-			for (const [el] of tiles) {
-				const img = el.querySelector<HTMLImageElement>("img");
-				if (!img) continue;
-				const id = Number(el.dataset.recordId);
-				const relevant =
-					typeof img.checkVisibility !== "function" ||
-					img.checkVisibility({ contentVisibilityAuto: true });
-				if (!relevant) {
-					coverWasRelevant.delete(id);
-					continue;
-				}
-				if (coverWasRelevant.has(id)) continue;
-				coverWasRelevant.add(id);
-				if (getComputedStyle(img).opacity !== "1") continue;
-				const disc = el.querySelector<HTMLElement>(".vinyl-peek");
-				img.style.transition = "none";
-				img.style.opacity = "0";
-				if (disc) {
-					disc.style.transition = "none";
-					disc.style.opacity = "0";
-				}
-				requestAnimationFrame(() => {
-					requestAnimationFrame(() => {
-						img.style.transition = "";
-						img.style.opacity = "";
-						if (disc) {
-							// Explicit, not cleared back to the CSS class's own
-							// `delay-700` — that delay exists to give a real,
-							// slow, first-ever network load a head start before
-							// revealing the disc, which doesn't apply here (this
-							// only ever replays for an image that's already
-							// cached, just catching up on a repaint), and
-							// clearing straight to the class would reintroduce
-							// a mismatch in the other direction: the disc
-							// sitting invisible for 700ms *after* the cover has
-							// already finished fading back in.
-							disc.style.transition = "opacity 700ms ease-out";
-							disc.style.opacity = "";
-						}
-					});
-				});
-			}
-		}
-		syncCoverFade(scanTiles());
-
-		let coverFadeRafId: number | null = null;
-		const onScroll = () => {
-			if (ambientRafId == null)
-				ambientRafId = requestAnimationFrame(ambientTick);
-			if (coverFadeRafId == null) {
-				coverFadeRafId = requestAnimationFrame(() => {
-					coverFadeRafId = null;
-					syncCoverFade(scanTiles());
-				});
-			}
+		const schedule = () => {
+			if (rafId == null) rafId = requestAnimationFrame(tick);
 		};
-		window.addEventListener("scroll", onScroll, { passive: true });
+		requestTickRef.current = schedule;
+
+		measure();
+		tick();
+
+		window.addEventListener("scroll", schedule, { passive: true });
+		// iOS URL-bar collapse/expand changes the viewport height without
+		// relayouting the grid — no re-measure needed, but centre/window math
+		// shift, so re-run the loop.
+		window.addEventListener("resize", schedule);
+		// Width/column-count changes DO relayout the grid: re-measure. Also
+		// fires once right after `observe`, which harmlessly repeats the
+		// explicit initial `measure()` above.
+		const resizeObserver = new ResizeObserver(() => {
+			measure();
+			schedule();
+		});
+		resizeObserver.observe(container);
 
 		return () => {
-			if (ambientRafId !== null) cancelAnimationFrame(ambientRafId);
-			if (coverFadeRafId !== null) cancelAnimationFrame(coverFadeRafId);
-			window.removeEventListener("scroll", onScroll);
+			requestTickRef.current = null;
+			if (rafId != null) cancelAnimationFrame(rafId);
+			window.removeEventListener("scroll", schedule);
+			window.removeEventListener("resize", schedule);
+			resizeObserver.disconnect();
+			// Don't leave half-applied inline styles behind for the desktop
+			// variant (or a fresh run of this effect) to inherit.
+			for (const id of ambientCurrent.keys()) {
+				const info = tileById.get(id);
+				if (info) clearAmbient(info);
+			}
 		};
 	}, [isTouch, records]);
 
 	// Marks the grid `data-scrolling="true"` for the duration of a scroll
 	// gesture (plus a short settle window after it stops) — see `.collection-grid[data-scrolling="true"]`
 	// in styles.css, which pauses the notes dot's infinite glow animation and
-	// drops the cover's grayscale↔colour `filter` transition to an instant
-	// snap for as long as this is set. Both are continuously-recomposited
-	// GPU work (`filter`/`blur()` far more so than plain `transform`/`opacity`)
-	// that a profiled Chrome CPU trace didn't surface — that trace measures
-	// main-thread JS, not compositor/GPU cost, and a real iOS device's GPU is
-	// far more constrained than a desktop one. With ~300 tiles mounted at
-	// once (no virtualization — see the module doc above for why), any of
-	// them mid-transition/animation during a scroll adds up. Written straight
-	// to the DOM, not React state, for the same reason the spotlight position
-	// and `data-pointer-outside` are — this never needs to trigger a re-render.
+	// (desktop) drops the cover's grayscale↔colour `filter` transition to an
+	// instant snap for as long as this is set. Both are continuously-
+	// recomposited GPU work (`filter`/`blur()` far more so than plain
+	// `transform`/`opacity`) that a profiled Chrome CPU trace didn't surface —
+	// that trace measures main-thread JS, not compositor/GPU cost. Matters
+	// most on desktop, where all ~300 tiles stay mounted; on touch the content
+	// window keeps the mounted-dot population small, but pausing the handful
+	// left is still free. Written straight to the DOM, not React state, for
+	// the same reason the spotlight position and `data-pointer-outside` are —
+	// this never needs to trigger a re-render.
 	useEffect(() => {
 		const container = gridElRef.current;
 		if (!container) return;
@@ -1299,6 +1228,11 @@ export function CollectionGrid({
 			ref={gridElRef}
 			className="collection-grid"
 			style={gridStyle}
+			// Switches CSS to the touch variant (see `[data-touch]` in
+			// styles.css): transitions come off every property the touch loop
+			// drives per-frame, so CSS smoothing never re-eases (= lags) the
+			// loop's own easing.
+			data-touch={isTouch ? "true" : undefined}
 			onPointerMove={
 				isTouch
 					? undefined
@@ -1363,6 +1297,17 @@ export function CollectionGrid({
 					// ever reusing the same field.
 					active={record.id === focusedRecordId}
 					onActivate={isTouch ? undefined : setActiveId}
+					isTouch={isTouch}
+					// `mountedIds == null` covers desktop and the touch path's
+					// first render (before the loop's first measurement) — both
+					// mount everything. `!isTouch` short-circuits so a stale set
+					// from a previous touch stint can't hide content if the
+					// device flips back to fine-pointer (a foldable, a mouse
+					// plugging in).
+					contentMounted={
+						!isTouch || mountedIds == null || mountedIds.has(record.id)
+					}
+					onCoverReady={isTouch ? handleCoverReady : undefined}
 				/>
 			))}
 			{/* Shared hover backdrop for every tile — see `.grid-focus-overlay` in
@@ -1391,7 +1336,55 @@ export function CollectionGrid({
 					isTouch={isTouch}
 				/>
 			)}
+			{showPerf && <PerfMeter />}
 		</div>
+	);
+}
+
+/**
+ * Dev instrumentation, mounted only with `?perf` in the URL: a fixed badge
+ * showing, once a second, the worst main-thread frame gap and how many
+ * frames blew a 34ms (two-vsync) budget in that second. Exists because none
+ * of the usual tools can measure this where it matters — Chrome traces run
+ * the wrong engine for iOS work, and WebDriver's automation banner blocks
+ * real touch input on the Simulator — while this shows up legibly in a plain
+ * screen recording of a real fling. One caveat when reading it: WebKit can
+ * suppress rAF entirely during parts of a native momentum scroll, which
+ * reports as one huge gap right as scrolling settles — that's the main
+ * thread being *idle* while the compositor scrolls, not a hitch; the number
+ * that matters is the worst frame while updates are actually flowing.
+ */
+function PerfMeter() {
+	const ref = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		let raf = 0;
+		let last = performance.now();
+		let windowStart = last;
+		let worst = 0;
+		let slow = 0;
+		const tick = (now: number) => {
+			const delta = now - last;
+			last = now;
+			if (delta > worst) worst = delta;
+			if (delta > 34) slow++;
+			if (now - windowStart > 1000) {
+				if (ref.current) {
+					ref.current.textContent = `worst ${Math.round(worst)}ms · >34ms ×${slow}`;
+				}
+				windowStart = now;
+				worst = 0;
+				slow = 0;
+			}
+			raf = requestAnimationFrame(tick);
+		};
+		raf = requestAnimationFrame(tick);
+		return () => cancelAnimationFrame(raf);
+	}, []);
+	return (
+		<div
+			ref={ref}
+			className="fixed top-14 left-2 z-50 rounded bg-black/80 px-2 py-1 font-mono text-[11px] text-white"
+		/>
 	);
 }
 

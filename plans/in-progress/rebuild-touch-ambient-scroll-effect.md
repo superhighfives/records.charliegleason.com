@@ -1,11 +1,19 @@
 ---
 title: Rebuild the touch ambient scroll effect (grayscale reveal + vinyl peek)
-status: Ready
+status: In Progress
 created: 2026-08-12
 updated: 2026-08-12
 ---
 
 # Rebuild the touch ambient scroll effect
+
+> **2026-08-12 (second update) — direction confirmed with the user.** The
+> user explicitly asked to throw the iOS/mobile experience out and rebuild
+> it for: silky-smooth scrolling, scroll-driven animation, and *real*
+> virtualization that handles scrolling both directions. That supersedes the
+> caution in the first update below — we are doing the rebuild, as a variant
+> of Option B that keeps the single continuous dense grid (see "Chosen
+> approach" at the bottom of this file). Desktop stays untouched.
 
 > **2026-08-12 update — read before executing this plan.** Two commits landed
 > on the branch after this plan was written (`ea030a4` "Fix touch ambient
@@ -295,3 +303,85 @@ under the user's own real-device testing. Use, in order of preference:
   source of this category of bug regardless of approach? Not this plan's
   call to make unilaterally, but worth raising if Option A still feels
   fragile after implementation.
+
+## Chosen approach (2026-08-12)
+
+A rebuild of the touch path around two ideas: **content windowing** (real
+virtualization that can't produce grid gaps) and **one clock** (a single
+rAF loop owns every per-frame value; no CSS transition, React state, or
+browser-scheduled repaint participates in the scroll-driven animation).
+
+### Content windowing, not node windowing
+
+The dense-packed single grid can't unmount *grid children* (auto-placement
+of every later tile depends on every earlier one), so every record keeps
+its outer grid slot (same span, same `aspect-square` box) permanently
+mounted — layout is bit-identical no matter where the window is, zero gap
+risk, zero scroll-anchor jumps. What windows in and out is the slot's
+*content*: tiles outside ±~1.5 viewport heights render a cheap static
+placeholder circle instead of the `FadeImage` + `VinylDisc` subtree.
+`content-visibility: auto` is removed from the touch path entirely (it
+stays on desktop) — a windowed tile that's mounted is *always really
+painted*, which deletes the unobservable paint-catchup clock that caused
+every bug in this saga. A remounted tile has no stale paint state: its
+cover either fades in fresh (first load) or mounts instantly opaque
+(session decode cache) in the same frame as the DOM node itself.
+
+Window membership is computed from a cached layout measurement (one batch
+of `getBoundingClientRect`s per layout change — records, container resize —
+then pure arithmetic against `scrollY` per frame; zero layout reads in the
+scroll loop except one rect for the grid container) with hysteresis
+(recompute every ~half viewport of travel), so React re-renders a few
+times per screenful, not per frame, and memoized tiles keep each update to
+the handful crossing the boundary.
+
+### One-clock ambient effect
+
+The proven pieces stay: trapezoid progress per tile, one-row-lit-at-a-time
+column blend, eased chase. What changes:
+
+- The same loop that eases progress now also drives the **disc's opacity**
+  on touch (ramping in over the first stretch of progress). At rest the
+  disc is simply invisible — which deletes the disc mask from the touch
+  path (desktop keeps its own CSS mask), and with it the whole "hide the
+  rest-state silhouette behind an alpha-transparent cover" problem.
+- `syncCoverFade` (the replay mechanism) is deleted — real windowing makes
+  remounting the fade.
+- A tile is only eligible for nonzero progress once its cover is ready
+  (`data-cover-ready`, written by React, read by the loop) — Option A's
+  settled-gate, now trivially reliable because paint state equals mount
+  state.
+- A `data-touch` attribute on the grid lets CSS drop transitions on every
+  property the loop drives per-frame (img `filter`/`scale`, disc
+  `transform`/opacity), so CSS smoothing never fights JS easing — the JS
+  chase is the only easing.
+- `NowShowing`/`activeId` selection logic (band, anchor, row sweep) is
+  kept as-is, just fed from the cached measurements.
+
+## Implementation notes (2026-08-12, rebuild landed on `rebuild-touch-scroll`)
+
+Built as described in "Chosen approach". Verified in the iOS Simulator per
+the verification method (recorded real CGEvent-driven flings, frame-by-frame
+inspection, plus a live WebDriver session for state assertions: 284 tiles,
+~9-40 cover imgs mounted at a time, `data-touch` set).
+
+The one significant discovery beyond the plan: after the rebuild, real-fling
+frame timing (measured with the new `?perf` meter, a dev-only badge in
+`collection-grid.tsx`) still showed 44-97ms main-thread frames. Isolation
+(loop off → clean; active-tracking on / ambient writes off → clean;
+windowing off → no change) pinned it entirely on the per-frame
+`filter`/`scale`/`transform` style writes re-rasterizing non-composited
+elements. Fix: `will-change: filter, scale` on covers and
+`transform`/`opacity` on discs, scoped to `[data-touch]` (styles.css) so
+layer memory is bounded by the content window, not the whole collection.
+After promotion: worst frames 17-53ms with mostly 0 frames over a 34ms
+budget — at parity with the no-JS-at-all baseline in the same measurement.
+Notably `content-visibility` was *not* the only pseudo-virtualization cost —
+and windowing commits (React mount/unmount of tile content) measured as
+irrelevant to frame pacing, vindicating content windowing.
+
+Remaining known trade: a hard fling into never-visited territory outruns
+image loading and shows the static placeholder circles until covers arrive
+(honest loading affordance; dev-server R2 latency exaggerates it vs
+production CDN). Revisited territory remounts instantly from the session
+decode cache.
