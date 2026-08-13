@@ -354,6 +354,47 @@ body {
   transition-property: opacity, scale;
 }
 
+/* Touch variant (`data-touch`, set by CollectionGrid on coarse-pointer
+ * devices). The touch scroll loop eases and writes `filter`/`scale` on the
+ * cover and `transform`/`opacity` on the disc directly, every frame — a CSS
+ * transition on any of those would smooth the already-eased values a second
+ * time, lagging the loop's own motion. Only the cover's load fade (opacity)
+ * keeps its transition. Declared after the `data-scrolling` rule above so it
+ * wins their equal-specificity tie while both attributes are set. */
+.collection-grid[data-touch="true"] img {
+  transition-property: opacity;
+  /* Promote each mounted cover to its own compositing layer. The touch loop
+   * writes `filter`/`scale` on these every animation frame — without a
+   * layer, WebKit re-rasterizes the whole image per write, which measured
+   * (Simulator, real flings, the `?perf` meter) as 44-97ms frames vs a
+   * 17-50ms baseline with the writes disabled. Layer memory is bounded by
+   * the content window (~40 mounted tiles), not the ~300-tile collection. */
+  will-change: filter, scale;
+}
+
+.collection-grid[data-touch="true"] .vinyl-disc {
+  transition: none;
+  /* Same reasoning as the cover's `will-change` above, for the per-frame
+   * disc `transform` writes. */
+  will-change: transform;
+}
+
+/* And for the loop's per-frame disc-stack `opacity` writes. */
+.collection-grid[data-touch="true"] .vinyl-peek {
+  will-change: opacity;
+}
+
+/* On touch the disc rests fully invisible (Tailwind `opacity-0` on
+ * `.vinyl-peek` — see `RecordTile`; the loop fades it in with the peek),
+ * which is what lets the touch path skip the `.disc-mask` desktop needs.
+ * The panel-pinned tile's look is pure CSS (`data-active`), so it needs its
+ * own override to reveal the disc — unlayered CSS beats the Tailwind
+ * utility regardless of specificity, and the loop clears its inline opacity
+ * for pinned tiles so this can win. */
+.collection-grid[data-touch="true"] .group[data-active="true"] .vinyl-peek {
+  opacity: 1;
+}
+
 code {
   font-family: var(--font-mono);
   font-size: 0.9em;
@@ -616,8 +657,8 @@ a {
 
 /* `.disc-mask` (see its own comment in collection-grid.tsx) covers the disc's
  * *rest* silhouette so a transparent cover doesn't show a dark crescent where
- * there's no art. The touch ambient effect already yields it via inline
- * `opacity` for any nonzero scroll-driven progress, but desktop's hover and
+ * there's no art. Desktop-only — the touch tile doesn't render it (the disc
+ * rests at opacity 0 there instead; see `RecordTile`). Desktop's hover and
  * the pinned `data-active` look are pure-CSS, driven by the same
  * `.vinyl-disc` transforms above — without a matching rule here the mask
  * stays opaque through both, cutting into the exact peek it exists to
@@ -646,13 +687,14 @@ a {
  * `getBoundingClientRect()` data that every tile's animation was
  * permanently stuck at its 50% (peak) keyframe regardless of actual scroll
  * position — not a tunable bug, the timeline just never bound to real
- * scroll offset in this environment. GSAP's ScrollTrigger drives this now
- * instead — see the touch effect in `collection-grid.tsx`, which computes
- * continuous progress from each candidate tile's distance to viewport
- * centre (not an edge-clipping metric, so — unlike this branch's earlier
- * `filter: blur()` attempt — a tall 2×2 spanning tile's single well-defined
- * centre point doesn't have the "which edge is it near" ambiguity that made
- * spanning tiles read as permanently blurred). */
+ * scroll offset in this environment. (GSAP was also tried and crashed on
+ * the SVG discs on real WebKit.) The rAF loop in `collection-grid.tsx`'s
+ * touch effect drives this now: continuous progress from each candidate
+ * tile's centre distance to the viewport centre (not an edge-clipping
+ * metric, so a tall 2×2 spanning tile's single well-defined centre point
+ * doesn't have the "which edge is it near" ambiguity that made spanning
+ * tiles read as permanently blurred under the earlier `filter: blur()`
+ * attempt). */
 
 /*
  * The record detail panel has no hover affordance for its disc (a static
