@@ -68,8 +68,9 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * currently "active", so nothing anchored to the tile has to reposition (or
  * get dismissed) as the page scrolls. `active` is set by `CollectionGrid`
  * whenever plain pointer hover can't be relied on to say which tile is
- * "current": mobile's scroll-driven `IntersectionObserver` (touch devices
- * have no hover to key off), and the record currently open in the detail
+ * "current": mobile's scroll-driven rAF scan (a `getBoundingClientRect`
+ * sweep per frame; touch devices have no hover to key off), and the record
+ * currently open in the detail
  * panel (so it stays highlighted underneath while the panel covers the
  * pointer). It drives the shared `data-active` attribute (grayscale→colour,
  * disc peek, the `grid-focus-overlay` blur) and, for the scroll-driven case,
@@ -464,7 +465,7 @@ const DISC_FADE_LEAD = 2;
 // `ambientProgress` uses this for the vertical falloff; the column crossfade
 // (`colWeight` in the touch effect) uses the exact same shape so a multi-tile
 // row gets the same "hold at full colour" dwell the vertical axis does.
-function trapezoidWeight(dist: number, falloffDist: number): number {
+export function trapezoidWeight(dist: number, falloffDist: number): number {
 	const corePx = falloffDist * AMBIENT_CORE_RATIO;
 	if (dist <= corePx) return 1;
 	return Math.max(0, Math.min(1, 1 - (dist - corePx) / (falloffDist - corePx)));
@@ -474,7 +475,10 @@ function trapezoidWeight(dist: number, falloffDist: number): number {
 // an edge-clipping metric — a tall 2×2 spanning tile has one well-defined
 // centre point regardless of its height, so there's no "which edge is it
 // near" ambiguity.
-function ambientProgress(tileCenterY: number, tileHeight: number): number {
+export function ambientProgress(
+	tileCenterY: number,
+	tileHeight: number,
+): number {
 	const dist = Math.abs(tileCenterY - window.innerHeight / 2);
 	return trapezoidWeight(dist, tileHeight * AMBIENT_FALLOFF_RATIO);
 }
