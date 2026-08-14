@@ -5,27 +5,46 @@ import { eq } from "drizzle-orm";
 import { getDb } from "#/db";
 import { type Record as RecordRow, records } from "#/db/schema";
 import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
-import { generateMatteFromCapture } from "#/lib/matte";
-import { professionalPipeline } from "#/lib/professional";
-import { enqueueAnalyze } from "#/lib/queue";
-import { parseReframeParams } from "#/lib/reframe-params";
-import { DEFAULT_BAND, serializeCornerBand } from "#/lib/sleeve-corners";
+import { enqueueAnalyze, enqueueCaptureFirstPass } from "#/lib/queue";
 
 /**
  * Server-only capture creation/replacement, called by `/api/admin/capture`
  * after it streams the photo into R2. Deliberately NOT in `records.ts` and NOT
- * server fns: as plain exports in a module that client routes import, the
- * TanStack compiler can't strip them from the browser bundle, and their
- * `professionalPipeline` dependency drags the photon wasm into the client
- * build (which fails). The base64-in-JSON server-fn payloads they replace held
- * ~6 copies of the photo in the isolate and blew the 128 MB memory limit on
- * unshrunk originals.
+ * server fns: the base64-in-JSON server-fn payloads they replace held ~6 copies
+ * of the photo in the isolate and blew the 128 MB memory limit on unshrunk
+ * originals (and as plain exports in a module client routes import, the
+ * TanStack compiler couldn't strip them from the browser bundle).
+ *
+ * Both flows stay light on purpose: the photon-heavy first-pass professional
+ * photo runs as its own queue message (`runCaptureFirstPass`), never inline in
+ * the request isolate — see that module for the OOM story.
  */
+
+/** Flag the professional* track failed when the first-pass can't even enqueue. */
+async function markFirstPassUnqueued(
+	recordId: number,
+	err: unknown,
+): Promise<RecordRow | null> {
+	const detail = err instanceof Error ? err.message : String(err);
+	const db = getDb(env.DB);
+	const [failed] = await db
+		.update(records)
+		.set({
+			professionalStatus: "failed",
+			professionalError: `Could not queue professional photo: ${detail}`,
+			updatedAt: new Date(),
+		})
+		.where(eq(records.id, recordId))
+		.returning()
+		.catch(() => []);
+	return failed ?? null;
+}
 
 /**
  * Capture flow entry: insert a `pending` row for an already-stored capture photo
- * and enqueue it for background analysis. Returns the new row so the UI can jump
- * straight to its detail page and watch the AI work land.
+ * and enqueue it for background analysis + the first-pass professional photo.
+ * Returns the new row so the UI can jump straight to its detail page and watch
+ * the AI work land.
  */
 export function createCaptureRecord(data: {
 	capturePhotoKey: string;
@@ -74,66 +93,25 @@ export function createCaptureRecord(data: {
 			return failed ?? row;
 		}
 
-		// Generate the first-pass professional photo inline. It's free, deterministic
-		// pixel math (detect the sleeve's corners, warp, tone) — no external call — so
-		// there's no queue: a straight, cropped square is ready the moment the capture
-		// lands, and clicking it opens the editor pre-cropped. Best-effort and fully
-		// independent of analysis: on failure we record it on the professional* track (a
-		// manual re-crop retries) rather than failing the whole capture.
+		// First-pass professional photo (detect corners, warp, deterministic
+		// matte) — its own queue message, best-effort and fully independent of
+		// analysis: an enqueue failure marks the professional* track (a manual
+		// re-crop retries) rather than failing the whole capture.
 		try {
-			const { professionalKey, band } = await professionalPipeline(row);
-			// Generate the matte from the same detected corner band — deterministic
-			// (free) on capture, no paid model call; the editor's Apply can upgrade it
-			// to the matting model. Best-effort: a matte failure never fails the capture.
-			const matte = await generateMatteFromCapture(
-				capturePhotoKey,
-				band,
-				{},
-				{ useAi: false },
-			).catch((err) => {
-				console.error("captureRecord: matte generation failed", err);
-				return null;
-			});
-			const [pro] = await db
-				.update(records)
-				.set({
-					professionalImageKey: professionalKey,
-					// Persist the detected seed so the editor opens pre-cropped; a later
-					// Apply overwrites it with the admin's band.
-					sleeveCornersJson: serializeCornerBand(band),
-					professionalAlphaKey: matte?.shadowKey ?? null,
-					professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
-					professionalAlphaSource: matte?.source ?? null,
-					// Generated, but not shown on the site until an admin approves it.
-					professionalStatus: "ready",
-					professionalError: null,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, row.id))
-				.returning();
-			return pro ?? row;
+			await enqueueCaptureFirstPass(row.id);
 		} catch (err) {
-			const detail = err instanceof Error ? err.message : String(err);
-			const [failed] = await db
-				.update(records)
-				.set({
-					professionalStatus: "failed",
-					professionalError: `Could not generate professional photo: ${detail}`,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, row.id))
-				.returning()
-				.catch(() => []);
-			return failed ?? row;
+			return (await markFirstPassUnqueued(row.id, err)) ?? row;
 		}
+		return row;
 	});
 }
 
 /**
- * Swap a record's source capture for a freshly uploaded photo, then regenerate the
- * first-pass professional crop from it — re-detecting the sleeve, since the stored
- * corners were for the old image. The result drops back to `ready` (unapproved), so
- * the admin re-approves via the editor. Best-effort R2 cleanup of the superseded
+ * Swap a record's source capture for a freshly uploaded photo, then regenerate
+ * the first-pass professional crop from it via the same queue message — clearing
+ * the stored corners first so the pass re-detects the sleeve (they were for the
+ * old image). The regenerated result lands back as `ready` (unapproved), so the
+ * admin re-approves via the editor. Best-effort R2 cleanup of the superseded
  * capture + professional objects. Returns the updated row, or null if it's gone.
  */
 export function replaceCaptureRecord(
@@ -149,65 +127,21 @@ export function replaceCaptureRecord(
 			.limit(1);
 		if (!record) return null;
 
-		// Regenerate from the new capture. Re-detect the sleeve (pass a null crop) —
-		// the stored corners were for the old image. On failure keep the new capture
-		// but mark the pro track failed, so the admin can crop it by hand.
-		let professionalKey: string | null = null;
-		let matte: {
-			shadowKey: string;
-			cutoutKey: string;
-			source: "ai" | "deterministic";
-		} | null = null;
-		const proFields: {
-			professionalImageKey?: string | null;
-			sleeveCornersJson: string;
-			professionalStatus: "ready" | "failed";
-			professionalError: string | null;
-			professionalAlphaKey: string | null;
-			professionalAlphaCutoutKey: string | null;
-			professionalAlphaSource: "ai" | "deterministic" | null;
-		} = {
-			sleeveCornersJson: serializeCornerBand(DEFAULT_BAND),
-			professionalStatus: "failed",
-			professionalError: null,
-			professionalAlphaKey: null,
-			professionalAlphaCutoutKey: null,
-			professionalAlphaSource: null,
-		};
-		try {
-			const gen = await professionalPipeline({
-				capturePhotoKey,
-				sleeveCornersJson: null,
-				professionalParamsJson: record.professionalParamsJson,
-			});
-			professionalKey = gen.professionalKey;
-			proFields.professionalImageKey = gen.professionalKey;
-			proFields.sleeveCornersJson = serializeCornerBand(gen.band);
-			proFields.professionalStatus = "ready";
-			// A deterministic matte from the same detected corner band (free — no paid
-			// call on a capture swap). Best-effort, independent of the square.
-			matte = await generateMatteFromCapture(
-				capturePhotoKey,
-				gen.band,
-				parseReframeParams(record.professionalParamsJson),
-				{ useAi: false },
-			).catch((err) => {
-				console.error("replaceCapture: matte generation failed", err);
-				return null;
-			});
-			proFields.professionalAlphaKey = matte?.shadowKey ?? null;
-			proFields.professionalAlphaCutoutKey = matte?.cutoutKey ?? null;
-			proFields.professionalAlphaSource = matte?.source ?? null;
-		} catch (err) {
-			proFields.professionalError =
-				err instanceof Error ? err.message : String(err);
-		}
-
 		const [row] = await db
 			.update(records)
 			.set({
 				capturePhotoKey,
-				...proFields,
+				// The old professional cover/matte were cut from the old capture (and
+				// their objects are deleted below) — clear them so nothing points at a
+				// deleted R2 object while the first-pass regenerates.
+				professionalImageKey: null,
+				professionalAlphaKey: null,
+				professionalAlphaCutoutKey: null,
+				professionalAlphaSource: null,
+				professionalStatus: null,
+				professionalError: null,
+				// Stored corners were for the old image — clear so the pass re-detects.
+				sleeveCornersJson: null,
 				// A new capture regenerates from scratch — no longer an upscale.
 				professionalEnhanced: false,
 				// Fresh source image → reset the reaper's auto-retry budget.
@@ -225,15 +159,15 @@ export function replaceCaptureRecord(
 			record.professionalAlphaKey,
 			record.professionalAlphaCutoutKey,
 		]) {
-			if (
-				staleKey &&
-				staleKey !== capturePhotoKey &&
-				staleKey !== professionalKey &&
-				staleKey !== matte?.shadowKey &&
-				staleKey !== matte?.cutoutKey
-			) {
+			if (staleKey && staleKey !== capturePhotoKey) {
 				await env.PHOTOS.delete(staleKey).catch(() => {});
 			}
+		}
+
+		try {
+			await enqueueCaptureFirstPass(id);
+		} catch (err) {
+			return (await markFirstPassUnqueued(id, err)) ?? row ?? null;
 		}
 		return row ?? null;
 	});
