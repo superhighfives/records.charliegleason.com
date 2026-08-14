@@ -12,6 +12,35 @@ import { type MatteMode, renderMatte } from "./matte.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 
+// Node's default for both is to kill the process — which aborts EVERY in-flight
+// render on this instance, surfaces in the Worker as an uncatchable "Container port
+// connection closed unexpectedly", and (because no catch block ever runs) leaves the
+// queue rows to the reaper with no recorded reason. A stray rejection from a fetch
+// body or a sharp worker isn't worth that blast radius in a stateless image server:
+// log it and keep serving. A genuinely broken process state still exits via
+// uncaughtException below, after the log gives the crash a trace.
+process.on("unhandledRejection", (reason) => {
+	console.error("[matte-container] unhandled rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+	console.error("[matte-container] uncaught exception, exiting:", err);
+	process.exit(1);
+});
+
+/**
+ * Serialize the heavy renders. A matte run peaks at hundreds of MB (full-capture RGBA
+ * buffers + the deskew), and the Worker's `getRandom` load-balancing can land two jobs
+ * on the same instance — co-located peaks are the likely OOM that kills the process
+ * mid-request. One job at a time per instance trades a little queueing latency for
+ * never losing both jobs to a memory kill.
+ */
+let jobChain: Promise<unknown> = Promise.resolve();
+function serialize<T>(job: () => Promise<T>): Promise<T> {
+	const next = jobChain.then(job, job);
+	jobChain = next.catch(() => {});
+	return next;
+}
+
 interface MatteRequest {
 	capture: string; // base64 capture bytes
 	band: unknown;
@@ -70,14 +99,16 @@ const server = createServer(async (req, res) => {
 					.end(JSON.stringify({ error: "bad matte request" }));
 				return;
 			}
-			const out = await renderMatte({
-				capture: new Uint8Array(Buffer.from(parsed.capture, "base64")),
-				// Trusted internal caller (the Worker DO); shapes match the shared types.
-				band: parsed.band as never,
-				params: (parsed.params ?? {}) as never,
-				mode: parsed.mode,
-				replicateToken: parsed.replicateToken,
-			});
+			const out = await serialize(() =>
+				renderMatte({
+					capture: new Uint8Array(Buffer.from(parsed.capture, "base64")),
+					// Trusted internal caller (the Worker DO); shapes match the shared types.
+					band: parsed.band as never,
+					params: (parsed.params ?? {}) as never,
+					mode: parsed.mode,
+					replicateToken: parsed.replicateToken,
+				}),
+			);
 			res.writeHead(200, { "content-type": "application/json" }).end(
 				JSON.stringify({
 					source: out.source,
@@ -97,9 +128,11 @@ const server = createServer(async (req, res) => {
 					.end(JSON.stringify({ error: "bad enhance request" }));
 				return;
 			}
-			const webp = await upscaleCoverToWebp(
-				new Uint8Array(Buffer.from(parsed.image, "base64")),
-				parsed.replicateToken,
+			const webp = await serialize(() =>
+				upscaleCoverToWebp(
+					new Uint8Array(Buffer.from(parsed.image, "base64")),
+					parsed.replicateToken,
+				),
 			);
 			res
 				.writeHead(200, { "content-type": "application/json" })

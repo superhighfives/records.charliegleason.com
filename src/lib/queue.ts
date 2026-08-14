@@ -110,9 +110,24 @@ function analyzeQueue(): Queue<AnalyzeMessage> {
 		.ANALYZE_QUEUE;
 }
 
-/** Enqueue a captured record for background analysis. */
+/**
+ * The capture-only queue (see wrangler.jsonc `queues`). New-upload analysis rides its
+ * own queue so a bulk Apply/enhance batch churning on `records-analyze` can't starve a
+ * fresh capture; both feed the same consumer, which dispatches by message mode. Falls
+ * back to the analyze queue where the binding isn't deployed yet (one deploy's worth of
+ * config skew — the message is identical either way, this only picks the lane).
+ */
+function captureQueue(): Queue<AnalyzeMessage> {
+	const bindings = env as unknown as {
+		CAPTURE_QUEUE?: Queue<AnalyzeMessage>;
+		ANALYZE_QUEUE: Queue<AnalyzeMessage>;
+	};
+	return bindings.CAPTURE_QUEUE ?? bindings.ANALYZE_QUEUE;
+}
+
+/** Enqueue a captured record for background analysis (its own queue — see {@link captureQueue}). */
 export async function enqueueAnalyze(recordId: number): Promise<void> {
-	await analyzeQueue().send({ recordId });
+	await captureQueue().send({ recordId });
 }
 
 /** Enqueue one batch of the background matte-quality audit sweep. */

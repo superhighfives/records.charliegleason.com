@@ -4,8 +4,11 @@ import {
 	type AnalyzeMessage,
 	chunk,
 	D1_PARAM_CHUNK,
+	MAX_AUTO_RETRIES,
 	nextMatteAction,
 	QUEUE_BATCH_SIZE,
+	STALE_JOB_MS,
+	staleThresholdMs,
 	toQueueBatches,
 } from "./batching";
 
@@ -144,5 +147,23 @@ describe("nextMatteAction", () => {
 	it("falls back immediately when there is no retry budget", () => {
 		// maxRetries 0 → the first (and only) failure has nowhere to retry.
 		expect(nextMatteAction(false, 1, 0)).toBe("fallback");
+	});
+});
+
+describe("staleThresholdMs", () => {
+	it("doubles the window per prior reap: 5m, 10m, 20m", () => {
+		expect(staleThresholdMs(0)).toBe(5 * 60 * 1000);
+		expect(staleThresholdMs(1)).toBe(10 * 60 * 1000);
+		expect(staleThresholdMs(2)).toBe(20 * 60 * 1000);
+	});
+
+	it("starts at the base staleness window", () => {
+		expect(staleThresholdMs(0)).toBe(STALE_JOB_MS);
+	});
+
+	it("clamps at MAX_AUTO_RETRIES - 1 so the window never exceeds 20m", () => {
+		const ceiling = staleThresholdMs(MAX_AUTO_RETRIES - 1);
+		expect(staleThresholdMs(MAX_AUTO_RETRIES)).toBe(ceiling);
+		expect(staleThresholdMs(100)).toBe(ceiling);
 	});
 });

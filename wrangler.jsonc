@@ -48,17 +48,25 @@
 	"ai": {
 		"binding": "AI"
 	},
-	// Queues — background record analysis, and (via the same queue, keyed off
-	// message.body.mode) color vinyl-texture generation. The consumer
-	// (src/server.ts → handleAnalyzeBatch) dispatches each message by mode. One
-	// message per record/color, retried up to 3× before going to the dead-letter queue.
-	// Provision once: `wrangler queues create records-analyze` and
-	// `wrangler queues create records-analyze-dlq`.
+	// Queues — background jobs, dispatched by message.body.mode in the shared consumer
+	// (src/server.ts → handleAnalyzeBatch). Two queues, one consumer worker:
+	// `records-capture` carries ONLY new-capture analysis (enqueueAnalyze), so a bulk
+	// Apply/enhance batch churning on `records-analyze` can never starve a fresh upload
+	// out of its analysis — the exact starvation seen when a wedged 16-job enhance batch
+	// held both `records-analyze` consumer slots for half an hour. Everything else
+	// (professional/matte stages, rescans, refreshes, colors, ASIN, audits) stays on
+	// `records-analyze`. One message per record/color, retried up to 3× before the
+	// shared dead-letter queue. Provision once: `wrangler queues create records-analyze`,
+	// `wrangler queues create records-capture` and `wrangler queues create records-analyze-dlq`.
 	"queues": {
 		"producers": [
 			{
 				"binding": "ANALYZE_QUEUE",
 				"queue": "records-analyze"
+			},
+			{
+				"binding": "CAPTURE_QUEUE",
+				"queue": "records-capture"
 			}
 		],
 		"consumers": [
@@ -71,6 +79,17 @@
 				// all" (or a big capture session) drains steadily instead of fanning
 				// out into a burst of parallel AI Gateway / Discogs calls that trips
 				// rate limits and AI-credit caps all at once.
+				"max_concurrency": 2,
+				"dead_letter_queue": "records-analyze-dlq"
+			},
+			{
+				"queue": "records-capture",
+				"max_batch_size": 1,
+				"max_batch_timeout": 5,
+				"max_retries": 3,
+				// A capture session is a human photographing sleeves one at a time —
+				// 2 concurrent analyses keeps pace with that without adding to the
+				// AI-rate-limit pressure the records-analyze throttle exists for.
 				"max_concurrency": 2,
 				"dead_letter_queue": "records-analyze-dlq"
 			}

@@ -120,16 +120,20 @@ jobs:
             // Mark it the preview env so runtime Sentry stays disabled (src/server.ts).
             config.vars = { ENVIRONMENT: 'preview' };
 
-            // Per-PR queue name for both producer + consumer; drop the DLQ (a
-            // second per-PR queue to manage for no preview value).
+            // Per-PR queue name for every producer binding + the consumer; drop the
+            // DLQ (a second per-PR queue to manage for no preview value). All
+            // producer bindings may share one queue, but Cloudflare allows only ONE
+            // consumer per queue — with multiple consumers in the real config
+            // (records-analyze + records-capture) the collapse must also dedupe to
+            // a single consumer or the triggers deploy fails on the consumers API.
             const q = `records-analyze-pr-${pr}`;
             if (config.queues?.producers) {
               config.queues.producers = config.queues.producers.map((p) => ({ ...p, queue: q }));
             }
             if (config.queues?.consumers) {
-              config.queues.consumers = config.queues.consumers.map(
-                ({ dead_letter_queue, ...c }) => ({ ...c, queue: q })
-              );
+              config.queues.consumers = config.queues.consumers
+                .slice(0, 1)
+                .map(({ dead_letter_queue, ...c }) => ({ ...c, queue: q }));
             }
 
             // Drop the matte container + its DO — preview falls back to the

@@ -23,7 +23,13 @@ import {
 } from "#/db/schema";
 import { identifyFromAsin } from "#/lib/asin";
 import { AdminSessionError, authMiddleware, getAdminSession } from "#/lib/auth";
-import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
+import {
+	chunk,
+	D1_PARAM_CHUNK,
+	MAX_AUTO_RETRIES,
+	STALE_JOB_MS,
+	staleThresholdMs,
+} from "#/lib/batching";
 import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
 import { displayCoverKey } from "#/lib/cover";
 import {
@@ -356,24 +362,6 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 	);
 
 /**
- * A background job untouched for longer than this is treated as dead. A queue
- * consumer that's killed mid-run (OOM, wall-clock eviction) never reaches its
- * catch block, so the row keeps its `processing`/`queued` status with no error
- * and sits "in flight" forever. Jobs finish in ~a minute (Replicate calls cap at
- * 120s each), so 5 minutes of no update is safely past the worst legitimate case.
- */
-const STALE_JOB_MS = 5 * 60 * 1000;
-
-/**
- * How many times the reaper re-enqueues a FRESH job before giving up and flagging a dead
- * job terminally failed. Targets uncatchable interruptions (OOM / eviction / mid-deploy
- * termination) the queue's own per-message retries can't recover — a clean re-run usually
- * clears a transient one. Counted per-pipeline on the row (`analyzeRetryCount` /
- * `professionalRetryCount`); reset on success and manual re-triggers.
- */
-const MAX_AUTO_RETRIES = 3;
-
-/**
  * The error stamped on a reaped job. The analyze note carries its own retry guidance
  * (its failure display shows the note verbatim). The pro note deliberately does NOT: the
  * editor appends the "Apply again" guidance to *every* professional failure — reaper note
@@ -557,12 +545,15 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		const reaps: Promise<{ id: number; outcome: "retry" | "fail" } | null>[] =
 			[];
 		for (const row of rows) {
-			if (!row.updatedAt || now - row.updatedAt.getTime() <= STALE_JOB_MS) {
-				continue;
-			}
 			const analyzing = row.status === "pending" || row.status === "processing";
 			const retryCount =
 				(analyzing ? row.analyzeRetryCount : row.professionalRetryCount) ?? 0;
+			if (
+				!row.updatedAt ||
+				now - row.updatedAt.getTime() <= staleThresholdMs(retryCount)
+			) {
+				continue;
+			}
 			// Under budget → re-enqueue a fresh job (clear the error, bump the counter, keep
 			// it in the running state); budget exhausted → flag failed with the interrupted
 			// note so the editor offers a manual retry.
