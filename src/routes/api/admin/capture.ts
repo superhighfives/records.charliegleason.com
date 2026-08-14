@@ -5,8 +5,11 @@ import {
 	getResponseStatus,
 } from "@tanstack/react-start/server";
 import { getAdminSession } from "#/lib/auth";
+import {
+	createCaptureRecord,
+	replaceCaptureRecord,
+} from "#/lib/capture-server";
 import { storeCapturePhotoFromR2 } from "#/lib/images";
-import { createCaptureRecord, replaceCaptureRecord } from "#/lib/records";
 
 /**
  * Capture upload: the photo arrives as the raw request body (metadata as query
