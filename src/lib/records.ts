@@ -365,6 +365,18 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 const STALE_JOB_MS = 5 * 60 * 1000;
 
 /**
+ * Staleness threshold for a job that's already been reaped `retryCount` times: 5m,
+ * then 10m, then 20m. A first interruption is usually transient and worth a prompt
+ * re-run, but a job the reaper has ALREADY re-enqueued twice is likely dying to a
+ * shared cause (a container roll, a crash-looping instance) — doubling the window
+ * each time keeps a wedged batch from hammering the container in lockstep every
+ * 5 minutes while it recovers, and spreads the retries across its recovery instead.
+ */
+function staleThresholdMs(retryCount: number): number {
+	return STALE_JOB_MS * 2 ** Math.min(retryCount, MAX_AUTO_RETRIES - 1);
+}
+
+/**
  * How many times the reaper re-enqueues a FRESH job before giving up and flagging a dead
  * job terminally failed. Targets uncatchable interruptions (OOM / eviction / mid-deploy
  * termination) the queue's own per-message retries can't recover — a clean re-run usually
@@ -557,12 +569,15 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		const reaps: Promise<{ id: number; outcome: "retry" | "fail" } | null>[] =
 			[];
 		for (const row of rows) {
-			if (!row.updatedAt || now - row.updatedAt.getTime() <= STALE_JOB_MS) {
-				continue;
-			}
 			const analyzing = row.status === "pending" || row.status === "processing";
 			const retryCount =
 				(analyzing ? row.analyzeRetryCount : row.professionalRetryCount) ?? 0;
+			if (
+				!row.updatedAt ||
+				now - row.updatedAt.getTime() <= staleThresholdMs(retryCount)
+			) {
+				continue;
+			}
 			// Under budget → re-enqueue a fresh job (clear the error, bump the counter, keep
 			// it in the running state); budget exhausted → flag failed with the interrupted
 			// note so the editor offers a manual retry.

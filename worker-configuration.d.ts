@@ -5,6 +5,9 @@ interface __BaseEnv_Env {
 	PHOTOS: R2Bucket;
 	DB: D1Database;
 	ANALYZE_QUEUE: Queue;
+	// Optional for one deploy's worth of config skew: enqueueAnalyze falls back to
+	// ANALYZE_QUEUE when the binding isn't live yet (see queue.ts#captureQueue).
+	CAPTURE_QUEUE?: Queue;
 	AI: Ai;
 	IMAGES: ImagesBinding;
 	ENVIRONMENT: "preview" | "production";
@@ -39,6 +42,7 @@ declare namespace Cloudflare {
 		PHOTOS: R2Bucket;
 		DB: D1Database;
 		ANALYZE_QUEUE: Queue;
+		CAPTURE_QUEUE?: Queue;
 		AI: Ai;
 		IMAGES: ImagesBinding;
 		ENVIRONMENT: "preview";
