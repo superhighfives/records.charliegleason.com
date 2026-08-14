@@ -152,7 +152,7 @@ export function encodePng(image: RgbaImage): Uint8Array {
 }
 
 // A normalised capture is a ~2048² webp, comfortably under ~2 MB. Anything materially
-// larger is the raw-original storage fallback (`storeCapturePhoto`, when Image
+// larger is the raw-original storage fallback (`storeCapturePhotoFromR2`, when Image
 // Transformations are unavailable) — a straight-off-the-phone HEIC/JPEG that would decode
 // to a 40+ MB RGBA buffer and, stacked with the matte pipeline's other buffers, OOM the
 // generation isolate outright. Route only those through the Images binding first (it

@@ -49,11 +49,7 @@ import {
 	searchReleases,
 } from "#/lib/discogs";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
-import {
-	sourceCoverFromDiscogs,
-	storeCapturePhoto,
-	storeUploadedCover,
-} from "#/lib/images";
+import { sourceCoverFromDiscogs, storeUploadedCover } from "#/lib/images";
 import {
 	type LinkHealthResult,
 	MANUAL_CHECK_BATCH,
@@ -1242,126 +1238,113 @@ export const retryProfessionalMatte = createServerFn({ method: "POST" })
  * corners were for the old image. The result drops back to `ready` (unapproved), so
  * the admin re-approves via the editor. Best-effort R2 cleanup of the superseded
  * capture + professional objects. Returns the updated row, or null if it's gone.
+ *
+ * Not a server fn (see `createCaptureRecord`): the replacement photo uploads as
+ * a raw request body to `/api/admin/capture?recordId=…`, which stores it and
+ * then calls this with the new key.
  */
-export const replaceCapture = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((data: unknown) => {
-		const d = (data ?? {}) as Record<string, unknown>;
-		if (typeof d.id !== "number") throw new Error("id must be a number");
-		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
-			throw new Error("imageBase64 must be a non-empty string");
+export function replaceCaptureRecord(
+	id: number,
+	capturePhotoKey: string,
+): Promise<RecordRow | null> {
+	return Sentry.startSpan({ name: "replaceCapture" }, async () => {
+		const db = getDb(env.DB);
+		const [record] = await db
+			.select()
+			.from(records)
+			.where(eq(records.id, id))
+			.limit(1);
+		if (!record) return null;
+
+		// Regenerate from the new capture. Re-detect the sleeve (pass a null crop) —
+		// the stored corners were for the old image. On failure keep the new capture
+		// but mark the pro track failed, so the admin can crop it by hand.
+		let professionalKey: string | null = null;
+		let matte: {
+			shadowKey: string;
+			cutoutKey: string;
+			source: "ai" | "deterministic";
+		} | null = null;
+		const proFields: {
+			professionalImageKey?: string | null;
+			sleeveCornersJson: string;
+			professionalStatus: "ready" | "failed";
+			professionalError: string | null;
+			professionalAlphaKey: string | null;
+			professionalAlphaCutoutKey: string | null;
+			professionalAlphaSource: "ai" | "deterministic" | null;
+		} = {
+			sleeveCornersJson: serializeCornerBand(DEFAULT_BAND),
+			professionalStatus: "failed",
+			professionalError: null,
+			professionalAlphaKey: null,
+			professionalAlphaCutoutKey: null,
+			professionalAlphaSource: null,
+		};
+		try {
+			const gen = await professionalPipeline({
+				capturePhotoKey,
+				sleeveCornersJson: null,
+				professionalParamsJson: record.professionalParamsJson,
+			});
+			professionalKey = gen.professionalKey;
+			proFields.professionalImageKey = gen.professionalKey;
+			proFields.sleeveCornersJson = serializeCornerBand(gen.band);
+			proFields.professionalStatus = "ready";
+			// A deterministic matte from the same detected corner band (free — no paid
+			// call on a capture swap). Best-effort, independent of the square.
+			matte = await generateMatteFromCapture(
+				capturePhotoKey,
+				gen.band,
+				parseReframeParams(record.professionalParamsJson),
+				{ useAi: false },
+			).catch((err) => {
+				console.error("replaceCapture: matte generation failed", err);
+				return null;
+			});
+			proFields.professionalAlphaKey = matte?.shadowKey ?? null;
+			proFields.professionalAlphaCutoutKey = matte?.cutoutKey ?? null;
+			proFields.professionalAlphaSource = matte?.source ?? null;
+		} catch (err) {
+			proFields.professionalError =
+				err instanceof Error ? err.message : String(err);
 		}
-		const mediaType =
-			typeof d.mediaType === "string" && d.mediaType.startsWith("image/")
-				? d.mediaType
-				: "image/jpeg";
-		return { id: d.id, imageBase64: d.imageBase64, mediaType };
-	})
-	.handler(({ data: { id, imageBase64, mediaType } }) =>
-		Sentry.startSpan({ name: "replaceCapture" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record) return null;
 
-			const bytes = base64ToBytes(stripDataUrl(imageBase64));
-			const { key: capturePhotoKey } = await storeCapturePhoto(
-				bytes,
-				mediaType,
-			);
+		const [row] = await db
+			.update(records)
+			.set({
+				capturePhotoKey,
+				...proFields,
+				// A new capture regenerates from scratch — no longer an upscale.
+				professionalEnhanced: false,
+				// Fresh source image → reset the reaper's auto-retry budget.
+				professionalRetryCount: 0,
+				updatedAt: new Date(),
+			})
+			.where(eq(records.id, id))
+			.returning();
 
-			// Regenerate from the new capture. Re-detect the sleeve (pass a null crop) —
-			// the stored corners were for the old image. On failure keep the new capture
-			// but mark the pro track failed, so the admin can crop it by hand.
-			let professionalKey: string | null = null;
-			let matte: {
-				shadowKey: string;
-				cutoutKey: string;
-				source: "ai" | "deterministic";
-			} | null = null;
-			const proFields: {
-				professionalImageKey?: string | null;
-				sleeveCornersJson: string;
-				professionalStatus: "ready" | "failed";
-				professionalError: string | null;
-				professionalAlphaKey: string | null;
-				professionalAlphaCutoutKey: string | null;
-				professionalAlphaSource: "ai" | "deterministic" | null;
-			} = {
-				sleeveCornersJson: serializeCornerBand(DEFAULT_BAND),
-				professionalStatus: "failed",
-				professionalError: null,
-				professionalAlphaKey: null,
-				professionalAlphaCutoutKey: null,
-				professionalAlphaSource: null,
-			};
-			try {
-				const gen = await professionalPipeline({
-					capturePhotoKey,
-					sleeveCornersJson: null,
-					professionalParamsJson: record.professionalParamsJson,
-				});
-				professionalKey = gen.professionalKey;
-				proFields.professionalImageKey = gen.professionalKey;
-				proFields.sleeveCornersJson = serializeCornerBand(gen.band);
-				proFields.professionalStatus = "ready";
-				// A deterministic matte from the same detected corner band (free — no paid
-				// call on a capture swap). Best-effort, independent of the square.
-				matte = await generateMatteFromCapture(
-					capturePhotoKey,
-					gen.band,
-					parseReframeParams(record.professionalParamsJson),
-					{ useAi: false },
-				).catch((err) => {
-					console.error("replaceCapture: matte generation failed", err);
-					return null;
-				});
-				proFields.professionalAlphaKey = matte?.shadowKey ?? null;
-				proFields.professionalAlphaCutoutKey = matte?.cutoutKey ?? null;
-				proFields.professionalAlphaSource = matte?.source ?? null;
-			} catch (err) {
-				proFields.professionalError =
-					err instanceof Error ? err.message : String(err);
+		// Bin the superseded objects — best-effort, so a transient R2 failure just
+		// leaves an orphan rather than breaking the (already-updated) row.
+		for (const staleKey of [
+			record.capturePhotoKey,
+			record.professionalImageKey,
+			record.professionalAlphaKey,
+			record.professionalAlphaCutoutKey,
+		]) {
+			if (
+				staleKey &&
+				staleKey !== capturePhotoKey &&
+				staleKey !== professionalKey &&
+				staleKey !== matte?.shadowKey &&
+				staleKey !== matte?.cutoutKey
+			) {
+				await env.PHOTOS.delete(staleKey).catch(() => {});
 			}
-
-			const [row] = await db
-				.update(records)
-				.set({
-					capturePhotoKey,
-					...proFields,
-					// A new capture regenerates from scratch — no longer an upscale.
-					professionalEnhanced: false,
-					// Fresh source image → reset the reaper's auto-retry budget.
-					professionalRetryCount: 0,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, id))
-				.returning();
-
-			// Bin the superseded objects — best-effort, so a transient R2 failure just
-			// leaves an orphan rather than breaking the (already-updated) row.
-			for (const staleKey of [
-				record.capturePhotoKey,
-				record.professionalImageKey,
-				record.professionalAlphaKey,
-				record.professionalAlphaCutoutKey,
-			]) {
-				if (
-					staleKey &&
-					staleKey !== capturePhotoKey &&
-					staleKey !== professionalKey &&
-					staleKey !== matte?.shadowKey &&
-					staleKey !== matte?.cutoutKey
-				) {
-					await env.PHOTOS.delete(staleKey).catch(() => {});
-				}
-			}
-			return row ?? null;
-		}),
-	);
+		}
+		return row ?? null;
+	});
+}
 
 /**
  * Approve (promote) or unapprove the generated professional photo. Only

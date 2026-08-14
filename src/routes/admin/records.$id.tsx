@@ -48,6 +48,7 @@ import {
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
+import { uploadReplacementCapture } from "#/lib/capture-upload";
 import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import type {
 	DiscogsCandidate,
@@ -70,7 +71,6 @@ import {
 	previewReleaseValue,
 	publishRecord,
 	reframeRecord,
-	replaceCapture,
 	reprocessRecord,
 	retryFlaggedMattes,
 	retryProfessionalMatte,
@@ -92,16 +92,6 @@ import {
 } from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
-
-/** Read a file to a data URL — used to ship a replacement capture to the server. */
-function readFileAsDataUrl(file: File): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => resolve(reader.result as string);
-		reader.onerror = () => reject(reader.error);
-		reader.readAsDataURL(file);
-	});
-}
 
 /** One labelled reframe knob: a slider with its current value shown on the right. */
 function Knob({
@@ -754,17 +744,13 @@ function RecordDetail() {
 	// Replace the source capture with a freshly chosen photo, regenerate the crop
 	// server-side, then open the editor on the new image so it can be reviewed.
 	const replaceCaptureMut = useMutation({
-		mutationFn: (input: { dataUrl: string; mediaType: string }) =>
-			replaceCapture({
-				data: {
-					id: recordId,
-					imageBase64: input.dataUrl,
-					mediaType: input.mediaType,
-				},
-			}),
-		onSuccess: (row) => {
+		mutationFn: (input: { blob: Blob; mediaType: string }) =>
+			uploadReplacementCapture({ recordId, ...input }),
+		onSuccess: async (row) => {
 			if (!row) return;
-			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			// The route returns the row as plain JSON (dates as strings), so refetch
+			// through the usual queries rather than seeding the cache with it.
+			await invalidate();
 			// Open the editor on the new capture. The editor body re-seeds its crop/
 			// tone from the record on mount — and its key includes the capture key,
 			// which just changed — so there's nothing to seed here.
@@ -785,8 +771,10 @@ function RecordDetail() {
 		if (!file || !file.type.startsWith("image/")) return;
 		setReplacingCapture(true);
 		try {
-			const dataUrl = await readFileAsDataUrl(file);
-			await replaceCaptureMut.mutateAsync({ dataUrl, mediaType: file.type });
+			await replaceCaptureMut.mutateAsync({
+				blob: file,
+				mediaType: file.type || "image/jpeg",
+			});
 		} finally {
 			setReplacingCapture(false);
 		}

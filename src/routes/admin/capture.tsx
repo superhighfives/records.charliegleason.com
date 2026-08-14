@@ -9,6 +9,7 @@ import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { uploadCapture } from "#/lib/capture-upload";
 import { likelyDuplicateOf } from "#/lib/duplicates";
 import { type ProcessedImage, squareDownscale } from "#/lib/image-resize";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
@@ -104,30 +105,6 @@ async function prepareUpload(file: File): Promise<ProcessedImage> {
 	}
 }
 
-/**
- * Upload the capture as a raw request body (metadata in the query string) rather
- * than base64-in-JSON through a server fn — the base64 route buffered several
- * copies of the photo in the worker and hit the isolate memory limit whenever
- * the client had to fall back to an unshrunk original.
- */
-async function uploadCapture(vars: {
-	photo: ProcessedImage;
-	context: string;
-	colorId: string;
-}): Promise<{ id: number }> {
-	const params = new URLSearchParams();
-	if (vars.context) params.set("context", vars.context);
-	if (vars.colorId) params.set("colorId", vars.colorId);
-	const query = params.size > 0 ? `?${params}` : "";
-	const res = await fetch(`/api/admin/capture${query}`, {
-		method: "POST",
-		headers: { "content-type": vars.photo.mediaType },
-		body: vars.photo.blob,
-	});
-	if (!res.ok) throw new Error(`Capture upload failed (${res.status})`);
-	return res.json();
-}
-
 /** One-tap format hints appended to the context field. */
 const CONTEXT_PRESETS = ["Single LP", "2×LP", '7"', '10"', '12"', "EP"];
 
@@ -168,7 +145,17 @@ function Capture() {
 	const cameraInputRef = useRef<HTMLInputElement>(null);
 
 	const capture = useMutation({
-		mutationFn: uploadCapture,
+		mutationFn: (vars: {
+			photo: ProcessedImage;
+			context: string;
+			colorId: string;
+		}) =>
+			uploadCapture({
+				blob: vars.photo.blob,
+				mediaType: vars.photo.mediaType,
+				context: vars.context,
+				colorId: vars.colorId,
+			}),
 		onSuccess: async (record) => {
 			await queryClient.invalidateQueries({
 				queryKey: recordsQueryOptions.queryKey,
