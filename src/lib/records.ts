@@ -23,7 +23,13 @@ import {
 } from "#/db/schema";
 import { identifyFromAsin } from "#/lib/asin";
 import { AdminSessionError, authMiddleware, getAdminSession } from "#/lib/auth";
-import { chunk, D1_PARAM_CHUNK } from "#/lib/batching";
+import {
+	chunk,
+	D1_PARAM_CHUNK,
+	MAX_AUTO_RETRIES,
+	STALE_JOB_MS,
+	staleThresholdMs,
+} from "#/lib/batching";
 import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
 import { displayCoverKey } from "#/lib/cover";
 import {
@@ -354,36 +360,6 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 			});
 		}),
 	);
-
-/**
- * A background job untouched for longer than this is treated as dead. A queue
- * consumer that's killed mid-run (OOM, wall-clock eviction) never reaches its
- * catch block, so the row keeps its `processing`/`queued` status with no error
- * and sits "in flight" forever. Jobs finish in ~a minute (Replicate calls cap at
- * 120s each), so 5 minutes of no update is safely past the worst legitimate case.
- */
-const STALE_JOB_MS = 5 * 60 * 1000;
-
-/**
- * Staleness threshold for a job that's already been reaped `retryCount` times: 5m,
- * then 10m, then 20m. A first interruption is usually transient and worth a prompt
- * re-run, but a job the reaper has ALREADY re-enqueued twice is likely dying to a
- * shared cause (a container roll, a crash-looping instance) — doubling the window
- * each time keeps a wedged batch from hammering the container in lockstep every
- * 5 minutes while it recovers, and spreads the retries across its recovery instead.
- */
-function staleThresholdMs(retryCount: number): number {
-	return STALE_JOB_MS * 2 ** Math.min(retryCount, MAX_AUTO_RETRIES - 1);
-}
-
-/**
- * How many times the reaper re-enqueues a FRESH job before giving up and flagging a dead
- * job terminally failed. Targets uncatchable interruptions (OOM / eviction / mid-deploy
- * termination) the queue's own per-message retries can't recover — a clean re-run usually
- * clears a transient one. Counted per-pipeline on the row (`analyzeRetryCount` /
- * `professionalRetryCount`); reset on success and manual re-triggers.
- */
-const MAX_AUTO_RETRIES = 3;
 
 /**
  * The error stamped on a reaped job. The analyze note carries its own retry guidance
