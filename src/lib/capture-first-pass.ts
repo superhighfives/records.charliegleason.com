@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { generateMatteFromCapture } from "#/lib/matte";
@@ -29,6 +29,12 @@ import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
  * the consumer always acks. A cover failure marks the professional* track
  * `failed` (a manual re-crop retries); a matte failure just leaves the alpha
  * keys empty (the editor's Apply can regenerate).
+ *
+ * Every write is guarded on the inputs it was computed from (`capturePhotoKey`,
+ * and for the matte the band too) still being on the row — a replace clears the
+ * row and re-enqueues, so a still-in-flight (or redelivered) message for the
+ * superseded capture must not stomp the fresh one's fields with stale results.
+ * Same hazard the Apply pipeline documents in `AnalyzeRecordMessage`.
  */
 export async function runCaptureFirstPass(recordId: number): Promise<void> {
 	const db = getDb(env.DB);
@@ -40,9 +46,17 @@ export async function runCaptureFirstPass(recordId: number): Promise<void> {
 	// Deleted between enqueue and delivery, or a row with nothing to work from.
 	if (!record?.capturePhotoKey) return;
 
+	// Guard every write on the capture this run was computed from: a replace
+	// swaps `capturePhotoKey` and re-enqueues, so a match on 0 rows means this
+	// message is for a superseded capture and its results must be dropped.
+	const sameCapture = and(
+		eq(records.id, recordId),
+		eq(records.capturePhotoKey, record.capturePhotoKey),
+	);
+
 	try {
 		const { professionalKey, band } = await professionalPipeline(record);
-		await db
+		const updated = await db
 			.update(records)
 			.set({
 				professionalImageKey: professionalKey,
@@ -54,7 +68,11 @@ export async function runCaptureFirstPass(recordId: number): Promise<void> {
 				professionalError: null,
 				updatedAt: new Date(),
 			})
-			.where(eq(records.id, recordId));
+			.where(sameCapture)
+			.returning({ id: records.id });
+		// Superseded mid-render: the replace's own message regenerates everything,
+		// so don't enqueue a matte cut from the old capture's band.
+		if (updated.length === 0) return;
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
 		await db
@@ -64,7 +82,7 @@ export async function runCaptureFirstPass(recordId: number): Promise<void> {
 				professionalError: `Could not generate professional photo: ${detail}`,
 				updatedAt: new Date(),
 			})
-			.where(eq(records.id, recordId))
+			.where(sameCapture)
 			.catch(() => {});
 		return;
 	}
@@ -104,7 +122,16 @@ export async function runCaptureFirstPassMatte(
 				professionalAlphaSource: matte.source,
 				updatedAt: new Date(),
 			})
-			.where(eq(records.id, recordId));
+			// Only land the matte if it was cut from the capture AND band still on
+			// the row — a replace (new capture) or an admin Apply (new band) mid-cut
+			// supersedes this result, and each regenerates its own matte.
+			.where(
+				and(
+					eq(records.id, recordId),
+					eq(records.capturePhotoKey, record.capturePhotoKey),
+					eq(records.sleeveCornersJson, record.sleeveCornersJson),
+				),
+			);
 	} catch (err) {
 		// Best-effort, same as the old inline pass: a matte failure never fails
 		// the capture — the cover stays, just without a matte.

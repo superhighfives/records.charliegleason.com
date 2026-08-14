@@ -630,7 +630,13 @@ function RecordDetail() {
 					r?.status === "pending" ||
 					r?.status === "processing" ||
 					r?.professionalJobStatus === "queued" ||
-					r?.professionalJobStatus === "processing";
+					r?.professionalJobStatus === "processing" ||
+					// A capture replace explicitly nulls `professionalStatus` (its only
+					// writer) while the first-pass re-detects in the queue — poll so the
+					// detected corners land in the just-opened editor, which adopts them
+					// while its crop is untouched. Terminal either way: the pass sets
+					// `ready` or `failed` (enqueue failure marks `failed` too).
+					(r?.professionalStatus == null && r?.capturePhotoKey != null);
 				return active ? 2000 : false;
 			},
 		});
@@ -1989,6 +1995,23 @@ function RecordEditorBody({
 	const [band, setBand] = useState<CornerBand>(() =>
 		parseCornerBand(record.sleeveCornersJson),
 	);
+	// A capture replace opens this editor before the background first-pass has
+	// re-detected the corners (the row's are nulled, so the seed above is the
+	// full-frame default). Adopt the detected band when the poll delivers it —
+	// but only while the crop is untouched, so it never moves handles under an
+	// admin who has already started dragging.
+	const bandTouched = useRef(false);
+	const adoptedCorners = useRef(record.sleeveCornersJson);
+	useEffect(() => {
+		if (bandTouched.current) return;
+		if (
+			record.sleeveCornersJson &&
+			record.sleeveCornersJson !== adoptedCorners.current
+		) {
+			adoptedCorners.current = record.sleeveCornersJson;
+			setBand(parseCornerBand(record.sleeveCornersJson));
+		}
+	}, [record.sleeveCornersJson]);
 	// Which output the live editing preview shows — the matte (default, the primary
 	// render) or the square cover — toggled by the switch in the preview's top-right.
 	const [previewMode, setPreviewMode] = useState<"matte" | "cover">("matte");
@@ -2105,7 +2128,10 @@ function RecordEditorBody({
 					<CornerEditor
 						src={`/api/photos/${record.capturePhotoKey}`}
 						value={band}
-						onChange={setBand}
+						onChange={(next) => {
+							bandTouched.current = true;
+							setBand(next);
+						}}
 						onDetect={async () => {
 							const res = await detectCorners({ data: recordId });
 							return res.corners;
