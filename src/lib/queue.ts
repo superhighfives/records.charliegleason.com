@@ -19,7 +19,10 @@ import {
 	QUEUE_BATCH_SIZE,
 	toQueueBatches,
 } from "#/lib/batching";
-import { runCaptureFirstPass } from "#/lib/capture-first-pass";
+import {
+	runCaptureFirstPass,
+	runCaptureFirstPassMatte,
+} from "#/lib/capture-first-pass";
 import {
 	extractStoredColorPalette,
 	generateColorTexture,
@@ -139,6 +142,16 @@ export async function enqueueAnalyze(recordId: number): Promise<void> {
  */
 export async function enqueueCaptureFirstPass(recordId: number): Promise<void> {
 	await captureQueue().send({ recordId, mode: "capture-first-pass" });
+}
+
+/**
+ * Stage 2 of the first-pass: the deterministic matte, in its own isolate (see
+ * `runCaptureFirstPassMatte`). Enqueued by the stage-1 consumer, not the UI.
+ */
+export async function enqueueCaptureFirstPassMatte(
+	recordId: number,
+): Promise<void> {
+	await captureQueue().send({ recordId, mode: "capture-first-pass-matte" });
 }
 
 /** Enqueue one batch of the background matte-quality audit sweep. */
@@ -721,11 +734,16 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	const { recordId, mode } = message.body;
 	const db = getDb(env.DB);
 
-	// The free on-capture professional seed, in its own isolate (see
-	// `runCaptureFirstPass` for why it can't run inline in the capture POST).
-	// It records its own failure on the row and never throws — always ack.
+	// The free on-capture professional seed, one near-ceiling render per isolate
+	// (see `capture-first-pass.ts` for why neither can run inline in the capture
+	// POST). Both record their own failures and never throw — always ack.
 	if (mode === "capture-first-pass") {
 		await runCaptureFirstPass(recordId);
+		message.ack();
+		return;
+	}
+	if (mode === "capture-first-pass-matte") {
+		await runCaptureFirstPassMatte(recordId);
 		message.ack();
 		return;
 	}

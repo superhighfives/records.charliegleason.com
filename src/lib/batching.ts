@@ -21,14 +21,16 @@ export interface AnalyzeRecordMessage {
 	// isolate — "professional-matte-fallback" — rather than run inline, since stacking
 	// the failed AI attempt's buffers with the ~3000² deterministic deskew on one isolate
 	// is itself what OOM'd.
-	// "capture-first-pass" is the free on-capture professional seed (detect + warp +
-	// deterministic matte) — split out of the capture POST for the same reason, after
-	// the same pass OOM'd the request isolate whenever it shared one with the analyze
-	// consumer.
+	// "capture-first-pass" / "capture-first-pass-matte" are the free on-capture
+	// professional seed (detect + warp, then the deterministic matte) — split out of
+	// the capture POST after the inline pass OOM'd the request isolate, and split
+	// from each other for the same reason the Apply stages are: each is a
+	// near-ceiling render on its own.
 	mode?:
 		| "analyze"
 		| "refresh"
 		| "capture-first-pass"
+		| "capture-first-pass-matte"
 		| "professional"
 		| "professional-matte"
 		| "professional-matte-fallback";
