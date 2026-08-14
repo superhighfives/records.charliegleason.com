@@ -803,138 +803,116 @@ export const createRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Capture flow entry: store the iPhone photo, insert a `pending` row, and enqueue
- * it for background analysis. Returns the new row so the UI can jump straight to
- * its detail page and watch the AI work land.
+ * Capture flow entry: insert a `pending` row for an already-stored capture photo
+ * and enqueue it for background analysis. Returns the new row so the UI can jump
+ * straight to its detail page and watch the AI work land.
+ *
+ * Not a server fn: the capture uploads its photo as a raw request body to
+ * `/api/admin/capture` (which streams it to R2 and then calls this), because a
+ * base64-in-JSON payload held ~6 copies of the photo in the isolate and blew
+ * the 128 MB memory limit on unshrunk originals.
  */
-export const captureRecord = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	// This writes to R2/D1, so validate + normalize the payload before use.
-	.validator((data: unknown) => {
-		const d = (data ?? {}) as Record<string, unknown>;
-		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
-			throw new Error("imageBase64 must be a non-empty string");
-		}
-		const mediaType =
-			typeof d.mediaType === "string" && d.mediaType.startsWith("image/")
-				? d.mediaType
-				: "image/jpeg";
+export function createCaptureRecord(data: {
+	capturePhotoKey: string;
+	context?: string;
+	colorId?: number;
+}): Promise<RecordRow> {
+	return Sentry.startSpan({ name: "captureRecord" }, async () => {
+		const db = getDb(env.DB);
+		const { capturePhotoKey } = data;
+
+		// Vinyl color is manual-only (see `records.colorId`) and the analyze
+		// pipeline never sets it, so default it here at creation — same as
+		// `createRecord` — rather than leaving every captured record uncolored.
 		const colorId =
-			typeof d.colorId === "string" && d.colorId.trim() !== ""
-				? Number(d.colorId)
-				: undefined;
-		return {
-			imageBase64: d.imageBase64,
-			mediaType,
-			context: typeof d.context === "string" ? d.context : undefined,
-			colorId:
-				colorId != null && Number.isFinite(colorId) ? colorId : undefined,
-		};
-	})
-	.handler(({ data }) =>
-		Sentry.startSpan({ name: "captureRecord" }, async () => {
-			const db = getDb(env.DB);
-			const bytes = base64ToBytes(stripDataUrl(data.imageBase64));
+			data.colorId ?? (await getOrCreateColor(DEFAULT_COLOR_NAME)).id;
 
-			// Canonicalise to a square webp via Cloudflare Images (falls back to the
-			// raw bytes if Image Transformations are unavailable).
-			const { key: capturePhotoKey } = await storeCapturePhoto(
-				bytes,
-				data.mediaType,
-			);
+		const [row] = await db
+			.insert(records)
+			.values({
+				artist: "",
+				title: "",
+				format: "LP",
+				source: "photo",
+				status: "pending",
+				colorId,
+				capturePhotoKey,
+				captureContext: data.context?.trim() || null,
+			})
+			.returning();
 
-			// Vinyl color is manual-only (see `records.colorId`) and the analyze
-			// pipeline never sets it, so default it here at creation — same as
-			// `createRecord` — rather than leaving every captured record uncolored.
-			const colorId =
-				data.colorId ?? (await getOrCreateColor(DEFAULT_COLOR_NAME)).id;
-
-			const [row] = await db
-				.insert(records)
-				.values({
-					artist: "",
-					title: "",
-					format: "LP",
-					source: "photo",
-					status: "pending",
-					colorId,
-					capturePhotoKey,
-					captureContext: data.context?.trim() || null,
+		// Don't strand a `pending` row if the queue is unavailable — mark it
+		// `failed` so the detail page can offer a manual retry instead.
+		try {
+			await enqueueAnalyze(row.id);
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			const [failed] = await db
+				.update(records)
+				.set({
+					status: "failed",
+					error: `Could not queue analysis: ${detail}`,
+					updatedAt: new Date(),
 				})
+				.where(eq(records.id, row.id))
 				.returning();
+			return failed ?? row;
+		}
 
-			// Don't strand a `pending` row if the queue is unavailable — mark it
-			// `failed` so the detail page can offer a manual retry instead.
-			try {
-				await enqueueAnalyze(row.id);
-			} catch (err) {
-				const detail = err instanceof Error ? err.message : String(err);
-				const [failed] = await db
-					.update(records)
-					.set({
-						status: "failed",
-						error: `Could not queue analysis: ${detail}`,
-						updatedAt: new Date(),
-					})
-					.where(eq(records.id, row.id))
-					.returning();
-				return failed ?? row;
-			}
-
-			// Generate the first-pass professional photo inline. It's free, deterministic
-			// pixel math (detect the sleeve's corners, warp, tone) — no external call — so
-			// there's no queue: a straight, cropped square is ready the moment the capture
-			// lands, and clicking it opens the editor pre-cropped. Best-effort and fully
-			// independent of analysis: on failure we record it on the professional* track (a
-			// manual re-crop retries) rather than failing the whole capture.
-			try {
-				const { professionalKey, band } = await professionalPipeline(row);
-				// Generate the matte from the same detected corner band — deterministic
-				// (free) on capture, no paid model call; the editor's Apply can upgrade it
-				// to the matting model. Best-effort: a matte failure never fails the capture.
-				const matte = await generateMatteFromCapture(
-					capturePhotoKey,
-					band,
-					{},
-					{ useAi: false },
-				).catch((err) => {
-					console.error("captureRecord: matte generation failed", err);
-					return null;
-				});
-				const [pro] = await db
-					.update(records)
-					.set({
-						professionalImageKey: professionalKey,
-						// Persist the detected seed so the editor opens pre-cropped; a later
-						// Apply overwrites it with the admin's band.
-						sleeveCornersJson: serializeCornerBand(band),
-						professionalAlphaKey: matte?.shadowKey ?? null,
-						professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
-						professionalAlphaSource: matte?.source ?? null,
-						// Generated, but not shown on the site until an admin approves it.
-						professionalStatus: "ready",
-						professionalError: null,
-						updatedAt: new Date(),
-					})
-					.where(eq(records.id, row.id))
-					.returning();
-				return pro ?? row;
-			} catch (err) {
-				const detail = err instanceof Error ? err.message : String(err);
-				const [failed] = await db
-					.update(records)
-					.set({
-						professionalStatus: "failed",
-						professionalError: `Could not generate professional photo: ${detail}`,
-						updatedAt: new Date(),
-					})
-					.where(eq(records.id, row.id))
-					.returning()
-					.catch(() => []);
-				return failed ?? row;
-			}
-		}),
-	);
+		// Generate the first-pass professional photo inline. It's free, deterministic
+		// pixel math (detect the sleeve's corners, warp, tone) — no external call — so
+		// there's no queue: a straight, cropped square is ready the moment the capture
+		// lands, and clicking it opens the editor pre-cropped. Best-effort and fully
+		// independent of analysis: on failure we record it on the professional* track (a
+		// manual re-crop retries) rather than failing the whole capture.
+		try {
+			const { professionalKey, band } = await professionalPipeline(row);
+			// Generate the matte from the same detected corner band — deterministic
+			// (free) on capture, no paid model call; the editor's Apply can upgrade it
+			// to the matting model. Best-effort: a matte failure never fails the capture.
+			const matte = await generateMatteFromCapture(
+				capturePhotoKey,
+				band,
+				{},
+				{ useAi: false },
+			).catch((err) => {
+				console.error("captureRecord: matte generation failed", err);
+				return null;
+			});
+			const [pro] = await db
+				.update(records)
+				.set({
+					professionalImageKey: professionalKey,
+					// Persist the detected seed so the editor opens pre-cropped; a later
+					// Apply overwrites it with the admin's band.
+					sleeveCornersJson: serializeCornerBand(band),
+					professionalAlphaKey: matte?.shadowKey ?? null,
+					professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
+					professionalAlphaSource: matte?.source ?? null,
+					// Generated, but not shown on the site until an admin approves it.
+					professionalStatus: "ready",
+					professionalError: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, row.id))
+				.returning();
+			return pro ?? row;
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			const [failed] = await db
+				.update(records)
+				.set({
+					professionalStatus: "failed",
+					professionalError: `Could not generate professional photo: ${detail}`,
+					updatedAt: new Date(),
+				})
+				.where(eq(records.id, row.id))
+				.returning()
+				.catch(() => []);
+			return failed ?? row;
+		}
+	});
+}
 
 /**
  * Confirm a captured record: save the (possibly edited) fields, apply the chosen

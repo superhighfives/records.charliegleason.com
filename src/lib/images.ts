@@ -100,6 +100,38 @@ export async function sourceCoverFromDiscogs(
  * — if Image Transformations are unavailable it falls back to the raw bytes.
  * Returns the R2 key plus the stored content type (used as the vision media type).
  */
+/**
+ * Canonicalise a capture that's already sitting in R2 (streamed there straight
+ * from the upload request, so the isolate never buffers the original photo —
+ * an unshrunk iPhone original held as ~6 base64/binary copies is what used to
+ * blow the 128 MB memory limit). Reads the raw object as a stream, writes the
+ * canonical square webp, and deletes the raw object. If the transform is
+ * unavailable the raw object *is* the capture — same fallback as
+ * `storeCapturePhoto`.
+ */
+export async function storeCapturePhotoFromR2(
+	rawKey: string,
+	fallbackMediaType: string,
+): Promise<{ key: string; contentType: string }> {
+	try {
+		const raw = await env.PHOTOS.get(rawKey);
+		if (!raw) throw new Error(`raw capture missing from R2: ${rawKey}`);
+		const out = await env.IMAGES.input(raw.body)
+			.transform({ width: 2048, height: 2048, fit: "cover" })
+			.output({ format: "image/webp", quality: 90 });
+		// The transformed webp is ~1 MB, so buffering it (unlike the original) is fine.
+		const buffer = await out.response().arrayBuffer();
+		const key = `captures/${crypto.randomUUID()}.webp`;
+		await env.PHOTOS.put(key, buffer, {
+			httpMetadata: { contentType: "image/webp" },
+		});
+		await env.PHOTOS.delete(rawKey).catch(() => {});
+		return { key, contentType: "image/webp" };
+	} catch {
+		return { key: rawKey, contentType: fallbackMediaType };
+	}
+}
+
 export async function storeCapturePhoto(
 	bytes: Uint8Array,
 	fallbackMediaType: string,
