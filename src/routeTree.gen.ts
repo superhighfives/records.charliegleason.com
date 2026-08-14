@@ -21,6 +21,7 @@ import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
 import { Route as ApiDiscogsCoverIdRouteImport } from './routes/api/discogs-cover.$id'
 import { Route as ApiCronMasterCheckRouteImport } from './routes/api/cron.master-check'
 import { Route as ApiCronDigestRouteImport } from './routes/api/cron.digest'
+import { Route as ApiAdminCaptureRouteImport } from './routes/api/admin/capture'
 import { Route as ApiAdminBackupRouteImport } from './routes/api/admin/backup'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdRouteImport } from './routes/admin/records.$id'
@@ -85,6 +86,11 @@ const ApiCronDigestRoute = ApiCronDigestRouteImport.update({
   path: '/api/cron/digest',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminCaptureRoute = ApiAdminCaptureRouteImport.update({
+  id: '/api/admin/capture',
+  path: '/api/admin/capture',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminBackupRoute = ApiAdminBackupRouteImport.update({
   id: '/api/admin/backup',
   path: '/api/admin/backup',
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/admin/backup': typeof ApiAdminBackupRoute
+  '/api/admin/capture': typeof ApiAdminCaptureRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
@@ -134,6 +141,7 @@ export interface FileRoutesByTo {
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/admin/backup': typeof ApiAdminBackupRoute
+  '/api/admin/capture': typeof ApiAdminCaptureRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
@@ -153,6 +161,7 @@ export interface FileRoutesById {
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/admin/backup': typeof ApiAdminBackupRoute
+  '/api/admin/capture': typeof ApiAdminCaptureRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
@@ -172,6 +181,7 @@ export interface FileRouteTypes {
     | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/admin/backup'
+    | '/api/admin/capture'
     | '/api/cron/digest'
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
@@ -188,6 +198,7 @@ export interface FileRouteTypes {
     | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/admin/backup'
+    | '/api/admin/capture'
     | '/api/cron/digest'
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
@@ -206,6 +217,7 @@ export interface FileRouteTypes {
     | '/admin/records/$id'
     | '/admin/records/new'
     | '/api/admin/backup'
+    | '/api/admin/capture'
     | '/api/cron/digest'
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
@@ -219,6 +231,7 @@ export interface RootRouteChildren {
   R500Route: typeof R500Route
   ApiRecordsRoute: typeof ApiRecordsRoute
   ApiAdminBackupRoute: typeof ApiAdminBackupRoute
+  ApiAdminCaptureRoute: typeof ApiAdminCaptureRoute
   ApiCronDigestRoute: typeof ApiCronDigestRoute
   ApiCronMasterCheckRoute: typeof ApiCronMasterCheckRoute
   ApiDiscogsCoverIdRoute: typeof ApiDiscogsCoverIdRoute
@@ -311,6 +324,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCronDigestRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/capture': {
+      id: '/api/admin/capture'
+      path: '/api/admin/capture'
+      fullPath: '/api/admin/capture'
+      preLoaderRoute: typeof ApiAdminCaptureRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/backup': {
       id: '/api/admin/backup'
       path: '/api/admin/backup'
@@ -381,6 +401,7 @@ const rootRouteChildren: RootRouteChildren = {
   R500Route: R500Route,
   ApiRecordsRoute: ApiRecordsRoute,
   ApiAdminBackupRoute: ApiAdminBackupRoute,
+  ApiAdminCaptureRoute: ApiAdminCaptureRoute,
   ApiCronDigestRoute: ApiCronDigestRoute,
   ApiCronMasterCheckRoute: ApiCronMasterCheckRoute,
   ApiDiscogsCoverIdRoute: ApiDiscogsCoverIdRoute,

@@ -48,6 +48,7 @@ import {
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
+import { uploadReplacementCapture } from "#/lib/capture-upload";
 import { displayCoverKey, displayMatteKey } from "#/lib/cover";
 import type {
 	DiscogsCandidate,
@@ -70,7 +71,6 @@ import {
 	previewReleaseValue,
 	publishRecord,
 	reframeRecord,
-	replaceCapture,
 	reprocessRecord,
 	retryFlaggedMattes,
 	retryProfessionalMatte,
@@ -92,16 +92,6 @@ import {
 } from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
-
-/** Read a file to a data URL — used to ship a replacement capture to the server. */
-function readFileAsDataUrl(file: File): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => resolve(reader.result as string);
-		reader.onerror = () => reject(reader.error);
-		reader.readAsDataURL(file);
-	});
-}
 
 /** One labelled reframe knob: a slider with its current value shown on the right. */
 function Knob({
@@ -640,7 +630,13 @@ function RecordDetail() {
 					r?.status === "pending" ||
 					r?.status === "processing" ||
 					r?.professionalJobStatus === "queued" ||
-					r?.professionalJobStatus === "processing";
+					r?.professionalJobStatus === "processing" ||
+					// A capture replace explicitly nulls `professionalStatus` (its only
+					// writer) while the first-pass re-detects in the queue — poll so the
+					// detected corners land in the just-opened editor, which adopts them
+					// while its crop is untouched. Terminal either way: the pass sets
+					// `ready` or `failed` (enqueue failure marks `failed` too).
+					(r?.professionalStatus == null && r?.capturePhotoKey != null);
 				return active ? 2000 : false;
 			},
 		});
@@ -754,17 +750,13 @@ function RecordDetail() {
 	// Replace the source capture with a freshly chosen photo, regenerate the crop
 	// server-side, then open the editor on the new image so it can be reviewed.
 	const replaceCaptureMut = useMutation({
-		mutationFn: (input: { dataUrl: string; mediaType: string }) =>
-			replaceCapture({
-				data: {
-					id: recordId,
-					imageBase64: input.dataUrl,
-					mediaType: input.mediaType,
-				},
-			}),
-		onSuccess: (row) => {
+		mutationFn: (input: { blob: Blob; mediaType: string }) =>
+			uploadReplacementCapture({ recordId, ...input }),
+		onSuccess: async (row) => {
 			if (!row) return;
-			queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			// The route returns the row as plain JSON (dates as strings), so refetch
+			// through the usual queries rather than seeding the cache with it.
+			await invalidate();
 			// Open the editor on the new capture. The editor body re-seeds its crop/
 			// tone from the record on mount — and its key includes the capture key,
 			// which just changed — so there's nothing to seed here.
@@ -785,8 +777,10 @@ function RecordDetail() {
 		if (!file || !file.type.startsWith("image/")) return;
 		setReplacingCapture(true);
 		try {
-			const dataUrl = await readFileAsDataUrl(file);
-			await replaceCaptureMut.mutateAsync({ dataUrl, mediaType: file.type });
+			await replaceCaptureMut.mutateAsync({
+				blob: file,
+				mediaType: file.type || "image/jpeg",
+			});
 		} finally {
 			setReplacingCapture(false);
 		}
@@ -2001,6 +1995,23 @@ function RecordEditorBody({
 	const [band, setBand] = useState<CornerBand>(() =>
 		parseCornerBand(record.sleeveCornersJson),
 	);
+	// A capture replace opens this editor before the background first-pass has
+	// re-detected the corners (the row's are nulled, so the seed above is the
+	// full-frame default). Adopt the detected band when the poll delivers it —
+	// but only while the crop is untouched, so it never moves handles under an
+	// admin who has already started dragging.
+	const bandTouched = useRef(false);
+	const adoptedCorners = useRef(record.sleeveCornersJson);
+	useEffect(() => {
+		if (bandTouched.current) return;
+		if (
+			record.sleeveCornersJson &&
+			record.sleeveCornersJson !== adoptedCorners.current
+		) {
+			adoptedCorners.current = record.sleeveCornersJson;
+			setBand(parseCornerBand(record.sleeveCornersJson));
+		}
+	}, [record.sleeveCornersJson]);
 	// Which output the live editing preview shows — the matte (default, the primary
 	// render) or the square cover — toggled by the switch in the preview's top-right.
 	const [previewMode, setPreviewMode] = useState<"matte" | "cover">("matte");
@@ -2117,7 +2128,10 @@ function RecordEditorBody({
 					<CornerEditor
 						src={`/api/photos/${record.capturePhotoKey}`}
 						value={band}
-						onChange={setBand}
+						onChange={(next) => {
+							bandTouched.current = true;
+							setBand(next);
+						}}
 						onDetect={async () => {
 							const res = await detectCorners({ data: recordId });
 							return res.corners;

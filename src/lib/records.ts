@@ -49,20 +49,15 @@ import {
 	searchReleases,
 } from "#/lib/discogs";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
-import {
-	sourceCoverFromDiscogs,
-	storeCapturePhoto,
-	storeUploadedCover,
-} from "#/lib/images";
+import { sourceCoverFromDiscogs, storeUploadedCover } from "#/lib/images";
 import {
 	type LinkHealthResult,
 	MANUAL_CHECK_BATCH,
 	runLinkHealthCheck,
 } from "#/lib/master-health";
-import { generateMatteFromCapture } from "#/lib/matte";
 import { beginMatteAuditSweep, getRunningMatteAudit } from "#/lib/matte-audit";
 import { hasMatteAuditFixReason } from "#/lib/photo-processing";
-import { detectCaptureCorners, professionalPipeline } from "#/lib/professional";
+import { detectCaptureCorners } from "#/lib/professional";
 import type { CoverStageResult } from "#/lib/professional-pipeline";
 import {
 	enqueueAnalyze,
@@ -85,7 +80,6 @@ import {
 } from "#/lib/reframe-params";
 import {
 	type CornerBand,
-	DEFAULT_BAND,
 	parseCornerBand,
 	parseNormalizedCornerBand,
 	serializeCornerBand,
@@ -803,140 +797,6 @@ export const createRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Capture flow entry: store the iPhone photo, insert a `pending` row, and enqueue
- * it for background analysis. Returns the new row so the UI can jump straight to
- * its detail page and watch the AI work land.
- */
-export const captureRecord = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	// This writes to R2/D1, so validate + normalize the payload before use.
-	.validator((data: unknown) => {
-		const d = (data ?? {}) as Record<string, unknown>;
-		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
-			throw new Error("imageBase64 must be a non-empty string");
-		}
-		const mediaType =
-			typeof d.mediaType === "string" && d.mediaType.startsWith("image/")
-				? d.mediaType
-				: "image/jpeg";
-		const colorId =
-			typeof d.colorId === "string" && d.colorId.trim() !== ""
-				? Number(d.colorId)
-				: undefined;
-		return {
-			imageBase64: d.imageBase64,
-			mediaType,
-			context: typeof d.context === "string" ? d.context : undefined,
-			colorId:
-				colorId != null && Number.isFinite(colorId) ? colorId : undefined,
-		};
-	})
-	.handler(({ data }) =>
-		Sentry.startSpan({ name: "captureRecord" }, async () => {
-			const db = getDb(env.DB);
-			const bytes = base64ToBytes(stripDataUrl(data.imageBase64));
-
-			// Canonicalise to a square webp via Cloudflare Images (falls back to the
-			// raw bytes if Image Transformations are unavailable).
-			const { key: capturePhotoKey } = await storeCapturePhoto(
-				bytes,
-				data.mediaType,
-			);
-
-			// Vinyl color is manual-only (see `records.colorId`) and the analyze
-			// pipeline never sets it, so default it here at creation — same as
-			// `createRecord` — rather than leaving every captured record uncolored.
-			const colorId =
-				data.colorId ?? (await getOrCreateColor(DEFAULT_COLOR_NAME)).id;
-
-			const [row] = await db
-				.insert(records)
-				.values({
-					artist: "",
-					title: "",
-					format: "LP",
-					source: "photo",
-					status: "pending",
-					colorId,
-					capturePhotoKey,
-					captureContext: data.context?.trim() || null,
-				})
-				.returning();
-
-			// Don't strand a `pending` row if the queue is unavailable — mark it
-			// `failed` so the detail page can offer a manual retry instead.
-			try {
-				await enqueueAnalyze(row.id);
-			} catch (err) {
-				const detail = err instanceof Error ? err.message : String(err);
-				const [failed] = await db
-					.update(records)
-					.set({
-						status: "failed",
-						error: `Could not queue analysis: ${detail}`,
-						updatedAt: new Date(),
-					})
-					.where(eq(records.id, row.id))
-					.returning();
-				return failed ?? row;
-			}
-
-			// Generate the first-pass professional photo inline. It's free, deterministic
-			// pixel math (detect the sleeve's corners, warp, tone) — no external call — so
-			// there's no queue: a straight, cropped square is ready the moment the capture
-			// lands, and clicking it opens the editor pre-cropped. Best-effort and fully
-			// independent of analysis: on failure we record it on the professional* track (a
-			// manual re-crop retries) rather than failing the whole capture.
-			try {
-				const { professionalKey, band } = await professionalPipeline(row);
-				// Generate the matte from the same detected corner band — deterministic
-				// (free) on capture, no paid model call; the editor's Apply can upgrade it
-				// to the matting model. Best-effort: a matte failure never fails the capture.
-				const matte = await generateMatteFromCapture(
-					capturePhotoKey,
-					band,
-					{},
-					{ useAi: false },
-				).catch((err) => {
-					console.error("captureRecord: matte generation failed", err);
-					return null;
-				});
-				const [pro] = await db
-					.update(records)
-					.set({
-						professionalImageKey: professionalKey,
-						// Persist the detected seed so the editor opens pre-cropped; a later
-						// Apply overwrites it with the admin's band.
-						sleeveCornersJson: serializeCornerBand(band),
-						professionalAlphaKey: matte?.shadowKey ?? null,
-						professionalAlphaCutoutKey: matte?.cutoutKey ?? null,
-						professionalAlphaSource: matte?.source ?? null,
-						// Generated, but not shown on the site until an admin approves it.
-						professionalStatus: "ready",
-						professionalError: null,
-						updatedAt: new Date(),
-					})
-					.where(eq(records.id, row.id))
-					.returning();
-				return pro ?? row;
-			} catch (err) {
-				const detail = err instanceof Error ? err.message : String(err);
-				const [failed] = await db
-					.update(records)
-					.set({
-						professionalStatus: "failed",
-						professionalError: `Could not generate professional photo: ${detail}`,
-						updatedAt: new Date(),
-					})
-					.where(eq(records.id, row.id))
-					.returning()
-					.catch(() => []);
-				return failed ?? row;
-			}
-		}),
-	);
-
-/**
  * Confirm a captured record: save the (possibly edited) fields, apply the chosen
  * Discogs release, and publish it (`complete`). Also used to save edits to an
  * already-published record. Re-sources the cover when the Discogs pick changes.
@@ -1254,133 +1114,6 @@ export const retryProfessionalMatte = createServerFn({ method: "POST" })
 				.where(eq(records.id, id))
 				.returning();
 			await enqueueProfessionalMatte(id, stage);
-			return row ?? null;
-		}),
-	);
-
-/**
- * Swap a record's source capture for a freshly uploaded photo, then regenerate the
- * first-pass professional crop from it — re-detecting the sleeve, since the stored
- * corners were for the old image. The result drops back to `ready` (unapproved), so
- * the admin re-approves via the editor. Best-effort R2 cleanup of the superseded
- * capture + professional objects. Returns the updated row, or null if it's gone.
- */
-export const replaceCapture = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((data: unknown) => {
-		const d = (data ?? {}) as Record<string, unknown>;
-		if (typeof d.id !== "number") throw new Error("id must be a number");
-		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
-			throw new Error("imageBase64 must be a non-empty string");
-		}
-		const mediaType =
-			typeof d.mediaType === "string" && d.mediaType.startsWith("image/")
-				? d.mediaType
-				: "image/jpeg";
-		return { id: d.id, imageBase64: d.imageBase64, mediaType };
-	})
-	.handler(({ data: { id, imageBase64, mediaType } }) =>
-		Sentry.startSpan({ name: "replaceCapture" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record) return null;
-
-			const bytes = base64ToBytes(stripDataUrl(imageBase64));
-			const { key: capturePhotoKey } = await storeCapturePhoto(
-				bytes,
-				mediaType,
-			);
-
-			// Regenerate from the new capture. Re-detect the sleeve (pass a null crop) —
-			// the stored corners were for the old image. On failure keep the new capture
-			// but mark the pro track failed, so the admin can crop it by hand.
-			let professionalKey: string | null = null;
-			let matte: {
-				shadowKey: string;
-				cutoutKey: string;
-				source: "ai" | "deterministic";
-			} | null = null;
-			const proFields: {
-				professionalImageKey?: string | null;
-				sleeveCornersJson: string;
-				professionalStatus: "ready" | "failed";
-				professionalError: string | null;
-				professionalAlphaKey: string | null;
-				professionalAlphaCutoutKey: string | null;
-				professionalAlphaSource: "ai" | "deterministic" | null;
-			} = {
-				sleeveCornersJson: serializeCornerBand(DEFAULT_BAND),
-				professionalStatus: "failed",
-				professionalError: null,
-				professionalAlphaKey: null,
-				professionalAlphaCutoutKey: null,
-				professionalAlphaSource: null,
-			};
-			try {
-				const gen = await professionalPipeline({
-					capturePhotoKey,
-					sleeveCornersJson: null,
-					professionalParamsJson: record.professionalParamsJson,
-				});
-				professionalKey = gen.professionalKey;
-				proFields.professionalImageKey = gen.professionalKey;
-				proFields.sleeveCornersJson = serializeCornerBand(gen.band);
-				proFields.professionalStatus = "ready";
-				// A deterministic matte from the same detected corner band (free — no paid
-				// call on a capture swap). Best-effort, independent of the square.
-				matte = await generateMatteFromCapture(
-					capturePhotoKey,
-					gen.band,
-					parseReframeParams(record.professionalParamsJson),
-					{ useAi: false },
-				).catch((err) => {
-					console.error("replaceCapture: matte generation failed", err);
-					return null;
-				});
-				proFields.professionalAlphaKey = matte?.shadowKey ?? null;
-				proFields.professionalAlphaCutoutKey = matte?.cutoutKey ?? null;
-				proFields.professionalAlphaSource = matte?.source ?? null;
-			} catch (err) {
-				proFields.professionalError =
-					err instanceof Error ? err.message : String(err);
-			}
-
-			const [row] = await db
-				.update(records)
-				.set({
-					capturePhotoKey,
-					...proFields,
-					// A new capture regenerates from scratch — no longer an upscale.
-					professionalEnhanced: false,
-					// Fresh source image → reset the reaper's auto-retry budget.
-					professionalRetryCount: 0,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, id))
-				.returning();
-
-			// Bin the superseded objects — best-effort, so a transient R2 failure just
-			// leaves an orphan rather than breaking the (already-updated) row.
-			for (const staleKey of [
-				record.capturePhotoKey,
-				record.professionalImageKey,
-				record.professionalAlphaKey,
-				record.professionalAlphaCutoutKey,
-			]) {
-				if (
-					staleKey &&
-					staleKey !== capturePhotoKey &&
-					staleKey !== professionalKey &&
-					staleKey !== matte?.shadowKey &&
-					staleKey !== matte?.cutoutKey
-				) {
-					await env.PHOTOS.delete(staleKey).catch(() => {});
-				}
-			}
 			return row ?? null;
 		}),
 	);

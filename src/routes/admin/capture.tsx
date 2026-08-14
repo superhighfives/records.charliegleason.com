@@ -9,9 +9,9 @@ import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { uploadCapture } from "#/lib/capture-upload";
 import { likelyDuplicateOf } from "#/lib/duplicates";
 import { type ProcessedImage, squareDownscale } from "#/lib/image-resize";
-import { captureRecord } from "#/lib/records";
 import { recordQueryOptions, recordsQueryOptions } from "#/lib/records-queries";
 import { cn } from "#/lib/utils";
 
@@ -98,6 +98,7 @@ async function prepareUpload(file: File): Promise<ProcessedImage> {
 		return await squareDownscale(file);
 	} catch {
 		return {
+			blob: file,
 			dataUrl: await readFile(file),
 			mediaType: file.type || "image/jpeg",
 		};
@@ -131,8 +132,7 @@ function togglePreset(context: string, preset: string): string {
 function Capture() {
 	const queryClient = useQueryClient();
 
-	const [preview, setPreview] = useState<string | null>(null);
-	const [mediaType, setMediaType] = useState("image/jpeg");
+	const [photo, setPhoto] = useState<ProcessedImage | null>(null);
 	const [context, setContext] = useState("");
 	const [colorId, setColorId] = useState("");
 	const [dragOver, setDragOver] = useState(false);
@@ -146,11 +146,16 @@ function Capture() {
 
 	const capture = useMutation({
 		mutationFn: (vars: {
-			imageBase64: string;
-			mediaType: string;
+			photo: ProcessedImage;
 			context: string;
 			colorId: string;
-		}) => captureRecord({ data: vars }),
+		}) =>
+			uploadCapture({
+				blob: vars.photo.blob,
+				mediaType: vars.photo.mediaType,
+				context: vars.context,
+				colorId: vars.colorId,
+			}),
 		onSuccess: async (record) => {
 			await queryClient.invalidateQueries({
 				queryKey: recordsQueryOptions.queryKey,
@@ -167,16 +172,14 @@ function Capture() {
 		// Decoding + cropping a large HEIC/JPEG isn't instant — show a spinner.
 		setReading(true);
 		try {
-			const processed = await prepareUpload(file);
-			setMediaType(processed.mediaType);
-			setPreview(processed.dataUrl);
+			setPhoto(await prepareUpload(file));
 		} finally {
 			setReading(false);
 		}
 	}
 
 	function reset() {
-		setPreview(null);
+		setPhoto(null);
 		setContext("");
 		setColorId("");
 		capture.reset();
@@ -217,7 +220,7 @@ function Capture() {
 					</div>
 					<p className="font-medium">Loading photo…</p>
 				</div>
-			) : !preview ? (
+			) : !photo ? (
 				// biome-ignore lint/a11y/useSemanticElements: the dropzone wraps a nested "Open camera" button, so it can't itself be a <button>
 				<div
 					role="button"
@@ -278,17 +281,12 @@ function Capture() {
 					onSubmit={(e) => {
 						e.preventDefault();
 						if (capture.isPending) return;
-						capture.mutate({
-							imageBase64: preview,
-							mediaType,
-							context,
-							colorId,
-						});
+						capture.mutate({ photo, context, colorId });
 					}}
 				>
 					<div className="space-y-2">
 						<img
-							src={preview}
+							src={photo.dataUrl}
 							alt="Record cover preview"
 							className="max-h-64 rounded-md border"
 						/>

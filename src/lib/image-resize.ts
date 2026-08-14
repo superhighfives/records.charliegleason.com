@@ -17,7 +17,8 @@
 const TARGET_SIZE = 2048;
 const QUALITY = 0.92;
 
-export type ProcessedImage = { dataUrl: string; mediaType: string };
+/** `blob` is what gets uploaded (raw body); `dataUrl` is only for the preview. */
+export type ProcessedImage = { blob: Blob; dataUrl: string; mediaType: string };
 
 /** Decode a file to something drawable, respecting EXIF orientation. */
 async function loadImage(file: File): Promise<ImageBitmap | HTMLImageElement> {
@@ -89,5 +90,5 @@ export async function squareDownscale(file: File): Promise<ProcessedImage> {
 
 	const blob = await toBlob(canvas, "image/jpeg");
 	if (!blob) throw new Error("canvas toBlob failed");
-	return { dataUrl: await blobToDataUrl(blob), mediaType: "image/jpeg" };
+	return { blob, dataUrl: await blobToDataUrl(blob), mediaType: "image/jpeg" };
 }
