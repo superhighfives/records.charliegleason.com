@@ -379,6 +379,41 @@ function toggleFacet(active: string[], token: string): string[] {
 	return [...active.filter((t) => TOKEN_INFO[t].groupKey !== groupKey), token];
 }
 
+// Remembers the last facets + search text across visits (e.g. clicking "Admin" from
+// the nav rather than pressing back), separate from the URL's `f` param which only
+// covers in-app back/forward. `f` in the URL still wins on load so shared/bookmarked
+// links behave as expected.
+const ADMIN_FILTERS_STORAGE_KEY = "admin-records-filters";
+
+function readStoredFilters(): { f?: string; filter?: string } {
+	if (typeof window === "undefined") return {};
+	try {
+		const raw = window.localStorage.getItem(ADMIN_FILTERS_STORAGE_KEY);
+		if (!raw) return {};
+		const parsed = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null) return {};
+		const { f, filter } = parsed as { f?: unknown; filter?: unknown };
+		return {
+			...(typeof f === "string" ? { f } : {}),
+			...(typeof filter === "string" ? { filter } : {}),
+		};
+	} catch {
+		return {};
+	}
+}
+
+function writeStoredFilters(next: { f?: string; filter?: string }): void {
+	if (typeof window === "undefined") return;
+	try {
+		window.localStorage.setItem(
+			ADMIN_FILTERS_STORAGE_KEY,
+			JSON.stringify(next),
+		);
+	} catch {
+		// Storage can be unavailable (private browsing, quota) — filters just won't persist.
+	}
+}
+
 // Bulk row actions. Each hands the selected ids to a single batched server
 // endpoint (one round trip, not N parallel calls). `publish` flips rows to
 // `complete` (live on the homepage), `unpublish` drops them back to `review`
@@ -637,10 +672,13 @@ function AdminRecords() {
 	);
 
 	// The active facets live in the URL (?f=token,token) so they survive navigating into
-	// a record and pressing back, and can be shared/bookmarked.
+	// a record and pressing back, and can be shared/bookmarked. If the URL arrives with
+	// no `f` (e.g. clicking "Admin" from the nav rather than pressing back), fall back to
+	// the last selection remembered in localStorage.
 	const { f: rawFacets } = Route.useSearch();
 	const activeFacets = useMemo(() => parseFacetTokens(rawFacets), [rawFacets]);
-	const setFacets = (tokens: string[]) =>
+	const setFacets = (tokens: string[]) => {
+		writeStoredFilters({ ...readStoredFilters(), f: tokens.join(",") });
 		navigate({
 			to: "/admin",
 			search: (prev) => ({
@@ -649,9 +687,26 @@ function AdminRecords() {
 			}),
 			replace: true,
 		});
+	};
 	const toggleFilter = (token: string) =>
 		setFacets(toggleFacet(activeFacets, token));
-	const [filter, setFilter] = useState("");
+	const [filter, setFilter] = useState(() => readStoredFilters().filter ?? "");
+	// Restore facets from localStorage once, only when the URL didn't already specify them.
+	const restoredFacetsRef = useRef(false);
+	useEffect(() => {
+		if (restoredFacetsRef.current) return;
+		restoredFacetsRef.current = true;
+		if (rawFacets) return;
+		const stored = readStoredFilters().f;
+		const tokens = parseFacetTokens(stored);
+		if (tokens.length) {
+			navigate({
+				to: "/admin",
+				search: (prev) => ({ ...prev, f: tokens.join(",") }),
+				replace: true,
+			});
+		}
+	}, [rawFacets, navigate]);
 	const [sorting, setSorting] = useState<SortingState>([]);
 	// Bulk selection, keyed by record id (see `getRowId`) so a selection survives
 	// re-sorts and tab switches rather than tracking to whatever row an index lands on.
@@ -741,6 +796,9 @@ function AdminRecords() {
 	}, [data]);
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
+	useEffect(() => {
+		writeStoredFilters({ ...readStoredFilters(), filter: debouncedFilter });
+	}, [debouncedFilter]);
 
 	const deleteMutation = useMutation({
 		mutationFn: (id: number) => deleteRecord({ data: id }),
