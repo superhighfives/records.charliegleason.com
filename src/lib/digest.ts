@@ -24,11 +24,11 @@ const TO = "hi@charliegleason.com";
 const EDITION_KEYWORDS =
 	"extended|deluxe|remaster(?:ed)?|expanded|anniversary|special|bonus track";
 const EDITION_SUFFIX = new RegExp(
-	`\\s*(?:[([][^()[\\]]*\\b(?:${EDITION_KEYWORDS})\\b[^()[\\]]*[)\\]]|[-–—]\\s*(?:${EDITION_KEYWORDS})(?:\\s+(?:edition|version))?)\\s*$`,
+	`\\s*(?:\\([^()]*\\b(?:${EDITION_KEYWORDS})\\b[^()]*\\)|\\[[^[\\]]*\\b(?:${EDITION_KEYWORDS})\\b[^[\\]]*\\]|[-–—]\\s*(?:${EDITION_KEYWORDS})(?:\\s+(?:edition|version))?)\\s*$`,
 	"i",
 );
 
-function normalize(s: string): string {
+export function normalize(s: string): string {
 	return s
 		.toLowerCase()
 		.normalize("NFD")
