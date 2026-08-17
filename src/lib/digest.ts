@@ -16,10 +16,23 @@ import { findCheapestVinyl, type SellerSummary } from "#/lib/sellers";
 const FROM = { name: "Records Weekly", email: "digest@charliegleason.com" };
 const TO = "hi@charliegleason.com";
 
-function normalize(s: string): string {
+// Edition/reissue qualifiers Last.fm and Discogs titles commonly append, e.g.
+// "Alligator Bites Never Heal (Extended)" — stripped so an owned record still
+// matches a suggestion for a different pressing of the same album. Only
+// matches inside a trailing bracket/paren or after a dash, so a standalone
+// album actually titled e.g. "Clean" or "Radio" is left alone.
+const EDITION_KEYWORDS =
+	"extended|deluxe|remaster(?:ed)?|expanded|anniversary|special|bonus track";
+const EDITION_SUFFIX = new RegExp(
+	`\\s*(?:\\([^()]*\\b(?:${EDITION_KEYWORDS})\\b[^()]*\\)|\\[[^[\\]]*\\b(?:${EDITION_KEYWORDS})\\b[^[\\]]*\\]|[-–—]\\s*(?:${EDITION_KEYWORDS})(?:\\s+(?:edition|version))?)\\s*$`,
+	"i",
+);
+
+export function normalize(s: string): string {
 	return s
 		.toLowerCase()
 		.normalize("NFD")
+		.replace(EDITION_SUFFIX, "")
 		.replace(/[^a-z0-9]+/g, " ")
 		.trim();
 }
