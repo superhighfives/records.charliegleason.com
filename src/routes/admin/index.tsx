@@ -389,7 +389,14 @@ function readStoredFilters(): { f?: string; filter?: string } {
 	if (typeof window === "undefined") return {};
 	try {
 		const raw = window.localStorage.getItem(ADMIN_FILTERS_STORAGE_KEY);
-		return raw ? JSON.parse(raw) : {};
+		if (!raw) return {};
+		const parsed = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null) return {};
+		const { f, filter } = parsed as { f?: unknown; filter?: unknown };
+		return {
+			...(typeof f === "string" ? { f } : {}),
+			...(typeof filter === "string" ? { filter } : {}),
+		};
 	} catch {
 		return {};
 	}
@@ -700,9 +707,6 @@ function AdminRecords() {
 			});
 		}
 	}, [rawFacets, navigate]);
-	useEffect(() => {
-		writeStoredFilters({ ...readStoredFilters(), filter });
-	}, [filter]);
 	const [sorting, setSorting] = useState<SortingState>([]);
 	// Bulk selection, keyed by record id (see `getRowId`) so a selection survives
 	// re-sorts and tab switches rather than tracking to whatever row an index lands on.
@@ -792,6 +796,9 @@ function AdminRecords() {
 	}, [data]);
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
+	useEffect(() => {
+		writeStoredFilters({ ...readStoredFilters(), filter: debouncedFilter });
+	}, [debouncedFilter]);
 
 	const deleteMutation = useMutation({
 		mutationFn: (id: number) => deleteRecord({ data: id }),
