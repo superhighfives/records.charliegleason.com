@@ -232,8 +232,8 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			</header>
 
 			{!search.trim() && (
-				<div className="min-h-[70vh] sm:min-h-[75vh] flex items-center">
-					<p className="rise-in my-16 max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:text-6xl lg:text-8xl">
+				<div className="min-h-[60vh] sm:min-h-[75vh] flex items-center">
+					<p className="rise-in max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:text-6xl lg:text-8xl">
 						<span className="text-brand italic">All</span>{" "}
 						<span className="px-[0.1ch]">{numberToWords(data.length)}</span>{" "}
 						<span className="text-brand italic">

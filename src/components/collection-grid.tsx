@@ -135,30 +135,49 @@ const RecordTile = memo(function RecordTile({
 	// double that, so it gets a correspondingly larger request.
 	const coverSrc = cover ? photoUrl(cover, spanning ? 900 : 500) : undefined;
 	// Desktop: fades the disc in behind the cover once it's up (see the
-	// `VinylDisc` className below). Touch: read by the ambient loop as its
-	// eligibility gate (`data-cover-ready` on the group) — a tile whose cover
-	// hasn't actually loaded is never asked to animate, so a disc can't peek
-	// out from behind a cover that isn't there. Seeded from `FadeImage`'s own
-	// decoded-src cache so a cover the grid has already shown this session
-	// (e.g. its content remounting as the touch window scrolls back over it)
-	// counts as ready the instant it mounts, matching the fade the cover
-	// itself skips.
+	// `VinylDisc` className below). Also gates the loading skeleton below.
+	// Seeded from `FadeImage`'s own decoded-src cache so a cover the grid has
+	// already shown this session (e.g. its content remounting as the touch
+	// window scrolls back over it) counts as ready the instant it mounts,
+	// matching the fade the cover itself skips.
 	const [coverReady, setCoverReady] = useState(
 		() => !cover || isImageDecoded(coverSrc),
 	);
-	// See `onCoverReady`'s prop comment. `contentMounted` is a dependency on
-	// purpose: a remount of already-ready content (the window scrolling back
-	// over this tile) needs to wake the loop too, not just the first-ever
-	// decode.
+	// Touch: the ambient loop's eligibility gate (`data-cover-settled` on the
+	// group) — a tile isn't asked to animate until its cover has not just
+	// decoded but finished *fading in*. `coverReady` fires the instant the
+	// cover decodes, which is exactly when `FadeImage` *starts* its 700ms
+	// opacity fade; revealing the disc then lets it show through the still-
+	// translucent cover as it fades — the "vinyl showing through while the
+	// record fades in" artifact. Waiting out that fade (the same 700ms desktop
+	// bakes into the disc's `delay-700` below, and the record panel into
+	// `.vinyl-peek--static`'s delay) means the disc only ever peeks from behind
+	// a cover that's already fully opaque. A cover already decoded before this
+	// tile mounted has no fade to wait on, so it counts as settled immediately.
+	const [coverSettled, setCoverSettled] = useState(
+		() => !cover || isImageDecoded(coverSrc),
+	);
 	useEffect(() => {
-		if (coverReady && contentMounted) onCoverReady?.();
-	}, [coverReady, contentMounted, onCoverReady]);
+		if (!coverReady || coverSettled) return;
+		const timer = window.setTimeout(() => setCoverSettled(true), 700);
+		return () => window.clearTimeout(timer);
+	}, [coverReady, coverSettled]);
+	// See `onCoverReady`'s prop comment. Keyed on `coverSettled` (not just
+	// `coverReady`) so the loop is woken *after* the fade-in delay above too —
+	// the disc reveal is gated on settled, so a wake at bare `coverReady` would
+	// tick once, find the tile not yet settled, and stop before the disc ever
+	// got its turn. `contentMounted` is a dependency on purpose: a remount of
+	// already-settled content (the window scrolling back over this tile) needs
+	// to wake the loop too, not just the first-ever decode.
+	useEffect(() => {
+		if (coverSettled && contentMounted) onCoverReady?.();
+	}, [coverSettled, contentMounted, onCoverReady]);
 	return (
 		<div
 			className="group"
 			data-record-id={record.id}
 			data-active={active ? "true" : undefined}
-			data-cover-ready={coverReady ? "true" : undefined}
+			data-cover-settled={coverSettled ? "true" : undefined}
 			style={
 				spanning
 					? { gridColumn: "span 2", gridRow: "span 2", alignSelf: "start" }
@@ -1021,14 +1040,15 @@ export function CollectionGrid({
 				}
 				let target = targets.get(id) ?? 0;
 				// The settled-gate: a tile is only eligible to animate once its
-				// cover has actually decoded (`data-cover-ready`, written by
-				// React state whose commit *is* the paint on this path — no
-				// content-visibility means no async catch-up to race). Until
+				// cover has decoded *and* finished fading in (`data-cover-settled`,
+				// written by React state whose commit *is* the paint on this path
+				// — no content-visibility means no async catch-up to race). Until
 				// then it rests, whatever its distance says — a disc must never
-				// peek out from behind a cover that isn't there. The eased
-				// approach below turns the gate opening into a fade-in, not a
-				// pop.
-				if (target > 0 && info.el.dataset.coverReady !== "true") target = 0;
+				// peek out from behind a cover that isn't there yet, nor through
+				// one still mid-fade (see `coverSettled` in `RecordTile`). The
+				// eased approach below turns the gate opening into a fade-in, not
+				// a pop.
+				if (target > 0 && info.el.dataset.coverSettled !== "true") target = 0;
 				const current = ambientCurrent.get(id) ?? 0;
 				const delta = target - current;
 				let next: number;
