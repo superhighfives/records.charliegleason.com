@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	isTransientContainerReset,
+	isTransientImagesError,
 	NonRetryableError,
 	withRetry,
 } from "./retry";
@@ -71,6 +72,17 @@ describe("isTransientContainerReset", () => {
 		).toBe(true);
 	});
 
+	it("matches the container's 'suddenly disconnected' 5xx body (surfaced from the response, not a throw)", () => {
+		expect(
+			isTransientContainerReset(
+				new Error("container 500: Container suddenly disconnected, try again"),
+			),
+		).toBe(true);
+		expect(
+			isTransientContainerReset("Container suddenly disconnected, try again"),
+		).toBe(true);
+	});
+
 	it("matches the code-update DO reset and the container-rollout exit (the mass-fail signals)", () => {
 		expect(
 			isTransientContainerReset(
@@ -122,5 +134,30 @@ describe("isTransientContainerReset", () => {
 		).rejects.toBeInstanceOf(NonRetryableError);
 		// Non-reset error fails fast — one call, not the full 3.
 		expect(other).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("isTransientImagesError", () => {
+	it("matches the Images binding connection error (9502), by code or by text", () => {
+		expect(
+			isTransientImagesError(
+				new Error(
+					"IMAGES_TRANSFORM_ERROR 9502: Images binding connection error",
+				),
+			),
+		).toBe(true);
+		expect(isTransientImagesError("Images binding connection error")).toBe(
+			true,
+		);
+	});
+
+	it("is false for a corrupt/undecodable image and other failures — so only a blip retries", () => {
+		expect(
+			isTransientImagesError(
+				new Error("IMAGES_TRANSFORM_ERROR 9412: input is not an image"),
+			),
+		).toBe(false);
+		expect(isTransientImagesError(new Error("decode failed"))).toBe(false);
+		expect(isTransientImagesError(null)).toBe(false);
 	});
 });
