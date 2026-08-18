@@ -1270,7 +1270,7 @@ function AdminRecords() {
 						<span className="font-medium tabular-nums text-foreground">
 							{formatMoney(totals.total, "USD")}
 						</span>{" "}
-						/ {totals.valued} {totals.valued === 1 ? "record" : "records"}
+						/ {totals.valued} of {data.length} valued
 						{totals.confirmedTotal > 0 && (
 							<>
 								{" "}
