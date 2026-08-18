@@ -9,9 +9,23 @@ import {
 	type MatteAuditReasonCode,
 } from "#/lib/photo-processing";
 import { decodeRgba } from "#/lib/professional";
+import {
+	isTransientImagesError,
+	NonRetryableError,
+	withRetry,
+} from "#/lib/retry";
 
 /** The audit sweep's global progress row is always this one id — see schema.ts. */
 const AUDIT_STATE_ID = 1;
+
+/**
+ * The Images binding intermittently can't reach its backend (9502 "Images binding connection
+ * error"). It's a connection blip, not bad input, so re-run the downsize a couple of times
+ * before the row falls through to the sweep's catch — 3 attempts with a 200ms base (~200ms then
+ * ~400ms of backoff), matching the container path's shape in {@link isTransientImagesError}.
+ */
+const AUDIT_IMAGES_ATTEMPTS = 3;
+const AUDIT_IMAGES_RETRY_BASE_MS = 200;
 
 /**
  * How many stored mattes to re-check per sweep. Each row costs one R2 GET + a small
@@ -95,15 +109,37 @@ export async function runMatteAudit(
 				continue;
 			}
 			try {
-				const out = await env.IMAGES.input(object.body)
-					.transform({
-						width: AUDIT_DECODE_SIZE,
-						height: AUDIT_DECODE_SIZE,
-						fit: "scale-down",
-					})
-					.output({ format: "image/webp", quality: 92 });
-				const rgba = decodeRgba(
-					new Uint8Array(await out.response().arrayBuffer()),
+				// Buffer the R2 body once so each retry attempt can feed the Images binding a
+				// fresh stream — `object.body` is single-use, so re-reading it on a retry would
+				// fail.
+				const bytes = new Uint8Array(await object.arrayBuffer());
+				const rgba = await withRetry(
+					async () => {
+						try {
+							const out = await env.IMAGES.input(new Blob([bytes]).stream())
+								.transform({
+									width: AUDIT_DECODE_SIZE,
+									height: AUDIT_DECODE_SIZE,
+									fit: "scale-down",
+								})
+								.output({ format: "image/webp", quality: 92 });
+							return decodeRgba(
+								new Uint8Array(await out.response().arrayBuffer()),
+							);
+						} catch (err) {
+							// Only a connection blip is worth another attempt; a corrupt/undecodable
+							// stored image fails fast (as before) so it lands in the outer catch and
+							// gets reported, not retried three times.
+							if (isTransientImagesError(err)) throw err;
+							throw new NonRetryableError(
+								err instanceof Error ? err.message : String(err),
+							);
+						}
+					},
+					{
+						attempts: AUDIT_IMAGES_ATTEMPTS,
+						baseMs: AUDIT_IMAGES_RETRY_BASE_MS,
+					},
 				);
 				const assessment = assessMatteQuality(rgba);
 				const reasons: MatteAuditReasonCode[] = [

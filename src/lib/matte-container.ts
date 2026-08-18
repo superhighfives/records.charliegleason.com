@@ -69,8 +69,9 @@ async function postToContainer(path: string, body: unknown): Promise<Response> {
 		async () => {
 			// A fresh stub per attempt: getRandom re-picks an instance, so a reset DO isn't reused.
 			const stub = await getRandom(binding, MATTE_CONTAINER_INSTANCES);
+			let res: Response;
 			try {
-				return await stub.fetch(`http://matte-container${path}`, {
+				res = await stub.fetch(`http://matte-container${path}`, {
 					method: "POST",
 					headers: { "content-type": "application/json" },
 					body: payload,
@@ -81,6 +82,19 @@ async function postToContainer(path: string, body: unknown): Promise<Response> {
 					err instanceof Error ? err.message : String(err),
 				);
 			}
+			// A mid-request transport drop doesn't throw — it comes back as a 5xx whose body is
+			// "Container suddenly disconnected, try again". That's the same transient loss as a DO
+			// reset, so surface it as a retryable throw (getRandom re-picks a live instance on the
+			// next attempt). Read a clone so the untouched response still reaches the caller, which
+			// keeps its own `res.status`/body in the thrown message for a genuine (non-transient)
+			// failure.
+			if (!res.ok) {
+				const bodyText = await res.clone().text();
+				if (isTransientContainerReset(bodyText)) {
+					throw new Error(`container ${res.status}: ${bodyText}`);
+				}
+			}
+			return res;
 		},
 		{
 			attempts: MATTE_CONTAINER_ATTEMPTS,
