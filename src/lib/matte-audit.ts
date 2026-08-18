@@ -108,10 +108,11 @@ export async function runMatteAudit(
 					.where(eq(records.id, row.id));
 				continue;
 			}
-			// Buffer the R2 body once so each retry attempt can feed the Images binding a fresh
-			// stream — `object.body` is single-use, so re-reading it on a retry would fail.
-			const bytes = new Uint8Array(await object.arrayBuffer());
 			try {
+				// Buffer the R2 body once so each retry attempt can feed the Images binding a
+				// fresh stream — `object.body` is single-use, so re-reading it on a retry would
+				// fail.
+				const bytes = new Uint8Array(await object.arrayBuffer());
 				const rgba = await withRetry(
 					async () => {
 						try {

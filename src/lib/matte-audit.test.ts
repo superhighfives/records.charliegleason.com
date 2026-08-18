@@ -54,7 +54,9 @@ describe("runMatteAudit", () => {
 		};
 		const transform = vi.fn(() => ({ output: () => output }));
 		env.PHOTOS = {
-			get: vi.fn().mockResolvedValue({ body: {} }),
+			get: vi
+				.fn()
+				.mockResolvedValue({ arrayBuffer: async () => new ArrayBuffer(0) }),
 		} as unknown as typeof env.PHOTOS;
 		env.IMAGES = {
 			input: vi.fn(() => ({ transform })),
@@ -95,7 +97,9 @@ describe("runMatteAudit", () => {
 		};
 		const transform = vi.fn(() => ({ output: () => output }));
 		env.PHOTOS = {
-			get: vi.fn().mockResolvedValue({ body: {} }),
+			get: vi
+				.fn()
+				.mockResolvedValue({ arrayBuffer: async () => new ArrayBuffer(0) }),
 		} as unknown as typeof env.PHOTOS;
 		env.IMAGES = {
 			input: vi.fn(() => ({ transform })),
