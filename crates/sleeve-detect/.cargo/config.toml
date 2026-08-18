@@ -1,0 +1,5 @@
+# getrandom's wasm_js backend needs this cfg selected at build time (RUSTFLAGS,
+# since Cargo has no first-class way to pass it via [dependencies] alone).
+# Only affects the wasm32 target; native builds (cargo test/check) are unaffected.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]

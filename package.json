@@ -10,6 +10,7 @@
     "dev": "dotenv -e .env.local -- vite dev --port 3000",
     "generate-routes": "tsr generate",
     "build": "vite build",
+    "build:wasm": "node crates/sleeve-detect/build.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "format": "biome format",

@@ -1,0 +1,17 @@
+{
+  "name": "sleeve-detect",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "sleeve_detect_bg.wasm",
+    "sleeve_detect.js",
+    "sleeve_detect_bg.js",
+    "sleeve_detect.d.ts"
+  ],
+  "main": "sleeve_detect.js",
+  "types": "sleeve_detect.d.ts",
+  "sideEffects": [
+    "./sleeve_detect.js",
+    "./snippets/*"
+  ]
+}
