@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 console_error_panic_hook = { version = "0.1.7", optional = true }
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25.10", default-features = false, features = [] }
 imageproc = { version = "0.27.0", default-features = false }
 wasm-bindgen = "0.2.127"
 
