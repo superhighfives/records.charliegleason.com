@@ -21,7 +21,7 @@
 use image::{GrayImage, Luma, RgbaImage as ImageRgbaImage};
 use imageproc::distance_transform::Norm;
 use imageproc::filter::median_filter;
-use imageproc::morphology::{close, dilate};
+use imageproc::morphology::{close, dilate, erode};
 use imageproc::region_labelling::{Connectivity, connected_components};
 use std::collections::{HashMap, HashSet};
 use wasm_bindgen::prelude::*;
@@ -88,11 +88,10 @@ const MAX_TILT_DEG: f64 = 12.0;
 /// accept count drops — so 3 is the knee. 0 disables it.
 const SMOOTH_RADIUS: u32 = 3;
 
-/// Optionally dilate the segmented sleeve blob by this fraction of the shorter side before
-/// fitting. Left at 0: measured against the true sleeve edge (the midline of the admin's
-/// band) a nonzero value didn't reduce corner error, so the plumbing is kept for tuning but
-/// disabled by default.
-const DILATE_FRAC: f64 = 0.0;
+/// Signed morphology applied to the sleeve blob before fitting, as a fraction of the shorter
+/// side: positive dilates, negative erodes. A small negative value trims the cast-shadow
+/// border that segments as foreground on a light background.
+const MORPH_FRAC: f64 = -0.008;
 
 fn detect(rgba: &[u8], width: u32, height: u32) -> Option<Corners> {
     if width < 40 || height < 40 {
@@ -221,15 +220,20 @@ fn segment(src: &ImageRgbaImage) -> Option<Segmentation> {
         comp.put_pixel(x, y, Luma([if p[0] == best { 255 } else { 0 }]));
     }
     let comp = fill_holes(&comp);
-    // The threshold keeps only *confidently* foreground pixels, so the blob stops a hair
-    // inside the true sleeve edge (the anti-aliased boundary pixels fall sub-threshold) —
-    // which shows up as a consistent few-percent inward bias against the admin's hand-placed
-    // corners. A small dilation pushes the fitted edge back out onto the real boundary.
-    let grow = (w.min(h) as f64 * dilate_frac()).round() as u8;
-    let comp = if grow > 0 {
-        dilate(&comp, Norm::LInf, grow)
-    } else {
+    // Nudge the blob edge in or out by a fraction of the frame before fitting (signed:
+    // positive dilates, negative erodes). A small **erosion** is the point: a sleeve casts a
+    // shadow onto a lighter background, and that shadow — being darker than the background —
+    // reads as foreground, so the blob spills a few percent past the true edge on the
+    // shadowed sides and the crop catches the shadow. Eroding pulls every edge back onto the
+    // sleeve; it slightly under-crops a shadowless edge, but the admin's hand-placed inner
+    // corners sit just inside the edge anyway, so biasing inward tracks their crops.
+    let r = (w.min(h) as f64 * morph_frac().abs()).round() as u8;
+    let comp = if r == 0 {
         comp
+    } else if morph_frac() > 0.0 {
+        dilate(&comp, Norm::LInf, r)
+    } else {
+        erode(&comp, Norm::LInf, r)
     };
 
     let mut pts: Vec<(f64, f64)> = Vec::new();
@@ -363,8 +367,8 @@ fn max_tilt_deg() -> f64 {
     env_f("MAX_TILT", MAX_TILT_DEG)
 }
 #[cfg(feature = "debug-harness")]
-fn dilate_frac() -> f64 {
-    env_f("DILATE_FRAC", DILATE_FRAC)
+fn morph_frac() -> f64 {
+    env_f("MORPH_FRAC", MORPH_FRAC)
 }
 #[cfg(feature = "debug-harness")]
 fn smooth_radius(_w: u32, _h: u32) -> u32 {
@@ -383,8 +387,8 @@ fn max_tilt_deg() -> f64 {
     MAX_TILT_DEG
 }
 #[cfg(not(feature = "debug-harness"))]
-fn dilate_frac() -> f64 {
-    DILATE_FRAC
+fn morph_frac() -> f64 {
+    MORPH_FRAC
 }
 #[cfg(not(feature = "debug-harness"))]
 fn smooth_radius(_w: u32, _h: u32) -> u32 {
