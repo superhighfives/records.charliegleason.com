@@ -6,8 +6,9 @@
  * bails to `null` if any one side doesn't clear its confidence threshold — assumptions
  * that hold for a tightly-framed, high-contrast capture but not for a sleeve that sits
  * well inside the frame or reads close in tone to its background (a tan cover on a tan
- * wall). The wasm detector runs Canny + contour finding over the whole image instead, so
- * it isn't tied to how tightly the sleeve was framed. See `crates/sleeve-detect/src/lib.rs`
+ * wall). The wasm detector runs YCbCr-whitened foreground segmentation over the whole
+ * image instead, so it isn't tied to how tightly the sleeve was framed. See
+ * `crates/sleeve-detect/src/lib.rs`
  * for the algorithm and its own test fixtures for the specific cases each detector does
  * and doesn't handle.
  *
