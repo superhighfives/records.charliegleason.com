@@ -1,0 +1,33 @@
+[package]
+name = "sleeve-corner-net"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# The learned corner detector: a MobileNetV3-small corner-regressor (trained in ml/, see
+# ml/README.md) exported to ONNX and run with tract (pure-Rust, compiles to wasm). Takes an
+# already-decoded RGBA buffer, resizes to 224x224 internally, and returns the four sleeve
+# corners. Mirrors sleeve-detect's wasm shape so the worker can call it the same way.
+
+[dependencies]
+wasm-bindgen = "0.2.127"
+# tract-onnx with default features off keeps the wasm build free of mmap/native-only bits;
+# it still parses ONNX from a byte slice (see `model_for_read` in lib.rs).
+tract-onnx = { version = "0.21", default-features = false }
+image = { version = "0.25.10", default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+# Native-only decoder for the correctness test (tests/inference.rs); never enters the wasm
+# build (same split sleeve-detect uses for its tuning harness).
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

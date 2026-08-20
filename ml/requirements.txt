@@ -1,0 +1,9 @@
+# Python 3.12 (3.14 lacks torch/opencv wheels as of writing).
+torch>=2.4
+torchvision>=0.19
+opencv-python-headless>=4.10
+numpy>=2.0
+pillow>=10.0
+onnx>=1.16
+onnxruntime>=1.18
+onnxscript>=0.1

@@ -1,0 +1,9 @@
+# Private dataset (captures + labels) and local venv — never committed.
+data/
+.venv/
+__pycache__/
+# Build output: the trained model. The committed source of truth is
+# crates/sleeve-corner-net/model/corner_model.onnx (embedded into the wasm); this local copy
+# is produced by train.py and copied over, so it's not tracked here.
+corner_model.onnx
+corner_model.meta.json

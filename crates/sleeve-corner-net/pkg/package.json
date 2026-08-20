@@ -1,0 +1,17 @@
+{
+  "name": "sleeve-corner-net",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "sleeve_corner_net_bg.wasm",
+    "sleeve_corner_net.js",
+    "sleeve_corner_net_bg.js",
+    "sleeve_corner_net.d.ts"
+  ],
+  "main": "sleeve_corner_net.js",
+  "types": "sleeve_corner_net.d.ts",
+  "sideEffects": [
+    "./sleeve_corner_net.js",
+    "./snippets/*"
+  ]
+}
