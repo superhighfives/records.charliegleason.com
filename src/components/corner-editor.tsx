@@ -40,7 +40,8 @@ const EDGES: Array<[number, number]> = [
 // edge lies in the band between — the dashed overlay shows where the cut will find it.
 const QUADS = ["outer", "inner"] as const;
 type QuadKey = (typeof QUADS)[number];
-const NUDGE = 0.0005; // arrow-key step, as a fraction of the image
+const NUDGE = 0.0005; // arrow-key step, as a fraction of the image (~1px at 2048px)
+const COARSE_NUDGE_MULTIPLIER = 10; // Shift+arrow jumps ~10px instead of ~1px
 const CORNER_GRAB_PX = 14; // press within this of a corner → grab just that corner
 const CLICK_MOVE_THRESHOLD_PX = 4; // pointer moved less than this → treat as a click, not a drag
 const LOUPE_SIZE = 132; // magnifier diameter, px
@@ -450,11 +451,12 @@ export function CornerEditor({
 			setSelected(new Set());
 			return;
 		}
+		const s = e.shiftKey ? NUDGE * COARSE_NUDGE_MULTIPLIER : NUDGE;
 		const step: Record<string, NormalizedCorner> = {
-			ArrowLeft: [-NUDGE, 0],
-			ArrowRight: [NUDGE, 0],
-			ArrowUp: [0, -NUDGE],
-			ArrowDown: [0, NUDGE],
+			ArrowLeft: [-s, 0],
+			ArrowRight: [s, 0],
+			ArrowUp: [0, -s],
+			ArrowDown: [0, s],
 		};
 		const delta = step[e.key];
 		if (!delta || selected.size === 0) return;
