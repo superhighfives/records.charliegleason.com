@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/cloudflare";
 import entry from "@tanstack/react-start/server-entry";
 
 import { runWeeklyDigest } from "#/lib/digest";
+import { runFlywheelCheck } from "#/lib/flywheel-alert";
 import { runLinkHealthCheck } from "#/lib/master-health";
 
 const LINK_CHECK_CRON = "0 9 * * *";
@@ -26,13 +27,15 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 	fetch: (request) => entry.fetch(request),
 	// Two crons share this handler (see wrangler.jsonc `triggers.crons`) — dispatch
 	// by the cron expression that fired. The daily link-check validates Discogs
-	// master + release links; anything else is the weekly digest.
+	// master + release links; the weekly slot runs the buy digest plus the
+	// "time to retrain the corner detector" nudge (independent; each fails alone).
 	scheduled(controller, _env, ctx) {
-		ctx.waitUntil(
-			controller.cron === LINK_CHECK_CRON
-				? runLinkHealthCheck()
-				: runWeeklyDigest(),
-		);
+		if (controller.cron === LINK_CHECK_CRON) {
+			ctx.waitUntil(runLinkHealthCheck());
+		} else {
+			ctx.waitUntil(runWeeklyDigest());
+			ctx.waitUntil(runFlywheelCheck());
+		}
 	},
 	queue: (batch) => handleAnalyzeBatch(batch as MessageBatch<AnalyzeMessage>),
 };
