@@ -1,4 +1,4 @@
-import { Info, Loader2, Scan } from "lucide-react";
+import { Info, Loader2, Magnet, Scan } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -306,6 +306,17 @@ export function CornerEditor({
 		} finally {
 			setDetecting(false);
 		}
+	};
+
+	// Commit the live edge-refinement (the dashed overlay) as the band: drag the handles
+	// roughly onto the sleeve, then snap the whole band to where the edge search actually
+	// found the boundary. Only the edges the search was confident about move — an amber
+	// (no-boundary) edge keeps the admin's line — so this never yanks a hand-placed edge
+	// off a genuinely ambiguous boundary.
+	const snapToEdges = () => {
+		if (disabled || !refined) return;
+		onChange(bandFromQuad(refined.corners));
+		toast.success("Snapped the band to the detected edges.");
 	};
 
 	const setCorner = (quad: QuadKey, index: number, point: NormalizedCorner) => {
@@ -640,22 +651,35 @@ export function CornerEditor({
 						</TooltipContent>
 					</Tooltip>
 				</p>
-				{onDetect && (
+				<div className="flex items-center gap-2">
 					<Button
 						type="button"
 						size="sm"
 						variant="outline"
-						disabled={disabled || detecting}
-						onClick={runDetect}
+						disabled={disabled || !refined}
+						onClick={snapToEdges}
+						title="Snap the band to the detected edges"
 					>
-						{detecting ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Scan className="size-4" />
-						)}
-						{detecting ? "Detecting…" : "Detect corners"}
+						<Magnet className="size-4" />
+						Snap to edges
 					</Button>
-				)}
+					{onDetect && (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={disabled || detecting}
+							onClick={runDetect}
+						>
+							{detecting ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<Scan className="size-4" />
+							)}
+							{detecting ? "Detecting…" : "Detect corners"}
+						</Button>
+					)}
+				</div>
 			</div>
 		</div>
 	);
