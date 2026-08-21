@@ -22,7 +22,7 @@ from torchvision import models
 import metric
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WS = 224
+WS = 384
 DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 EPOCHS = 120
 BATCH = 16
@@ -120,7 +120,7 @@ def export(model):
     out = os.path.join(HERE, "corner_model.onnx")
     torch.onnx.export(wrapped, torch.zeros(1, 3, WS, WS), out, input_names=["input"],
                       output_names=["corners"], opset_version=17, dynamo=False)
-    json.dump({"input": "1x3x224x224 float [0,1] RGB NCHW (resize 224, /255)",
+    json.dump({"input": "1x3x384x384 float [0,1] RGB NCHW (resize 384, /255)",
                "output": "1x8 = TL,TR,BR,BL (x,y) in [0,1]"},
               open(os.path.join(HERE, "corner_model.meta.json"), "w"), indent=2)
     print(f"exported {out} ({os.path.getsize(out) / 1e6:.2f} MB)")

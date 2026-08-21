@@ -2,19 +2,19 @@
 //! must reproduce the reference onnxruntime output. This guards the wasm-free code path
 //! (preprocess + tract inference); wasm-specific wiring is covered by the app integration.
 //!
-//! The fixture `capture_224.png` is a real capture (record #4) resized to 224x224; `EXPECTED`
+//! The fixture `capture_384.png` is a real capture (record #4) resized to 384x384; `EXPECTED`
 //! is onnxruntime's output for the same input (see ml/README.md). Run: `cargo test`.
 
 use image::GenericImageView;
 
-// onnxruntime reference for capture_224.png (TL,TR,BR,BL normalised).
+// onnxruntime reference for capture_384.png (TL,TR,BR,BL normalised).
 const EXPECTED: [f64; 8] = [
-    0.0872, 0.0791, 0.9754, 0.1311, 0.9624, 0.9891, 0.0299, 0.9731,
+    0.0561, 0.0979, 0.9580, 0.0979, 0.9766, 0.9855, 0.0432, 0.9881,
 ];
 
 #[test]
 fn matches_onnxruntime_reference() {
-    let img = image::load_from_memory(include_bytes!("fixtures/capture_224.png"))
+    let img = image::load_from_memory(include_bytes!("fixtures/capture_384.png"))
         .expect("decode fixture");
     let (w, h) = img.dimensions();
     let rgba = img.to_rgba8().into_raw();
