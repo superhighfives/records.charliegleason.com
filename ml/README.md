@@ -94,3 +94,9 @@ from the saved band — i.e. how much a human had to nudge — after an `export_
 saved crop *is* the corrected label, so this is the offline equivalent of instrumenting the
 editor, and the worst records are the best hard examples to prioritise in the next retrain.
 (It's in-sample-optimistic on records the current model trained on; most honest on new records.)
+
+**You don't have to watch for it.** `train.py` also writes `ml/labels_manifest.json` — a
+per-record hash of every band it trained on. A weekly Worker cron (`src/lib/flywheel-alert.ts`,
+wired in `src/server.ts`) compares live D1 to that manifest and **emails when ≥10 labels have
+changed** since the last train, so you get a nudge to run the flywheel when it's actually worth
+it. Committing a fresh model + manifest resets the counter — no state to manage.
