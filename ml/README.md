@@ -36,8 +36,8 @@ than auto-committing.
 
 - Backbone: `mobilenet_v3_small` (ImageNet-pretrained), classifier head → 8 = 4 corners
   `(x,y)` in `[0,1]`, order **TL, TR, BR, BL**, sigmoid-bounded.
-- Input: `1×3×224×224` float in `[0,1]`, RGB, NCHW. ImageNet mean/std normalisation is **baked
-  into the exported graph**, so the caller (the Rust crate / JS) only resizes to 224×224 and
+- Input: `1×3×384×384` float in `[0,1]`, RGB, NCHW. ImageNet mean/std normalisation is **baked
+  into the exported graph**, so the caller (the Rust crate / JS) only resizes to 384×384 and
   divides by 255 — no per-channel normalisation needed downstream. See `corner_model.meta.json`.
 - Trained with geometric augmentation (±12° rotation, scale, translation — matching the tilt
   gate) + colour jitter, SmoothL1 loss, ~120 epochs.
@@ -56,3 +56,35 @@ python train.py                                   # trains on all records, write
 `export_dataset.py` needs `wrangler` auth (D1 `records` + R2 `records-photos`). The dataset
 itself is not committed (private, ~300 captures). `train.py` also 5-fold-validates and prints
 the learned model's row of the table above (pass `--no-val` to skip straight to export).
+
+## Edge-refinement (the detector isn't just the model)
+
+The model gets the sleeve *region* right but the raw prediction is off by ~1–3% of the frame
+(~20–60px on a 2048px capture — visibly "needs a nudge"). So `detectSleeveCornersBest`
+(`src/lib/sleeve-detect-wasm.ts`) doesn't return the raw prediction: it **de-shrinks** it
+(cancelling a measured ~0.5% inward regression bias) and then **snaps each edge to the true
+sleeve boundary** with `refineQuadEdgesDetailed` — the same colour-gradient edge search the
+matte runs at Apply time, brought forward to detect. It reverts low-confidence edges back to
+the model's line so an ambiguous edge is never made worse; the 4% search band was tuned
+offline (best over 6–8%).
+
+Offline over the labelled set, end to end (384 model → de-shrink → refine): median corner
+error **1.16%**, with only **15%** of records off by >2% (the "needs a nudge" threshold) —
+down from a raw-224-model baseline of 1.67% median / 32%. The two levers stack: the 384 input
+(vs 224) buys most of the median (1.67% → 1.36% raw), and the edge-refine buys the rest and
+tightens the whole distribution (1.36% → 1.16%).
+
+## Keeping it sharp over time (the flywheel)
+
+The training labels *are* the admin's saved crops (`sleeveCornersJson`), so **every manual
+nudge-and-save is a new label**. To fold accumulated corrections + new records back in:
+
+```sh
+python export_dataset.py   # re-pulls the current labels (now includes your fixes)
+python train.py            # re-validates 5-fold, retrains, re-exports the ONNX
+cp corner_model.onnx ../crates/sleeve-corner-net/model/ && npm run build:wasm
+```
+
+Worth doing once a meaningful batch of corrections has accrued (it's ~3 min), or when captures
+move to a new rig/lighting. Re-run the offline edge-refine check after a retrain if you want to
+re-tune the search band. There's little value retraining when the label set hasn't grown.

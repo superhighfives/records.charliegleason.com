@@ -17,10 +17,12 @@ use tract_onnx::prelude::*;
 use wasm_bindgen::prelude::*;
 
 /// The trained model (fp32 ONNX). Normalisation (ImageNet mean/std) is baked into the graph,
-/// so the input is a plain 1x3x224x224 f32 tensor in [0,1], RGB, NCHW.
+/// so the input is a plain 1x3xSIDExSIDE f32 tensor in [0,1], RGB, NCHW.
 static MODEL_BYTES: &[u8] = include_bytes!("../model/corner_model.onnx");
 
-const SIDE: usize = 224;
+// Model input side. 384 (not 224) — the larger input localises edges noticeably better
+// (offline median corner error 1.38% -> 1.16% with the edge-refine step); see ml/README.md.
+const SIDE: usize = 384;
 
 type Runnable = RunnableModel<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
 
@@ -47,9 +49,9 @@ fn build_model() -> TractResult<Runnable> {
         .into_runnable()
 }
 
-/// Resize an RGBA buffer to 224x224 and pack it as an NCHW f32 tensor in [0,1] (RGB, alpha
-/// dropped). The whole frame is squashed to 224x224 (aspect not preserved) — matching how the
-/// model was trained (`cv2.resize(capture, (224,224))`), and corners are normalised to the
+/// Resize an RGBA buffer to SIDExSIDE and pack it as an NCHW f32 tensor in [0,1] (RGB, alpha
+/// dropped). The whole frame is squashed to SIDExSIDE (aspect not preserved) — matching how the
+/// model was trained (`cv2.resize(capture, (SIDE,SIDE))`), and corners are normalised to the
 /// frame either way so it stays consistent.
 fn preprocess(rgba: &[u8], width: u32, height: u32) -> Option<Tensor> {
     if width == 0 || height == 0 {
