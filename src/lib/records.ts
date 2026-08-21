@@ -978,9 +978,11 @@ export const refreshRecord = createServerFn({ method: "POST" })
 
 /**
  * Detect the sleeve's corners in a record's capture on demand — the corner editor's
- * "Detect corners" button. Runs the lightweight, free detector server-side and returns the
- * suggested corners for the admin to review before applying (or null if it can't find the
- * sleeve — e.g. a low-contrast cover). Does not persist anything; the follow-up Apply does.
+ * "Detect corners" button. Runs the lightweight, free detectors server-side and returns the
+ * suggested corners *with a confidence score and which detector won*, so the editor can tell
+ * the admin how hard to scrutinise the seed before applying (or null if neither detector can
+ * find the sleeve — e.g. a low-contrast cover). Does not persist anything; the follow-up
+ * Apply does.
  */
 export const detectCorners = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
@@ -996,7 +998,7 @@ export const detectCorners = createServerFn({ method: "POST" })
 			if (!record?.capturePhotoKey) {
 				throw new Error("This record has no capture photo to detect.");
 			}
-			return { corners: await detectCaptureCorners(record.capturePhotoKey) };
+			return { detection: await detectCaptureCorners(record.capturePhotoKey) };
 		}),
 	);
 

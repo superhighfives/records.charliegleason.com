@@ -2134,7 +2134,7 @@ function RecordEditorBody({
 						}}
 						onDetect={async () => {
 							const res = await detectCorners({ data: recordId });
-							return res.corners;
+							return res.detection;
 						}}
 						disabled={editorBusy}
 					/>

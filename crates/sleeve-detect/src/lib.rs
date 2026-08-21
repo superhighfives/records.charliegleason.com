@@ -54,6 +54,60 @@ pub fn detect_sleeve_corners(rgba: &[u8], width: u32, height: u32) -> Vec<f64> {
     }
 }
 
+/// Detect the sleeve's corners AND report the segmentation's own confidence signals, so the
+/// TS orchestrator (`detectSleeveCornersBest`) can *reconcile* this colour-segmentation
+/// detector against the learned net on every capture rather than only reaching for it when the
+/// net's wasm fails to load. That reconciliation is what lets a confident segmentation override
+/// an out-of-distribution net miss — e.g. a neon-pink sleeve on tan card, which segments
+/// trivially (rectangularity ~0.96) but the net has never seen, so it regresses toward a
+/// frame-filling mean. See the module doc in `sleeve-detect-wasm.ts`.
+///
+/// Returns a flat array, or empty when the image is too small / no blob was found at all:
+///   `[accepted, rectangularity, blob_area_frac, x0,y0, x1,y1, x2,y2, x3,y3]`
+/// `accepted` is 1.0 when the fitted quad cleared every gate (so it equals what
+/// `detect_sleeve_corners` returns non-empty) and 0.0 when a blob was fitted but a gate rejected
+/// it. The quad (TL,TR,BR,BL normalised) is present in *both* cases — a soft-rejected fit is
+/// still worth comparing against the net's geometry to gauge agreement.
+#[wasm_bindgen(js_name = detectSleeveCornersScored)]
+pub fn detect_sleeve_corners_scored(rgba: &[u8], width: u32, height: u32) -> Vec<f64> {
+    match scored(rgba, width, height) {
+        Some(s) => {
+            let mut out = Vec::with_capacity(11);
+            out.push(if s.accepted { 1.0 } else { 0.0 });
+            out.push(s.rectangularity);
+            out.push(s.blob_area_frac);
+            out.extend(s.quad.iter().flat_map(|&(x, y)| [x, y]));
+            out
+        }
+        None => Vec::new(),
+    }
+}
+
+struct Scored {
+    accepted: bool,
+    rectangularity: f64,
+    blob_area_frac: f64,
+    quad: Corners,
+}
+
+/// Shared core for [`detect_sleeve_corners_scored`]: runs the full segmentation and returns the
+/// fitted quad (accepted or not) with its confidence signals. `None` only when there is no
+/// fitted quad at all (image too small, or no blob to fit).
+fn scored(rgba: &[u8], width: u32, height: u32) -> Option<Scored> {
+    if width < 40 || height < 40 {
+        return None;
+    }
+    let img = ImageRgbaImage::from_raw(width, height, rgba.to_vec())?;
+    let work = downscale(&img, WORK_MAX);
+    let seg = segment(&work)?;
+    Some(Scored {
+        accepted: seg.accepted.is_some(),
+        rectangularity: seg.rectangularity,
+        blob_area_frac: seg.blob_area_frac,
+        quad: seg.quad?,
+    })
+}
+
 /// Segmentation runs at this longest-side resolution. The morphology radius, the border
 /// ring and the thresholds are all set as fractions of the frame, so behaviour is already
 /// scale-independent — but a fixed working size keeps a manual "Detect corners" tap fast on

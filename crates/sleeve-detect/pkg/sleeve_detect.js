@@ -9,5 +9,5 @@ const instance = new WebAssembly.Instance(wasmModule, {
 __wbg_set_wasm(instance.exports);
 instance.exports.__wbindgen_start();
 export {
-    detectSleeveCorners, init
+    detectSleeveCorners, detectSleeveCornersScored, init
 } from "./sleeve_detect_bg.js";

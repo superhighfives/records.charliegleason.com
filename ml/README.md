@@ -20,27 +20,42 @@ baselines:
 | segmentation, forced quad on bail | 40.9% | 16% | 23% | 2.51% | 77% | 25.0% |
 | constant "mean quad" (floor) | 3.81% | 74% | 100% | 2.89% | 85% | 5.6% |
 | classical Hough rectangle | 6.29% | 42% | 67% | 4.19% | 57% | 11.3% |
-| **learned MobileNetV3 (this)** | **1.77%** | **98%** | **100%** | **1.67%** | **98%** | **2.9%** |
+| learned MobileNetV3 (SmoothL1, 224) | 1.77% | 98% | 100% | 1.67% | 98% | 2.9% |
+| **learned MobileNetV3 (hetero + hue-aug, 384)** | —\* | —\* | —\* | **0.86%** | **98%** | **1.73%** |
 
 The learned model dominates everywhere — including the segmentation detector's own easy
-"accepts" (1.64% vs 2.17% median) — with no fat tail (p90 2.9% of the frame). Error is % of the
-frame. The classical Hough rectangle baseline underperformed even a constant guess, so it was
-dropped. Full write-up and method comparison: `plans/backlog/learned-sleeve-corner-detection.md`.
+"accepts". Error is % of the frame. Adding hue/saturation augmentation and the heteroscedastic
+head (below) roughly **halved** the median (1.67% → 0.86%) and dropped p90 (2.9% → 1.73%) — the
+augmentation pulls saturated/neon sleeves in-distribution (they used to regress toward a
+frame-filling mean, e.g. record 310, a fluorescent-pink cover). The classical Hough rectangle
+baseline underperformed even a constant guess, so it was dropped. Full write-up:
+`plans/backlog/learned-sleeve-corner-detection.md`.
+
+\* Tail (segmentation-bail) columns weren't rescored in the latest run — it needs
+`data/bail_ids.txt` (produced separately by the segmentation harness) present during
+validation; the prior row's tail figures are the last measured.
 
 Known limits: the model is trained on this capture rig (table, lighting, framing) — a new setup
-is unproven and would want a retrain (cheap: ~3 min, and labels keep accruing). It has **no
-confidence head**, so every detection seeds the corner editor for the admin to review rather
-than auto-committing.
+is unproven and would want a retrain (cheap: a few min on MPS, and labels keep accruing). The
+model now has a **heteroscedastic uncertainty head** (per-corner sigma), so it can flag its own
+low-confidence guesses — but detections still seed the corner editor for the admin to review
+rather than auto-committing.
 
 ## The model
 
-- Backbone: `mobilenet_v3_small` (ImageNet-pretrained), classifier head → 8 = 4 corners
-  `(x,y)` in `[0,1]`, order **TL, TR, BR, BL**, sigmoid-bounded.
+- Backbone: `mobilenet_v3_small` (ImageNet-pretrained). Heteroscedastic head → **two** outputs:
+  `corners` (8 = 4 corners `(x,y)` in `[0,1]`, order **TL, TR, BR, BL**, sigmoid-bounded) and
+  `log_var` (8 = per-coordinate log-variance, the model's own uncertainty; `sigma =
+  exp(0.5·log_var)` in frame units). The Rust crate reads both by index and is backward-
+  compatible with a legacy single-output model. `sigma` feeds the reconciliation/confidence in
+  `src/lib/sleeve-detect-wasm.ts`.
 - Input: `1×3×384×384` float in `[0,1]`, RGB, NCHW. ImageNet mean/std normalisation is **baked
   into the exported graph**, so the caller (the Rust crate / JS) only resizes to 384×384 and
   divides by 255 — no per-channel normalisation needed downstream. See `corner_model.meta.json`.
 - Trained with geometric augmentation (±12° rotation, scale, translation — matching the tilt
-  gate) + colour jitter, SmoothL1 loss, ~120 epochs.
+  gate), **hue/saturation + brightness/contrast** jitter, Gaussian NLL loss (spelled out in
+  native ops so it runs on MPS), ~120 epochs. The onnxruntime reference for the crate's
+  inference test is regenerated with `gen_ref.py` after each retrain.
 
 ## Reproduce
 
