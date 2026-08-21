@@ -88,3 +88,9 @@ cp corner_model.onnx ../crates/sleeve-corner-net/model/ && npm run build:wasm
 Worth doing once a meaningful batch of corrections has accrued (it's ~3 min), or when captures
 move to a new rig/lighting. Re-run the offline edge-refine check after a retrain if you want to
 re-tune the search band. There's little value retraining when the label set hasn't grown.
+
+**Where's the pain? `python nudge_report.py`** ranks records by how far the shipped model lands
+from the saved band — i.e. how much a human had to nudge — after an `export_dataset.py`. The
+saved crop *is* the corrected label, so this is the offline equivalent of instrumenting the
+editor, and the worst records are the best hard examples to prioritise in the next retrain.
+(It's in-sample-optimistic on records the current model trained on; most honest on new records.)
