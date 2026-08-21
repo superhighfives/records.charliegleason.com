@@ -255,7 +255,9 @@ async function detectViaSeg(img: RgbaImage): Promise<SegResult | null> {
  *   1. Both ran and a confident, *accepted* segmentation disagrees with the net → the net is
  *      out-of-distribution; take the colour quad ("segmentation-override"). The result is
  *      trustworthy (segmentation is self-confident here) but a detector conflict still warrants
- *      a human glance, so confidence is capped below the auto-trust band.
+ *      a human glance — `detectionBadge` always shows the scrutinise treatment for this source
+ *      regardless of the numeric confidence (the cap below isn't itself below the high-band
+ *      threshold; the UI-level override is what guarantees the glance).
  *   2. The net ran → take it (its on-distribution accuracy beats segmentation). Confidence is
  *      high when segmentation independently agrees, middling when the net is unverified.
  *   3. Only segmentation ran (net wasm absent) → take it, confidence from its own gates.
