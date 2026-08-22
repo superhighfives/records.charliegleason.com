@@ -101,7 +101,7 @@ export function confidenceBand(confidence: number): ConfidenceBand {
 // it from its own centroid by this factor to re-centre the edge-refinement search band
 // (below) on the true boundary rather than just inside it. Measured over the 5-fold
 // out-of-fold predictions; see ml/README.md.
-const DESHRINK = 1.005;
+export const DESHRINK = 1.005;
 
 // Corner-agreement scale: two quads whose corresponding corners sit this far apart on average
 // (as a fraction of the frame) count as fully disagreeing (agreement 0). 15% is well beyond

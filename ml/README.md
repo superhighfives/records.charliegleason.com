@@ -21,19 +21,16 @@ baselines:
 | constant "mean quad" (floor) | 3.81% | 74% | 100% | 2.89% | 85% | 5.6% |
 | classical Hough rectangle | 6.29% | 42% | 67% | 4.19% | 57% | 11.3% |
 | learned MobileNetV3 (SmoothL1, 224) | 1.77% | 98% | 100% | 1.67% | 98% | 2.9% |
-| **learned MobileNetV3 (hetero + hue-aug, 384)** | —\* | —\* | —\* | **0.86%** | **98%** | **1.73%** |
+| **learned MobileNetV3 (hetero + hue-aug, 384)** | **1.03%** | **98%** | **100%** | **0.89%** | **98%** | **1.45%** |
 
 The learned model dominates everywhere — including the segmentation detector's own easy
-"accepts". Error is % of the frame. Adding hue/saturation augmentation and the heteroscedastic
-head (below) roughly **halved** the median (1.67% → 0.86%) and dropped p90 (2.9% → 1.73%) — the
-augmentation pulls saturated/neon sleeves in-distribution (they used to regress toward a
-frame-filling mean, e.g. record 310, a fluorescent-pink cover). The classical Hough rectangle
-baseline underperformed even a constant guess, so it was dropped. Full write-up:
-`plans/backlog/learned-sleeve-corner-detection.md`.
-
-\* Tail (segmentation-bail) columns weren't rescored in the latest run — it needs
-`data/bail_ids.txt` (produced separately by the segmentation harness) present during
-validation; the prior row's tail figures are the last measured.
+"accepts". Error is % of the frame (5-fold OOF; minor ±0.03 run-to-run variance on MPS). Adding
+hue/saturation augmentation and the heteroscedastic head (below) roughly **halved** the median
+(1.67% → 0.89%), dropped p90 (2.9% → 1.45%), and — crucially — pulled the **tail** (the 43
+segmentation-bail records) from 1.77% to **1.03%**: the augmentation brings saturated/neon
+sleeves in-distribution (they used to regress toward a frame-filling mean, e.g. record 310, a
+fluorescent-pink cover). The classical Hough rectangle baseline underperformed even a constant
+guess, so it was dropped. Full write-up: `plans/backlog/learned-sleeve-corner-detection.md`.
 
 Known limits: the model is trained on this capture rig (table, lighting, framing) — a new setup
 is unproven and would want a retrain (cheap: a few min on MPS, and labels keep accruing). The
@@ -64,13 +61,22 @@ python -m venv .venv && . .venv/bin/activate      # Python 3.12; 3.14 lacks torc
 pip install -r requirements.txt
 python export_dataset.py                          # pulls captures (R2) + labels (D1) -> data/
 python metric.py                                  # sanity: reproduces the segmentation baseline
-python train.py                                   # trains on all records, writes corner_model.onnx
-# then: cp corner_model.onnx ../crates/sleeve-corner-net/model/ && npm run build:wasm
+# tail metric input: the segmentation-bail record ids (run from repo root; scratch-dir avoids
+# littering captures/ with the harness's debug PNGs):
+mkdir -p /tmp/caps && cp data/captures/*.webp /tmp/caps/ && \
+  (cd ../crates/sleeve-detect && cargo run --release --example tune --features debug-harness -- /tmp/caps/*.webp) \
+  | awk '/=== .*\/([0-9]+)\.webp/{match($0,/([0-9]+)\.webp/,m);id=m[1]} /^RESULT\t0/{print id}' \
+  > data/bail_ids.txt && rm -rf /tmp/caps
+python train.py                                   # 5-fold OOF (dumps data/oof_corners.json), then export
+bun run ../ml/e2e_metric.ts                        # end-to-end (de-shrink + refine) all + tail numbers
+# then: cp corner_model.onnx ../crates/sleeve-corner-net/model/ && python gen_ref.py && npm run build:wasm
 ```
 
 `export_dataset.py` needs `wrangler` auth (D1 `records` + R2 `records-photos`). The dataset
-itself is not committed (private, ~300 captures). `train.py` also 5-fold-validates and prints
-the learned model's row of the table above (pass `--no-val` to skip straight to export).
+itself is not committed (private, ~300 captures). `train.py` 5-fold-validates, prints the
+learned model's row of the table above, and dumps `data/oof_corners.json` (pass `--no-val` to
+skip straight to export). `e2e_metric.ts` then reports the end-to-end figures; `gen_ref.py`
+regenerates the crate's onnxruntime reference test for the new model.
 
 ## Edge-refinement (the detector isn't just the model)
 
@@ -84,10 +90,14 @@ the model's line so an ambiguous edge is never made worse; the 4% search band wa
 offline (best over 6–8%).
 
 Offline over the labelled set, end to end (384 model → de-shrink → refine): median corner
-error **1.16%**, with only **15%** of records off by >2% (the "needs a nudge" threshold) —
-down from a raw-224-model baseline of 1.67% median / 32%. The two levers stack: the 384 input
-(vs 224) buys most of the median (1.67% → 1.36% raw), and the edge-refine buys the rest and
-tightens the whole distribution (1.36% → 1.16%).
+error **0.83%**, with only **6%** of records off by >2% (the "needs a nudge" threshold) — down
+from **1.16% / 15%** before the hetero + hue-aug retrain. The tail lands at 1.02% end-to-end,
+essentially level with the whole set.
+
+This end-to-end number is now **reproducible**: `bun run ml/e2e_metric.ts` applies the app's
+*real* de-shrink + `refineQuadEdgesDetailed` (imported from `src/lib`, not a copy) on top of the
+out-of-fold predictions `train.py` dumps to `data/oof_corners.json`, so it can't silently drift
+from what ships. Its RAW columns reproduce `train.py`'s table exactly, as a self-check.
 
 ## Keeping it sharp over time (the flywheel)
 

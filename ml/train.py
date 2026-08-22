@@ -223,6 +223,14 @@ def main():
         print("  " + metric.fmt("all", metric.evaluate(oof, ids, labels)))
         print("  " + metric.fmt("tail (bails)", metric.evaluate(oof, tail, labels)))
 
+        # Dump the raw out-of-fold corner predictions so the end-to-end harness
+        # (ml/e2e_metric.ts) can apply the app's de-shrink + edge-refine on top and report the
+        # number the admin actually experiences — without re-running the model. Written whenever
+        # validating; the harness and #3's CI both read it.
+        oof_path = os.path.join(metric.DATA, "oof_corners.json")
+        json.dump(oof, open(oof_path, "w"))
+        print(f"wrote {oof_path} ({len(oof)} out-of-fold predictions)")
+
     print("\ntraining on all records for export...")
     export(train_model(ids, labels, imgs))
     write_manifest()
