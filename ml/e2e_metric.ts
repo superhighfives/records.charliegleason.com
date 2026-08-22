@@ -22,11 +22,10 @@ import {
 	type RgbaImage,
 	toPixelCorners,
 } from "#/lib/photo-processing";
+import { DESHRINK } from "#/lib/sleeve-detect-wasm";
 import type { NormalizedCorners } from "#/lib/sleeve-corners";
 
 const DATA = new URL("./data/", import.meta.url).pathname;
-// Must match DESHRINK in src/lib/sleeve-detect-wasm.ts (net's inward regression bias).
-const DESHRINK = 1.005;
 
 type Quad = [number, number][];
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
