@@ -61,6 +61,19 @@ export type DetectionSource =
 	| "segmentation-override"
 	| "band-scan";
 
+const DETECTION_SOURCES = new Set<DetectionSource>([
+	"net",
+	"segmentation",
+	"segmentation-override",
+	"band-scan",
+]);
+
+/** Narrows a free-text DB value to {@link DetectionSource}, so a decoupled or manually-edited
+ *  column falls back to "net" instead of silently mislabeling the confidence badge. */
+export function isDetectionSource(value: string): value is DetectionSource {
+	return DETECTION_SOURCES.has(value as DetectionSource);
+}
+
 export interface SleeveDetection {
 	corners: NormalizedCorners;
 	/**
