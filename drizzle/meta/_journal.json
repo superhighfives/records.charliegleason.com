@@ -204,6 +204,13 @@
       "when": 1785995670371,
       "tag": "0028_flashy_mercury",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1787366811144,
+      "tag": "0029_dry_star_brand",
+      "breakpoints": true
     }
   ]
 }

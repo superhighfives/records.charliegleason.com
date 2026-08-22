@@ -147,6 +147,18 @@ export const records = sqliteTable("records", {
 	// are kept in the enum only for historical rows. Crucially this is NOT downgraded while
 	// a re-generation runs, so an approved cover stays live until the new one swaps in.
 	sleeveCornersJson: text("sleeve_corners_json"), // normalised sleeve corners (JSON), admin-picked
+	// Confidence in the *auto-seeded* corners, from the detection reconciliation
+	// (`detectSleeveCornersBest` — see src/lib/sleeve-detect-wasm.ts). `detectionConfidence` is
+	// 0..1 (null = never detected); `detectionSource` is which detector won (net / segmentation /
+	// segmentation-override / band-scan). Surfaced as the editor's on-open confidence badge and
+	// used to rank the admin "needs review" queue (lowest confidence first — the highest-value
+	// labels for the next retrain). `cornersReviewed` flips to true once the admin saves the band,
+	// so a human-approved crop is never treated as an uncertain auto-seed.
+	detectionConfidence: real("detection_confidence"),
+	detectionSource: text("detection_source"),
+	cornersReviewed: integer("corners_reviewed", { mode: "boolean" }).default(
+		false,
+	),
 	professionalImageKey: text("professional_image_key"), // R2 key — pro photo (public once approved)
 	professionalParamsJson: text("professional_params_json"), // last reframe knob settings (JSON)
 	professionalStatus: text("professional_status", {

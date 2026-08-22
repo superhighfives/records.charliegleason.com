@@ -55,7 +55,8 @@ export async function runCaptureFirstPass(recordId: number): Promise<void> {
 	);
 
 	try {
-		const { professionalKey, band } = await professionalPipeline(record);
+		const { professionalKey, band, detection } =
+			await professionalPipeline(record);
 		const updated = await db
 			.update(records)
 			.set({
@@ -63,6 +64,12 @@ export async function runCaptureFirstPass(recordId: number): Promise<void> {
 				// Persist the detected seed so the editor opens pre-cropped; a later
 				// Apply overwrites it with the admin's band.
 				sleeveCornersJson: serializeCornerBand(band),
+				// The seed's confidence/source drive the editor's on-open badge and the
+				// review queue. It's an unreviewed auto-seed until the admin saves the band,
+				// so reset `cornersReviewed` (a re-capture must re-enter the queue).
+				detectionConfidence: detection?.confidence ?? null,
+				detectionSource: detection?.source ?? null,
+				cornersReviewed: false,
 				// Generated, but not shown on the site until an admin approves it.
 				professionalStatus: "ready",
 				professionalError: null,

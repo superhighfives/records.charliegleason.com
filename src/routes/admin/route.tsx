@@ -77,6 +77,12 @@ function AdminGate() {
 						</Link>
 					</nav>
 					<div className="flex items-center gap-3">
+						<Link
+							to="/admin/corner-review"
+							className="text-sm text-muted-foreground hover:text-foreground"
+						>
+							Corner review
+						</Link>
 						<QueueMenu />
 						<SettingsModal />
 						<ThemeToggle />

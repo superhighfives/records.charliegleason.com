@@ -90,6 +90,7 @@ import {
 	parseCornerBand,
 	serializeCornerBand,
 } from "#/lib/sleeve-corners";
+import type { DetectionSource } from "#/lib/sleeve-detect-wasm";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
 
@@ -2136,6 +2137,15 @@ function RecordEditorBody({
 							const res = await detectCorners({ data: recordId });
 							return res.detection;
 						}}
+						initialDetection={
+							record.cornersReviewed || record.detectionConfidence == null
+								? null
+								: {
+										confidence: record.detectionConfidence,
+										source: (record.detectionSource ??
+											"net") as DetectionSource,
+									}
+						}
 						disabled={editorBusy}
 					/>
 				</div>

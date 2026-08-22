@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn } from "@tanstack/react-start";
 import {
 	and,
+	asc,
 	count,
 	desc,
 	eq,
@@ -202,6 +203,41 @@ export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 		const db = getDb(env.DB);
 		return db.select().from(records).orderBy(desc(records.createdAt));
 	}),
+);
+
+/**
+ * The corner-review queue: auto-seeded crops the admin hasn't approved yet, **worst first**.
+ * This is the active-learning list — the lowest-confidence detections are both the ones most
+ * likely to need a nudge *and* the highest-value labels for the next retrain (a corrected hard
+ * case teaches the model more than an easy one). Only records the current detector actually
+ * scored (`detectionConfidence` not null) and that aren't reviewed are included; ordered by
+ * confidence ascending. Admin-only (returns capture keys). Capped so a big backlog stays cheap.
+ */
+export const listCornerReviewQueue = createServerFn({ method: "GET" }).handler(
+	() =>
+		Sentry.startSpan({ name: "listCornerReviewQueue" }, async () => {
+			if (!(await getAdminSession())) throw new AdminSessionError();
+			const db = getDb(env.DB);
+			return db
+				.select({
+					id: records.id,
+					artist: records.artist,
+					title: records.title,
+					capturePhotoKey: records.capturePhotoKey,
+					detectionConfidence: records.detectionConfidence,
+					detectionSource: records.detectionSource,
+				})
+				.from(records)
+				.where(
+					and(
+						isNotNull(records.detectionConfidence),
+						isNotNull(records.capturePhotoKey),
+						eq(records.cornersReviewed, false),
+					),
+				)
+				.orderBy(asc(records.detectionConfidence))
+				.limit(200);
+		}),
 );
 
 /**
@@ -998,7 +1034,18 @@ export const detectCorners = createServerFn({ method: "POST" })
 			if (!record?.capturePhotoKey) {
 				throw new Error("This record has no capture photo to detect.");
 			}
-			return { detection: await detectCaptureCorners(record.capturePhotoKey) };
+			const detection = await detectCaptureCorners(record.capturePhotoKey);
+			// Persist the confidence/source so a manual re-detect keeps the on-open badge and
+			// review-queue ranking current. The admin still hasn't committed a band here, so
+			// `cornersReviewed` is untouched (detecting isn't approving).
+			await db
+				.update(records)
+				.set({
+					detectionConfidence: detection?.confidence ?? null,
+					detectionSource: detection?.source ?? null,
+				})
+				.where(eq(records.id, id));
+			return { detection };
 		}),
 	);
 
@@ -1050,6 +1097,9 @@ export const reframeRecord = createServerFn({ method: "POST" })
 					professionalJobStatus: "queued",
 					professionalStage: "cover",
 					professionalError: null,
+					// The admin applied this crop → it's reviewed, so it drops out of the
+					// "needs review" queue and the editor stops badging it as an auto-seed.
+					cornersReviewed: true,
 					// Fresh manual Apply → reset the reaper's auto-retry budget.
 					professionalRetryCount: 0,
 					updatedAt: new Date(),
