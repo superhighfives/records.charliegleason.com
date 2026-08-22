@@ -222,10 +222,12 @@ export function bandFromQuad(quad: NormalizedCorners): CornerBand {
 	let inner = offsetQuadNormalized(quad, -side * BAND_IN_FRAC);
 	// Synthesis floor: when the outward offset clamps at the frame (a full-frame default, or
 	// a pick hard against a frame edge), the band can pinch below MIN_BAND_FRAC on that edge.
-	// Push the inner quad further inward to make up the shortfall, so every synthesised band
-	// is valid by construction — a legacy row or detect seed can't produce a band the editor
-	// then blocks with no obvious fix. A normal pick clears the floor already (~0.03·side), so
-	// this is a no-op there.
+	// Push the inner quad further inward to make up the shortfall. This single linear step
+	// covers every legacy row or detect seed we've seen in practice; it isn't an exact fix, so
+	// a sufficiently degenerate quad (near-coincident corners) can still land under- or
+	// over-corrected — that residual case just falls through to bandInvalidReason like any
+	// other invalid band, so it fails safe. A normal pick clears the floor already
+	// (~0.03·side), so this is a no-op there.
 	const gap = minBandGapFrac({ inner, outer });
 	if (gap < MIN_BAND_FRAC) {
 		const extra = MIN_BAND_FRAC - gap;
