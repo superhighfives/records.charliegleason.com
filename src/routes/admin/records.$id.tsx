@@ -2418,7 +2418,12 @@ function RecordEditorBody({
 						type="button"
 						size="sm"
 						variant="destructive"
-						disabled={removeCover.isPending || applyPro.isPending || editorBusy}
+						disabled={
+							removeCover.isPending ||
+							applyPro.isPending ||
+							editorBusy ||
+							reapplyMatte.isPending
+						}
 						onClick={() => removeCover.mutate()}
 					>
 						{removeCover.isPending ? "Removing…" : "Remove cover"}
@@ -2458,7 +2463,9 @@ function RecordEditorBody({
 							disabled={editorBusy || reapplyMatte.isPending}
 							onClick={() => reapplyMatte.mutate()}
 						>
-							{editorBusy ? "Re-applying…" : "Re-apply matte"}
+							{editorBusy || reapplyMatte.isPending
+								? "Re-applying…"
+								: "Re-apply matte"}
 						</Button>
 					)}
 					{/* One primary action, three states: Apply (nothing live yet),
@@ -2476,7 +2483,9 @@ function RecordEditorBody({
 						// clamp-colliding trimap can't be applied. When live + idle it's
 						// a plain Close, which is always allowed.
 						disabled={
-							editorBusy || (!(proIsLive && !jobFailed) && !isBandValid(band))
+							editorBusy ||
+							reapplyMatte.isPending ||
+							(!(proIsLive && !jobFailed) && !isBandValid(band))
 						}
 						onClick={() =>
 							proIsLive && !jobFailed ? onClose() : applyPro.mutate()
