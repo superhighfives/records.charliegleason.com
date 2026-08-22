@@ -16,6 +16,7 @@ import { Route as CollectionRouteRouteImport } from './routes/_collection/route'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as CollectionIndexRouteImport } from './routes/_collection/index'
 import { Route as ApiRecordsRouteImport } from './routes/api/records'
+import { Route as AdminCornerReviewRouteImport } from './routes/admin/corner-review'
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
 import { Route as ApiDiscogsCoverIdRouteImport } from './routes/api/discogs-cover.$id'
@@ -60,6 +61,11 @@ const ApiRecordsRoute = ApiRecordsRouteImport.update({
   id: '/api/records',
   path: '/api/records',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminCornerReviewRoute = AdminCornerReviewRouteImport.update({
+  id: '/corner-review',
+  path: '/corner-review',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminCaptureRoute = AdminCaptureRouteImport.update({
   id: '/capture',
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/404': typeof R404Route
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
+  '/admin/corner-review': typeof AdminCornerReviewRoute
   '/api/records': typeof ApiRecordsRoute
   '/admin/': typeof AdminIndexRoute
   '/records/$id': typeof CollectionRecordsIdRoute
@@ -134,6 +141,7 @@ export interface FileRoutesByTo {
   '/404': typeof R404Route
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
+  '/admin/corner-review': typeof AdminCornerReviewRoute
   '/api/records': typeof ApiRecordsRoute
   '/': typeof CollectionIndexRoute
   '/admin': typeof AdminIndexRoute
@@ -154,6 +162,7 @@ export interface FileRoutesById {
   '/404': typeof R404Route
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
+  '/admin/corner-review': typeof AdminCornerReviewRoute
   '/api/records': typeof ApiRecordsRoute
   '/_collection/': typeof CollectionIndexRoute
   '/admin/': typeof AdminIndexRoute
@@ -175,6 +184,7 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/admin/capture'
+    | '/admin/corner-review'
     | '/api/records'
     | '/admin/'
     | '/records/$id'
@@ -191,6 +201,7 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/admin/capture'
+    | '/admin/corner-review'
     | '/api/records'
     | '/'
     | '/admin'
@@ -210,6 +221,7 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/admin/capture'
+    | '/admin/corner-review'
     | '/api/records'
     | '/_collection/'
     | '/admin/'
@@ -288,6 +300,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/records'
       preLoaderRoute: typeof ApiRecordsRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/corner-review': {
+      id: '/admin/corner-review'
+      path: '/corner-review'
+      fullPath: '/admin/corner-review'
+      preLoaderRoute: typeof AdminCornerReviewRouteImport
+      parentRoute: typeof AdminRouteRoute
     }
     '/admin/capture': {
       id: '/admin/capture'
@@ -378,6 +397,7 @@ const CollectionRouteRouteWithChildren = CollectionRouteRoute._addFileChildren(
 
 interface AdminRouteRouteChildren {
   AdminCaptureRoute: typeof AdminCaptureRoute
+  AdminCornerReviewRoute: typeof AdminCornerReviewRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminRecordsIdRoute: typeof AdminRecordsIdRoute
   AdminRecordsNewRoute: typeof AdminRecordsNewRoute
@@ -385,6 +405,7 @@ interface AdminRouteRouteChildren {
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminCaptureRoute: AdminCaptureRoute,
+  AdminCornerReviewRoute: AdminCornerReviewRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminRecordsIdRoute: AdminRecordsIdRoute,
   AdminRecordsNewRoute: AdminRecordsNewRoute,

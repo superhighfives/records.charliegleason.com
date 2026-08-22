@@ -90,8 +90,21 @@ import {
 	parseCornerBand,
 	serializeCornerBand,
 } from "#/lib/sleeve-corners";
+import type { DetectionSource } from "#/lib/sleeve-detect-wasm";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
+
+// Mirrors isDetectionSource in sleeve-detect-wasm. Inlined so this route doesn't import that
+// value module (its dynamic wasm imports would be pulled into the client bundle).
+const DETECTION_SOURCES = new Set<DetectionSource>([
+	"net",
+	"segmentation",
+	"segmentation-override",
+	"band-scan",
+]);
+function isDetectionSource(value: string): value is DetectionSource {
+	return DETECTION_SOURCES.has(value as DetectionSource);
+}
 
 /** One labelled reframe knob: a slider with its current value shown on the right. */
 function Knob({
@@ -2136,6 +2149,18 @@ function RecordEditorBody({
 							const res = await detectCorners({ data: recordId });
 							return res.detection;
 						}}
+						initialDetection={
+							record.cornersReviewed || record.detectionConfidence == null
+								? null
+								: {
+										confidence: record.detectionConfidence,
+										source:
+											record.detectionSource != null &&
+											isDetectionSource(record.detectionSource)
+												? record.detectionSource
+												: "net",
+									}
+						}
 						disabled={editorBusy}
 					/>
 				</div>

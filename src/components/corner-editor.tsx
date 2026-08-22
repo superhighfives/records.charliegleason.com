@@ -71,7 +71,7 @@ const DETECTION_SOURCE_LABEL: Record<DetectionSource, string> = {
  * scrutinise. The admin always reviews the seed; this just says how hard to look. Bands match
  * {@link confidenceBand} in sleeve-detect-wasm.
  */
-function detectionBadge(d: SleeveDetection): {
+function detectionBadge(d: Pick<SleeveDetection, "confidence" | "source">): {
 	dot: string;
 	text: string;
 	scrutinise: string | null;
@@ -214,6 +214,7 @@ export function CornerEditor({
 	value,
 	onChange,
 	onDetect,
+	initialDetection,
 	disabled,
 }: {
 	src: string;
@@ -222,6 +223,9 @@ export function CornerEditor({
 	/** Optional: run detection (server-side) and return the suggested corners plus a
 	 *  confidence score / source to seed and badge. */
 	onDetect?: () => Promise<SleeveDetection | null>;
+	/** The stored confidence/source of the auto-seeded band, so the badge shows on open
+	 *  (before any manual detect). Pass null once the crop is admin-reviewed. */
+	initialDetection?: Pick<SleeveDetection, "confidence" | "source"> | null;
 	disabled?: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -233,10 +237,15 @@ export function CornerEditor({
 	// The set of handles selected for keyboard nudging, keyed by `${quad}:${index}`.
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [detecting, setDetecting] = useState(false);
-	// The last detection result, kept so its confidence badge persists under the editor after
-	// the toast fades — cleared once the admin edits a handle (the seed is no longer "the
-	// detection"). Never gates anything: the admin reviews every seed regardless.
-	const [detection, setDetection] = useState<SleeveDetection | null>(null);
+	// The detection behind the current seed — the stored auto-seed confidence on open, or the
+	// last manual detect. Its badge persists under the editor (and the % on the button) until the
+	// admin edits a handle, when it's cleared (the seed is no longer "the detection"). Never gates
+	// anything: the admin reviews every seed regardless. Only confidence + source are needed for
+	// the badge, so a stored {confidence, source} is enough.
+	const [detection, setDetection] = useState<Pick<
+		SleeveDetection,
+		"confidence" | "source"
+	> | null>(initialDetection ?? null);
 	// Which handle the loupe magnifies — the hovered/focused one, or the one being
 	// dragged. The rendered image box size, tracked so the magnifier can map
 	// normalised corner coords to background pixels.
