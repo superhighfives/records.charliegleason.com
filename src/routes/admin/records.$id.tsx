@@ -2431,8 +2431,9 @@ function RecordEditorBody({
 						// Disabled while a job runs (editorBusy) — including the
 						// "Generating…" state — so a second Apply can't stack, and
 						// while the band is invalid (inner corners outside the outer
-						// frame) so a self-contradictory trimap can't be applied. When
-						// live + idle it's a plain Close, which is always allowed.
+						// frame, or a too-thin band) so a self-contradictory or
+						// clamp-colliding trimap can't be applied. When live + idle it's
+						// a plain Close, which is always allowed.
 						disabled={
 							editorBusy || (!(proIsLive && !jobFailed) && !isBandValid(band))
 						}

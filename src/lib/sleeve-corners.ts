@@ -124,6 +124,27 @@ export interface CornerBand {
 export const BAND_IN_FRAC = 0.012;
 export const BAND_OUT_FRAC = 0.018;
 
+/**
+ * The narrowest a band may be — the minimum inner→outer gap, as a fraction of the mean
+ * side (see {@link minBandGapFrac}). A band narrower than this lets the matte's two
+ * edge treatments collide: on a low-confidence edge the model's alpha is clamped a hair
+ * (`CLAMP_LOWCONF_INSET`) inside the band MIDLINE, while the trimap's certified-foreground
+ * region (the INNER quad) is later re-locked to fully opaque. If the inner quad reaches
+ * outward past that midline-minus-inset line, the re-lock repaints exactly what the clamp
+ * meant to cut. Keeping the gap above this floor keeps the inner quad clear of the clamp.
+ *
+ * Derivation (kept as a comment, not an import — this module stays dependency-free, as
+ * the header note requires): the deskewed model frame is `MODEL_SIZE / (1 + 2·MODEL_PAD)`
+ * ≈ 1143 px across the sleeve, so a normalised gap `g·side` maps to ≈ `g · 1143` model px;
+ * the midline sits at the gap's centre, so the midline→inner half is `g·1143 / 2`, which
+ * must clear `CLAMP_LOWCONF_INSET` (≈ 6 px). That gives the real floor `g ≳ 0.0105`. We sit
+ * this constant just above it, and just BELOW the ≈ 0.012 gap the full-frame `DEFAULT_BAND`
+ * (and any normal pick, at ≈ 0.03) already produces — so the default is valid with a little
+ * margin while only a genuinely-too-narrow band is rejected. A test pins both ends of that
+ * ordering, so lowering `BAND_IN_FRAC` toward the floor can't silently invalidate the default.
+ */
+export const MIN_BAND_FRAC = 0.011;
+
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
 /** Intersection of two infinite lines (each as two points); falls back to an endpoint. */
@@ -197,10 +218,22 @@ export function bandFromQuad(quad: NormalizedCorners): CornerBand {
 		side += Math.hypot(bx - ax, by - ay);
 	}
 	side /= 4;
-	return {
-		inner: offsetQuadNormalized(quad, -side * BAND_IN_FRAC),
-		outer: offsetQuadNormalized(quad, side * BAND_OUT_FRAC),
-	};
+	const outer = offsetQuadNormalized(quad, side * BAND_OUT_FRAC);
+	let inner = offsetQuadNormalized(quad, -side * BAND_IN_FRAC);
+	// Synthesis floor: when the outward offset clamps at the frame (a full-frame default, or
+	// a pick hard against a frame edge), the band can pinch below MIN_BAND_FRAC on that edge.
+	// Push the inner quad further inward to make up the shortfall. This single linear step
+	// covers every legacy row or detect seed we've seen in practice; it isn't an exact fix, so
+	// a sufficiently degenerate quad (near-coincident corners) can still land under- or
+	// over-corrected — that residual case just falls through to bandInvalidReason like any
+	// other invalid band, so it fails safe. A normal pick clears the floor already
+	// (~0.03·side), so this is a no-op there.
+	const gap = minBandGapFrac({ inner, outer });
+	if (gap < MIN_BAND_FRAC) {
+		const extra = MIN_BAND_FRAC - gap;
+		inner = offsetQuadNormalized(quad, -side * (BAND_IN_FRAC + extra));
+	}
+	return { inner, outer };
 }
 
 /** The full-frame default band — outer on the frame, inner inset from it. */
@@ -225,14 +258,76 @@ function insideQuadNorm(
 	return true;
 }
 
+/** Perpendicular distance from point (px,py) to segment a→b (clamped to the segment). */
+function pointToSegmentDist(
+	px: number,
+	py: number,
+	ax: number,
+	ay: number,
+	bx: number,
+	by: number,
+): number {
+	const dx = bx - ax;
+	const dy = by - ay;
+	const len2 = dx * dx + dy * dy || 1;
+	let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+	t = Math.max(0, Math.min(1, t));
+	return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
 /**
- * A band is valid when every inner corner lies inside the outer quad — i.e. the
- * certified-sleeve region is wholly contained by the certified-background boundary,
- * so the trimap's unknown band can't self-contradict. The editor shows a warning and
- * the Apply is blocked while this is false.
+ * The band's narrowest inner→outer gap, as a fraction of the outer quad's mean side:
+ * the smallest distance from any inner corner to the nearest outer edge, normalised so
+ * the measure is scale-free. Near-parallel bands read ≈ their perpendicular width; the
+ * corner sampling under-reads a sharply pinched band, which is the safe direction (it
+ * rejects a hair more, never less). See {@link MIN_BAND_FRAC} for what the number guards.
+ * Returns 0 for a degenerate (zero-side) outer quad.
  */
+export function minBandGapFrac(band: CornerBand): number {
+	const { inner, outer } = band;
+	let side = 0;
+	for (let e = 0; e < 4; e++) {
+		const [ax, ay] = outer[e];
+		const [bx, by] = outer[(e + 1) % 4];
+		side += Math.hypot(bx - ax, by - ay);
+	}
+	side /= 4;
+	if (side === 0) return 0;
+	let min = Number.POSITIVE_INFINITY;
+	for (const [px, py] of inner) {
+		for (let e = 0; e < 4; e++) {
+			const [ax, ay] = outer[e];
+			const [bx, by] = outer[(e + 1) % 4];
+			min = Math.min(min, pointToSegmentDist(px, py, ax, ay, bx, by));
+		}
+	}
+	return min / side;
+}
+
+/** Why a band is invalid, or null when it's fine — drives the editor's warning copy. */
+export type BandInvalidReason = "crossed" | "narrow";
+
+/**
+ * The first thing wrong with a band, or null if it's valid:
+ *  - `"crossed"` — an inner corner has been dragged outside the outer quad, so the
+ *    certified-sleeve region isn't wholly inside the certified-background boundary and
+ *    the trimap's unknown band self-contradicts;
+ *  - `"narrow"` — the band is thinner than {@link MIN_BAND_FRAC} somewhere, where the
+ *    matte's low-confidence clamp and its certified-foreground re-lock can collide.
+ * Crossed is reported first (it's the more fundamental break). The editor shows a
+ * matching warning and the Apply is blocked while this is non-null.
+ */
+export function bandInvalidReason(band: CornerBand): BandInvalidReason | null {
+	if (!band.inner.every(([x, y]) => insideQuadNorm(band.outer, x, y))) {
+		return "crossed";
+	}
+	if (minBandGapFrac(band) < MIN_BAND_FRAC) return "narrow";
+	return null;
+}
+
+/** Whether a band is safe to apply — see {@link bandInvalidReason} for the failure modes. */
 export function isBandValid(band: CornerBand): boolean {
-	return band.inner.every(([x, y]) => insideQuadNorm(band.outer, x, y));
+	return bandInvalidReason(band) === null;
 }
 
 /**

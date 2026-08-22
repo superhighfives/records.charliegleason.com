@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
 	bandFromQuad,
+	bandInvalidReason,
 	DEFAULT_BAND,
 	DEFAULT_CORNERS,
 	isBandValid,
+	MIN_BAND_FRAC,
+	minBandGapFrac,
 	type NormalizedCorners,
 	parseCornerBand,
 	parseCorners,
@@ -98,5 +101,69 @@ describe("isBandValid", () => {
 			) as NormalizedCorners,
 		};
 		expect(isBandValid(crossed)).toBe(false);
+		expect(bandInvalidReason(crossed)).toBe("crossed");
+	});
+});
+
+// A concentric square band; the inner offset from the outer sets the gap exactly.
+const OUTER_SQ: NormalizedCorners = [
+	[0.1, 0.1],
+	[0.9, 0.1],
+	[0.9, 0.9],
+	[0.1, 0.9],
+];
+const squareBand = (
+	inset: number,
+): { inner: NormalizedCorners; outer: NormalizedCorners } => ({
+	outer: OUTER_SQ,
+	inner: [
+		[0.1 + inset, 0.1 + inset],
+		[0.9 - inset, 0.1 + inset],
+		[0.9 - inset, 0.9 - inset],
+		[0.1 + inset, 0.9 - inset],
+	],
+});
+
+describe("minBandGapFrac", () => {
+	it("measures the narrowest inner→outer gap as a fraction of the mean side", () => {
+		// Outer square side 0.8; inner inset 0.02 → gap 0.02, fraction 0.02/0.8 = 0.025.
+		expect(minBandGapFrac(squareBand(0.02))).toBeCloseTo(0.025, 6);
+	});
+});
+
+describe("isBandValid / bandInvalidReason — band-width floor", () => {
+	it("accepts a comfortably wide band", () => {
+		expect(minBandGapFrac(squareBand(0.02))).toBeGreaterThan(MIN_BAND_FRAC);
+		expect(bandInvalidReason(squareBand(0.02))).toBeNull();
+	});
+
+	it("rejects a too-thin band even though its inner sits inside the outer", () => {
+		const thin = squareBand(0.002); // gap 0.002/0.8 = 0.0025 ≪ floor
+		expect(minBandGapFrac(thin)).toBeLessThan(MIN_BAND_FRAC);
+		expect(isBandValid(thin)).toBe(false);
+		expect(bandInvalidReason(thin)).toBe("narrow");
+	});
+
+	it("keeps the floor above the real clamp-overlap risk (~0.0105) and below the default's gap", () => {
+		expect(MIN_BAND_FRAC).toBeGreaterThan(0.0105);
+		// The full-frame default (and thus every wider pick) clears the floor by construction.
+		expect(minBandGapFrac(DEFAULT_BAND)).toBeGreaterThanOrEqual(MIN_BAND_FRAC);
+		expect(isBandValid(DEFAULT_BAND)).toBe(true);
+	});
+});
+
+describe("bandFromQuad — synthesis floor", () => {
+	it("keeps a frame-hugging pick valid despite the outer offset clamping", () => {
+		// Left edge flush to the frame: the outward offset can't grow past x=0, which would
+		// otherwise pinch the band on that side. The synthesis floor widens the inner instead.
+		const flush: NormalizedCorners = [
+			[0, 0.1],
+			[0.9, 0.1],
+			[0.9, 0.9],
+			[0, 0.9],
+		];
+		const band = bandFromQuad(flush);
+		expect(isBandValid(band)).toBe(true);
+		expect(minBandGapFrac(band)).toBeGreaterThanOrEqual(MIN_BAND_FRAC);
 	});
 });

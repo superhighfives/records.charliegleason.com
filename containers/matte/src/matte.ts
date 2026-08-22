@@ -44,6 +44,7 @@ import {
 	type RgbaImage,
 	rasterizePolygon,
 	refineQuadEdgesDetailed,
+	relockCertifiedForeground,
 	toPixelCorners,
 	vetoBackgroundAlpha,
 	warpMatteToSquare,
@@ -126,22 +127,16 @@ async function matteAI(
 		bgQuad: outer,
 		fgInset: VETO_FG_INSET,
 	});
-	// Re-assert the guarantee the trimap only *promises*: the inner pick is certified sleeve
-	// (the admin places the inner handles ON the sleeve), so trimap 255 = definite foreground.
-	// But ViTMatte treats the trimap as guidance, not a hard constraint, and on a low-contrast
-	// or worn cover it returns alpha < 1 well inside that locked interior — carving a concave
-	// bite into a shape that is, by construction, a filled convex quad. Nothing downstream
-	// refills it (keepLargestComponent drops islands, it doesn't fill holes; despeckle only
-	// shrinks; the veto only removes). So lock certified foreground back to fully opaque here —
-	// after despeckle/largest-component so neither can nibble it, before feather so the only
-	// soft transition sits at the true sleeve edge, never inside it.
 	const cleaned = keepLargestComponent(
 		despeckleMask(raw, content.width, content.height),
 		content.width,
 		content.height,
 	);
-	for (let i = 0; i < cleaned.length; i++)
-		if (trimap[i] === 255) cleaned[i] = 255;
+	// Re-assert the guarantee the trimap only *promises*: the inner pick is certified sleeve,
+	// so trimap 255 = definite foreground — but ViTMatte can still bite into that locked
+	// interior. Lock it back to opaque here (see `relockCertifiedForeground`), after
+	// despeckle/largest-component and before feather.
+	relockCertifiedForeground(cleaned, trimap);
 	const feathered = featherMask(
 		cleaned,
 		content.width,
