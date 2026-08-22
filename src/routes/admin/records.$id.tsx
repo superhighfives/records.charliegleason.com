@@ -2069,6 +2069,29 @@ function RecordEditorBody({
 			),
 	});
 
+	// Re-roll ONLY the Magic matte for the live cover, without touching the crop or tone.
+	// The matte is the non-deterministic AI step, so a re-run can shake off an artifact (a
+	// background halo, or an edge biting into the sleeve) that the last cut happened to
+	// land — the square cover rides through unchanged (no paid reframe + Real-ESRGAN
+	// re-render), only the matte variants are re-cut, swapping in atomically if it lands.
+	// Surfaced as "Re-apply matte" in the footer when the cover is live + unchanged (the
+	// one state where the primary button is otherwise just a plain Close).
+	const reapplyMatte = useMutation({
+		mutationFn: () => retryProfessionalMatte({ data: { id: recordId } }),
+		onSuccess: async (row) => {
+			if (row)
+				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
+			await invalidate();
+			toast.success(
+				"Re-applying the Magic matte… this runs in the background.",
+			);
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't re-apply the matte.",
+			),
+	});
+
 	// Remove the professional photo altogether: delete it from R2 and clear the record
 	// back to a zero-state (no image, default crop + tone), then close the editor and
 	// return to the detail view. A later edit regenerates from scratch.
@@ -2420,6 +2443,24 @@ function RecordEditorBody({
 					>
 						Reset
 					</Button>
+					{/* Re-roll just the Magic matte on a live, unchanged cover — the one
+					    state where the primary button is otherwise a dead-end Close. The
+					    matte is the non-deterministic AI step, so this is the one-click way
+					    to shake off an artifact (a background halo, an edge biting into the
+					    sleeve) without nudging a knob or paying for a full re-render. Hidden
+					    while editing (the primary "Re-apply" already re-cuts the matte) and
+					    on a failed job (the primary "Retry" is the recovery there). */}
+					{proIsLive && !jobFailed && record.professionalImageKey && (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={editorBusy || reapplyMatte.isPending}
+							onClick={() => reapplyMatte.mutate()}
+						>
+							{editorBusy ? "Re-applying…" : "Re-apply matte"}
+						</Button>
+					)}
 					{/* One primary action, three states: Apply (nothing live yet),
 					    Re-apply (live, but the crop/tone has been nudged), or a
 					    plain Close (live and unchanged — nothing left to do). Only
