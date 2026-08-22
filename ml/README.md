@@ -123,5 +123,12 @@ editor, and the worst records are the best hard examples to prioritise in the ne
 **You don't have to watch for it.** `train.py` also writes `ml/labels_manifest.json` — a
 per-record hash of every band it trained on. A weekly Worker cron (`src/lib/flywheel-alert.ts`,
 wired in `src/server.ts`) compares live D1 to that manifest and **emails when ≥10 labels have
-changed** since the last train, so you get a nudge to run the flywheel when it's actually worth
-it. Committing a fresh model + manifest resets the counter — no state to manage.
+changed** since the last train. Committing a fresh model + manifest resets the counter — no state
+to manage.
+
+**And you don't have to run it by hand, either.** The `retrain-corners` GitHub Actions workflow
+(`.github/workflows/retrain-corners.yml`) does the same drift check weekly (`ml/check_drift.py`)
+and, when it's over threshold, runs this whole pipeline on a CPU runner — export → 5-fold train →
+`e2e_metric.ts` → swap model + `gen_ref.py --write` + `build:wasm` — and opens a PR with the
+metrics. The **swap stays reviewed**: you read the numbers and merge. (Needs the
+`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `RETRAIN_PR_TOKEN` repo secrets.)

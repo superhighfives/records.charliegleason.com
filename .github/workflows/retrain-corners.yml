@@ -1,0 +1,125 @@
+name: Retrain corner model
+
+# Closes the corner-detector flywheel: on a weekly schedule (or manual dispatch) it checks how
+# many sleeve-corner labels have drifted since the model was last trained, and only if that's over
+# threshold does it run the full offline pipeline (export → 5-fold train → end-to-end metrics →
+# swap model + regen reference test + rebuild wasm) and open a PR with the metrics for review.
+# A model swap stays reviewed, not silent — this just removes the ~40-min manual toil.
+#
+# Runs on GitHub-hosted Linux (CPU), so training is slow (~2-4h, well under the 6h job cap).
+# Requires repo secrets: CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID (D1/R2 read for the dataset
+# export + drift check) and, ideally, RETRAIN_PR_TOKEN (a PAT so the opened PR triggers CI).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 15 * * 1" # Mondays 15:00 UTC — after the flywheel email cron (14:00)
+
+concurrency:
+  group: retrain-corners
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350 # under the 6h hard cap; CPU 5-fold + final train
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PYTORCH_ENABLE_MPS_FALLBACK: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Use the PAT (if set) so the PR this workflow opens triggers CI; falls back to the
+          # built-in token, whose pushes/PRs don't kick off further workflows.
+          token: ${{ secrets.RETRAIN_PR_TOKEN || github.token }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+
+      - uses: astral-sh/setup-uv@v5
+      - name: Python venv + deps
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv -r ml/requirements.txt
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
+      - name: Check label drift
+        id: drift
+        working-directory: ml
+        run: ../.venv/bin/python check_drift.py
+
+      - name: Export dataset (captures + labels)
+        if: steps.drift.outputs.retrain == 'true'
+        working-directory: ml
+        run: ../.venv/bin/python export_dataset.py
+
+      - name: Generate bail ids (tail metric input)
+        if: steps.drift.outputs.retrain == 'true'
+        working-directory: ml
+        run: |
+          mkdir -p /tmp/caps && cp data/captures/*.webp /tmp/caps/
+          (cd ../crates/sleeve-detect && cargo run --release --example tune --features debug-harness -- /tmp/caps/*.webp) \
+            | awk 'match($0, /\/([0-9]+)\.webp/, m) { id = m[1] } /^RESULT\t0\t/ { print id }' \
+            > data/bail_ids.txt
+          rm -rf /tmp/caps
+          echo "bails: $(wc -l < data/bail_ids.txt)"
+
+      - name: Train + 5-fold validate (dumps OOF)
+        if: steps.drift.outputs.retrain == 'true'
+        working-directory: ml
+        run: ../.venv/bin/python train.py
+
+      - name: End-to-end metrics
+        if: steps.drift.outputs.retrain == 'true'
+        run: bun run ml/e2e_metric.ts | tee /tmp/e2e.txt
+
+      - name: Swap model + regen reference + rebuild wasm
+        if: steps.drift.outputs.retrain == 'true'
+        run: |
+          cp ml/corner_model.onnx crates/sleeve-corner-net/model/corner_model.onnx
+          .venv/bin/python ml/gen_ref.py --write
+          bun run build:wasm
+
+      - name: Open PR
+        if: steps.drift.outputs.retrain == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RETRAIN_PR_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="retrain/corner-model-${{ github.run_id }}"
+          git config user.name "records-retrain-bot"
+          git config user.email "bot@charliegleason.com"
+          git checkout -b "$BRANCH"
+          git add crates/sleeve-corner-net/model/corner_model.onnx \
+                  crates/sleeve-corner-net/pkg crates/sleeve-detect/pkg \
+                  crates/sleeve-corner-net/tests/inference.rs \
+                  ml/labels_manifest.json
+          if git diff --cached --quiet; then
+            echo "::warning::retrain produced no committable change — skipping PR."
+            exit 0
+          fi
+          git commit -m "Retrain corner model (drift ${{ steps.drift.outputs.drift }})"
+          git push -u origin "$BRANCH"
+          {
+            echo "Automated retrain — **${{ steps.drift.outputs.drift }}** corner labels drifted since the last train (${{ steps.drift.outputs.added }} new, ${{ steps.drift.outputs.changed }} corrected)."
+            echo
+            echo "Review the metrics below, then merge to ship the new model (the swap stays human-reviewed)."
+            echo
+            echo '```'
+            cat /tmp/e2e.txt
+            echo '```'
+            echo
+            echo "🤖 Opened by the retrain-corners workflow."
+          } > /tmp/body.md
+          gh pr create --base main --head "$BRANCH" \
+            --title "Retrain corner model (drift ${{ steps.drift.outputs.drift }})" \
+            --body-file /tmp/body.md
