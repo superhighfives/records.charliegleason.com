@@ -30,7 +30,10 @@ import {
 	type NormalizedCorners,
 	parseCornerBand,
 } from "#/lib/sleeve-corners";
-import { detectSleeveCornersBest } from "#/lib/sleeve-detect-wasm";
+import {
+	detectSleeveCornersBest,
+	type SleeveDetection,
+} from "#/lib/sleeve-detect-wasm";
 
 /**
  * Turn a rough iPhone capture into a clean, straight-on studio shot of the physical
@@ -340,13 +343,14 @@ export async function upscaleProfessional(
 
 /**
  * Run the {@link detectSleeveCornersBest} seed against a stored capture on demand — the
- * corner editor's "Detect corners" button. Returns the detected corners, or `null` when
- * neither detector can separate the sleeve from the background (the caller leaves the
- * handles put).
+ * corner editor's "Detect corners" button. Returns the detected corners plus a confidence
+ * score and which detector won (so the editor can tell the admin how hard to scrutinise the
+ * seed), or `null` when neither detector can separate the sleeve from the background (the
+ * caller leaves the handles put).
  */
 export async function detectCaptureCorners(
 	capturePhotoKey: string,
-): Promise<NormalizedCorners | null> {
+): Promise<SleeveDetection | null> {
 	return detectSleeveCornersBest(await loadCapture(capturePhotoKey));
 }
 
@@ -375,7 +379,7 @@ export async function professionalPipeline(
 		band = parseCornerBand(record.sleeveCornersJson);
 	} else {
 		const detected = await detectSleeveCornersBest(capture);
-		band = detected ? bandFromQuad(detected) : DEFAULT_BAND;
+		band = detected ? bandFromQuad(detected.corners) : DEFAULT_BAND;
 	}
 	const { key: professionalKey } = await warpEncodeStore(
 		capture,

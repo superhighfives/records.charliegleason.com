@@ -7,9 +7,10 @@
 
 use image::GenericImageView;
 
-// onnxruntime reference for capture_384.png (TL,TR,BR,BL normalised).
+// onnxruntime reference for capture_384.png (TL,TR,BR,BL normalised). Regenerated whenever the
+// model is retrained (ml/train.py) — via onnxruntime on the exported ONNX; see ml/gen_ref.
 const EXPECTED: [f64; 8] = [
-    0.0561, 0.0979, 0.9580, 0.0979, 0.9766, 0.9855, 0.0432, 0.9881,
+    0.0653, 0.0821, 0.9642, 0.0866, 0.9812, 0.9843, 0.0347, 0.9862,
 ];
 
 #[test]
@@ -19,7 +20,9 @@ fn matches_onnxruntime_reference() {
     let (w, h) = img.dimensions();
     let rgba = img.to_rgba8().into_raw();
 
-    let got = sleeve_corner_net::detect(&rgba, w, h).expect("detect returned None");
+    let got = sleeve_corner_net::detect(&rgba, w, h)
+        .expect("detect returned None")
+        .quad;
 
     let max_diff = got
         .iter()

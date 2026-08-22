@@ -22,6 +22,35 @@ export function detectSleeveCorners(rgba, width, height) {
     return v2;
 }
 
+/**
+ * Detect the sleeve's corners AND report the segmentation's own confidence signals, so the
+ * TS orchestrator (`detectSleeveCornersBest`) can *reconcile* this colour-segmentation
+ * detector against the learned net on every capture rather than only reaching for it when the
+ * net's wasm fails to load. That reconciliation is what lets a confident segmentation override
+ * an out-of-distribution net miss — e.g. a neon-pink sleeve on tan card, which segments
+ * trivially (rectangularity ~0.96) but the net has never seen, so it regresses toward a
+ * frame-filling mean. See the module doc in `sleeve-detect-wasm.ts`.
+ *
+ * Returns a flat array, or empty when the image is too small / no blob was found at all:
+ *   `[accepted, rectangularity, blob_area_frac, x0,y0, x1,y1, x2,y2, x3,y3]`
+ * `accepted` is 1.0 when the fitted quad cleared every gate (so it equals what
+ * `detect_sleeve_corners` returns non-empty) and 0.0 when a blob was fitted but a gate rejected
+ * it. The quad (TL,TR,BR,BL normalised) is present in *both* cases — a soft-rejected fit is
+ * still worth comparing against the net's geometry to gauge agreement.
+ * @param {Uint8Array} rgba
+ * @param {number} width
+ * @param {number} height
+ * @returns {Float64Array}
+ */
+export function detectSleeveCornersScored(rgba, width, height) {
+    const ptr0 = passArray8ToWasm0(rgba, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.detectSleeveCornersScored(ptr0, len0, width, height);
+    var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v2;
+}
+
 export function init() {
     wasm.init();
 }

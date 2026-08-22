@@ -81,38 +81,70 @@ fn preprocess(rgba: &[u8], width: u32, height: u32) -> Option<Tensor> {
     Tensor::from_shape(&[1, 3, SIDE, SIDE], &data).ok()
 }
 
-/// Core inference, native-testable (no wasm-bindgen). Returns 8 normalised corner values
-/// (TL,TR,BR,BL) or `None` on any failure.
-pub fn detect(rgba: &[u8], width: u32, height: u32) -> Option<[f64; 8]> {
+/// A learned detection: the corner quad, plus — when the model has a heteroscedastic head
+/// (`ml/train.py`) — the model's own per-corner positional uncertainty (`sigma`, in normalised
+/// frame units; larger = less sure). `sigma` is `None` for an older single-output model, so the
+/// wasm contract and callers stay backward-compatible.
+pub struct NetDetection {
+    pub quad: [f64; 8],
+    pub sigma: Option<[f64; 4]>,
+}
+
+/// Core inference, native-testable (no wasm-bindgen). Returns the corner quad (TL,TR,BR,BL) and
+/// optional per-corner uncertainty, or `None` on any failure.
+pub fn detect(rgba: &[u8], width: u32, height: u32) -> Option<NetDetection> {
     let input = preprocess(rgba, width, height)?;
-    let vals = with_model(|model| -> Option<Vec<f32>> {
+    let (corners, log_var) = with_model(|model| -> Option<(Vec<f32>, Option<Vec<f32>>)> {
         let out = model.run(tvec!(input.into())).ok()?;
-        Some(
-            out[0]
-                .to_array_view::<f32>()
-                .ok()?
-                .iter()
-                .copied()
-                .collect(),
-        )
+        let corners = out[0].to_array_view::<f32>().ok()?.iter().copied().collect();
+        // Second output (log-variance) only exists on a heteroscedastic model; absent on the
+        // legacy single-output export, in which case there's no learned confidence.
+        let log_var = out
+            .get(1)
+            .and_then(|o| o.to_array_view::<f32>().ok())
+            .map(|v| v.iter().copied().collect());
+        Some((corners, log_var))
     })?;
-    if vals.len() != 8 || vals.iter().any(|v| !v.is_finite()) {
+    if corners.len() != 8 || corners.iter().any(|v| !v.is_finite()) {
         return None;
     }
     let mut quad = [0f64; 8];
-    for (i, v) in vals.iter().enumerate() {
-        // sigmoid head already bounds to [0,1]; clamp defensively.
+    for (i, v) in corners.iter().enumerate() {
+        // sigmoid head already bounds the means to [0,1]; clamp defensively.
         quad[i] = (*v as f64).clamp(0.0, 1.0);
     }
-    Some(quad)
+    // Per-corner sigma from the 8 per-coordinate log-variances: sigma_coord = exp(0.5·log_var),
+    // combined per corner as the RMS of its x/y sigmas. None unless the model emitted a valid
+    // length-8 log_var.
+    let sigma = log_var.and_then(|lv| {
+        if lv.len() != 8 || lv.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let s: Vec<f64> = lv.iter().map(|v| (0.5 * *v as f64).exp()).collect();
+        Some([
+            ((s[0] * s[0] + s[1] * s[1]) / 2.0).sqrt(),
+            ((s[2] * s[2] + s[3] * s[3]) / 2.0).sqrt(),
+            ((s[4] * s[4] + s[5] * s[5]) / 2.0).sqrt(),
+            ((s[6] * s[6] + s[7] * s[7]) / 2.0).sqrt(),
+        ])
+    });
+    Some(NetDetection { quad, sigma })
 }
 
-/// wasm entry point. Returns a flat length-8 `Vec<f64>` (TL,TR,BR,BL normalised) or an empty
-/// vec on failure — same convention as `sleeve-detect`'s `detectSleeveCorners`.
+/// wasm entry point. Returns a flat `Vec<f64>`: the 8 normalised corners (TL,TR,BR,BL), followed
+/// by 4 per-corner uncertainties (sigma) **when the model reports them** — so length is 8 for a
+/// legacy model and 12 for a heteroscedastic one. Empty vec on failure. Same empty-on-failure
+/// convention as `sleeve-detect`'s `detectSleeveCorners`.
 #[wasm_bindgen(js_name = detectSleeveCornersNet)]
 pub fn detect_sleeve_corners_net(rgba: &[u8], width: u32, height: u32) -> Vec<f64> {
     match detect(rgba, width, height) {
-        Some(q) => q.to_vec(),
+        Some(d) => {
+            let mut out = d.quad.to_vec();
+            if let Some(sigma) = d.sigma {
+                out.extend_from_slice(&sigma);
+            }
+            out
+        }
         None => Vec::new(),
     }
 }

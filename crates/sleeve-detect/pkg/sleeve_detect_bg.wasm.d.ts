@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const detectSleeveCorners: (a: number, b: number, c: number, d: number) => [number, number];
+export const detectSleeveCornersScored: (a: number, b: number, c: number, d: number) => [number, number];
 export const init: () => void;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;

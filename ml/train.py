@@ -2,7 +2,9 @@
 
 Runs 5-fold out-of-fold validation (prints the comparison table from the README), then trains
 one model on all records and exports ONNX with ImageNet normalisation baked into the graph
-(input: 1x3x224x224 float [0,1] RGB NCHW; output: 1x8 = TL,TR,BR,BL in [0,1]).
+(input: 1x3x384x384 float [0,1] RGB NCHW; outputs: corners 1x8 = TL,TR,BR,BL in [0,1], and
+log_var 1x8 = the model's own per-coordinate uncertainty, so a caller can tell a confident fit
+from an out-of-distribution guess — see the heteroscedastic head below and sleeve-detect-wasm.ts).
 
 Usage: python train.py            (validate + train-all + export)
        python train.py --no-val   (skip the 5-fold validation, just train + export)
@@ -37,12 +39,23 @@ def load_image(i):
 
 
 def augment(img, pts):
-    """Rotation ±12° / scale / translation about centre + colour jitter; labels follow."""
+    """Rotation ±12° / scale / translation about centre + hue/sat + brightness/contrast jitter;
+    labels follow the geometric part."""
     M = cv2.getRotationMatrix2D((WS / 2, WS / 2), np.random.uniform(-12, 12), np.random.uniform(0.88, 1.12))
     M[0, 2] += np.random.uniform(-0.05, 0.05) * WS
     M[1, 2] += np.random.uniform(-0.05, 0.05) * WS
     img = cv2.warpAffine(img, M, (WS, WS), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
     pts = (M @ np.hstack([pts, np.ones((4, 1))]).T).T
+    # Hue/saturation jitter. The dataset is small (~300) and skewed to conventional artwork, so a
+    # vivid/neon sleeve is out-of-distribution and the net regresses it toward a frame-filling
+    # mean (a real miss — see record 310, a fluorescent-pink Madonna sleeve). Randomising hue and
+    # saturation teaches colour-invariance, so a neon sleeve is localised like any other. Wider
+    # hue swing than a typical ±10° jitter precisely to reach those saturated corners of colour
+    # space the captures don't cover.
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hsv[..., 0] = (hsv[..., 0] + np.random.uniform(-25, 25)) % 180  # OpenCV hue is 0..179
+    hsv[..., 1] = np.clip(hsv[..., 1] * np.random.uniform(0.6, 1.4), 0, 255)
+    img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
     img = img.astype(np.float32) * np.random.uniform(0.8, 1.2)
     m = img.mean()
     img = np.clip((img - m) * np.random.uniform(0.8, 1.2) + m, 0, 255)
@@ -67,9 +80,28 @@ class CornerSet(Dataset):
                 torch.from_numpy((pts / WS).reshape(-1).astype(np.float32)))
 
 
+class HeteroHead(nn.Module):
+    """Replaces MobileNetV3's final classifier layer with a *heteroscedastic* head: 8 corner
+    means (sigmoid-bounded to [0,1]) plus 8 per-coordinate log-variances (unbounded). The
+    log-variance is the model's own uncertainty about each coordinate, learned via Gaussian NLL
+    (see {@link train_model}). It exists so the net can say "I don't know" on out-of-distribution
+    input — a neon sleeve it has never seen — by predicting a large variance, instead of emitting
+    a confident frame-filling guess indistinguishable from a good fit. The corner editor reads it
+    as a confidence signal (`sleeve-detect-wasm.ts`); the mean is byte-for-byte the same
+    prediction the old 8-output head produced, so accuracy is unchanged."""
+
+    def __init__(self, in_features):
+        super().__init__()
+        self.fc = nn.Linear(in_features, 16)
+
+    def forward(self, x):
+        out = self.fc(x)
+        return torch.sigmoid(out[:, :8]), out[:, 8:]
+
+
 def make_model():
     m = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.IMAGENET1K_V1)
-    m.classifier[-1] = nn.Sequential(nn.Linear(m.classifier[-1].in_features, 8), nn.Sigmoid())
+    m.classifier[-1] = HeteroHead(m.classifier[-1].in_features)
     return m.to(DEVICE)
 
 
@@ -77,13 +109,22 @@ def train_model(ids, labels, imgs):
     model = make_model()
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, EPOCHS)
-    lossf = nn.SmoothL1Loss()
     dl = DataLoader(CornerSet(ids, labels, imgs, True), batch_size=BATCH, shuffle=True)
     for _ in range(EPOCHS):
         model.train()
         for x, y in dl:
             opt.zero_grad()
-            lossf(model(x.to(DEVICE)), y.to(DEVICE)).backward()
+            mean, log_var = model(x.to(DEVICE))
+            # Gaussian NLL, spelled out in native ops: 0.5·(exp(-log_var)·(mean-target)² +
+            # log_var). Equivalent to nn.GaussianNLLLoss(full=False) with var=exp(log_var), but
+            # that op has no MPS kernel and silently falls back to CPU every batch (≈10× slower);
+            # these primitives all run on-device. The mean is still fit by the squared-error term,
+            # down-weighted per coordinate by its predicted variance — so the net minimises loss
+            # on a genuinely ambiguous corner by admitting uncertainty (raising log_var) rather
+            # than forcing a wrong-but-confident point. log_var is clamped for a stable exp.
+            log_var = log_var.clamp(-10.0, 10.0)
+            nll = 0.5 * (torch.exp(-log_var) * (mean - y.to(DEVICE)) ** 2 + log_var)
+            nll.mean().backward()
             opt.step()
         sched.step()
     return model
@@ -96,12 +137,14 @@ def predict(model, ids, labels, imgs):
         ds = CornerSet(ids, labels, imgs, False)
         for k in range(len(ds)):
             x, _ = ds[k]
-            out[ids[k]] = model(x.unsqueeze(0).to(DEVICE)).cpu().numpy().reshape(4, 2).tolist()
+            mean, _ = model(x.unsqueeze(0).to(DEVICE))
+            out[ids[k]] = mean.cpu().numpy().reshape(4, 2).tolist()
     return out
 
 
 class Wrapped(nn.Module):
-    """Input [0,1] NCHW RGB -> normalise -> backbone. Bakes normalisation into the export."""
+    """Input [0,1] NCHW RGB -> normalise -> backbone. Bakes normalisation into the export.
+    Returns the head's (corners, log_var) tuple as two ONNX outputs."""
 
     def __init__(self, backbone):
         super().__init__()
@@ -118,10 +161,14 @@ def export(model):
     wrapped.backbone.load_state_dict(model.state_dict())
     wrapped.eval().cpu()
     out = os.path.join(HERE, "corner_model.onnx")
+    # Two outputs: corners (means) first, log_var second — the Rust net crate reads them by
+    # index in that order (out[0], out[1]) and is backward-compatible with a single-output model.
     torch.onnx.export(wrapped, torch.zeros(1, 3, WS, WS), out, input_names=["input"],
-                      output_names=["corners"], opset_version=17, dynamo=False)
+                      output_names=["corners", "log_var"], opset_version=17, dynamo=False)
     json.dump({"input": "1x3x384x384 float [0,1] RGB NCHW (resize 384, /255)",
-               "output": "1x8 = TL,TR,BR,BL (x,y) in [0,1]"},
+               "outputs": {"corners": "1x8 = TL,TR,BR,BL (x,y) in [0,1]",
+                           "log_var": "1x8 = per-coordinate log-variance (uncertainty); "
+                           "sigma = exp(0.5·log_var) in frame units"}},
               open(os.path.join(HERE, "corner_model.meta.json"), "w"), indent=2)
     print(f"exported {out} ({os.path.getsize(out) / 1e6:.2f} MB)")
 

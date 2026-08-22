@@ -24,6 +24,12 @@ import {
 	type NormalizedCorner,
 	type NormalizedCorners,
 } from "#/lib/sleeve-corners";
+// Type-only: the detection object shape. Importing the value module would pull its dynamic
+// wasm imports into the client bundle; the types erase at compile time, so this stays free.
+import type {
+	DetectionSource,
+	SleeveDetection,
+} from "#/lib/sleeve-detect-wasm";
 import { cn } from "#/lib/utils";
 
 const CORNER_LABELS = ["Top-left", "Top-right", "Bottom-right", "Bottom-left"];
@@ -50,6 +56,53 @@ const LOUPE_GAP = 20; // gap between the corner and the magnifier, px
 const KEYBOARD_LOUPE_HOLD_MS = 2000; // how long the loupe stays up after an arrow-key nudge
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+
+// Human-readable name for whichever detector produced the seed (see SleeveDetection.source).
+const DETECTION_SOURCE_LABEL: Record<DetectionSource, string> = {
+	net: "learned detector",
+	segmentation: "colour segmentation",
+	"segmentation-override": "colour segmentation",
+	"band-scan": "edge scan",
+};
+
+/**
+ * Map a detection to the badge shown under the editor: a colour band, a percentage, and — for
+ * the cases worth a closer look (a detector disagreement or a low score) — a one-line nudge to
+ * scrutinise. The admin always reviews the seed; this just says how hard to look. Bands match
+ * {@link confidenceBand} in sleeve-detect-wasm.
+ */
+function detectionBadge(d: SleeveDetection): {
+	dot: string;
+	text: string;
+	scrutinise: string | null;
+} {
+	const pct = Math.round(d.confidence * 100);
+	const band =
+		d.confidence >= 0.75 ? "high" : d.confidence >= 0.45 ? "medium" : "low";
+	const dot =
+		band === "high"
+			? "bg-emerald-500"
+			: band === "medium"
+				? "bg-amber-500"
+				: "bg-red-500";
+	const source = DETECTION_SOURCE_LABEL[d.source];
+	if (d.source === "segmentation-override") {
+		return {
+			dot: "bg-amber-500",
+			text: `${pct}% · ${source} (detectors disagreed)`,
+			scrutinise:
+				"The learned detector looked out of its depth, so this used the colour outline — give it a careful look.",
+		};
+	}
+	return {
+		dot,
+		text: `${pct}% confidence · ${source}`,
+		scrutinise:
+			band === "low"
+				? "Low confidence — check the handles before applying."
+				: null,
+	};
+}
 
 // The refined-edge overlay runs the same edge search the server does, on a small
 // decode of the capture — big enough that the sleeve edge survives downscaling,
@@ -166,8 +219,9 @@ export function CornerEditor({
 	src: string;
 	value: CornerBand;
 	onChange: (band: CornerBand) => void;
-	/** Optional: run detection (server-side) and return suggested corners to seed. */
-	onDetect?: () => Promise<NormalizedCorners | null>;
+	/** Optional: run detection (server-side) and return the suggested corners plus a
+	 *  confidence score / source to seed and badge. */
+	onDetect?: () => Promise<SleeveDetection | null>;
 	disabled?: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -179,6 +233,10 @@ export function CornerEditor({
 	// The set of handles selected for keyboard nudging, keyed by `${quad}:${index}`.
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [detecting, setDetecting] = useState(false);
+	// The last detection result, kept so its confidence badge persists under the editor after
+	// the toast fades — cleared once the admin edits a handle (the seed is no longer "the
+	// detection"). Never gates anything: the admin reviews every seed regardless.
+	const [detection, setDetection] = useState<SleeveDetection | null>(null);
 	// Which handle the loupe magnifies — the hovered/focused one, or the one being
 	// dragged. The rendered image box size, tracked so the magnifier can map
 	// normalised corner coords to background pixels.
@@ -291,9 +349,24 @@ export function CornerEditor({
 			const found = await onDetect();
 			if (found) {
 				// The detector returns a single quad on the edge — seed the band around it.
-				onChange(bandFromQuad(found));
-				toast.success("Detected the sleeve — nudge the handles to fine-tune.");
+				onChange(bandFromQuad(found.corners));
+				setDetection(found);
+				if (found.source === "segmentation-override") {
+					toast.warning("Detectors disagreed — used the colour outline.", {
+						description:
+							"The learned detector looked out of its depth. Give the seed a careful look.",
+					});
+				} else if (found.confidence < 0.45) {
+					toast.message("Detected the sleeve, but low confidence.", {
+						description: "Check the handles carefully before applying.",
+					});
+				} else {
+					toast.success(
+						"Detected the sleeve — nudge the handles to fine-tune.",
+					);
+				}
 			} else {
+				setDetection(null);
 				toast.message("Couldn't find the sleeve automatically.", {
 					description:
 						"Drag the outer handles onto the background and the inner ones onto the sleeve.",
@@ -315,11 +388,13 @@ export function CornerEditor({
 	// off a genuinely ambiguous boundary.
 	const snapToEdges = () => {
 		if (disabled || !refined) return;
+		setDetection(null);
 		onChange(bandFromQuad(refined.corners));
 		toast.success("Snapped the band to the detected edges.");
 	};
 
 	const setCorner = (quad: QuadKey, index: number, point: NormalizedCorner) => {
+		setDetection(null);
 		onChange({
 			...value,
 			[quad]: value[quad].map((c, i) =>
@@ -343,6 +418,7 @@ export function CornerEditor({
 	// Nudge every selected handle by the same delta, clamped per-corner to the frame.
 	const moveSelected = (dx: number, dy: number) => {
 		if (disabled || selected.size === 0) return;
+		setDetection(null);
 		const next = { ...value };
 		for (const quad of QUADS) {
 			next[quad] = value[quad].map((c, i) =>
@@ -681,6 +757,26 @@ export function CornerEditor({
 					)}
 				</div>
 			</div>
+			{detection &&
+				(() => {
+					const badge = detectionBadge(detection);
+					return (
+						<div className="space-y-0.5">
+							<div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+								<span
+									className={cn("size-2 shrink-0 rounded-full", badge.dot)}
+									aria-hidden
+								/>
+								<span>{badge.text}</span>
+							</div>
+							{badge.scrutinise && (
+								<p className="text-xs text-amber-600 dark:text-amber-400">
+									{badge.scrutinise}
+								</p>
+							)}
+						</div>
+					);
+				})()}
 		</div>
 	);
 }
