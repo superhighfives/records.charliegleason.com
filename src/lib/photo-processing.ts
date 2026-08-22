@@ -1015,6 +1015,25 @@ export function featherMask(
 	return boxBlur1(mask, width, height, radius, 2);
 }
 
+/**
+ * Re-lock certified-foreground pixels (trimap value 255) back to fully opaque in an
+ * alpha mask, in place. The matte's trimap 255 region is the admin's inner quad —
+ * certified sleeve, definite foreground — but ViTMatte treats the trimap as guidance,
+ * not a hard constraint, and on a low-contrast or worn cover it returns alpha < 1 well
+ * inside that locked interior, carving a concave bite into what is by construction a
+ * filled convex quad. Nothing else downstream refills it (keepLargestComponent drops
+ * islands, it doesn't fill holes; despeckleMask only shrinks; the veto only removes), so
+ * this is the single place that re-asserts the guarantee. Call it after
+ * despeckle/largest-component (so neither can nibble the re-locked interior) and before
+ * feather (so the only soft transition sits at the true sleeve edge, never inside it).
+ */
+export function relockCertifiedForeground(
+	mask: Uint8ClampedArray,
+	trimap: Uint8ClampedArray,
+): void {
+	for (let i = 0; i < mask.length; i++) if (trimap[i] === 255) mask[i] = 255;
+}
+
 /** Multiply `img`'s alpha by `mask` (0..255) in place — cut the sleeve out to the mask. */
 export function applyMask(img: RgbaImage, mask: Uint8ClampedArray): void {
 	const d = img.data;

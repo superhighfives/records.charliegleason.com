@@ -19,8 +19,8 @@ import {
 } from "#/lib/photo-processing";
 import {
 	bandFromQuad,
+	bandInvalidReason,
 	type CornerBand,
-	isBandValid,
 	type NormalizedCorner,
 	type NormalizedCorners,
 } from "#/lib/sleeve-corners";
@@ -286,7 +286,8 @@ export function CornerEditor({
 	} | null>(null);
 	const refineRafRef = useRef<number | null>(null);
 
-	const bandValid = isBandValid(value);
+	const bandProblem = bandInvalidReason(value);
+	const bandValid = bandProblem === null;
 
 	useEffect(() => {
 		let cancelled = false;
@@ -707,10 +708,16 @@ export function CornerEditor({
 					<Loupe src={src} point={value[loupe.quad][loupe.index]} box={box} />
 				)}
 			</div>
-			{!bandValid && (
+			{bandProblem === "crossed" && (
 				<p className="text-xs text-red-600 dark:text-red-400" role="alert">
 					The inner (blue) corners must all sit inside the outer frame — fix the
 					crossed handles before applying.
+				</p>
+			)}
+			{bandProblem === "narrow" && (
+				<p className="text-xs text-red-600 dark:text-red-400" role="alert">
+					The band is too thin — widen the gap between the inner and outer
+					frames before applying.
 				</p>
 			)}
 			<div className="flex items-center justify-between gap-2">

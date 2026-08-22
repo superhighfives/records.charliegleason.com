@@ -28,6 +28,7 @@ import {
 	refineQuadEdges,
 	refineQuadEdgesDetailed,
 	reframeFromCorners,
+	relockCertifiedForeground,
 	shadowFromAlpha,
 	vetoBackgroundAlpha,
 	warpToQuad,
@@ -990,6 +991,44 @@ describe("despeckleMask", () => {
 		expect(out[5 * w + 5]).toBe(255); // inside the block — kept
 		expect(out[2 * w + 2]).toBe(255); // block corner — kept
 		expect(out[16 * w + 16]).toBe(0); // the fleck — erased
+	});
+});
+
+describe("relockCertifiedForeground", () => {
+	it("refills a bite in certified foreground without touching the unknown band or background", () => {
+		const w = 8;
+		const h = 8;
+		// trimap: a 4×4 certified-foreground block (255) in the middle, band (128) around it,
+		// the rest background (0).
+		const trimap = new Uint8ClampedArray(w * h);
+		for (let y = 0; y < h; y++)
+			for (let x = 0; x < w; x++) {
+				const inFg = x >= 2 && x < 6 && y >= 2 && y < 6;
+				const inBand = x >= 1 && x < 7 && y >= 1 && y < 7;
+				trimap[y * w + x] = inFg ? 255 : inBand ? 128 : 0;
+			}
+		// mask: the model carved a concave bite out of the certified interior and left the
+		// band partly soft.
+		const mask = trimap.map((v) => (v === 255 ? 255 : v === 128 ? 90 : 0));
+		mask[3 * w + 3] = 0; // the bite inside certified foreground
+		mask[4 * w + 4] = 120;
+
+		relockCertifiedForeground(mask, trimap);
+
+		// Every certified-foreground pixel is fully opaque again.
+		for (let y = 2; y < 6; y++)
+			for (let x = 2; x < 6; x++) expect(mask[y * w + x]).toBe(255);
+		// The unknown band's soft alpha is untouched (not a 128/255 pixel).
+		expect(mask[1 * w + 1]).toBe(90);
+		// Background stays clear.
+		expect(mask[0]).toBe(0);
+	});
+
+	it("leaves an already-opaque mask unchanged", () => {
+		const trimap = new Uint8ClampedArray([255, 128, 0, 255]);
+		const mask = new Uint8ClampedArray([255, 200, 0, 255]);
+		relockCertifiedForeground(mask, trimap);
+		expect(Array.from(mask)).toEqual([255, 200, 0, 255]);
 	});
 });
 
