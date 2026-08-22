@@ -753,6 +753,18 @@ export function CornerEditor({
 								<Scan className="size-4" />
 							)}
 							{detecting ? "Detecting…" : "Detect corners"}
+							{detection && !detecting && (
+								<span className="ml-1 inline-flex items-center gap-1 tabular-nums">
+									<span
+										className={cn(
+											"size-1.5 rounded-full",
+											detectionBadge(detection).dot,
+										)}
+										aria-hidden
+									/>
+									{Math.round(detection.confidence * 100)}%
+								</span>
+							)}
 						</Button>
 					)}
 				</div>
