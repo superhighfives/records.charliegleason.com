@@ -98,12 +98,26 @@ describe("isTransientContainerReset", () => {
 		).toBe(true);
 	});
 
+	it("matches no-instance-available (503) and failed-to-start (500) — RECORDS-25 / RECORDS-24", () => {
+		expect(
+			isTransientContainerReset(
+				new Error(
+					"enhance container 503: There is no Container instance available at this time.",
+				),
+			),
+		).toBe(true);
+		expect(
+			isTransientContainerReset(
+				new Error(
+					"matte container 500: Failed to start container: Network connection lost.",
+				),
+			),
+		).toBe(true);
+	});
+
 	it("is false for unrelated failures — so only the reset is retried", () => {
 		expect(
 			isTransientContainerReset(new Error("matte container 500: boom")),
-		).toBe(false);
-		expect(
-			isTransientContainerReset(new Error("Network connection lost.")),
 		).toBe(false);
 		expect(isTransientContainerReset(null)).toBe(false);
 	});
