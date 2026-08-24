@@ -44,7 +44,7 @@ export class NonRetryableError extends Error {
  */
 export function isTransientContainerReset(err: unknown): boolean {
 	const message = err instanceof Error ? err.message : String(err);
-	return /exceeded timeout|to be reset|code was updated|the container to exit|suddenly disconnected|no Container instance available|Failed to start container/i.test(
+	return /exceeded timeout|to be reset|code was updated|the container to exit|suddenly disconnected|no Container instance available|Failed to start container:.*Network connection lost/i.test(
 		message,
 	);
 }
