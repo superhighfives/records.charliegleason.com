@@ -27,13 +27,11 @@ async function retrainAlreadyInFlight(token: string): Promise<boolean> {
 	const [runsRes, prsRes] = await Promise.all([
 		fetch(
 			`https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW}/runs?per_page=5`,
-			{ headers: ghHeaders(token) },
+			{ headers: ghHeaders(token), signal: AbortSignal.timeout(10_000) },
 		),
 		fetch(
 			`https://api.github.com/repos/${OWNER}/${REPO}/pulls?state=open&per_page=20`,
-			{
-				headers: ghHeaders(token),
-			},
+			{ headers: ghHeaders(token), signal: AbortSignal.timeout(10_000) },
 		),
 	]);
 	if (runsRes.ok) {
@@ -41,11 +39,21 @@ async function retrainAlreadyInFlight(token: string): Promise<boolean> {
 			workflow_runs: Array<{ status: string }>;
 		};
 		if (body.workflow_runs.some((r) => r.status !== "completed")) return true;
+	} else {
+		Sentry.captureException(
+			new Error(
+				`retrainAlreadyInFlight: runs check failed (${runsRes.status})`,
+			),
+		);
 	}
 	if (prsRes.ok) {
 		const body = (await prsRes.json()) as Array<{ title: string }>;
 		if (body.some((pr) => pr.title.startsWith("Retrain corner model")))
 			return true;
+	} else {
+		Sentry.captureException(
+			new Error(`retrainAlreadyInFlight: PRs check failed (${prsRes.status})`),
+		);
 	}
 	return false;
 }
@@ -65,14 +73,21 @@ export function maybeTriggerRetrain(): Promise<void> {
 			const { added, changed } = await countDrift();
 			if (added + changed < RETRAIN_THRESHOLD) return;
 			if (await retrainAlreadyInFlight(token)) return;
-			await fetch(
+			const res = await fetch(
 				`https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW}/dispatches`,
 				{
 					method: "POST",
 					headers: { ...ghHeaders(token), "Content-Type": "application/json" },
 					body: JSON.stringify({ ref: "main" }),
+					signal: AbortSignal.timeout(10_000),
 				},
 			);
+			if (!res.ok) {
+				Sentry.captureException(
+					new Error(`retrain dispatch failed (${res.status})`),
+				);
+				return;
+			}
 			await notifyRetrainDispatched(added, changed);
 		} catch (err) {
 			Sentry.captureException(err);

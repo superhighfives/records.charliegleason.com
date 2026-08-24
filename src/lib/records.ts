@@ -1055,11 +1055,12 @@ export const detectCorners = createServerFn({ method: "POST" })
  * matte. The actual GPU work (~a minute) runs in the queue consumer, split across two
  * isolates ({@link generateProfessionalCover} then {@link commitProfessionalMatte}). This
  * server fn only persists the edited corners + tone knobs, flags
- * `professionalJobStatus: "queued"`, and enqueues the job — returning immediately so the
- * editor can close and the admin can move on. Crucially it does NOT touch the display
- * `professionalStatus`, so an already-approved cover stays live until the consumer swaps in
- * the new keys. Requires a capture to warp — throws if there's none. Returns the updated
- * row (now `queued`), or null if the record's gone.
+ * `professionalJobStatus: "queued"`, and enqueues the job — returning as soon as that's done
+ * so the editor can close and the admin can move on (one exception: it also awaits
+ * {@link maybeTriggerRetrain}, a bounded GitHub API dispatch, before returning). Crucially it
+ * does NOT touch the display `professionalStatus`, so an already-approved cover stays live
+ * until the consumer swaps in the new keys. Requires a capture to warp — throws if there's
+ * none. Returns the updated row (now `queued`), or null if the record's gone.
  */
 export const reframeRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
