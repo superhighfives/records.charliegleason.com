@@ -20,7 +20,7 @@ export class NonRetryableError extends Error {
 
 /**
  * A transient Cloudflare error from a container-fronting Durable Object that a retry with a
- * fresh stub recovers. Four shapes, all of which lose only in-memory state and which
+ * fresh stub recovers. Six shapes, all of which lose only in-memory state and which
  * Cloudflare's guidance is to retry:
  *   - a DO storage op exceeds its ~30s timeout and the platform resets the object mid-request
  *     ("…storage operation exceeded timeout which caused object to be reset");
@@ -31,7 +31,12 @@ export class NonRetryableError extends Error {
  *     replacement, which with no drain grace kills the in-flight request outright;
  *   - the container's transport drops mid-request and it answers 5xx with "Container suddenly
  *     disconnected, try again" — the same class of loss, but surfaced as a response *body*
- *     rather than a thrown error, so the caller has to test the body text (see postToContainer).
+ *     rather than a thrown error, so the caller has to test the body text (see postToContainer);
+ *   - no instance is available yet — a burst past `max_instances` or an instance still
+ *     provisioning answers 503 with "There is no Container instance available at this time"
+ *     (RECORDS-25) — a fresh stub/attempt gives the pool a moment to free up or finish booting;
+ *   - the container fails to start with "Failed to start container: Network connection lost"
+ *     (RECORDS-24) — a boot-time network blip, not a bad request.
  * A caller keeps {@link withRetry} retrying these (getRandom re-picks a fresh instance/stub)
  * while classifying everything else as {@link NonRetryableError}. Lives here (dependency-free)
  * so it's testable without importing its Workers-bound caller — same reason as the rest of
@@ -39,7 +44,7 @@ export class NonRetryableError extends Error {
  */
 export function isTransientContainerReset(err: unknown): boolean {
 	const message = err instanceof Error ? err.message : String(err);
-	return /exceeded timeout|to be reset|code was updated|the container to exit|suddenly disconnected/i.test(
+	return /exceeded timeout|to be reset|code was updated|the container to exit|suddenly disconnected|no Container instance available|Failed to start container/i.test(
 		message,
 	);
 }
