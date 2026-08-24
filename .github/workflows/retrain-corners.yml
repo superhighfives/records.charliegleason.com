@@ -1,10 +1,17 @@
 name: Retrain corner model
 
-# Closes the corner-detector flywheel: on a weekly schedule (or manual dispatch) it checks how
-# many sleeve-corner labels have drifted since the model was last trained, and only if that's over
-# threshold does it run the full offline pipeline (export → 5-fold train → end-to-end metrics →
-# swap model + regen reference test + rebuild wasm) and open a PR with the metrics for review.
-# A model swap stays reviewed, not silent — this just removes the ~40-min manual toil.
+# Closes the corner-detector flywheel: it checks how many sleeve-corner labels have drifted
+# since the model was last trained, and only if that's over threshold does it run the full
+# offline pipeline (export → 5-fold train → end-to-end metrics → swap model + regen reference
+# test + rebuild wasm) and open a PR with the metrics for review. A model swap stays reviewed,
+# not silent — this just removes the ~40-min manual toil.
+#
+# Three triggers: the weekly schedule below (belt-and-braces), manual workflow_dispatch, and
+# maybeTriggerRetrain (src/lib/retrain-dispatch.ts) firing this same workflow_dispatch the
+# moment a corner-label save pushes drift over threshold — so retrain PRs open same-day instead
+# of waiting for Monday. That dispatcher already checks for an in-flight run / open retrain PR
+# before firing, so repeated saves don't queue duplicate ~2-4h runs; check_drift.py below is a
+# second, authoritative gate against the same race.
 #
 # Runs on GitHub-hosted Linux (CPU), so training is slow (~2-4h, well under the 6h job cap).
 # Requires repo secrets: CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID (D1/R2 read for the dataset

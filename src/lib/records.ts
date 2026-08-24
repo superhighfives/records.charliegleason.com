@@ -79,6 +79,7 @@ import {
 	type ReframeParams,
 	sanitizeReframeParams,
 } from "#/lib/reframe-params";
+import { maybeTriggerRetrain } from "#/lib/retrain-dispatch";
 import {
 	type CornerBand,
 	parseCornerBand,
@@ -1107,6 +1108,10 @@ export const reframeRecord = createServerFn({ method: "POST" })
 				.where(eq(records.id, id))
 				.returning();
 			await enqueueProfessional(id);
+			// This save just moved a corner label — if that's enough to cross the
+			// retrain-worthy drift threshold, kick the retrain workflow now instead of
+			// waiting for Monday's cron (see maybeTriggerRetrain for the dedup logic).
+			await maybeTriggerRetrain();
 			return row ?? null;
 		}),
 	);

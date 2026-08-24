@@ -25,6 +25,10 @@ interface __BaseEnv_Env {
 	// api.discogs.com directly.
 	DISCOGS_PROXY_URL?: string;
 	DISCOGS_PROXY_SECRET?: string;
+	// Fine-grained GitHub PAT (Actions: write, Contents: read, Pull requests: read) used
+	// to dispatch retrain-corners.yml on-demand from reframeRecord (see retrain-dispatch.ts).
+	// Unset in preview/dev: maybeTriggerRetrain no-ops without it.
+	GITHUB_DISPATCH_TOKEN?: string;
 	SERPAPI_KEY: string;
 	REPLICATE_API_KEY: string;
 	LASTFM_API_KEY: string;
