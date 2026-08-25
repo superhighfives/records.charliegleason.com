@@ -10,7 +10,7 @@ use image::GenericImageView;
 // onnxruntime reference for capture_384.png (TL,TR,BR,BL normalised). Regenerated whenever the
 // model is retrained (ml/train.py) — via onnxruntime on the exported ONNX; see ml/gen_ref.
 const EXPECTED: [f64; 8] = [
-    0.0653, 0.0821, 0.9642, 0.0866, 0.9812, 0.9843, 0.0347, 0.9862,
+    0.0657, 0.0843, 0.9615, 0.0873, 0.9797, 0.9863, 0.0306, 0.9844,
 ];
 
 #[test]
