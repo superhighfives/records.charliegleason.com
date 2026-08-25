@@ -115,6 +115,9 @@ jobs:
             exit 0
           fi
           git commit -m "Retrain corner model (drift ${{ steps.drift.outputs.drift }})"
+          # Re-authenticate right before pushing rather than trusting checkout's baked-in
+          # credentials to still be good after the multi-hour train step.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
           git push -u origin "$BRANCH"
           {
             echo "Automated retrain — **${{ steps.drift.outputs.drift }}** corner labels drifted since the last train (${{ steps.drift.outputs.added }} new, ${{ steps.drift.outputs.changed }} corrected)."
