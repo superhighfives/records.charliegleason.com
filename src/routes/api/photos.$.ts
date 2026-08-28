@@ -91,6 +91,6 @@ function clampWidth(raw: string | null): number | null {
 	);
 }
 
-function parseFormat(raw: string | null): keyof typeof OUTPUT_FORMATS {
+export function parseFormat(raw: string | null): keyof typeof OUTPUT_FORMATS {
 	return raw === "jpeg" ? "jpeg" : "webp";
 }
