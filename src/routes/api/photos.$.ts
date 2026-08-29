@@ -7,17 +7,27 @@ import { createFileRoute } from "@tanstack/react-router";
 // distinct (paid) Image Transformations per photo by varying the query param.
 const ALLOWED_WIDTHS = [350, 500, 800, 1600];
 
+// webp (the default) beats jpeg on size for every browser caller. jpeg exists only
+// for embedded callers with no webp decoder (e.g. the ESP32 record-slideshow board,
+// which only carries a JPEG decoder) — see `?format=` below.
+const OUTPUT_FORMATS = {
+	webp: "image/webp",
+	jpeg: "image/jpeg",
+} as const;
+
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
 /**
  * Serve a vinyl cover/matte photo from R2 by key (e.g. /api/photos/covers/abc.jpg).
  * Public read — cover art isn't sensitive.
  *
- * An optional `?w=` resizes + re-encodes to webp on the way out via the Cloudflare
- * Images binding — the stored masters run up to ~1MB, but no display surface
- * needs more than a few hundred px, so callers ask for the size they actually
- * render at (see `photoUrl` in `#/lib/cover`) instead of shipping the master
- * every time.
+ * An optional `?w=` resizes + re-encodes on the way out via the Cloudflare Images
+ * binding — the stored masters run up to ~1MB, but no display surface needs more
+ * than a few hundred px, so callers ask for the size they actually render at (see
+ * `photoUrl` in `#/lib/cover`) instead of shipping the master every time. `?format=`
+ * only takes effect alongside `?w=` (it selects the re-encode's output codec, so it's
+ * meaningless without a transform); omitted or unrecognized falls back to webp, the
+ * existing default every current caller relies on.
  */
 export const Route = createFileRoute("/api/photos/$")({
 	server: {
@@ -31,7 +41,8 @@ export const Route = createFileRoute("/api/photos/$")({
 
 				const contentType =
 					object.httpMetadata?.contentType ?? "application/octet-stream";
-				const width = clampWidth(new URL(request.url).searchParams.get("w"));
+				const searchParams = new URL(request.url).searchParams;
+				const width = clampWidth(searchParams.get("w"));
 				if (width == null) {
 					return new Response(object.body, {
 						headers: {
@@ -40,6 +51,7 @@ export const Route = createFileRoute("/api/photos/$")({
 						},
 					});
 				}
+				const format = parseFormat(searchParams.get("format"));
 
 				// Buffered (not streamed) into IMAGES so the bytes are still on hand for
 				// the fallback below if the transform itself fails — a stream can only
@@ -49,14 +61,23 @@ export const Route = createFileRoute("/api/photos/$")({
 				try {
 					const out = await env.IMAGES.input(new Blob([bytes]).stream())
 						.transform({ width, fit: "scale-down" })
-						.output({ format: "image/webp", quality: 82 });
+						.output({ format: OUTPUT_FORMATS[format], quality: 82 });
 					return new Response(await out.response().arrayBuffer(), {
 						headers: {
-							"content-type": "image/webp",
+							"content-type": OUTPUT_FORMATS[format],
 							"cache-control": IMMUTABLE_CACHE,
 						},
 					});
 				} catch (error) {
+					// The stored object is always webp today (see every `PHOTOS.put`
+					// call site), so falling back to its raw bytes is only safe when
+					// the caller actually asked for webp. A `?format=jpeg` caller (the
+					// ESP32 board, which can't decode webp) must not silently receive
+					// mislabeled webp bytes — fail loudly instead.
+					if (format !== "webp") {
+						console.error("Image transform failed, cannot honor format", error);
+						return new Response("Image transform failed", { status: 502 });
+					}
 					console.error("Image transform failed, serving original", error);
 					return new Response(bytes, {
 						headers: {
@@ -77,4 +98,8 @@ function clampWidth(raw: string | null): number | null {
 	return ALLOWED_WIDTHS.reduce((closest, width) =>
 		Math.abs(width - n) < Math.abs(closest - n) ? width : closest,
 	);
+}
+
+export function parseFormat(raw: string | null): keyof typeof OUTPUT_FORMATS {
+	return raw === "jpeg" ? "jpeg" : "webp";
 }
