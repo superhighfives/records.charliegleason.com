@@ -69,6 +69,15 @@ export const Route = createFileRoute("/api/photos/$")({
 						},
 					});
 				} catch (error) {
+					// The stored object is always webp today (see every `PHOTOS.put`
+					// call site), so falling back to its raw bytes is only safe when
+					// the caller actually asked for webp. A `?format=jpeg` caller (the
+					// ESP32 board, which can't decode webp) must not silently receive
+					// mislabeled webp bytes — fail loudly instead.
+					if (format !== "webp") {
+						console.error("Image transform failed, cannot honor format", error);
+						return new Response("Image transform failed", { status: 502 });
+					}
 					console.error("Image transform failed, serving original", error);
 					return new Response(bytes, {
 						headers: {
