@@ -18,6 +18,7 @@ import { Route as CollectionIndexRouteImport } from './routes/_collection/index'
 import { Route as ApiRecordsRouteImport } from './routes/api/records'
 import { Route as AdminCornerReviewRouteImport } from './routes/admin/corner-review'
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
+import { Route as ApiRecordsLiteRouteImport } from './routes/api/records.lite'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
 import { Route as ApiDiscogsCoverIdRouteImport } from './routes/api/discogs-cover.$id'
 import { Route as ApiCronMasterCheckRouteImport } from './routes/api/cron.master-check'
@@ -72,6 +73,11 @@ const AdminCaptureRoute = AdminCaptureRouteImport.update({
   path: '/capture',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const ApiRecordsLiteRoute = ApiRecordsLiteRouteImport.update({
+  id: '/lite',
+  path: '/lite',
+  getParentRoute: () => ApiRecordsRoute,
+} as any)
 const ApiPhotosSplatRoute = ApiPhotosSplatRouteImport.update({
   id: '/api/photos/$',
   path: '/api/photos/$',
@@ -125,7 +131,7 @@ export interface FileRoutesByFullPath {
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/admin/corner-review': typeof AdminCornerReviewRoute
-  '/api/records': typeof ApiRecordsRoute
+  '/api/records': typeof ApiRecordsRouteWithChildren
   '/admin/': typeof AdminIndexRoute
   '/records/$id': typeof CollectionRecordsIdRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
@@ -136,13 +142,14 @@ export interface FileRoutesByFullPath {
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
+  '/api/records/lite': typeof ApiRecordsLiteRoute
 }
 export interface FileRoutesByTo {
   '/404': typeof R404Route
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/admin/corner-review': typeof AdminCornerReviewRoute
-  '/api/records': typeof ApiRecordsRoute
+  '/api/records': typeof ApiRecordsRouteWithChildren
   '/': typeof CollectionIndexRoute
   '/admin': typeof AdminIndexRoute
   '/records/$id': typeof CollectionRecordsIdRoute
@@ -154,6 +161,7 @@ export interface FileRoutesByTo {
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
+  '/api/records/lite': typeof ApiRecordsLiteRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -163,7 +171,7 @@ export interface FileRoutesById {
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
   '/admin/corner-review': typeof AdminCornerReviewRoute
-  '/api/records': typeof ApiRecordsRoute
+  '/api/records': typeof ApiRecordsRouteWithChildren
   '/_collection/': typeof CollectionIndexRoute
   '/admin/': typeof AdminIndexRoute
   '/_collection/records/$id': typeof CollectionRecordsIdRoute
@@ -175,6 +183,7 @@ export interface FileRoutesById {
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
+  '/api/records/lite': typeof ApiRecordsLiteRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -196,6 +205,7 @@ export interface FileRouteTypes {
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
     | '/api/photos/$'
+    | '/api/records/lite'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/404'
@@ -214,6 +224,7 @@ export interface FileRouteTypes {
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
     | '/api/photos/$'
+    | '/api/records/lite'
   id:
     | '__root__'
     | '/_collection'
@@ -234,6 +245,7 @@ export interface FileRouteTypes {
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
     | '/api/photos/$'
+    | '/api/records/lite'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -241,7 +253,7 @@ export interface RootRouteChildren {
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
   R404Route: typeof R404Route
   R500Route: typeof R500Route
-  ApiRecordsRoute: typeof ApiRecordsRoute
+  ApiRecordsRoute: typeof ApiRecordsRouteWithChildren
   ApiAdminBackupRoute: typeof ApiAdminBackupRoute
   ApiAdminCaptureRoute: typeof ApiAdminCaptureRoute
   ApiCronDigestRoute: typeof ApiCronDigestRoute
@@ -314,6 +326,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/capture'
       preLoaderRoute: typeof AdminCaptureRouteImport
       parentRoute: typeof AdminRouteRoute
+    }
+    '/api/records/lite': {
+      id: '/api/records/lite'
+      path: '/lite'
+      fullPath: '/api/records/lite'
+      preLoaderRoute: typeof ApiRecordsLiteRouteImport
+      parentRoute: typeof ApiRecordsRoute
     }
     '/api/photos/$': {
       id: '/api/photos/$'
@@ -415,12 +434,24 @@ const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
   AdminRouteRouteChildren,
 )
 
+interface ApiRecordsRouteChildren {
+  ApiRecordsLiteRoute: typeof ApiRecordsLiteRoute
+}
+
+const ApiRecordsRouteChildren: ApiRecordsRouteChildren = {
+  ApiRecordsLiteRoute: ApiRecordsLiteRoute,
+}
+
+const ApiRecordsRouteWithChildren = ApiRecordsRoute._addFileChildren(
+  ApiRecordsRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   CollectionRouteRoute: CollectionRouteRouteWithChildren,
   AdminRouteRoute: AdminRouteRouteWithChildren,
   R404Route: R404Route,
   R500Route: R500Route,
-  ApiRecordsRoute: ApiRecordsRoute,
+  ApiRecordsRoute: ApiRecordsRouteWithChildren,
   ApiAdminBackupRoute: ApiAdminBackupRoute,
   ApiAdminCaptureRoute: ApiAdminCaptureRoute,
   ApiCronDigestRoute: ApiCronDigestRoute,
