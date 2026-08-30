@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Mark Phelps
+# SPDX-License-Identifier: Apache-2.0
+
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_USE_QRCODE=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# The full default CA bundle plus mbedtls's per-connection TLS buffers
+# starved the tiny ~240KB internal-RAM pool during the records HTTPS fetch,
+# aborting the board mid-handshake (ESP_ERR_NO_MEM in an unrelated WiFi PHY
+# timer, a symptom of internal heap exhaustion elsewhere). The smaller "CMN"
+# bundle and dynamic TLS buffers are Espressif's documented recipe for this
+# exact class of board: PSRAM-backed but internal-RAM-starved.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
+# Only allocations >=16KB redirect to PSRAM by default — every smaller one
+# (the HTTP client's read buffer, mbedtls's own small structures) still
+# fights over the ~240KB internal pool.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512

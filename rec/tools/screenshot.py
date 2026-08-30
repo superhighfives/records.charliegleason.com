@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mark Phelps
+# SPDX-License-Identifier: Apache-2.0
+
+"""Save one rec display snapshot from USB serial as a PNG file."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+import os
+from pathlib import Path
+import struct
+import sys
+import time
+from typing import Protocol, cast
+import zlib
+
+import detect_port
+
+MAGIC = b"SNAP"
+VERSION = 1
+HEADER = struct.Struct("<4sBBHHHHHII")
+HEADER_LENGTH = HEADER.size
+WIDTH = 368
+HEIGHT = 448
+PIXEL_FORMAT_RGB565_BE = 1
+PIXEL_BYTES = WIDTH * HEIGHT * 2
+NOISE_ALLOWANCE = 65536
+# One whole frame, then the old noise allowance. A run that dies in the middle
+# of a payload leaves the device inside its send budget, so the device streams
+# the rest of that payload to the next run before the frame that run asked for.
+# A limit under one frame turned that leftover into a hard failure. Retrying on
+# the overflow instead would also converge, because the leftover is bounded and
+# the device budget expires, but it spends whole requests to reach the frame
+# that this limit accepts on the first one.
+PRE_HEADER_LIMIT = HEADER_LENGTH + PIXEL_BYTES + NOISE_ALLOWANCE
+FRAME_TIMEOUT_SECONDS = 30
+# Longer than the device send budget of 5000 ms, so a device that abandoned a
+# frame is quiet for this long only after it stopped sending.
+STALL_SECONDS = 8
+REEXEC_GUARD = "REC_SCREENSHOT_PYSERIAL_REEXEC"
+
+
+class ScreenshotNotReadyError(RuntimeError):
+    """The device has not finished its first display mirror refresh."""
+
+
+class ScreenshotCorruptFrameError(RuntimeError):
+    """Other output reached the port and damaged the payload.
+
+    The firmware serializes only `esp_log` output against the binary frame.
+    ROM output, panic output, and a direct write to stdout still reach the
+    port, so a frame can arrive damaged while the device stays healthy. A
+    second request usually returns a clean frame, which a device error frame
+    never does.
+    """
+
+
+class ScreenshotTimeoutError(RuntimeError):
+    """The whole-frame deadline expired.
+
+    It carries its own class so that the retry loop can name the last answer
+    the device gave, whichever read reached the deadline first.
+    """
+
+
+class ScreenshotTruncatedFrameError(RuntimeError):
+    """The device stopped in the middle of a frame it had started.
+
+    The device gives one whole response a 5000 ms budget, and abandons the
+    response when that budget expires. It sends nothing more, so a host that
+    waits for the rest waits out its own deadline for a frame that can never
+    arrive. A new request usually returns a whole frame.
+    """
+
+
+# The three answers that a second request can correct. Every other error stops
+# the run at once.
+RETRYABLE_ERRORS = (
+    ScreenshotNotReadyError,
+    ScreenshotCorruptFrameError,
+    ScreenshotTruncatedFrameError,
+)
+
+
+class SerialConnection(Protocol):
+    """The subset of pyserial used for one screenshot request."""
+
+    dtr: bool
+    rts: bool
+    port: str | None
+    baudrate: int
+    timeout: float | None
+
+    def close(self) -> None: ...
+
+    def flush(self) -> None: ...
+
+    def open(self) -> None: ...
+
+    def read(self, size: int = 1) -> bytes: ...
+
+    def reset_input_buffer(self) -> None: ...
+
+    def write(self, data: bytes) -> int: ...
+
+
+def reexec_with_esptool_python(arguments: list[str]) -> None:
+    """Restart with esptool's Python interpreter, which includes pyserial."""
+    python = detect_port.esptool_python()
+    if python is None or os.environ.get(REEXEC_GUARD) == "1":
+        raise RuntimeError("pyserial is unavailable. Run `mise install` to install esptool.")
+    environment = os.environ.copy()
+    environment[REEXEC_GUARD] = "1"
+    os.execve(str(python), [str(python), str(Path(__file__).resolve()), *arguments], environment)
+
+
+def serial_factory(arguments: list[str]) -> Callable[[], SerialConnection]:
+    """Import pyserial, restarting under the esptool interpreter when needed."""
+    try:
+        import serial  # pyright: ignore[reportMissingModuleSource]
+    except ModuleNotFoundError:
+        reexec_with_esptool_python(arguments)
+        raise AssertionError("The esptool Python re-execution returned")
+    return cast(Callable[[], SerialConnection], serial.Serial)
+
+
+def open_serial(factory: Callable[[], SerialConnection]) -> SerialConnection:
+    """Open the rec port without a reset through the DTR and RTS lines.
+
+    The USB-Serial-JTAG controller resets the chip when the lines reach
+    DTR low with RTS high. The operating system asserts both lines during
+    open, and pyserial applies a stored DTR value before a stored RTS
+    value. A preset low DTR therefore moves the lines through the reset
+    state, and the board reboots on every open. Keep both lines high
+    through open, then release RTS before DTR, so the reset state never
+    occurs.
+    """
+    connection = factory()
+    connection.dtr = True
+    connection.rts = True
+    try:
+        connection.port = detect_port.detect_port()
+        connection.baudrate = 115200
+        connection.timeout = 1
+        connection.open()
+        connection.rts = False
+        connection.dtr = False
+    except BaseException:
+        connection.close()
+        raise
+    return connection
+
+
+def timed_out(last_answer: RuntimeError | None) -> ScreenshotTimeoutError:
+    """The deadline error, named after the last answer the device gave.
+
+    A run that spends its whole deadline on not-ready answers reported a bare
+    timeout, which names the cable and not the mirror. The last retryable
+    answer is the actionable half of that message.
+    """
+    message = "Timed out while waiting for a complete screenshot frame"
+    if last_answer is None:
+        return ScreenshotTimeoutError(message)
+    return ScreenshotTimeoutError(f"{message}. The last device answer was: {last_answer}")
+
+
+def read_more(connection: SerialConnection, deadline: float) -> bytes:
+    """Read one serial chunk, or stop when the complete-frame deadline expires.
+
+    The deadline is read before each chunk, not only after an empty one. A
+    board that resets in a loop sends log bytes without a pause, and a check
+    that only an empty read can reach never occurs.
+    """
+    if time.monotonic() >= deadline:
+        raise timed_out(None)
+    return connection.read(4096)
+
+
+def read_until(connection: SerialConnection, buffer: bytearray, size: int, deadline: float) -> None:
+    """Fill the buffer to `size` bytes, or refuse a frame the device stopped sending.
+
+    The device abandons a response that it cannot send inside its own 5000 ms
+    budget, and it sends no marker for that. Silence is the only signal, so a
+    stall longer than that budget becomes a retryable error here. Without it the
+    host waits out the whole 30-second deadline and then reports a timeout for a
+    frame that can never arrive.
+    """
+    last_progress = time.monotonic()
+    while len(buffer) < size:
+        data = read_more(connection, deadline)
+        if data:
+            buffer.extend(data)
+            last_progress = time.monotonic()
+        elif time.monotonic() - last_progress >= STALL_SECONDS:
+            raise ScreenshotTruncatedFrameError(
+                f"The device stopped sending the screenshot frame for {STALL_SECONDS} seconds"
+            )
+
+
+def validate_header(header: bytes) -> int:
+    """Validate a version-1 success header and return its payload length."""
+    (
+        magic,
+        version,
+        status,
+        header_length,
+        width,
+        height,
+        pixel_format,
+        reserved,
+        payload_length,
+        expected_crc,
+    ) = HEADER.unpack(header)
+    if magic != MAGIC:
+        raise RuntimeError("The screenshot response has invalid magic")
+    if version != VERSION:
+        raise RuntimeError(f"The screenshot response has unsupported version {version}")
+    if status == 1:
+        raise ScreenshotNotReadyError("The device display mirror is not ready")
+    if status != 0:
+        raise RuntimeError(f"The device refused the screenshot request with status {status}")
+    if header_length != HEADER_LENGTH:
+        raise RuntimeError("The screenshot response has an invalid header length")
+    if width != WIDTH or height != HEIGHT:
+        raise RuntimeError("The screenshot response has unexpected dimensions")
+    if pixel_format != PIXEL_FORMAT_RGB565_BE:
+        raise RuntimeError("The screenshot response has an unsupported pixel format")
+    if reserved != 0:
+        raise RuntimeError("The screenshot response has a nonzero reserved value")
+    if payload_length != PIXEL_BYTES:
+        raise RuntimeError("The screenshot response has an unexpected payload length")
+    return expected_crc
+
+
+def read_frame(connection: SerialConnection, deadline: float | None = None) -> bytes:
+    """Read and validate one framed screenshot response from a noisy serial stream.
+
+    The search for the header needs the same stall check as the payload read.
+    The pre-header limit is one whole frame wide now, so a device that answers
+    with a header this host cannot parse no longer trips that limit: the search
+    discards the frame, finds no other magic, and waits on a device that has
+    already said everything it means to say. Silence ends the search here, and
+    the retry that follows names the device rather than the cable.
+    """
+    deadline = time.monotonic() + FRAME_TIMEOUT_SECONDS if deadline is None else deadline
+    buffer = bytearray()
+    skipped = 0
+    last_progress = time.monotonic()
+
+    while True:
+        magic_position = buffer.find(MAGIC)
+        if magic_position >= 0:
+            skipped += magic_position
+            if skipped > PRE_HEADER_LIMIT:
+                raise RuntimeError(
+                    f"The screenshot response has more than {PRE_HEADER_LIMIT} bytes "
+                    "before its header"
+                )
+            del buffer[:magic_position]
+            read_until(connection, buffer, 8, deadline)
+            version, header_length = buffer[4], struct.unpack_from("<H", buffer, 6)[0]
+            if version == VERSION and header_length == HEADER_LENGTH:
+                break
+            del buffer[0]
+            skipped += 1
+            continue
+
+        keep = min(len(buffer), len(MAGIC) - 1)
+        skipped += len(buffer) - keep
+        if skipped > PRE_HEADER_LIMIT:
+            raise RuntimeError(
+                f"The screenshot response has more than {PRE_HEADER_LIMIT} bytes before its header"
+            )
+        if len(buffer) > keep:
+            del buffer[:-keep]
+        data = read_more(connection, deadline)
+        if data:
+            buffer.extend(data)
+            last_progress = time.monotonic()
+        elif time.monotonic() - last_progress >= STALL_SECONDS:
+            raise ScreenshotTruncatedFrameError(
+                f"The device sent no screenshot header for {STALL_SECONDS} seconds"
+            )
+
+    read_until(connection, buffer, HEADER_LENGTH, deadline)
+
+    expected_crc = validate_header(bytes(buffer[:HEADER_LENGTH]))
+    del buffer[:HEADER_LENGTH]
+    read_until(connection, buffer, PIXEL_BYTES, deadline)
+
+    payload = bytes(buffer[:PIXEL_BYTES])
+    actual_crc = zlib.crc32(payload) & 0xFFFFFFFF
+    if actual_crc != expected_crc:
+        raise ScreenshotCorruptFrameError("The screenshot response has an invalid CRC")
+    return payload
+
+
+def rgb565_to_png_rows(payload: bytes) -> bytes:
+    """Convert big-endian RGB565 pixels to unfiltered, truecolor PNG rows."""
+    rows = bytearray((WIDTH * 3 + 1) * HEIGHT)
+    source = 0
+    destination = 0
+    for _ in range(HEIGHT):
+        rows[destination] = 0
+        destination += 1
+        for _ in range(WIDTH):
+            value = (payload[source] << 8) | payload[source + 1]
+            source += 2
+            rows[destination] = ((value >> 11) & 0x1F) * 255 // 0x1F
+            rows[destination + 1] = ((value >> 5) & 0x3F) * 255 // 0x3F
+            rows[destination + 2] = (value & 0x1F) * 255 // 0x1F
+            destination += 3
+    return bytes(rows)
+
+
+def png_chunk(kind: bytes, data: bytes) -> bytes:
+    """Create one PNG chunk with its CRC."""
+    return (
+        struct.pack(">I", len(data))
+        + kind
+        + data
+        + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    )
+
+
+def write_png(path: Path, payload: bytes) -> None:
+    """Write a screenshot PNG without replacing an existing destination."""
+    if path.exists():
+        raise RuntimeError(f"The output file already exists: {path}")
+    header = struct.pack(">IIBBBBB", WIDTH, HEIGHT, 8, 2, 0, 0, 0)
+    png = b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", header)
+    png += png_chunk(b"IDAT", zlib.compress(rgb565_to_png_rows(payload)))
+    png += png_chunk(b"IEND", b"")
+    created = False
+    try:
+        with path.open("xb") as output:
+            created = True
+            output.write(png)
+    except OSError:
+        if created:
+            path.unlink(missing_ok=True)
+        raise
+
+
+def screenshot(path: Path, factory: Callable[[], SerialConnection]) -> None:
+    """Request a screenshot and write it after the complete frame validates.
+
+    A not-ready device, a damaged frame, and an abandoned frame all get a new
+    request inside the same deadline. The stale input is discarded before each
+    request, because the bytes that damaged one frame must not reach the next
+    one. A device error frame stops the request at once.
+    """
+    if path.exists():
+        raise RuntimeError(f"The output file already exists: {path}")
+    connection = open_serial(factory)
+    deadline = time.monotonic() + FRAME_TIMEOUT_SECONDS
+    last_answer: RuntimeError | None = None
+    try:
+        while True:
+            if time.monotonic() >= deadline:
+                raise timed_out(last_answer)
+            connection.reset_input_buffer()
+            if connection.write(b"s") != 1:
+                raise RuntimeError("Could not send the screenshot request")
+            connection.flush()
+            try:
+                write_png(path, read_frame(connection, deadline))
+                return
+            except RETRYABLE_ERRORS as error:
+                last_answer = error
+                time.sleep(0.1)
+            except ScreenshotTimeoutError:
+                raise timed_out(last_answer) from None
+    finally:
+        connection.close()
+
+
+def main(arguments: list[str] | None = None) -> int:
+    """Run the screenshot command and report any actionable error."""
+    arguments = sys.argv[1:] if arguments is None else arguments
+    if len(arguments) != 1:
+        print("usage: screenshot.py <output.png>", file=sys.stderr)
+        return 2
+    path = Path(arguments[0])
+    if path.exists():
+        print(f"screenshot failed: The output file already exists: {path}", file=sys.stderr)
+        return 1
+
+    try:
+        screenshot(path, serial_factory(arguments))
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"screenshot failed: {error}", file=sys.stderr)
+        return 1
+    print(f"Saved {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("Canceled.", file=sys.stderr)
+        raise SystemExit(130)

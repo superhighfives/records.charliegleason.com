@@ -1,0 +1,379 @@
+// SPDX-FileCopyrightText: 2026 Mark Phelps
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
+#include "esp_crc.h"
+#include "esp_err.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "screenshot.h"
+
+#define REC_SCREENSHOT_WIDTH 368U
+#define REC_SCREENSHOT_HEIGHT 448U
+#define REC_SCREENSHOT_PIXEL_BYTES 2U
+#define REC_SCREENSHOT_PAYLOAD_SIZE \
+    (REC_SCREENSHOT_WIDTH * REC_SCREENSHOT_HEIGHT * REC_SCREENSHOT_PIXEL_BYTES)
+#define REC_SCREENSHOT_HEADER_SIZE 24U
+#define REC_SCREENSHOT_VERSION 1U
+#define REC_SCREENSHOT_STATUS_SUCCESS 0U
+#define REC_SCREENSHOT_STATUS_NOT_READY 1U
+#define REC_SCREENSHOT_STATUS_NO_MEMORY 2U
+#define REC_SCREENSHOT_PIXEL_FORMAT_RGB565_BE 1U
+#define REC_SCREENSHOT_SERIAL_BUFFER_SIZE 4096U
+#define REC_SCREENSHOT_SERIAL_WRITE_SIZE 1024U
+// One budget for a whole response, not one for each chunk. A healthy host
+// reads the 329728-byte payload in well under a second, and the host tool
+// gives a frame 30 seconds, so this value abandons only a host that stopped
+// reading. A per-chunk timeout of the same size would hold the serial mutex
+// for minutes across the 322 chunks of one payload, which is the fault this
+// budget exists to prevent.
+#define REC_SCREENSHOT_SERIAL_BUDGET_MS 5000U
+#define REC_SCREENSHOT_REFRESH_TIMER_MS 10U
+#define REC_SCREENSHOT_REFRESH_TIMEOUT_MS 1000U
+#define REC_SCREENSHOT_TASK_STACK_SIZE 8192U
+#define REC_SCREENSHOT_TASK_CORE 0
+
+static const char *TAG = "screenshot";
+static uint8_t *mirror_buffer;
+static uint8_t *staging_buffer;
+static SemaphoreHandle_t mirror_mutex;
+static SemaphoreHandle_t serial_output_mutex;
+// esp_log_set_vprintf installs the new hook before it returns the previous
+// one, so a log line from another core can reach serial_log_vprintf before
+// that returned pointer lands here. This initializer is the handler the log
+// component starts with, so the pointer already works in that window.
+static vprintf_like_t original_vprintf = vprintf;
+static TaskHandle_t screenshot_task_handle;
+static bool mirror_ready;
+static bool refresh_requested;
+
+// Free whichever mutex exists. One creation can fail while the other succeeds,
+// and vSemaphoreDelete does not accept a NULL handle.
+static void delete_mutexes(void)
+{
+    if (mirror_mutex != NULL) {
+        vSemaphoreDelete(mirror_mutex);
+        mirror_mutex = NULL;
+    }
+    if (serial_output_mutex != NULL) {
+        vSemaphoreDelete(serial_output_mutex);
+        serial_output_mutex = NULL;
+    }
+}
+
+// The mutex is recursive because the task that holds it can reach this hook
+// again. usb_serial_jtag_write_bytes starts with two ESP_RETURN_ON_FALSE
+// checks that log, so a non-recursive mutex would let the sender wait on
+// itself forever, with every other task blocked behind it. A recursive take
+// costs one log line inside a frame instead. The host reads that frame as a
+// CRC error and asks again.
+static int serial_log_vprintf(const char *format, va_list arguments)
+{
+    xSemaphoreTakeRecursive(serial_output_mutex, portMAX_DELAY);
+    int result = original_vprintf(format, arguments);
+    xSemaphoreGiveRecursive(serial_output_mutex);
+    return result;
+}
+
+static void write_uint16_le(uint8_t *destination, uint16_t value)
+{
+    destination[0] = value & 0xffU;
+    destination[1] = value >> 8;
+}
+
+static void write_uint32_le(uint8_t *destination, uint32_t value)
+{
+    destination[0] = value & 0xffU;
+    destination[1] = (value >> 8) & 0xffU;
+    destination[2] = (value >> 16) & 0xffU;
+    destination[3] = value >> 24;
+}
+
+static void make_header(uint8_t header[REC_SCREENSHOT_HEADER_SIZE], uint8_t status, uint32_t crc)
+{
+    memset(header, 0, REC_SCREENSHOT_HEADER_SIZE);
+    memcpy(header, "SNAP", 4);
+    header[4] = REC_SCREENSHOT_VERSION;
+    header[5] = status;
+    write_uint16_le(&header[6], REC_SCREENSHOT_HEADER_SIZE);
+    if (status == REC_SCREENSHOT_STATUS_SUCCESS) {
+        write_uint16_le(&header[8], REC_SCREENSHOT_WIDTH);
+        write_uint16_le(&header[10], REC_SCREENSHOT_HEIGHT);
+        write_uint16_le(&header[12], REC_SCREENSHOT_PIXEL_FORMAT_RGB565_BE);
+        write_uint32_le(&header[16], REC_SCREENSHOT_PAYLOAD_SIZE);
+        write_uint32_le(&header[20], crc);
+    }
+}
+
+// What is left of one response budget that started at `start`. The subtraction
+// is unsigned, so it stays correct across a tick counter wrap. Zero means the
+// response is out of budget and the caller must abandon it.
+static TickType_t remaining_budget(TickType_t start)
+{
+    const TickType_t budget = pdMS_TO_TICKS(REC_SCREENSHOT_SERIAL_BUDGET_MS);
+    const TickType_t elapsed = xTaskGetTickCount() - start;
+    return elapsed < budget ? budget - elapsed : 0;
+}
+
+static bool write_serial_bytes(const uint8_t *source, size_t size, TickType_t start)
+{
+    size_t offset = 0;
+    while (offset < size) {
+        size_t remaining = size - offset;
+        size_t write_size = remaining < REC_SCREENSHOT_SERIAL_WRITE_SIZE
+            ? remaining
+            : REC_SCREENSHOT_SERIAL_WRITE_SIZE;
+        // Half of what is left, because usb_serial_jtag_write_bytes applies
+        // this wait twice: once to its own transmit mutex and once to the
+        // ring buffer send. The whole budget here makes the worst-case hold
+        // two budgets long.
+        TickType_t wait = remaining_budget(start) / 2;
+        if (wait == 0) {
+            return false;
+        }
+        int written = usb_serial_jtag_write_bytes(source + offset, write_size, wait);
+        if (written <= 0) {
+            return false;
+        }
+        offset += (size_t)written;
+    }
+    return true;
+}
+
+static bool send_response(uint8_t status, uint32_t crc)
+{
+    uint8_t header[REC_SCREENSHOT_HEADER_SIZE];
+    make_header(header, status, crc);
+
+    xSemaphoreTakeRecursive(serial_output_mutex, portMAX_DELAY);
+    // The clock starts after the mutex arrives, because the budget bounds how
+    // long this task holds the mutex. Every task that writes a log line waits
+    // behind it, so a host that stops reading in the middle of a frame must
+    // cost them this budget once and then get the mutex back.
+    //
+    // Nothing between this take and the give below may log. A log line from
+    // this task lands in the middle of the frame it is sending, and the host
+    // then reads a payload with a broken CRC.
+    const TickType_t start = xTaskGetTickCount();
+    bool sent = write_serial_bytes(header, sizeof(header), start);
+    if (sent && status == REC_SCREENSHOT_STATUS_SUCCESS) {
+        sent = write_serial_bytes(staging_buffer, REC_SCREENSHOT_PAYLOAD_SIZE, start);
+    }
+    if (sent) {
+        sent = usb_serial_jtag_wait_tx_done(remaining_budget(start)) == ESP_OK;
+    }
+    xSemaphoreGiveRecursive(serial_output_mutex);
+    // An abandoned frame leaves at most one transmit buffer of bytes behind,
+    // which the host skips before the next header. A frame this task did not
+    // abandon is the larger leftover: a host that dies mid-payload and starts
+    // again inside the budget gets the rest of the old payload first. The host
+    // skips a whole frame plus its noise allowance for that reason.
+    return sent;
+}
+
+static void send_screenshot(void)
+{
+    uint8_t status = REC_SCREENSHOT_STATUS_NO_MEMORY;
+    uint32_t crc = 0;
+    if (mirror_buffer != NULL && staging_buffer != NULL) {
+        xSemaphoreTakeRecursive(mirror_mutex, portMAX_DELAY);
+        if (mirror_ready) {
+            memcpy(staging_buffer, mirror_buffer, REC_SCREENSHOT_PAYLOAD_SIZE);
+            crc = esp_crc32_le(0, staging_buffer, REC_SCREENSHOT_PAYLOAD_SIZE);
+            status = REC_SCREENSHOT_STATUS_SUCCESS;
+        } else {
+            status = REC_SCREENSHOT_STATUS_NOT_READY;
+        }
+        xSemaphoreGiveRecursive(mirror_mutex);
+    }
+    if (!send_response(status, crc)) {
+        // The budget, not a measurement: a write that fails at once takes this
+        // same path, so no duration is known here.
+        ESP_LOGW(
+            TAG,
+            "Screenshot abandoned: the host did not read the frame within %ums",
+            (unsigned)REC_SCREENSHOT_SERIAL_BUDGET_MS);
+    }
+}
+
+static void render_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_RENDER_START) {
+        xSemaphoreTakeRecursive(mirror_mutex, portMAX_DELAY);
+    } else if (lv_event_get_code(event) == LV_EVENT_RENDER_READY) {
+        if (refresh_requested) {
+            mirror_ready = true;
+            refresh_requested = false;
+            xTaskNotifyGive(screenshot_task_handle);
+        }
+        xSemaphoreGiveRecursive(mirror_mutex);
+    }
+}
+
+static void refresh_timer(lv_timer_t *timer)
+{
+    (void)timer;
+    xSemaphoreTakeRecursive(mirror_mutex, portMAX_DELAY);
+    bool requested = refresh_requested;
+    xSemaphoreGiveRecursive(mirror_mutex);
+    if (requested) {
+        lv_obj_invalidate(lv_screen_active());
+    }
+}
+
+static bool request_refresh(void)
+{
+    xSemaphoreTakeRecursive(mirror_mutex, portMAX_DELAY);
+    // A render that finishes after an earlier wait timed out leaves its
+    // notification behind. Without this drain the next wait takes that stale
+    // notification and reports a mirror that no render has written yet, so the
+    // board answers not-ready for every later capture. The render callbacks
+    // hold this mutex from LV_EVENT_RENDER_START to LV_EVENT_RENDER_READY, so
+    // no render can post between the drain and the request below.
+    ulTaskNotifyTake(pdTRUE, 0);
+    mirror_ready = false;
+    refresh_requested = true;
+    xSemaphoreGiveRecursive(mirror_mutex);
+    return ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(REC_SCREENSHOT_REFRESH_TIMEOUT_MS)) != 0;
+}
+
+static void screenshot_task(void *argument)
+{
+    (void)argument;
+    screenshot_task_handle = xTaskGetCurrentTaskHandle();
+    for (;;) {
+        uint8_t input;
+        if (usb_serial_jtag_read_bytes(&input, 1, portMAX_DELAY) != 1) {
+            continue;
+        }
+        if (input != 's') {
+            continue;
+        }
+        if (!request_refresh()) {
+            ESP_LOGW(TAG, "Screenshot refresh did not finish");
+        }
+        send_screenshot();
+    }
+}
+
+esp_err_t rec_screenshot_init(void)
+{
+    // A second call must stop here. The log hook below stays installed for the
+    // life of the firmware and takes serial_output_mutex without a NULL check,
+    // so the driver-install failure of a second call would delete that handle
+    // under a live hook.
+    if (serial_output_mutex != NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    mirror_mutex = xSemaphoreCreateRecursiveMutex();
+    serial_output_mutex = xSemaphoreCreateRecursiveMutex();
+    if (mirror_mutex == NULL || serial_output_mutex == NULL) {
+        delete_mutexes();
+        return ESP_ERR_NO_MEM;
+    }
+
+    usb_serial_jtag_driver_config_t serial_configuration = {
+        .rx_buffer_size = REC_SCREENSHOT_SERIAL_BUFFER_SIZE,
+        .tx_buffer_size = REC_SCREENSHOT_SERIAL_BUFFER_SIZE,
+    };
+    esp_err_t error = usb_serial_jtag_driver_install(&serial_configuration);
+    if (error != ESP_OK) {
+        delete_mutexes();
+        return error;
+    }
+    usb_serial_jtag_vfs_use_driver();
+    // Keep the handler that was installed before this one, so its output
+    // survives. The guard keeps the initializer's promise: this pointer never
+    // becomes NULL, whatever the log component hands back.
+    vprintf_like_t previous = esp_log_set_vprintf(serial_log_vprintf);
+    if (previous != NULL) {
+        original_vprintf = previous;
+    }
+
+    // The allocations land in locals first. rec_screenshot_mirror_area tests
+    // mirror_buffer outside the mutex, and the LVGL task on core 1 is already
+    // running when this function is called, so a global that briefly holds a
+    // pointer this function then frees is a window where a flush writes into
+    // released PSRAM.
+    uint8_t *mirror = heap_caps_malloc(
+        REC_SCREENSHOT_PAYLOAD_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *staging = heap_caps_malloc(
+        REC_SCREENSHOT_PAYLOAD_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (mirror == NULL || staging == NULL) {
+        // One failed allocation makes the mirror unusable, so the other buffer
+        // goes back too. The caller reports this error and still starts the
+        // serial task: without the mirror the task still answers with the
+        // no-memory status.
+        heap_caps_free(mirror);
+        heap_caps_free(staging);
+        return ESP_ERR_NO_MEM;
+    }
+    mirror_buffer = mirror;
+    staging_buffer = staging;
+    return ESP_OK;
+}
+
+esp_err_t rec_screenshot_start(lv_display_t *display)
+{
+    if (display == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    // The caller starts the task after an initialization error, because a
+    // missing mirror still leaves a task that answers the host. The mutexes are
+    // the exception: without them the serial driver never came up, and every
+    // response path would take a NULL handle.
+    if (mirror_mutex == NULL || serial_output_mutex == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    // The serial task comes first, because every later failure here must still
+    // leave it running. The host must receive a status when an LVGL or PSRAM
+    // allocation leaves no room for the capture path.
+    if (xTaskCreatePinnedToCore(
+            screenshot_task,
+            "rec_screenshot",
+            REC_SCREENSHOT_TASK_STACK_SIZE,
+            NULL,
+            2,
+            NULL,
+            REC_SCREENSHOT_TASK_CORE)
+        != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (mirror_buffer != NULL && staging_buffer != NULL) {
+        lv_display_add_event_cb(display, render_event, LV_EVENT_RENDER_START, NULL);
+        lv_display_add_event_cb(display, render_event, LV_EVENT_RENDER_READY, NULL);
+        if (lv_timer_create(refresh_timer, REC_SCREENSHOT_REFRESH_TIMER_MS, NULL) == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return ESP_OK;
+}
+
+void rec_screenshot_mirror_area(const lv_area_t *area, const uint8_t *pixels)
+{
+    if (mirror_buffer == NULL || area->x1 < 0 || area->y1 < 0
+        || area->x2 >= REC_SCREENSHOT_WIDTH || area->y2 >= REC_SCREENSHOT_HEIGHT) {
+        return;
+    }
+    const size_t row_size = (size_t)(area->x2 - area->x1 + 1) * REC_SCREENSHOT_PIXEL_BYTES;
+    const size_t row_count = (size_t)(area->y2 - area->y1 + 1);
+    xSemaphoreTakeRecursive(mirror_mutex, portMAX_DELAY);
+    for (size_t row = 0; row < row_count; ++row) {
+        size_t destination_offset =
+            ((size_t)(area->y1 + row) * REC_SCREENSHOT_WIDTH + area->x1)
+            * REC_SCREENSHOT_PIXEL_BYTES;
+        memcpy(mirror_buffer + destination_offset, pixels + row * row_size, row_size);
+    }
+    xSemaphoreGiveRecursive(mirror_mutex);
+}
