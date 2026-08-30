@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { json } from "@tanstack/react-start";
 
+import { toLiteRecord } from "#/lib/lite-record";
 import { listPublicRecords } from "#/lib/records";
 
 /**
@@ -17,13 +18,8 @@ export const Route = createFileRoute("/api/records/lite")({
 			GET: async () => {
 				const publicRows = await listPublicRecords();
 				const records = publicRows
-					.map((record) => ({
-						id: record.id,
-						artist: record.artist,
-						title: record.title,
-						coverKey: record.professionalImageKey ?? record.coverImageKey,
-					}))
-					.filter((record) => record.coverKey != null);
+					.map(toLiteRecord)
+					.filter((record) => record != null);
 
 				return json(
 					{ records, count: records.length },
