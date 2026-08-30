@@ -107,8 +107,11 @@ run = "python tools/leak_scan.py"
 description = "Check that every source file records a license and a copyright holder"
 # REUSE 6.2.0 needs an encoding-detection module, and the mise pipx backend
 # drops the extra that supplies it. `pipx run --spec` keeps both the pin and
-# the extra, on every platform.
-run = 'pipx run --spec "reuse[charset-normalizer]==6.2.0" reuse lint'
+# the extra, on every platform. `--root .` is required now that this
+# directory lives inside a larger repo: without it, REUSE walks up to the
+# git toplevel (records.charliegleason.com/, which doesn't use REUSE at all)
+# instead of treating this directory as the project root.
+run = 'pipx run --spec "reuse[charset-normalizer]==6.2.0" reuse --root . lint'
 
 [tasks.clean]
 description = "Remove ESP-IDF build output"
