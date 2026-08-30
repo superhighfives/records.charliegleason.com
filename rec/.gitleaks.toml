@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Mark Phelps
+# SPDX-License-Identifier: Apache-2.0
+
 # Extends gitleaks' default ruleset (not a replacement) — see rec/tools/leak_scan.py.
 [extend]
 useDefault = true
