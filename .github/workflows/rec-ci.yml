@@ -1,0 +1,128 @@
+# Checks for the rec/ ESP32-S3 board firmware — only runs when rec/**
+# changes, so it doesn't slow down every website commit. Ported from the
+# standalone rec repo's own CI, which pinned every action to a commit SHA
+# and the ESP-IDF container to an image digest (a deliberate choice for a
+# board that gets physically flashed); kept that convention here even
+# though the rest of this repo pins to tags.
+#
+# The host jobs run the same mise tasks contributors run locally, from
+# rec/ (mise scopes to the nearest mise.toml, which lives there, not at
+# this repo's root).
+
+name: rec CI
+
+on:
+  pull_request:
+    paths:
+      - "rec/**"
+  push:
+    branches: [main]
+    paths:
+      - "rec/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rec-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The firmware job uses the ESP-IDF container. This value prevents each
+  # host job from installing a second ESP-IDF checkout through the mise hook.
+  REC_SKIP_IDF: "1"
+
+jobs:
+  firmware:
+    name: rec / firmware
+    runs-on: ubuntu-latest
+    # Keep this release equal to IDF_TAG in rec/tools/setup_idf.py.
+    # v5.5.5
+    container:
+      image: >-
+        espressif/idf@sha256:a9231d0697ab8f7517cc072e93b7c83e04907bfbfba80b6440d7dbbf90665cf2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the firmware
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          idf.py -C rec/firmware build
+
+      - name: Make sure that the build used the committed dependency lock
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git diff --exit-code -- rec/firmware/dependencies.lock
+
+  host-tools:
+    name: rec / host-tools (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.8.5
+          install_args: python
+        env:
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/rec
+      - working-directory: rec
+        run: mise run test-host
+
+  python-style:
+    name: rec / python-style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.8.5
+          install_args: ruff
+        env:
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/rec
+      - working-directory: rec
+        run: mise run format-check
+      - working-directory: rec
+        run: mise run lint
+
+  secrets:
+    name: rec / secrets
+    runs-on: ubuntu-latest
+    steps:
+      # The history scan needs every branch and tag. A shallow checkout hides
+      # most of the repository history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.8.5
+          install_args: python gitleaks
+        env:
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/rec
+      - working-directory: rec
+        run: mise run secrets
+
+  licenses:
+    name: rec / licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.8.5
+          install_args: pipx
+        env:
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/rec
+      - working-directory: rec
+        run: mise run licenses

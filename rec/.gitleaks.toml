@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Mark Phelps
+# SPDX-License-Identifier: Apache-2.0
+
+# Extends gitleaks' default ruleset (not a replacement) — see rec/tools/leak_scan.py.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Clerk publishable keys are designed to be public (client-side), unlike sk_ secret keys — see https://clerk.com/docs/references/nextjs/read-session-data"
+regexes = ['''pk_(test|live)_[A-Za-z0-9]+''']
