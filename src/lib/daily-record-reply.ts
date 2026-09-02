@@ -54,6 +54,26 @@ function field(formData: FormData, name: string): string {
 	return formData.get(name)?.toString().trim() ?? "";
 }
 
+/**
+ * The HMAC signature only proves the request came from Mailgun's relay, not
+ * who sent the underlying email — `sender`/`From:` are trivially spoofable.
+ * Mailgun runs its own SPF/DKIM checks on inbound mail and appends the
+ * verdicts as headers (`X-Mailgun-Spf`, `X-Mailgun-Dkim-Check-Result`) on the
+ * message it hands back, surfaced here via `message-headers`.
+ */
+function messageHeader(formData: FormData, name: string): string | undefined {
+	const raw = field(formData, "message-headers");
+	if (!raw) return undefined;
+	try {
+		const headers = JSON.parse(raw) as [string, string][];
+		return headers.find(
+			([key]) => key.toLowerCase() === name.toLowerCase(),
+		)?.[1];
+	} catch {
+		return undefined;
+	}
+}
+
 export async function handleDailyRecordReply(
 	formData: FormData,
 	env: Cloudflare.Env,
@@ -74,6 +94,12 @@ export async function handleDailyRecordReply(
 
 	const sender = field(formData, "sender").toLowerCase();
 	if (sender !== OWNER_EMAIL) return { ok: false, reason: "not authorized" };
+
+	const spf = messageHeader(formData, "X-Mailgun-Spf");
+	const dkim = messageHeader(formData, "X-Mailgun-Dkim-Check-Result");
+	if (spf !== "Pass" || dkim !== "Pass") {
+		return { ok: false, reason: "sender authentication failed" };
+	}
 
 	const recipient = field(formData, "recipient");
 	const match = RECORD_ADDRESS.exec(recipient);
