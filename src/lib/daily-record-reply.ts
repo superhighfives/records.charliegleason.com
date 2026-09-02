@@ -42,7 +42,12 @@ async function verifyMailgunSignature(
 	const hex = [...new Uint8Array(mac)]
 		.map((b) => b.toString(16).padStart(2, "0"))
 		.join("");
-	return hex === signature;
+	if (hex.length !== signature.length) return false;
+	let diff = 0;
+	for (let i = 0; i < hex.length; i++) {
+		diff |= hex.charCodeAt(i) ^ signature.charCodeAt(i);
+	}
+	return diff === 0;
 }
 
 function field(formData: FormData, name: string): string {
