@@ -137,10 +137,13 @@
 	//   "0 14 * * 1" — weekly "records to buy" digest email, Mondays 14:00 UTC.
 	//   "0 9 * * *"  — daily master-link health check (flags deleted/merged Discogs
 	//                  masters, 50 rows/run stalest-first), 09:00 UTC.
+	//   "0 13 * * *" — daily "record of the day" email (a random notes-empty record,
+	//                  reply-to-add-notes via Email Routing), 13:00 UTC.
 	"triggers": {
 		"crons": [
 			"0 14 * * 1",
-			"0 9 * * *"
+			"0 9 * * *",
+			"0 13 * * *"
 		]
 	},
 	// Cloudflare Email Sending (Email Service, beta) — onboard charliegleason.com

@@ -20,9 +20,11 @@ import { Route as AdminCornerReviewRouteImport } from './routes/admin/corner-rev
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
 import { Route as ApiRecordsLiteRouteImport } from './routes/api/records.lite'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
+import { Route as ApiInboundDailyRecordRouteImport } from './routes/api/inbound.daily-record'
 import { Route as ApiDiscogsCoverIdRouteImport } from './routes/api/discogs-cover.$id'
 import { Route as ApiCronMasterCheckRouteImport } from './routes/api/cron.master-check'
 import { Route as ApiCronDigestRouteImport } from './routes/api/cron.digest'
+import { Route as ApiCronDailyRecordRouteImport } from './routes/api/cron.daily-record'
 import { Route as ApiAdminCaptureRouteImport } from './routes/api/admin/capture'
 import { Route as ApiAdminBackupRouteImport } from './routes/api/admin/backup'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
@@ -83,6 +85,11 @@ const ApiPhotosSplatRoute = ApiPhotosSplatRouteImport.update({
   path: '/api/photos/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiInboundDailyRecordRoute = ApiInboundDailyRecordRouteImport.update({
+  id: '/api/inbound/daily-record',
+  path: '/api/inbound/daily-record',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiDiscogsCoverIdRoute = ApiDiscogsCoverIdRouteImport.update({
   id: '/api/discogs-cover/$id',
   path: '/api/discogs-cover/$id',
@@ -96,6 +103,11 @@ const ApiCronMasterCheckRoute = ApiCronMasterCheckRouteImport.update({
 const ApiCronDigestRoute = ApiCronDigestRouteImport.update({
   id: '/api/cron/digest',
   path: '/api/cron/digest',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCronDailyRecordRoute = ApiCronDailyRecordRouteImport.update({
+  id: '/api/cron/daily-record',
+  path: '/api/cron/daily-record',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAdminCaptureRoute = ApiAdminCaptureRouteImport.update({
@@ -138,9 +150,11 @@ export interface FileRoutesByFullPath {
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/admin/backup': typeof ApiAdminBackupRoute
   '/api/admin/capture': typeof ApiAdminCaptureRoute
+  '/api/cron/daily-record': typeof ApiCronDailyRecordRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
+  '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
 }
@@ -157,9 +171,11 @@ export interface FileRoutesByTo {
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/admin/backup': typeof ApiAdminBackupRoute
   '/api/admin/capture': typeof ApiAdminCaptureRoute
+  '/api/cron/daily-record': typeof ApiCronDailyRecordRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
+  '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
 }
@@ -179,9 +195,11 @@ export interface FileRoutesById {
   '/admin/records/new': typeof AdminRecordsNewRoute
   '/api/admin/backup': typeof ApiAdminBackupRoute
   '/api/admin/capture': typeof ApiAdminCaptureRoute
+  '/api/cron/daily-record': typeof ApiCronDailyRecordRoute
   '/api/cron/digest': typeof ApiCronDigestRoute
   '/api/cron/master-check': typeof ApiCronMasterCheckRoute
   '/api/discogs-cover/$id': typeof ApiDiscogsCoverIdRoute
+  '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
 }
@@ -201,9 +219,11 @@ export interface FileRouteTypes {
     | '/admin/records/new'
     | '/api/admin/backup'
     | '/api/admin/capture'
+    | '/api/cron/daily-record'
     | '/api/cron/digest'
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
+    | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
   fileRoutesByTo: FileRoutesByTo
@@ -220,9 +240,11 @@ export interface FileRouteTypes {
     | '/admin/records/new'
     | '/api/admin/backup'
     | '/api/admin/capture'
+    | '/api/cron/daily-record'
     | '/api/cron/digest'
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
+    | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
   id:
@@ -241,9 +263,11 @@ export interface FileRouteTypes {
     | '/admin/records/new'
     | '/api/admin/backup'
     | '/api/admin/capture'
+    | '/api/cron/daily-record'
     | '/api/cron/digest'
     | '/api/cron/master-check'
     | '/api/discogs-cover/$id'
+    | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
   fileRoutesById: FileRoutesById
@@ -256,9 +280,11 @@ export interface RootRouteChildren {
   ApiRecordsRoute: typeof ApiRecordsRouteWithChildren
   ApiAdminBackupRoute: typeof ApiAdminBackupRoute
   ApiAdminCaptureRoute: typeof ApiAdminCaptureRoute
+  ApiCronDailyRecordRoute: typeof ApiCronDailyRecordRoute
   ApiCronDigestRoute: typeof ApiCronDigestRoute
   ApiCronMasterCheckRoute: typeof ApiCronMasterCheckRoute
   ApiDiscogsCoverIdRoute: typeof ApiDiscogsCoverIdRoute
+  ApiInboundDailyRecordRoute: typeof ApiInboundDailyRecordRoute
   ApiPhotosSplatRoute: typeof ApiPhotosSplatRoute
 }
 
@@ -341,6 +367,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPhotosSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/inbound/daily-record': {
+      id: '/api/inbound/daily-record'
+      path: '/api/inbound/daily-record'
+      fullPath: '/api/inbound/daily-record'
+      preLoaderRoute: typeof ApiInboundDailyRecordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/discogs-cover/$id': {
       id: '/api/discogs-cover/$id'
       path: '/api/discogs-cover/$id'
@@ -360,6 +393,13 @@ declare module '@tanstack/react-router' {
       path: '/api/cron/digest'
       fullPath: '/api/cron/digest'
       preLoaderRoute: typeof ApiCronDigestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/cron/daily-record': {
+      id: '/api/cron/daily-record'
+      path: '/api/cron/daily-record'
+      fullPath: '/api/cron/daily-record'
+      preLoaderRoute: typeof ApiCronDailyRecordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/capture': {
@@ -454,9 +494,11 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRecordsRoute: ApiRecordsRouteWithChildren,
   ApiAdminBackupRoute: ApiAdminBackupRoute,
   ApiAdminCaptureRoute: ApiAdminCaptureRoute,
+  ApiCronDailyRecordRoute: ApiCronDailyRecordRoute,
   ApiCronDigestRoute: ApiCronDigestRoute,
   ApiCronMasterCheckRoute: ApiCronMasterCheckRoute,
   ApiDiscogsCoverIdRoute: ApiDiscogsCoverIdRoute,
+  ApiInboundDailyRecordRoute: ApiInboundDailyRecordRoute,
   ApiPhotosSplatRoute: ApiPhotosSplatRoute,
 }
 export const routeTree = rootRouteImport

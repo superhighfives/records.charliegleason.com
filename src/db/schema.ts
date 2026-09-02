@@ -254,6 +254,12 @@ export const records = sqliteTable("records", {
 	professionalRetryCount: integer("professional_retry_count").default(0),
 
 	notes: text("notes"),
+	// Last time this record was sent as the "record of the day" email (see
+	// src/lib/daily-record.ts). Null = never featured; the daily picker prefers
+	// never-featured, notes-empty records before it repeats any, and a reply's
+	// From/Reply-To address encodes the record id directly so this column isn't
+	// needed for correlation — just for round-robin fairness.
+	dailyPickEmailedAt: integer("daily_pick_emailed_at", { mode: "timestamp" }),
 	source: text("source", { enum: ["photo", "manual", "import"] }).default(
 		"manual",
 	),

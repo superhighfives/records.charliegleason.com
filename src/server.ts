@@ -1,11 +1,13 @@
 import * as Sentry from "@sentry/cloudflare";
 import entry from "@tanstack/react-start/server-entry";
 
+import { runDailyRecordPick } from "#/lib/daily-record";
 import { runWeeklyDigest } from "#/lib/digest";
 import { runFlywheelCheck } from "#/lib/flywheel-alert";
 import { runLinkHealthCheck } from "#/lib/master-health";
 
 const LINK_CHECK_CRON = "0 9 * * *";
+const DAILY_RECORD_CRON = "0 13 * * *";
 
 // Re-export the container Durable Object so wrangler can bind it (see wrangler.jsonc
 // `containers` + `durable_objects`). It fronts the matte render image in `containers/matte/`.
@@ -25,19 +27,26 @@ import { type AnalyzeMessage, handleAnalyzeBatch } from "#/lib/queue";
 const handler: ExportedHandler<Cloudflare.Env> = {
 	// TanStack's handler takes (request); env/ctx are reached via cloudflare:workers.
 	fetch: (request) => entry.fetch(request),
-	// Two crons share this handler (see wrangler.jsonc `triggers.crons`) — dispatch
+	// Three crons share this handler (see wrangler.jsonc `triggers.crons`) — dispatch
 	// by the cron expression that fired. The daily link-check validates Discogs
-	// master + release links; the weekly slot runs the buy digest plus the
+	// master + release links; the daily record-pick emails one notes-empty record
+	// (see src/lib/daily-record.ts); the weekly slot runs the buy digest plus the
 	// "time to retrain the corner detector" nudge (independent; each fails alone).
 	scheduled(controller, _env, ctx) {
 		if (controller.cron === LINK_CHECK_CRON) {
 			ctx.waitUntil(runLinkHealthCheck());
+		} else if (controller.cron === DAILY_RECORD_CRON) {
+			ctx.waitUntil(runDailyRecordPick());
 		} else {
 			ctx.waitUntil(runWeeklyDigest());
 			ctx.waitUntil(runFlywheelCheck());
 		}
 	},
 	queue: (batch) => handleAnalyzeBatch(batch as MessageBatch<AnalyzeMessage>),
+	// No `email()` export: the inbound half of the daily-record flow (a reply
+	// landing back as that record's notes) runs through a Mailgun webhook route
+	// instead of Cloudflare Email Routing — see
+	// src/routes/api/inbound.daily-record.ts for why.
 };
 
 export default Sentry.withSentry(
