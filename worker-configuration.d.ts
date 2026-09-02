@@ -34,6 +34,10 @@ interface __BaseEnv_Env {
 	LASTFM_API_KEY: string;
 	LASTFM_USER: string;
 	CRON_SECRET: string;
+	// HTTP webhook signing key for the Mailgun inbound route that powers
+	// reply-to-add-notes (see src/routes/api/inbound.daily-record.ts). Unset in
+	// preview/dev: the route rejects all webhook calls without it.
+	MAILGUN_WEBHOOK_SIGNING_KEY?: string;
 	EMAIL?: SendEmail;
 	MATTE_CONTAINER?: DurableObjectNamespace<import("./src/server").MatteContainer>;
 }

@@ -211,6 +211,13 @@
       "when": 1787366811144,
       "tag": "0029_dry_star_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1788371967263,
+      "tag": "0030_blue_fabian_cortez",
+      "breakpoints": true
     }
   ]
 }

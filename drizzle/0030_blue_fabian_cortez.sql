@@ -1,0 +1,1 @@
+ALTER TABLE `records` ADD `daily_pick_emailed_at` integer;
