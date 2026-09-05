@@ -57,9 +57,11 @@ function field(formData: FormData, name: string): string {
 /**
  * The HMAC signature only proves the request came from Mailgun's relay, not
  * who sent the underlying email — `sender`/`From:` are trivially spoofable.
- * Mailgun runs its own SPF/DKIM checks on inbound mail and appends the
- * verdicts as headers (`X-Mailgun-Spf`, `X-Mailgun-Dkim-Check-Result`) on the
- * message it hands back, surfaced here via `message-headers`.
+ * Mailgun doesn't append separate per-check headers; it's one combined
+ * `Authentication-Results` header (RFC 7601) with `dkim=`/`spf=`/`dmarc=`
+ * verdicts, surfaced here via `message-headers`. DMARC pass already implies
+ * an aligned SPF-or-DKIM pass against the visible From domain, so pairing it
+ * with an explicit DKIM pass is enough without parsing every verdict.
  */
 function messageHeader(formData: FormData, name: string): string | undefined {
 	const raw = field(formData, "message-headers");
@@ -72,6 +74,13 @@ function messageHeader(formData: FormData, name: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function senderAuthenticated(formData: FormData): boolean {
+	const authResults = messageHeader(formData, "Authentication-Results") ?? "";
+	return (
+		/\bdkim=pass\b/i.test(authResults) && /\bdmarc=pass\b/i.test(authResults)
+	);
 }
 
 export async function handleDailyRecordReply(
@@ -95,9 +104,7 @@ export async function handleDailyRecordReply(
 	const sender = field(formData, "sender").toLowerCase();
 	if (sender !== OWNER_EMAIL) return { ok: false, reason: "not authorized" };
 
-	const spf = messageHeader(formData, "X-Mailgun-Spf");
-	const dkim = messageHeader(formData, "X-Mailgun-Dkim-Check-Result");
-	if (spf !== "Pass" || dkim !== "Pass") {
+	if (!senderAuthenticated(formData)) {
 		return { ok: false, reason: "sender authentication failed" };
 	}
 
