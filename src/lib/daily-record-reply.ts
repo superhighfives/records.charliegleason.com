@@ -113,10 +113,13 @@ export async function handleDailyRecordReply(
 	if (!match) return { ok: false, reason: "unknown record address" };
 	const recordId = Number(match[1]);
 
-	const strippedText = field(formData, "stripped-text");
+	// Prefer HTML: most clients (Gmail included) render a link as plain
+	// `text <url>` in their plain-text part, which Turndown can't recover as
+	// markdown — the HTML part still has a real <a href>, so it round-trips
+	// through Turndown as proper `[text](url)`.
 	const strippedHtml = field(formData, "stripped-html");
-	const notes =
-		strippedText || (strippedHtml ? turndown.turndown(strippedHtml) : "");
+	const strippedText = field(formData, "stripped-text");
+	const notes = strippedHtml ? turndown.turndown(strippedHtml) : strippedText;
 	if (!notes) return { ok: false, reason: "empty reply body" };
 
 	const db = getDb(env.DB);
