@@ -1,5 +1,5 @@
 /**
- * Minimal Replicate client for the container — mirrors `src/lib/replicate.ts`, but takes
+ * Minimal Replicate client for the container — mirrors `apps/web/src/lib/replicate.ts`, but takes
  * the token as an argument (the container has no `cloudflare:workers` env; the Worker passes
  * `REPLICATE_API_KEY` in on each request). Creates a prediction against a pinned version and
  * polls it to completion.

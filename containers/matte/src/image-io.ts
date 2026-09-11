@@ -1,7 +1,7 @@
 /**
- * The container's image-IO shims — the small binding-coupled surface that `src/lib/matte.ts`
+ * The container's image-IO shims — the small binding-coupled surface that `apps/web/src/lib/matte.ts`
  * gets from Photon + the Cloudflare Images binding, reimplemented on sharp (libvips). Same
- * signatures and semantics as `src/lib/professional.ts`'s `decodeRgba` / `encodePng` /
+ * signatures and semantics as `apps/web/src/lib/professional.ts`'s `decodeRgba` / `encodePng` /
  * `upscaleImage` (plus a WebP encoder), so the reused pixel math sees identical inputs — but
  * off the JS heap and out of the 128MB isolate, which is the whole point of the container.
  *
