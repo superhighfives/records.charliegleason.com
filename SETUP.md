@@ -57,8 +57,8 @@ domain: dashboard → **Compute → Email Service → Email Sending → Onboard 
 records — your **apex MX (Gmail/Workspace) is untouched**, and you can send to any
 recipient (no destination to verify). The sender is `digest@charliegleason.com`
 (must be on the onboarded domain — not the worker subdomain); recipient is
-`hi@charliegleason.com` (`src/lib/digest.ts`). The cron (`triggers.crons`, `0 14 * * *`)
-runs `scheduled` in `src/server.ts`. Test now:
+`hi@charliegleason.com` (`apps/web/src/lib/digest.ts`). The cron (`triggers.crons`, `0 14 * * *`)
+runs `scheduled` in `apps/web/src/server.ts`. Test now:
 `curl -X POST https://…/api/cron/digest -H "x-cron-secret: $CRON_SECRET"`.
 
 After any edit to `wrangler.jsonc`, regenerate the binding types:
@@ -115,7 +115,7 @@ there's no local DB, apply it to the **remote** D1:
 bunx wrangler d1 migrations apply records --remote
 ```
 
-Changing the schema later: edit `src/db/schema.ts` → `bun run db:generate` → re-run the
+Changing the schema later: edit `apps/web/src/db/schema.ts` → `bun run db:generate` → re-run the
 apply command above.
 
 ---
@@ -228,7 +228,7 @@ What the CI rewrite changes vs. production config:
 - **Name/routes:** renamed to `records-pr-<n>`, `routes` dropped and `workers_dev`
   forced on — otherwise the per-PR Worker would try to claim
   `records.charliegleason.com`. `vars.ENVIRONMENT` is set to `preview` (gates off
-  runtime Sentry in `src/server.ts`).
+  runtime Sentry in `apps/web/src/server.ts`).
 - **Queue:** each PR gets its own `records-analyze-pr-<n>` (created idempotently by
   the workflow) for both producer and consumer, so it doesn't fight production's
   single consumer; the DLQ is dropped.
@@ -263,6 +263,6 @@ set, and optionally `SERPAPI_KEY` / `CRON_SECRET`.
 | `env.X` is `undefined` at runtime | add `X` to `.env.local`, then `bunx wrangler types`; restart dev |
 | Clerk "Add your Publishable Key" crash | `VITE_CLERK_PUBLISHABLE_KEY` missing from `.env.local` |
 | Capture analyze fails | confirm Workers Paid + Unified Billing credits and that the `AI` binding / gateway exist |
-| Pitchfork score always blank | The Fork match is best-effort (`src/lib/the-fork.ts`); fine to ignore |
+| Pitchfork score always blank | The Fork match is best-effort (`apps/web/src/lib/the-fork.ts`); fine to ignore |
 | Type errors after editing `wrangler.jsonc` | `bunx wrangler types` |
 ```

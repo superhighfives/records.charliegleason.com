@@ -203,7 +203,7 @@ interface NetResult {
 async function detectViaNet(img: RgbaImage): Promise<NetResult | null> {
 	try {
 		const { detectSleeveCornersNet: detect } = await import(
-			"../../crates/sleeve-corner-net/pkg/sleeve_corner_net.js"
+			"../../../../crates/sleeve-corner-net/pkg/sleeve_corner_net.js"
 		);
 		// [x0,y0,..x3,y3] (len 8) or that plus 4 per-corner sigmas (len 12) — see the crate.
 		const flat = detect(
@@ -232,7 +232,7 @@ interface SegResult {
 async function detectViaSeg(img: RgbaImage): Promise<SegResult | null> {
 	try {
 		const { detectSleeveCornersScored: detect } = await import(
-			"../../crates/sleeve-detect/pkg/sleeve_detect.js"
+			"../../../../crates/sleeve-detect/pkg/sleeve_detect.js"
 		);
 		// [accepted, rectangularity, blob_area_frac, x0,y0, x1,y1, x2,y2, x3,y3] or [].
 		const flat = detect(

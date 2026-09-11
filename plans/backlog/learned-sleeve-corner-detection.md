@@ -70,7 +70,7 @@ because corners drive the matte, lift matte quality on the same hard tail for fr
 ### Corners and mattes are one pipeline, not two
 
 The Apply-matte step is **downstream of corners**, and the coupling is the whole point of
-this plan (see `src/lib/matte.ts:71-74`):
+this plan (see `apps/web/src/lib/matte.ts:71-74`):
 
 ```
 corners (band) → trimap → ViTMatte → alpha → refit edges

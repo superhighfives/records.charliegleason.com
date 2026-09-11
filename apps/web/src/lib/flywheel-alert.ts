@@ -4,7 +4,7 @@ import { isNotNull } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
-import manifest from "../../ml/labels_manifest.json";
+import manifest from "../../../../ml/labels_manifest.json";
 
 /**
  * "Time to retrain the corner detector" email nudge.

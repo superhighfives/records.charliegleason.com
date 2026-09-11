@@ -80,6 +80,7 @@ jobs:
       # rate limit, quota) fails the job instead of silently deploying a
       # preview whose Worker has no queue to bind to.
       - name: Ensure per-PR queue exists
+        working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -103,7 +104,7 @@ jobs:
           script: |
             const fs = require('fs');
             const pr = context.payload.pull_request.number;
-            const path = 'wrangler.jsonc';
+            const path = 'apps/web/wrangler.jsonc';
             const raw = fs.readFileSync(path, 'utf8');
             // Strip // comments and trailing commas so JSON.parse accepts JSONC.
             const stripped = raw
@@ -117,7 +118,7 @@ jobs:
             // domain (records.charliegleason.com).
             delete config.routes;
             config.workers_dev = true;
-            // Mark it the preview env so runtime Sentry stays disabled (src/server.ts).
+            // Mark it the preview env so runtime Sentry stays disabled (apps/web/src/server.ts).
             config.vars = { ENVIRONMENT: 'preview' };
 
             // Per-PR queue name for every producer binding + the consumer; drop the
@@ -165,6 +166,7 @@ jobs:
 
       - name: Deploy preview Worker
         id: deploy
+        working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -184,6 +186,7 @@ jobs:
       # named in the rewritten wrangler.jsonc. Empty/unset values are dropped, so
       # optional integrations can be left unconfigured.
       - name: Push preview secrets
+        working-directory: apps/web
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

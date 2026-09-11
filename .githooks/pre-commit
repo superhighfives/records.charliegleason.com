@@ -18,13 +18,14 @@ if [ $status -ne 0 ]; then
 	exit $status
 fi
 
-# src/routeTree.gen.ts is committed but derived from src/routes/** — the dev
-# server's watcher keeps it in sync while it's running, but a route file edited
-# without it (or a stale copy from before a rebase) would otherwise commit out
-# of sync, surfacing as confusing type errors at createFileRoute() call sites
-# rather than here (and CI's own check would then block the push). Regenerate
-# and re-stage it here too, same treatment as the Biome fixes above.
+# apps/web/src/routeTree.gen.ts is committed but derived from
+# apps/web/src/routes/** — the dev server's watcher keeps it in sync while it's
+# running, but a route file edited without it (or a stale copy from before a
+# rebase) would otherwise commit out of sync, surfacing as confusing type
+# errors at createFileRoute() call sites rather than here (and CI's own check
+# would then block the push). Regenerate and re-stage it here too, same
+# treatment as the Biome fixes above.
 bun run generate-routes >/dev/null || exit 1
-git add src/routeTree.gen.ts
+git add apps/web/src/routeTree.gen.ts
 
 exit 0

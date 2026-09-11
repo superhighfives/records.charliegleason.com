@@ -77,7 +77,7 @@ bun run dev                              # connects to the remote D1/R2
 Goal: manage records by hand end-to-end before any AI.
 
 - [ ] Write server functions: `createRecord`, `updateRecord`, `deleteRecord`
-      (mirror `listRecords`/`getRecord` in `src/lib/records.ts`; wrap each in a Sentry
+      (mirror `listRecords`/`getRecord` in `apps/web/src/lib/records.ts`; wrap each in a Sentry
       span; gate behind Clerk server-side auth — see Phase 1.5).
 - [ ] `/admin/records/new` and `/admin/records/$id/edit` using **TanStack Form** + Zod.
 - [ ] Wire mutations through **TanStack Query** (or a TanStack DB collection backed by
@@ -88,7 +88,7 @@ Goal: manage records by hand end-to-end before any AI.
 
 ### Phase 1.5 — Harden auth ✅
 
-- [x] `authMiddleware` (`src/lib/auth.ts`, Clerk backend SDK) verifies the session
+- [x] `authMiddleware` (`apps/web/src/lib/auth.ts`, Clerk backend SDK) verifies the session
       **server-side** and is attached to `create`/`update`/`deleteRecord`. Client
       `<SignedIn>` gate stays for UX.
 - [x] Public `/api/*` + reads stay unauthenticated; all writes require auth.
@@ -154,10 +154,10 @@ Goal: read the collection from anywhere.
 
 Goal: once-a-day "records to buy" digest.
 
-- [x] **Last.fm** client (`src/lib/lastfm.ts`): top albums for `LASTFM_USER`.
-- [x] Suggestion logic (`src/lib/digest.ts`): top albums minus the collection
+- [x] **Last.fm** client (`apps/web/src/lib/lastfm.ts`): top albums for `LASTFM_USER`.
+- [x] Suggestion logic (`apps/web/src/lib/digest.ts`): top albums minus the collection
       (normalized artist+title match), top 10.
-- [x] **Cron Trigger** (`0 14 * * *`) → `scheduled` handler in `src/server.ts` (wraps
+- [x] **Cron Trigger** (`0 14 * * *`) → `scheduled` handler in `apps/web/src/server.ts` (wraps
       the TanStack entry) → compose + send via the **Email** `EMAIL` binding. Also
       `POST /api/cron/digest` (guarded by `CRON_SECRET`) for manual runs/testing.
 - [ ] Before it sends: onboard the sender domain for **Cloudflare Email Sending**
@@ -169,9 +169,9 @@ Goal: once-a-day "records to buy" digest.
 
 ## Phase 6 — Polish & ship
 
-- [x] Sentry: Worker runtime instrumented via `withSentry` (`src/server.ts`) — fetch +
+- [x] Sentry: Worker runtime instrumented via `withSentry` (`apps/web/src/server.ts`) — fetch +
       scheduled + server-fn spans. Set `VITE_SENTRY_DSN` in prod and spot-check capture.
-- [x] Sentry: **browser** error reporting via `Sentry.init` in `src/client.tsx`; the
+- [x] Sentry: **browser** error reporting via `Sentry.init` in `apps/web/src/client.tsx`; the
       `sentryTanstackStart` Vite plugin uploads source maps when `SENTRY_AUTH_TOKEN` is
       set. (Follow-up: add `tanstackRouterBrowserTracingIntegration` for navigation spans.)
 - [ ] Storybook coverage for key UI (capture flow, record card, table).

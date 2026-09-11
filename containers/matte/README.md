@@ -28,18 +28,18 @@ Worker (queue consumer)  ──(capture bytes + band + params + token)──▶ 
 ```
 
 The **pixel math is shared, not duplicated.** The container reuses the repo's pure modules
-verbatim via the `#/*` alias (resolved to `../src` at bundle time), so both renderers run
-byte-identical geometry:
+verbatim via the `#/*` alias (resolved to `../../apps/web/src` at bundle time), so both
+renderers run byte-identical geometry:
 
-- `src/lib/photo-processing.ts` — all the warp/mask/deskew math
-- `src/lib/matte-config.ts` — the render constants + `matteOptions`
-- `src/lib/matte-pixels.ts` — the AI-path mask helpers
-- `src/lib/reframe-params.ts`, `src/lib/sleeve-corners.ts` — shared types
+- `apps/web/src/lib/photo-processing.ts` — all the warp/mask/deskew math
+- `apps/web/src/lib/matte-config.ts` — the render constants + `matteOptions`
+- `apps/web/src/lib/matte-pixels.ts` — the AI-path mask helpers
+- `apps/web/src/lib/reframe-params.ts`, `apps/web/src/lib/sleeve-corners.ts` — shared types
 
 Only the binding-coupled surface is reimplemented here (`src/image-io.ts`): `decodeRgba` /
 `encodePng` / `encodeWebp` / `upscaleImage` on sharp, and a token-taking Replicate client
-(`src/replicate.ts`). `src/matte.ts` is a near-line-for-line port of `src/lib/matte.ts`'s
-`matteAI` / `matteFromBand`.
+(`src/replicate.ts`). `src/matte.ts` is a near-line-for-line port of
+`apps/web/src/lib/matte.ts`'s `matteAI` / `matteFromBand`.
 
 ## Build & run
 
@@ -51,7 +51,8 @@ bun run start        # node dist/server.js  (listens on :8080)
 ```
 
 The Docker image (`Dockerfile`) is multi-stage; its build context is the **repo root**
-(`image_build_context: "."` in wrangler.jsonc) so the bundle step can reach `src/lib`.
+(`image_build_context: "../.."` in `apps/web/wrangler.jsonc`) so the bundle step can reach
+`apps/web/src/lib`.
 
 ### HTTP contract (internal — only the `MatteContainer` DO calls it)
 
@@ -65,10 +66,10 @@ The container app + shared refactor are complete and typecheck/test green. Not y
 (needs Docker to build the image + a deploy to validate, and preview-env config decisions):
 
 1. `bun add @cloudflare/containers`; add a `MatteContainer extends Container` class and a
-   `renderMatteInContainer()` client (`src/lib/matte-container.ts`), export the class from
-   `src/server.ts`.
+   `renderMatteInContainer()` client (`apps/web/src/lib/matte-container.ts`), export the
+   class from `apps/web/src/server.ts`.
 2. wrangler.jsonc: `containers` (`instance_type: standard-1`, `max_instances: 3`,
-   `image_build_context: "."`), the `MATTE_CONTAINER` durable-object binding, and a
+   `image_build_context: "../.."`), the `MATTE_CONTAINER` durable-object binding, and a
    `new_sqlite_classes` migration — in **both** the top-level and `env.preview` blocks
    (bindings aren't inherited). Run `wrangler types`.
 3. Gate the matte stage on a `MATTE_RENDERER` var (`"worker"` default → `"container"`):

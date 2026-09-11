@@ -1,5 +1,5 @@
 //! Sleeve-corner detection by foreground segmentation: a replacement for both the
-//! narrow-band luminance scan in `src/lib/photo-processing.ts`'s `detectSleeveCorners` and
+//! narrow-band luminance scan in `apps/web/src/lib/photo-processing.ts`'s `detectSleeveCorners` and
 //! the earlier whole-frame Canny/contour approach. On real captures the edge approach
 //! failed two ways — the sleeve's own border is often lower-contrast than the artwork
 //! inside it (so the "largest contour" locks onto the cover's subject), and a hairline

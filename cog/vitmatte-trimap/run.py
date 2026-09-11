@@ -7,7 +7,7 @@ Output: a grayscale PNG alpha matte, at the working resolution (`max_size`).
 The trimap is the whole point: the model only decides the *unknown* band, so a
 locked-foreground cover interior and locked-background surround keep it from
 cutting into the depicted artwork or grabbing a neighbouring object. The caller
-(`src/lib/matte.ts`) builds the trimap from the admin's picked sleeve corners.
+(`apps/web/src/lib/matte.ts`) builds the trimap from the admin's picked sleeve corners.
 """
 
 import os

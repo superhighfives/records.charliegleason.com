@@ -1,6 +1,6 @@
 // Tiny reverse proxy for the Discogs API, deployed to Fly.io so lookups go out
 // from a dedicated egress IP instead of the Worker's shared Cloudflare pool —
-// that shared pool is what Discogs actually rate-limits (see src/lib/discogs.ts).
+// that shared pool is what Discogs actually rate-limits (see apps/web/src/lib/discogs.ts).
 // Holds the real DISCOGS_TOKEN; callers authenticate with a separate shared
 // secret (X-Proxy-Secret) so the token itself never leaves this machine.
 

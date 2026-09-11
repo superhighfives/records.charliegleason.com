@@ -33,9 +33,9 @@ This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
 
 If you prefer not to use Tailwind CSS:
 
-1. Remove the demo pages in `src/routes/demo/`
-2. Replace the Tailwind import in `src/styles.css` with your own styles
-3. Remove `tailwindcss()` from the plugins array in `vite.config.ts`
+1. Remove the demo pages in `apps/web/src/routes/demo/`
+2. Replace the Tailwind import in `apps/web/src/styles.css` with your own styles
+3. Remove `tailwindcss()` from the plugins array in `apps/web/vite.config.ts`
 4. Uninstall the packages: `bun install @tailwindcss/vite tailwindcss -D`
 
 ## Linting & Formatting
@@ -52,15 +52,15 @@ bun run check
 
 ## Deploy to Cloudflare Workers
 
-This project uses the Cloudflare Vite plugin (configured in `vite.config.ts`) and `wrangler.jsonc`:
+This project uses the Cloudflare Vite plugin (configured in `apps/web/vite.config.ts`) and `apps/web/wrangler.jsonc`:
 
 1. Install Wrangler: `bun install -g wrangler`
 2. Authenticate: `wrangler login`
 3. Deploy: `bunx wrangler deploy`
 
-For production env vars, run `wrangler secret put MY_VAR` for each secret listed in `.env.example`. Public (non-secret) vars go in `wrangler.jsonc` under `vars`.
+For production env vars, run `wrangler secret put MY_VAR` for each secret listed in `.env.example`. Public (non-secret) vars go in `apps/web/wrangler.jsonc` under `vars`.
 
-KV, D1, R2, and Durable Object bindings are configured in `wrangler.jsonc` — see https://developers.cloudflare.com/workers/wrangler/configuration/.
+KV, D1, R2, and Durable Object bindings are configured in `apps/web/wrangler.jsonc` — see https://developers.cloudflare.com/workers/wrangler/configuration/.
 
 
 ## Setting up Clerk
@@ -75,7 +75,7 @@ KV, D1, R2, and Durable Object bindings are configured in `wrangler.jsonc` — s
 
 ### What's wired up
 
-- **`<ClerkProvider>`** at the app root (`src/integrations/clerk/provider.tsx`) handles auth context for the whole tree
+- **`<ClerkProvider>`** at the app root (`apps/web/src/integrations/clerk/provider.tsx`) handles auth context for the whole tree
 - **`<SignInButton>` / `<UserButton>`** in the header swap based on auth state
 - **`/demo/clerk`** shows Clerk's prebuilt sign-in UI and a signed-in greeting
 
@@ -159,11 +159,11 @@ bunx shadcn@latest add button
 
 ## Routing
 
-This project uses [TanStack Router](https://tanstack.com/router) with file-based routing. Routes are managed as files in `src/routes`.
+This project uses [TanStack Router](https://tanstack.com/router) with file-based routing. Routes are managed as files in `apps/web/src/routes`.
 
 ### Adding A Route
 
-To add a new route to your application just add a new file in the `./src/routes` directory.
+To add a new route to your application just add a new file in the `./apps/web/src/routes` directory.
 
 TanStack will automatically generate the content of the route file for you.
 
@@ -189,7 +189,7 @@ More information on the `Link` component can be found in the [Link documentation
 
 ### Using A Layout
 
-In the File Based Routing setup the layout is located in `src/routes/__root.tsx`. Anything you add to the root route will appear in all the routes. The route content will appear in the JSX where you render `{children}` in the `shellComponent`.
+In the File Based Routing setup the layout is located in `apps/web/src/routes/__root.tsx`. Anything you add to the root route will appear in all the routes. The route content will appear in the JSX where you render `{children}` in the `shellComponent`.
 
 Here is an example layout that includes a header:
 
