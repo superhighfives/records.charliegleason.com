@@ -49,7 +49,7 @@ const SQL_OUT = join(
 );
 
 // Discogs' master `artist` is the first credited artist with its " (2)" style
-// disambiguator stripped — matches cleanArtistName in src/lib/discogs-shared.ts.
+// disambiguator stripped — matches cleanArtistName in apps/web/src/lib/discogs-shared.ts.
 function cleanArtistName(name) {
 	return name.replace(/\s*\(\d+\)\s*$/, "").trim();
 }

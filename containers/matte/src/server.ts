@@ -1,7 +1,7 @@
 /**
  * The container's HTTP entry. One job: `POST /matte` with a capture + band + params, run the
  * render, return the two WebP variants. Fronted by the `MatteContainer` Durable Object in the
- * main Worker (see `src/lib/matte-container.ts`), which is the only caller — so the contract
+ * main Worker (see `apps/web/src/lib/matte-container.ts`), which is the only caller — so the contract
  * is a small internal JSON envelope (base64 in, base64 out), not a public API.
  */
 

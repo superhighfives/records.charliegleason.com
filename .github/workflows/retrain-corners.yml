@@ -7,7 +7,7 @@ name: Retrain corner model
 # not silent — this just removes the ~40-min manual toil.
 #
 # Three triggers: the weekly schedule below (belt-and-braces), manual workflow_dispatch, and
-# maybeTriggerRetrain (src/lib/retrain-dispatch.ts) firing this same workflow_dispatch the
+# maybeTriggerRetrain (apps/web/src/lib/retrain-dispatch.ts) firing this same workflow_dispatch the
 # moment a corner-label save pushes drift over threshold — so retrain PRs open same-day instead
 # of waiting for Monday. That dispatcher already checks for an in-flight run / open retrain PR
 # before firing, so repeated saves don't queue duplicate ~2-4h runs; check_drift.py below is a

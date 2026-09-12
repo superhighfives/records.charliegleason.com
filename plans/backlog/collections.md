@@ -22,8 +22,8 @@ Each record now carries rich metadata to group on: `artist`, `year`, `label`, `g
 collection). That's the raw material both the manual picker and the AI grouper work from.
 
 Relevant existing code:
-- `src/db/schema.ts` — `records` table (the members being grouped)
-- `src/routes/admin/` — admin table + editor + Discogs search UX to mirror
+- `apps/web/src/db/schema.ts` — `records` table (the members being grouped)
+- `apps/web/src/routes/admin/` — admin table + editor + Discogs search UX to mirror
 - `@tanstack/ai-anthropic` is already a dependency — AI grouping can reuse it, no new SDK
 - CI excludes biome; SerpApi / CF Images notes in memory aren't relevant here
 

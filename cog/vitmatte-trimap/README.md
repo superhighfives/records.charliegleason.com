@@ -4,7 +4,7 @@ A [Cog](https://github.com/replicate/cog) wrapper around
 [ViTMatte](https://huggingface.co/hustvl/vitmatte-small-composition-1k) for
 **trimap-guided** image matting, deployed as a private Replicate model.
 
-The app (`src/lib/matte.ts`) sends a deskewed sleeve `image` plus a `trimap`
+The app (`apps/web/src/lib/matte.ts`) sends a deskewed sleeve `image` plus a `trimap`
 built from the admin's picked corners — cover interior locked foreground, wood
 beyond the edge locked background, a thin band around the edge left unknown.
 ViTMatte only resolves that band, so it can't cut into the depicted artwork or
@@ -45,7 +45,7 @@ cog push r8.im/your-username/vitmatte-trimap
 ```
 
 `cog push` prints the pushed **version hash**. Paste it into
-`MATTE_MODEL_VERSION` in `src/lib/matte.ts`. Until it's set, the app falls back
+`MATTE_MODEL_VERSION` in `apps/web/src/lib/matte.ts`. Until it's set, the app falls back
 to the free deterministic matte, so nothing breaks in the meantime.
 
 Ensure the `REPLICATE_API_KEY` secret is set for the Worker (already used by the

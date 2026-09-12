@@ -5,6 +5,7 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	// relative to this file, apps/web/
 	"main": "src/server.ts",
 	// Workers Logs — capture invocation logs + outcomes (incl. uncatchable kills
 	// like exceededMemory / exceededCpu that never reach Sentry). Without this a
@@ -103,15 +104,16 @@
 	// Matte render container — the Apply pipeline's sleeve matte renders here (real RAM),
 	// off the 128 MB queue-consumer isolate that OOM-looped on it. Built from
 	// containers/matte/Dockerfile with the REPO ROOT as build context
-	// (`image_build_context: "."`) so the bundle step can reach the shared src/lib pure
-	// modules. Fronted by the MatteContainer DO. Production only — preview can't host the
-	// DO (its `versions upload` deploy can't apply DO migrations), so it falls back to the
+	// (`image_build_context: "../.."`, since this config lives in apps/web/) so the
+	// bundle step can reach the shared apps/web/src/lib pure modules. Fronted by the
+	// MatteContainer DO. Production only — preview can't host the DO (its
+	// `versions upload` deploy can't apply DO migrations), so it falls back to the
 	// in-Worker matte render (see renderAiMatte / renderDeterministicMatte).
 	"containers": [
 		{
 			"class_name": "MatteContainer",
-			"image": "./containers/matte/Dockerfile",
-			"image_build_context": ".",
+			"image": "../../containers/matte/Dockerfile",
+			"image_build_context": "../..",
 			"instance_type": "standard-1",
 			"max_instances": 3,
 			// Give active instances time to drain in-flight /enhance and /matte requests

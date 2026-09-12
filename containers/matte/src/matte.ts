@@ -1,6 +1,6 @@
 /**
  * The matte render, in the container. A near-line-for-line port of `matteAI` /
- * `matteFromBand` in `src/lib/matte.ts` — same steps, same constants (imported from the
+ * `matteFromBand` in `apps/web/src/lib/matte.ts` — same steps, same constants (imported from the
  * shared `matte-config`), same pixel helpers (imported from the shared `photo-processing` /
  * `matte-pixels`) — with the three binding-coupled calls (decode / encode / ESRGAN upscale)
  * swapped for the sharp shims in `./image-io`, and the Replicate calls taking a token. R2 +
@@ -55,7 +55,7 @@ import type { CornerBand } from "#/lib/sleeve-corners";
 import { decodeRgba, encodePng, encodeWebp, upscaleImage } from "./image-io.ts";
 import { firstOutputUrl, runVersion } from "./replicate.ts";
 
-/** The paid matte — see `src/lib/matte.ts#matteAI` for the full prose behind each step. */
+/** The paid matte — see `apps/web/src/lib/matte.ts#matteAI` for the full prose behind each step. */
 async function matteAI(
 	capture: RgbaImage,
 	band: CornerBand,

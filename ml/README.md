@@ -45,7 +45,7 @@ rather than auto-committing.
   `log_var` (8 = per-coordinate log-variance, the model's own uncertainty; `sigma =
   exp(0.5·log_var)` in frame units). The Rust crate reads both by index and is backward-
   compatible with a legacy single-output model. `sigma` feeds the reconciliation/confidence in
-  `src/lib/sleeve-detect-wasm.ts`.
+  `apps/web/src/lib/sleeve-detect-wasm.ts`.
 - Input: `1×3×384×384` float in `[0,1]`, RGB, NCHW. ImageNet mean/std normalisation is **baked
   into the exported graph**, so the caller (the Rust crate / JS) only resizes to 384×384 and
   divides by 255 — no per-channel normalisation needed downstream. See `corner_model.meta.json`.
@@ -82,7 +82,7 @@ regenerates the crate's onnxruntime reference test for the new model.
 
 The model gets the sleeve *region* right but the raw prediction is off by ~1–3% of the frame
 (~20–60px on a 2048px capture — visibly "needs a nudge"). So `detectSleeveCornersBest`
-(`src/lib/sleeve-detect-wasm.ts`) doesn't return the raw prediction: it **de-shrinks** it
+(`apps/web/src/lib/sleeve-detect-wasm.ts`) doesn't return the raw prediction: it **de-shrinks** it
 (cancelling a measured ~0.5% inward regression bias) and then **snaps each edge to the true
 sleeve boundary** with `refineQuadEdgesDetailed` — the same colour-gradient edge search the
 matte runs at Apply time, brought forward to detect. It reverts low-confidence edges back to
@@ -95,7 +95,7 @@ from **1.16% / 15%** before the hetero + hue-aug retrain. The tail lands at 1.02
 essentially level with the whole set.
 
 This end-to-end number is now **reproducible**: `bun run ml/e2e_metric.ts` applies the app's
-*real* de-shrink + `refineQuadEdgesDetailed` (imported from `src/lib`, not a copy) on top of the
+*real* de-shrink + `refineQuadEdgesDetailed` (imported from `apps/web/src/lib`, not a copy) on top of the
 out-of-fold predictions `train.py` dumps to `data/oof_corners.json`, so it can't silently drift
 from what ships. Its RAW columns reproduce `train.py`'s table exactly, as a self-check.
 
@@ -121,8 +121,8 @@ editor, and the worst records are the best hard examples to prioritise in the ne
 (It's in-sample-optimistic on records the current model trained on; most honest on new records.)
 
 **You don't have to watch for it.** `train.py` also writes `ml/labels_manifest.json` — a
-per-record hash of every band it trained on. A weekly Worker cron (`src/lib/flywheel-alert.ts`,
-wired in `src/server.ts`) compares live D1 to that manifest and **emails when ≥10 labels have
+per-record hash of every band it trained on. A weekly Worker cron (`apps/web/src/lib/flywheel-alert.ts`,
+wired in `apps/web/src/server.ts`) compares live D1 to that manifest and **emails when ≥10 labels have
 changed** since the last train. Committing a fresh model + manifest resets the counter — no state
 to manage.
 

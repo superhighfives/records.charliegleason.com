@@ -3,22 +3,22 @@
   "private": true,
   "type": "module",
   "imports": {
-    "#/*": "./src/*"
+    "#/*": "./apps/web/src/*"
   },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
-    "dev": "dotenv -e .env.local -- vite dev --port 3000",
-    "generate-routes": "tsr generate",
-    "build": "vite build",
+    "dev": "cd apps/web && dotenv -e ../../.env.local -- vite dev --port 3000",
+    "generate-routes": "cd apps/web && tsr generate",
+    "build": "cd apps/web && vite build",
     "build:wasm": "node crates/sleeve-detect/build.mjs && node crates/sleeve-corner-net/build.mjs",
-    "preview": "vite preview",
-    "test": "vitest run",
+    "preview": "cd apps/web && vite preview",
+    "test": "cd apps/web && vitest run",
     "format": "biome format",
     "lint": "biome lint",
     "check": "biome check",
-    "deploy": "bun run build && wrangler deploy",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "wrangler d1 migrations apply records --remote"
+    "deploy": "cd apps/web && vite build && wrangler deploy",
+    "db:generate": "cd apps/web && drizzle-kit generate",
+    "db:migrate": "cd apps/web && wrangler d1 migrations apply records --remote"
   },
   "dependencies": {
     "@cf-wasm/photon": "^0.3.6",

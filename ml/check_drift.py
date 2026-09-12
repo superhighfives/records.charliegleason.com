@@ -1,6 +1,6 @@
 """Count corner-label drift vs the trained baseline and decide whether a retrain is worth it.
 
-Mirrors src/lib/flywheel-alert.ts (RETRAIN_THRESHOLD = 10, FNV-1a over the stored band JSON):
+Mirrors apps/web/src/lib/flywheel-alert.ts (RETRAIN_THRESHOLD = 10, FNV-1a over the stored band JSON):
 the baseline is ml/labels_manifest.json (per-record hash at last train); comparing it to live D1
 counts added + changed labels. The retrain-corners workflow runs this first and skips the costly
 CPU training when drift is below threshold.
@@ -14,7 +14,7 @@ import os
 import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# Keep in sync with RETRAIN_THRESHOLD in src/lib/flywheel-alert.ts.
+# Keep in sync with RETRAIN_THRESHOLD in apps/web/src/lib/flywheel-alert.ts.
 THRESHOLD = 10
 
 

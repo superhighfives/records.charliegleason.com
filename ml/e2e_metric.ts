@@ -3,7 +3,7 @@
  *
  * `train.py` reports the RAW 5-fold out-of-fold error (model output only). In the app, every
  * detection is then de-shrunk and edge-refined (`detectSleeveCornersBest` → `refineToEdges` in
- * src/lib/sleeve-detect-wasm.ts). This harness applies that SAME de-shrink + edge-refine — by
+ * apps/web/src/lib/sleeve-detect-wasm.ts). This harness applies that SAME de-shrink + edge-refine — by
  * importing the real `refineQuadEdgesDetailed`, not a copy — on top of the dumped out-of-fold
  * predictions, so the end-to-end figure can't silently drift from what ships.
  *

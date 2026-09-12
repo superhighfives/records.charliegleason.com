@@ -50,10 +50,10 @@ changes (TanStack AI, DB, Start, Router all ship skills) instead of guessing pat
 | State              | TanStack Store                                                   |
 | AI                 | TanStack AI (`@tanstack/ai*`) → Cloudflare Workers AI / AI Gateway |
 | Auth               | Clerk (`@clerk/clerk-react`), admin gated at `/admin`           |
-| Error monitoring   | Sentry — Worker via `@sentry/cloudflare` `withSentry` (`src/server.ts`), browser via `init` in `src/client.tsx`, source maps via `sentryTanstackStart` Vite plugin |
+| Error monitoring   | Sentry — Worker via `@sentry/cloudflare` `withSentry` (`apps/web/src/server.ts`), browser via `init` in `apps/web/src/client.tsx`, source maps via `sentryTanstackStart` Vite plugin |
 | Database           | Drizzle ORM → Cloudflare **D1** (SQLite)                         |
 | Photo storage      | Cloudflare **R2**                                                |
-| Deployment / host  | Cloudflare Workers (`@cloudflare/vite-plugin`, `wrangler.jsonc`) |
+| Deployment / host  | Cloudflare Workers (`@cloudflare/vite-plugin`, `apps/web/wrangler.jsonc`) |
 | Package manager    | **bun**                                                          |
 | Toolchain          | **biome** (lint/format/check)                                    |
 
@@ -94,15 +94,15 @@ production and live in `.env.local` for dev. See `.env.example`.
 | `CLERK_SECRET_KEY`           | secret       | Clerk server-side `auth()`               |
 | `VITE_SENTRY_DSN`            | build-time   | Sentry DSN (client + `withSentry`, via `import.meta.env`) |
 | `VITE_SENTRY_ORG`/`_PROJECT`/`SENTRY_AUTH_TOKEN` | build-time | Sentry source-map upload (Vite plugin) |
-| D1 binding `DB`              | binding      | Database, dev + prod (`wrangler.jsonc`)  |
+| D1 binding `DB`              | binding      | Database, dev + prod (`apps/web/wrangler.jsonc`)  |
 | `DISCOGS_TOKEN`              | secret       | Discogs API                              |
 | `REPLICATE_API_KEY`          | secret       | Replicate — professional studio photo generation |
 | `LASTFM_API_KEY` / `LASTFM_USER` | secret  | daily digest suggestions                 |
 | `CRON_SECRET`               | secret       | guards `POST /api/cron/digest`           |
-| Workers AI binding `AI`      | binding      | Workers AI / AI Gateway (`wrangler.jsonc`)|
-| R2 binding `PHOTOS`          | binding      | Vinyl photo storage (`wrangler.jsonc`)   |
-| Images binding `IMAGES`      | binding      | Cover resize (`wrangler.jsonc`)          |
-| Email binding `EMAIL`        | binding      | Daily digest send (`wrangler.jsonc`)     |
+| Workers AI binding `AI`      | binding      | Workers AI / AI Gateway (`apps/web/wrangler.jsonc`)|
+| R2 binding `PHOTOS`          | binding      | Vinyl photo storage (`apps/web/wrangler.jsonc`)   |
+| Images binding `IMAGES`      | binding      | Cover resize (`apps/web/wrangler.jsonc`)          |
+| Email binding `EMAIL`        | binding      | Daily digest send (`apps/web/wrangler.jsonc`)     |
 
 ## Deployment notes
 
@@ -113,17 +113,17 @@ production and live in `.env.local` for dev. See `.env.example`.
   `.env.local` stays on test keys. Runtime Worker secrets are set once via
   `wrangler secret put` and persist across deploys (CI doesn't touch them).
 - `bun run build` then `wrangler deploy` (see `package.json` scripts) — what CI runs.
-- **Worker entry is `src/server.ts`** (wrangler `main`), not the TanStack default —
+- **Worker entry is `apps/web/src/server.ts`** (wrangler `main`), not the TanStack default —
   it wraps `@tanstack/react-start/server-entry`'s `fetch`, adds a `scheduled` (cron)
   handler for the daily digest, and wraps the whole handler in `@sentry/cloudflare`
   `withSentry` for runtime error capture. Keep all three when touching the entry.
   (The old `instrument.server.mjs` was removed — it never instrumented the worker.)
 - Bindings (D1 `DB`, R2 `PHOTOS`, Workers `AI`, `IMAGES`, `EMAIL`, Cron) are declared
-  in `wrangler.jsonc`; worker `name` is `records`. D1 `database_id` is provisioned
+  in `apps/web/wrangler.jsonc`; worker `name` is `records`. D1 `database_id` is provisioned
   (`records`, WNAM region).
 - Custom domain `records.charliegleason.com` is attached via a Workers route /
-  custom domain in the Cloudflare dashboard or `wrangler.jsonc` `routes`.
-- **Daily digest** (`src/lib/digest.ts`): Last.fm top albums minus the collection →
+  custom domain in the Cloudflare dashboard or `apps/web/wrangler.jsonc` `routes`.
+- **Daily digest** (`apps/web/src/lib/digest.ts`): Last.fm top albums minus the collection →
   email via the `EMAIL` binding using **Cloudflare Email Sending** (`env.EMAIL.send({
   from, to, subject, html })` — structured API, no MIME lib). `send_email` binding is
   `{ name: "EMAIL", remote: true }` (send to anyone). Needs the **sender domain
@@ -135,18 +135,18 @@ production and live in `.env.local` for dev. See `.env.example`.
 ## Known gotchas
 
 - **Dev uses remote bindings — there is NO local DB.** `remoteBindings: true` in
-  `vite.config.ts` + `remote: true` on each binding in `wrangler.jsonc` means
+  `apps/web/vite.config.ts` + `remote: true` on each binding in `apps/web/wrangler.jsonc` means
   localhost reads/writes the real Cloudflare D1/R2. Apply migrations with
   `--remote` only (`bunx wrangler d1 migrations apply records --remote`).
 - **`better-sqlite3` is still in `dependencies`** but unused after the D1 move — safe
   to remove later.
 - **Auth boundary = write server fns, not the UI.** `/admin`'s `<SignedIn>` gate is
-  UX only; the real check is `authMiddleware` (`src/lib/auth.ts`, Clerk backend SDK)
+  UX only; the real check is `authMiddleware` (`apps/web/src/lib/auth.ts`, Clerk backend SDK)
   attached to `createRecord`/`updateRecord`/`deleteRecord`. Reads (`listRecords`,
   `/api/*`) are intentionally public. Needs `CLERK_SECRET_KEY` in `.env.local` (dev,
   read by the Cloudflare Vite plugin) and `wrangler secret put CLERK_SECRET_KEY` (prod).
 - **AI = Claude Sonnet 4.6 via Cloudflare Workers AI partner models + Unified Billing**
-  (`src/lib/ai.ts`, `runClaude` → `env.AI.run('anthropic/claude-sonnet-4.6', body,
+  (`apps/web/src/lib/ai.ts`, `runClaude` → `env.AI.run('anthropic/claude-sonnet-4.6', body,
   { gateway })`). **No `ANTHROPIC_API_KEY`** — Cloudflare bills it (Workers Paid +
   credits). `runClaude` is the entire AI surface: swap it back to the Anthropic SDK +
   BYOK in one file if needed. Body is the Anthropic Messages format (vision + tools
@@ -154,19 +154,19 @@ production and live in `.env.local` for dev. See `.env.example`.
   Billing path** — `identifyWithWebSearch` is best-effort and fails closed to the
   Discogs pick-list / manual search. (TanStack AI isn't used — it doesn't expose
   Claude's server-side tools.)
-- **Photo flow** (`src/lib/analyze.ts`): vision read → Discogs lookup → web-search
+- **Photo flow** (`apps/web/src/lib/analyze.ts`): vision read → Discogs lookup → web-search
   escalation when unsure → Pitchfork. `/api/photos/$` serves R2 objects.
 - **Three images per record.** `capturePhotoKey` = the iPhone shot (R2 `captures/`,
   **admin only** — omitted from `/api/records`). `coverImageKey` = the Discogs-
   sourced cover, resized with the Cloudflare **Images binding** (`env.IMAGES` → webp
-  ≤600px) at `createRecord` time (`src/lib/images.ts`). `professionalImageKey` = a
+  ≤600px) at `createRecord` time (`apps/web/src/lib/images.ts`). `professionalImageKey` = a
   studio product shot **generated from the capture** via Replicate (see below).
-  Which one displays is one shared helper — `displayCoverKey` (`src/lib/cover.ts`):
+  Which one displays is one shared helper — `displayCoverKey` (`apps/web/src/lib/cover.ts`):
   an **approved** professional photo wins, else the Discogs cover, else (admin only)
   the capture. Needs Image Transformations enabled on the account; fails closed to
   no cover. Public payloads go through `toPublicRecord` (same file), which drops the
   capture key + the internal `professionalError`/`professionalPredictionId`.
-- **Professional photo** (`src/lib/professional.ts` + `src/lib/replicate.ts`): a
+- **Professional photo** (`apps/web/src/lib/professional.ts` + `apps/web/src/lib/replicate.ts`): a
   new `professional` **queue mode** (alongside `analyze`/`refresh`) reads the capture
   from R2 and runs two Replicate passes — **Flux Kontext** (`black-forest-labs/
   flux-kontext-pro`, identity-preserving relight/straighten/crop on a plain bg) then
@@ -179,7 +179,7 @@ production and live in `.env.local` for dev. See `.env.example`.
   are constants at the top of `professional.ts` — the exact Replicate input schemas
   need a real-key smoke test. `REPLICATE_API_KEY` is a runtime secret (`wrangler
   secret put`).
-- **The Fork** (`src/lib/the-fork.ts`) has no query API — it ships a 20 MB static
+- **The Fork** (`apps/web/src/lib/the-fork.ts`) has no query API — it ships a 20 MB static
   `albums.json` (28k Pitchfork reviews: `{artist,title,score,url,...}`). We fetch it
   (edge + isolate cached), normalize, and match locally. Fails closed (null).
 - **Discogs** uses a personal access token (`DISCOGS_TOKEN`, `Authorization: Discogs
@@ -189,8 +189,8 @@ production and live in `.env.local` for dev. See `.env.example`.
   can't null those out on update.
 - TanStack DB live-query collections are **client-only** (no SSR) — disable SSR on
   routes that preload collections (see `db#meta-framework` skill).
-- Re-run `bunx wrangler types` after editing `wrangler.jsonc` (regenerates
-  `worker-configuration.d.ts`).
+- Re-run `bunx wrangler types` after editing `apps/web/wrangler.jsonc` (regenerates
+  `apps/web/worker-configuration.d.ts`).
 
 ## Next steps
 

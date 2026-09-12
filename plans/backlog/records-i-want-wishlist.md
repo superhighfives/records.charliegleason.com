@@ -29,9 +29,9 @@ individual releases; the refactor establishes how we resolve, store, and display
 and this feature sits on top of that.
 
 Relevant existing code:
-- `src/db/schema.ts` — `records` table (gains `masterId` in the refactor)
-- `src/lib/discogs.ts` — Discogs client (gains master helpers in the refactor)
-- `src/routes/admin/` — admin table + editor patterns to mirror
+- `apps/web/src/db/schema.ts` — `records` table (gains `masterId` in the refactor)
+- `apps/web/src/lib/discogs.ts` — Discogs client (gains master helpers in the refactor)
+- `apps/web/src/routes/admin/` — admin table + editor patterns to mirror
 
 ## Rough shape
 - New lightweight `wants` (wishlist) table, keyed by Discogs **master id** (+ cached
