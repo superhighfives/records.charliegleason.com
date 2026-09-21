@@ -460,11 +460,11 @@ const CANDIDATE_BAND_VH = 1.5;
 // fixed viewport constant that could span several rows of a dense grid.
 const AMBIENT_FALLOFF_RATIO = 0.62;
 const AMBIENT_CORE_RATIO = 0.75;
-// The column crossfade's horizontal counterpart to `AMBIENT_FALLOFF_RATIO` —
-// 1 fades a tile out exactly by the time its immediate neighbour's own slot
-// centre is reached, so a row wider than 2 columns still never blends across
-// more than its two nearest tiles at once.
-const COLUMN_FALLOFF_RATIO = 1;
+// How much of one column's slot the crossfade between two neighbouring tiles
+// spans, split evenly either side of the boundary between them. The rest of
+// a slot is that tile's alone at full weight. Keep it below 1 — at 1 a tile
+// would still be ramping in at its neighbour's own centre.
+const COLUMN_CROSSFADE_RATIO = 0.5;
 // `updateActive`'s targets are sampled once per frame — during a fast fling
 // the scroll position can move several steps' worth of the steep trapezoid
 // between two samples, so writing targets straight to the DOM read as a snap.
@@ -479,11 +479,11 @@ const AMBIENT_SETTLE_EPSILON = 0.01;
 // sliding around. (On touch the disc rests at opacity 0; see `RecordTile`.)
 const DISC_FADE_LEAD = 2;
 
-// Shared trapezoid shape — flat plateau at `1` for `dist <= falloff *
+// Trapezoid shape — flat plateau at `1` for `dist <= falloff *
 // AMBIENT_CORE_RATIO`, linear ramp to `0` over the remaining outer band.
-// `ambientProgress` uses this for the vertical falloff; the column crossfade
-// (`colWeight` in the touch effect) uses the exact same shape so a multi-tile
-// row gets the same "hold at full colour" dwell the vertical axis does.
+// Used for the vertical falloff (`ambientProgress`). The column crossfade
+// (`columnWeight`) is ramped off the column boundaries instead of a ratio of
+// its own falloff — see there for why it can't share this shape.
 export function trapezoidWeight(dist: number, falloffDist: number): number {
 	const corePx = falloffDist * AMBIENT_CORE_RATIO;
 	if (dist <= corePx) return 1;
@@ -500,6 +500,62 @@ export function ambientProgress(
 ): number {
 	const dist = Math.abs(tileCenterY - window.innerHeight / 2);
 	return trapezoidWeight(dist, tileHeight * AMBIENT_FALLOFF_RATIO);
+}
+
+/**
+ * The horizontal counterpart to `ambientProgress`: how lit the tile in
+ * column `index` of a `columns`-wide row should be when the viewport's centre
+ * line sits `fraction` (0–1) of the way down that row.
+ *
+ * `updateActive` hands NowShowing the tile whose slot `fraction` falls in —
+ * `floor(fraction * columns)` — so the lighting has to agree: exactly one
+ * tile may be at full weight at a time, and it must be that one. A trapezoid
+ * sized by a ratio of the *falloff* (what the vertical axis uses) can't
+ * promise that — with the shared 0.75 core ratio, two side-by-side tiles both
+ * sat at a flat `1` for the middle quarter of the row's travel, so a single
+ * scroll lit both covers at once while the bar named only one of them.
+ *
+ * Size the plateau from the column boundaries instead. A tile holds full
+ * weight right across its own slot, except within the crossfade band
+ * straddling each boundary it *shares with a neighbour*, where it ramps
+ * linearly to 0 on the far side. Weights sum to 1 across the row, neighbours
+ * cross at 0.5 exactly where NowShowing switches, and the tile the bar names
+ * is never the dimmer of the two.
+ *
+ * The row's own outer edges get no such ramp: `fraction` runs past 0/1 while
+ * the row is still the anchor (it only hands over once the *next* row's
+ * centre is nearer the centre line), and at that handoff the tile falls back
+ * to its own natural `ambientProgress` — undimmed. Tapering toward the ends
+ * would make that handoff a visible step up.
+ */
+export function columnWeight(
+	fraction: number,
+	index: number,
+	columns: number,
+): number {
+	// A row of one (typically a 2×2 spanning tile with no same-size
+	// neighbour) has nothing to blend against — attenuating a lone tile
+	// toward 0 near the ends of its own span just disagreed with the
+	// unattenuated natural-progress value computed for the same tile the
+	// instant it stopped being the anchor, which read as flicker right at
+	// that boundary.
+	if (columns <= 1) return 1;
+	const slotWidth = 1 / columns;
+	const bandHalf = (slotWidth * COLUMN_CROSSFADE_RATIO) / 2;
+	// How far in, as a 0–1 ramp, `fraction` is past a shared boundary at
+	// `boundary`: 0 a half-band before it, 1 a half-band after.
+	const crossed = (boundary: number) =>
+		Math.max(
+			0,
+			Math.min(1, (fraction - (boundary - bandHalf)) / (2 * bandHalf)),
+		);
+	// Fading in from the left neighbour, out toward the right one. The two
+	// bands can't overlap (`COLUMN_CROSSFADE_RATIO <= 1`), so at most one of
+	// these is mid-ramp and `min` simply picks it.
+	const fadeIn = index === 0 ? 1 : crossed(index * slotWidth);
+	const fadeOut =
+		index === columns - 1 ? 1 : 1 - crossed((index + 1) * slotWidth);
+	return Math.min(fadeIn, fadeOut);
 }
 
 /**
@@ -873,28 +929,14 @@ export function CollectionGrid({
 				// NowShowing hard-switches at `index`'s boundary, but the visual
 				// highlight shouldn't — every tile in the row shares the same
 				// vertical distance from centre, so a discrete flip right at the
-				// falloff's peak reads as a snap. Blend across columns with the
-				// same trapezoid the vertical axis uses: each tile's share of
-				// the row's vertical progress fades in as `fraction` approaches
-				// its column's centre and out toward its neighbours'.
+				// falloff's peak reads as a snap. `columnWeight` crossfades each
+				// tile's share of the row's vertical progress across that
+				// boundary instead, while still peaking on `index`'s own tile
+				// alone — so the cover that's lit is the one the bar names.
 				const rowCenterY = (rowTop + rowBottom) / 2;
 				const verticalProgress = ambientProgress(rowCenterY, anchorHeight);
-				const slotWidth = 1 / row.length;
 				for (let i = 0; i < row.length; i++) {
-					// A "row" of exactly one tile (typically a 2×2 spanning tile
-					// with no same-size neighbour) has nothing to blend against —
-					// attenuating a lone tile toward 0 near the ends of its own
-					// span just disagreed with the unattenuated natural-progress
-					// value computed for the same tile the instant it stopped
-					// being the anchor, which read as flicker right at that
-					// boundary.
-					const colWeight =
-						row.length === 1
-							? 1
-							: trapezoidWeight(
-									Math.abs(fraction - (i + 0.5) * slotWidth),
-									slotWidth * COLUMN_FALLOFF_RATIO,
-								);
+					const colWeight = columnWeight(fraction, i, row.length);
 					highlights.set(row[i].info.id, verticalProgress * colWeight);
 				}
 			}
