@@ -1,16 +1,24 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CollectionGrid } from "#/components/collection-grid";
+import { CollectionHero, heroDurationMs } from "#/components/collection-hero";
 import { CollectionSkeleton } from "#/components/collection-skeleton";
+import { CollectionStatsSentence } from "#/components/collection-stats-sentence";
 import { useCollectionUI } from "#/components/collection-ui";
+import { FilterStrip } from "#/components/filter-strip";
 import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import {
+	type CollectionFilters,
+	hasAnyFilter,
+	matchesFilters,
+	NO_FILTERS,
+} from "#/lib/collection-filters";
 import { emojiSrc } from "#/lib/emoji";
-import { numberToWords } from "#/lib/number-to-words";
 import { recordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 
@@ -40,8 +48,8 @@ const CRITICAL_FONTS = [
  * Explicitly `document.fonts.load(...)` each face rather than awaiting the
  * passive `document.fonts.ready` — `ready` only resolves once every font
  * *already in flight* has settled, and a font only enters flight once the
- * browser lays out text that needs it. The loading skeleton (`CollectionSkeleton`)
- * is a spinner, not text, so nothing on screen had actually requested Fraunces
+ * browser lays out text that needs it. The loading placeholder (`CollectionSkeleton`)
+ * has no Fraunces text in it, so nothing on screen had actually requested Fraunces
  * yet: `ready` was resolving as a same-tick no-op, and the real fetch (and the
  * reflow it causes) only started once the hero text itself mounted — the
  * exact flash this hook exists to prevent. Explicit `load()` calls kick off
@@ -113,7 +121,11 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 		[navigate, animateOpenRef],
 	);
 
-	const filtered = useMemo(() => {
+	const [filters, setFilters] = useState<CollectionFilters>(NO_FILTERS);
+
+	// Search first, then the filter strip — kept as two steps because the
+	// strip's chip counts are scoped to the search matches (see `facetCounts`).
+	const searched = useMemo(() => {
 		const q = search.trim().toLowerCase();
 		if (!q) return data;
 		return data.filter((r) =>
@@ -122,6 +134,14 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				.some((v) => String(v).toLowerCase().includes(q)),
 		);
 	}, [data, search]);
+
+	const filtered = useMemo(
+		() =>
+			hasAnyFilter(filters)
+				? searched.filter((r) => matchesFilters(r, filters))
+				: searched,
+		[searched, filters],
+	);
 
 	// Track the open record by id (not index) so re-filtering never jumps to the
 	// wrong one.
@@ -164,10 +184,14 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 
 	// Reuse the route's own loading skeleton as the font-loading gate too —
 	// see `useFontsReady`. The data-loading and font-loading phases then read
-	// as one continuous skeleton, and the real header/hero/grid only ever
-	// mounts (and starts its own staged `rise-in`/`fade-in`, below) once every
-	// custom font is actually ready to paint with, instead of racing it.
+	// as one continuous skeleton, and the real hero/grid only ever mounts (and
+	// starts its own staged `rise-in`/`fade-in`, below) once every custom font
+	// is actually ready to paint with, instead of racing it.
 	if (!fontsReady) return <CollectionSkeleton />;
+
+	// The statement writing itself in *is* the load (see `CollectionHero`);
+	// everything else follows it in once it's done.
+	const revealMs = heroDurationMs(data.length);
 
 	return (
 		<div className="w-full px-4 py-10 sm:px-6">
@@ -185,73 +209,56 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			    unlayered CSS (not `@layer utilities`), so they'd always beat a
 			    layered Tailwind utility regardless of class order; inline style
 			    always wins instead. */}
-			<header
-				className="rise-in mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between"
-				style={{ animationDelay: "500ms" }}
+			{/* No header: the big statement is the page's opening. The home
+			    link, search and the theme toggle live in one small floating pill in the corner instead, so
+			    they're always within reach without a bar across the page.
+			    Opaque rather than backdrop-blurred — it sits over the grid for
+			    the whole scroll, and a blur under it would be recomposited every
+			    scroll frame. */}
+			<h1 className="sr-only">Records — Charlie Gleason's vinyl collection</h1>
+			<div
+				className="floating-controls rise-in"
+				style={{ animationDelay: `${revealMs}ms` }}
 			>
-				<div className="flex items-center gap-4">
-					<a href="https://charliegleason.com" className="block shrink-0">
-						<img
-							src={HERO_EMOJI}
-							alt=""
-							aria-hidden="true"
-							width={64}
-							height={64}
-							className="size-16"
-						/>
-						<span className="sr-only">charliegleason.com</span>
-					</a>
-					<div>
-						<h1 className="font-serif text-4xl font-semibold tracking-tight">
-							Records
-						</h1>
-						<p className="mt-1 text-sm text-muted-foreground">
-							<span className="font-medium text-foreground tabular-nums">
-								{data.length}
-							</span>{" "}
-							vinyls ·{" "}
-							<a
-								href="https://charliegleason.com"
-								className="text-brand-strong underline decoration-brand-strong/60 underline-offset-4 hover:text-foreground"
-							>
-								charliegleason.com
-							</a>
-						</p>
-					</div>
-				</div>
-
-				<div className="flex items-center gap-2">
-					<Input
-						value={search}
-						onChange={(e) => setSearch(e.target.value)}
-						placeholder="Search records…"
-						className="w-full sm:w-64"
+				<Link to="/" className="block shrink-0" title="Records">
+					<img
+						src={HERO_EMOJI}
+						alt="Records home"
+						width={28}
+						height={28}
+						className="size-7"
 					/>
-					<ThemeToggle />
-				</div>
-			</header>
+				</Link>
+				<Input
+					value={search}
+					onChange={(e) => setSearch(e.target.value)}
+					placeholder="Search records…"
+					aria-label="Search records"
+					className="h-8 w-36 rounded-full border-0 bg-transparent shadow-none sm:w-56"
+				/>
+				<ThemeToggle className="size-8 rounded-full border-0" />
+			</div>
 
-			{!search.trim() && (
-				<div className="min-h-[60vh] sm:min-h-[75vh] flex items-center">
-					<p className="rise-in max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:text-6xl lg:text-8xl">
-						<span className="text-brand italic">All</span>{" "}
-						<span className="px-[0.1ch]">{numberToWords(data.length)}</span>{" "}
-						<span className="text-brand italic">
-							of my records, photographed, documented, and displayed.
-						</span>
-					</p>
-				</div>
-			)}
+			{!search.trim() && <CollectionHero count={data.length} />}
+
+			<div className="rise-in" style={{ animationDelay: `${revealMs}ms` }}>
+				<FilterStrip
+					records={data}
+					countRecords={searched}
+					filters={filters}
+					onChange={setFilters}
+				/>
+			</div>
 
 			<div
 				className="fade-in min-h-[70vh]"
-				style={{ animationDelay: "250ms" }}
+				style={{ animationDelay: `${revealMs + 150}ms` }}
 				// `animation-fill-mode: both` (see `.fade-in`) never really "ends" —
 				// it holds the finished keyframe indefinitely rather than the
 				// animation being removed — which keeps Chrome compositing this
 				// wrapper into its own layer forever. That layer boundary clips
-				// what CollectionGrid's fixed, backdrop-blurred children (the
-				// hover overlay, `NowShowing`) can see behind them to just this
+				// what CollectionGrid's fixed, backdrop-blurred child
+				// (`NowShowing`) can see behind it to just this
 				// subtree, so the blur silently stops reaching sibling content
 				// (e.g. the hero text above) once composited this way. Explicitly
 				// canceling the animation once it visually completes releases the
@@ -263,7 +270,11 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				{data.length === 0 ? (
 					<p className="text-muted-foreground">Nothing here yet.</p>
 				) : filtered.length === 0 ? (
-					<p className="text-muted-foreground">No records match “{search}”.</p>
+					<p className="text-muted-foreground">
+						{search.trim()
+							? `No records match “${search}”.`
+							: "No records match those filters."}
+					</p>
 				) : (
 					<CollectionGrid
 						records={filtered}
@@ -301,19 +312,27 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				</SheetContent>
 			</Sheet>
 
-			<footer className="mt-16 border-t border-border pt-48 text-xs text-muted-foreground">
-				<p className="my-16 max-w-6xl font-serif text-4xl font-medium tracking-tight text-pretty sm:text-5xl lg:text-7xl text-muted-foreground italic">
-					Well, that was all {data.length} of my records, photographed,
-					documented, and displayed.
-				</p>
-				<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
-				<a
-					href="https://charliegleason.com"
-					className="text-brand-strong underline decoration-brand-strong/60 underline-offset-4 hover:text-foreground"
-				>
-					charliegleason.com
-				</a>{" "}
-				· set in Fraunces.
+			<footer className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground">
+				<CollectionStatsSentence records={data} />
+				<div className="mt-24 flex flex-wrap items-end justify-between gap-4">
+					<div>
+						<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
+						<a
+							href="https://charliegleason.com"
+							className="text-brand-strong underline decoration-brand-strong/60 underline-offset-4 hover:text-foreground"
+						>
+							charliegleason.com
+						</a>{" "}
+						· set in Fraunces.
+					</div>
+					<button
+						type="button"
+						onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+						className="font-mono text-muted-foreground text-xs underline-offset-4 hover:text-foreground hover:underline"
+					>
+						Back to top ↑
+					</button>
+				</div>
 			</footer>
 		</div>
 	);

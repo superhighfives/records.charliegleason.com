@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 
 import { FadeImage, isImageDecoded } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
@@ -15,7 +23,10 @@ const GAP_REM = 1.25;
 // placeholder grid can use the same tracks and avoid a column jump on load.
 export const TILE_MIN_PX = 180;
 
-function hasNotes(record: PublicRecord): boolean {
+// Sizes worth labelling on a tile (see `.size-badge`) — 12" is the default.
+const SMALL_SIZES = new Set(['7"', '10"']);
+
+export function hasNotes(record: PublicRecord): boolean {
 	return Boolean(record.notes?.trim());
 }
 
@@ -48,7 +59,7 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
 
 /**
  * One cover tile: the peeking vinyl disc behind the cover. `.group` drives
- * the hover states (grayscale→colour, the disc slide-out+scale-up, the
+ * the hover states (the disc slide-out+scale-up, the
  * pencil-badge fade) via plain CSS `:hover` for an instant response. The disc
  * deliberately overflows the tile sideways (and rises above sibling tiles on
  * hover/active — see `.vinyl-peek` in styles.css — so it isn't painted over
@@ -72,15 +83,15 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * sweep per frame; touch devices have no hover to key off), and the record
  * currently open in the detail
  * panel (so it stays highlighted underneath while the panel covers the
- * pointer). It drives the shared `data-active` attribute (grayscale→colour,
- * disc peek, the `grid-focus-overlay` blur) and, for the scroll-driven case,
+ * pointer). It drives the shared `data-active` attribute (zoom, disc
+ * peek) and, for the scroll-driven case,
  * the bar's content. `onActivate` (desktop) reports a plain pointer hover
  * into that same shared "active" state so the bar tracks the mouse instead —
  * desktop's own visual feedback stays purely `:hover`-driven, only the bar's
  * *content* comes from this.
  *
  * Wrapped in `memo` — `CollectionGrid` re-renders on scroll-driven state
- * changes on touch (`activeId`, the content window), and without this every
+ * changes on touch (the content window), and without this every
  * one of the (currently ~300) tiles would re-render along with it even
  * though at most a handful actually have a changed prop. That was the
  * dominant cost behind the iOS scroll jank this was chasing — a profiled
@@ -93,7 +104,7 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * dense auto-flow placement — which depends on every earlier child — never
  * changes as the window moves. See the windowing comment in
  * `CollectionGrid`. The touch variant also drops two desktop-only
- * mechanisms outright: the `[content-visibility:auto]` cover wrapper (a
+ * mechanisms outright: the deferred `.tile-art--deferred` box (a
  * windowed tile that's mounted should always be genuinely painted — the
  * async paint catch-up that attribute schedules is exactly the unobservable
  * clock the old touch effect kept losing races against) and the
@@ -129,11 +140,7 @@ const RecordTile = memo(function RecordTile({
 }) {
 	const matte = displayMatteKey(record);
 	const cover = matte ?? displayCoverKey(record);
-	// Tiles stay near TILE_MIN_PX wide regardless of viewport (more columns get
-	// added instead of individual tiles growing) — 500 covers a ~250px tile at
-	// 2x without shipping the ~1MB master. A spanning (2×2) tile is roughly
-	// double that, so it gets a correspondingly larger request.
-	const coverSrc = cover ? photoUrl(cover, spanning ? 900 : 500) : undefined;
+	const coverSrc = tileCoverSrc(record, spanning);
 	// Desktop: fades the disc in behind the cover once it's up (see the
 	// `VinylDisc` className below). Also gates the loading skeleton below.
 	// Seeded from `FadeImage`'s own decoded-src cache so a cover the grid has
@@ -194,34 +201,46 @@ const RecordTile = memo(function RecordTile({
 			>
 				<div className="relative aspect-square">
 					{contentMounted ? (
-						<>
-							<VinylDisc
-								colorName={record.colorName}
-								textureImageKey={record.colorTextureImageKey}
-								textureStatus={record.colorTextureStatus}
-								translucent={record.colorTranslucent}
-								size={record.size}
-								discCount={record.discCount}
-								className={
-									// Touch: rests fully invisible — the ambient loop fades
-									// it in (inline `opacity` on `.vinyl-peek`) in step with
-									// the peek itself, so there's never a rest-state disc
-									// silhouette showing through the alpha-transparent
-									// covers, and nothing for a disc mask to hide. No
-									// transition classes: the loop is the only easing (see
-									// `[data-touch]` in styles.css). Desktop: kept faded
-									// out until the cover is up, then revealed on a delay
-									// so a slow first-ever load never flashes a bold disc
-									// behind a not-yet-loaded cover.
-									isTouch
-										? "m-1/16 opacity-0"
-										: cn(
-												"m-1/16 transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
-												coverReady ? "opacity-100" : "opacity-0",
-											)
-								}
-							/>
-							{/* Desktop only: masks the disc's rest-state silhouette once
+						// Everything a tile draws lives in one `.tile-art` box —
+						// see styles.css. On desktop that box carries
+						// `content-visibility: auto`, so the browser skips
+						// offscreen tiles *as a unit*: disc, cover and
+						// notes dot all start painting in the same frame.
+						// Previously only the cover's own wrapper was deferred, so
+						// after a jump down the page the disc (outside it) painted
+						// first and the cover caught up a beat later. The box is
+						// oversized past the tile so its implied paint containment
+						// doesn't clip the disc peek; `.tile-art-box` restores the tile's own
+						// bounds for the children's percentage insets.
+						<div className={cn("tile-art", !isTouch && "tile-art--deferred")}>
+							<div className="tile-art-box">
+								<VinylDisc
+									colorName={record.colorName}
+									textureImageKey={record.colorTextureImageKey}
+									textureStatus={record.colorTextureStatus}
+									translucent={record.colorTranslucent}
+									size={record.size}
+									discCount={record.discCount}
+									className={
+										// Touch: rests fully invisible — the ambient loop fades
+										// it in (inline `opacity` on `.vinyl-peek`) in step with
+										// the peek itself, so there's never a rest-state disc
+										// silhouette showing through the alpha-transparent
+										// covers, and nothing for a disc mask to hide. No
+										// transition classes: the loop is the only easing (see
+										// `[data-touch]` in styles.css). Desktop: kept faded
+										// out until the cover is up, then revealed on a delay
+										// so a slow first-ever load never flashes a bold disc
+										// behind a not-yet-loaded cover.
+										isTouch
+											? "m-1/16 opacity-0"
+											: cn(
+													"m-1/16 transition-opacity duration-700 ease-out motion-reduce:transition-none delay-700",
+													coverReady ? "opacity-100" : "opacity-0",
+												)
+									}
+								/>
+								{/* Desktop only: masks the disc's rest-state silhouette once
 							    `coverReady` — the covers are alpha-transparent with ragged
 							    edges (the whole collection is served via
 							    `/api/photos/alpha/…`, `object-contain`), so without this
@@ -235,33 +254,14 @@ const RecordTile = memo(function RecordTile({
 							    all — the disc rests at opacity 0 there instead (see the
 							    `VinylDisc` className above), which is the whole reason
 							    the touch path has no mask-timing races left to lose. */}
-							{!isTouch && coverReady && (
-								<div
-									aria-hidden="true"
-									className="disc-mask absolute inset-[5%] size-[90%] rounded-full bg-background"
-								/>
-							)}
-							{/* Desktop keeps `content-visibility: auto` on the cover's own
-							    wrapper (a sibling of the disc, so the peek is never
-							    clipped by its implied `contain: paint`) — with all ~300
-							    tiles' content permanently mounted there, letting the
-							    browser skip offscreen covers is a real win. Touch
-							    deliberately drops it: the content window below already
-							    keeps only the few dozen near-viewport tiles mounted, and
-							    a mounted tile being *always genuinely painted* is what
-							    makes the ambient effect race-free — content-visibility's
-							    async catch-up after a fast scroll-back was the
-							    unobservable clock behind every prior artifact. Sized
-							    purely by `inset-0` against the already-sized
-							    `aspect-square` parent, so no `contain-intrinsic-size`
-							    fallback is needed. */}
-							<div
-								className={cn(
-									"absolute inset-0 overflow-hidden",
-									!isTouch && "[content-visibility:auto]",
+								{!isTouch && coverReady && (
+									<div
+										aria-hidden="true"
+										className="disc-mask absolute inset-[5%] size-[90%] rounded-full bg-background"
+									/>
 								)}
-							>
-								{/* Shown behind the cover while it loads — `-z-10` (rather
+								<div className="absolute inset-0 overflow-hidden">
+									{/* Shown behind the cover while it loads — `-z-10` (rather
 								    than unmounting once ready) so it never has to fight
 								    FadeImage's own opacity for stacking order; the opaque
 								    cover simply paints over it once revealed. Cover-less
@@ -269,55 +269,65 @@ const RecordTile = memo(function RecordTile({
 								    for those. Same circle as the windowing placeholder and
 								    (desktop) disc mask, so every not-yet-content state
 								    reads as one consistent affordance. */}
-								{cover && !coverReady && (
-									<Skeleton className="absolute inset-[5%] size-[90%] -z-10 rounded-full" />
-								)}
-								{cover ? (
-									<FadeImage
-										src={coverSrc}
-										alt={`${record.artist} — ${record.title}`}
-										onReady={() => setCoverReady(true)}
-										className={cn(
-											// Fade in on load *and* keep the grayscale→colour
-											// hover — one combined transition property so both
-											// animate. Opacity itself stays driven by FadeImage's
-											// own `loaded` state (via onReady below just for the
-											// disc) — mirroring it here too would round-trip
-											// through a second component's state update, which
-											// can resolve before the browser ever paints the
-											// hidden frame, skipping the fade entirely. Scale is
-											// active-only (the panel-pinned tile) — a gentle
-											// zoom standing in for the pointer-driven spotlight
-											// desktop gets instead. The parent's `overflow-hidden`
-											// clips it, so it zooms in place rather than growing
-											// the tile's footprint. Tailwind v4's `scale-*`
-											// compiles to the native CSS `scale` property, not
-											// `transform` — transitioning `transform` here would
-											// silently do nothing to it. On touch, `[data-touch]`
-											// in styles.css narrows the transition to opacity
-											// only — filter/scale there are driven per-frame by
-											// the ambient loop, whose easing a CSS transition
-											// would smooth *again*, lagging it.
-											"size-full grayscale transition-[opacity,filter,scale] duration-1000 ease-out pointer-fine:group-hover:grayscale-0 group-data-[active=true]:grayscale-0 group-data-[active=true]:scale-105",
-											matte ? "object-contain" : "object-cover",
-										)}
-										loading="lazy"
-										decoding="async"
-									/>
-								) : (
-									<SleevePlaceholder />
-								)}
-							</div>
-							{/* Signals "this one has notes" at rest — the 2×2 span (when
+									{cover && !coverReady && (
+										<Skeleton className="absolute inset-[5%] size-[90%] -z-10 rounded-full" />
+									)}
+									{cover ? (
+										<FadeImage
+											src={coverSrc}
+											alt={`${record.artist} — ${record.title}`}
+											onReady={() => setCoverReady(true)}
+											className={cn(
+												// `.cover-art` (styles.css) owns the rest/hover
+												// filter and every transition here — the load fade,
+												// the colour wipe and its trailing fade back. Opacity
+												// itself stays driven by FadeImage's
+												// own `loaded` state (via onReady below just for the
+												// disc) — mirroring it here too would round-trip
+												// through a second component's state update, which
+												// can resolve before the browser ever paints the
+												// hidden frame, skipping the fade entirely. Scale is
+												// active-only (the panel-pinned tile) — a gentle
+												// zoom marking the tile the panel has open. The parent's `overflow-hidden`
+												// clips it, so it zooms in place rather than growing
+												// the tile's footprint. Tailwind v4's `scale-*`
+												// compiles to the native CSS `scale` property, not
+												// `transform` — transitioning `transform` here would
+												// silently do nothing to it. On touch, `[data-touch]`
+												// in styles.css narrows the transition to opacity
+												// only — filter/scale there are driven per-frame by
+												// the ambient loop, whose easing a CSS transition
+												// would smooth *again*, lagging it.
+												"cover-art size-full group-data-[active=true]:scale-105",
+												matte ? "object-contain" : "object-cover",
+											)}
+											loading="lazy"
+											decoding="async"
+										/>
+									) : (
+										<SleevePlaceholder />
+									)}
+								</div>
+								{/* Signals "this one has notes" at rest — the 2×2 span (when
 							    throttled-eligible, see `computeSpanningIds`) is a size
 							    hint, not everything with notes gets one, so records that
 							    stayed 1×1 still need their own affordance. Fades out on
 							    hover so it doesn't fight the disc for attention once
 							    you're already looking at this tile. */}
-							{hasNotes(record) && (
-								<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out pointer-fine:group-hover:opacity-0 group-data-[active=true]:opacity-0" />
-							)}
-						</>
+								{hasNotes(record) && (
+									<div className="dot-pulse pointer-events-none absolute top-1/12 left-1/12 size-2 rounded-full bg-brand border-1 border-black/20 opacity-100 transition-opacity duration-300 ease-out pointer-fine:group-hover:opacity-0 group-data-[active=true]:opacity-0" />
+								)}
+								{/* Marks the smaller formats — everything else is a 12", so
+								    only a 7" or 10" gets a label. Top-right, opposite the
+								    notes dot, and stays put on hover: unlike the dot it's
+								    worth reading while you look at the record. */}
+								{record.size && SMALL_SIZES.has(record.size) && (
+									<span className="size-badge">
+										{record.size.replace('"', "″")}
+									</span>
+								)}
+							</div>
+						</div>
 					) : (
 						// Windowed-out placeholder (touch only): the same circle the
 						// loading skeleton uses, minus the pulse animation — it's only
@@ -335,15 +345,113 @@ const RecordTile = memo(function RecordTile({
 	);
 });
 
+// Tiles stay near TILE_MIN_PX wide regardless of viewport (more columns get
+// added instead of individual tiles growing) — 500 covers a ~250px tile at
+// 2x without shipping the ~1MB master. A spanning (2×2) tile is roughly
+// double that, so it gets a correspondingly larger request. Shared by the
+// tile and the background preloader, which must request the exact same URL
+// for the cache to hit.
+function tileCoverSrc(
+	record: PublicRecord,
+	spanning: boolean,
+): string | undefined {
+	const cover = displayMatteKey(record) ?? displayCoverKey(record);
+	return cover ? photoUrl(cover, spanning ? 900 : 500) : undefined;
+}
+
+// How many covers the background preloader fetches at once — enough to keep
+// the connection busy, few enough that a cover the browser's own lazy
+// loading asks for (scrolled near) never queues behind a long backlog.
+const PRELOAD_CONCURRENCY = 4;
+
+/**
+ * Warms the HTTP cache with every tile's cover once the page is idle, so
+ * scrolling (or jumping) anywhere in the collection finds its covers already
+ * downloaded instead of each tile sitting on a loading circle while a
+ * request round-trips. The `<img>`s keep `loading="lazy"` — they still
+ * decide *when* to decode and paint, this only makes their fetch instant.
+ * Covers are small (~20–50KB WebP, immutable-cached), so the whole
+ * collection is a few MB. Uses `Image` objects rather than `fetch` so the
+ * request matches what an `<img>` sends (same Accept header, same cache
+ * entry), at low priority, and never calls `decode()` — holding ~300
+ * decoded bitmaps would cost far more memory than the bytes. Starts at the
+ * tile currently on screen and wraps, so what you're about to scroll to
+ * comes first. Skipped under Save-Data or a 2G-class connection.
+ */
+function useCoverPreload(
+	records: PublicRecord[],
+	spanningIds: Set<number>,
+	gridElRef: React.RefObject<HTMLDivElement | null>,
+) {
+	useEffect(() => {
+		const connection = (
+			navigator as Navigator & {
+				connection?: { saveData?: boolean; effectiveType?: string };
+			}
+		).connection;
+		if (connection?.saveData || /2g/.test(connection?.effectiveType ?? "")) {
+			return;
+		}
+		let cancelled = false;
+		const inFlight = new Set<HTMLImageElement>();
+		const start = () => {
+			// Rotate the list to begin at the first tile in view.
+			let first = 0;
+			const tiles = gridElRef.current?.children;
+			if (tiles) {
+				for (let i = 0; i < tiles.length; i++) {
+					if (tiles[i].getBoundingClientRect().bottom > 0) {
+						first = i;
+						break;
+					}
+				}
+			}
+			const ordered = [...records.slice(first), ...records.slice(0, first)];
+			const urls = [
+				...new Set(
+					ordered
+						.map((r) => tileCoverSrc(r, spanningIds.has(r.id)))
+						.filter((u): u is string => u != null && !isImageDecoded(u)),
+				),
+			];
+			let next = 0;
+			const pump = () => {
+				if (cancelled || next >= urls.length) return;
+				const img = new Image();
+				img.fetchPriority = "low";
+				inFlight.add(img);
+				const done = () => {
+					inFlight.delete(img);
+					pump();
+				};
+				img.onload = done;
+				img.onerror = done;
+				img.src = urls[next++];
+			};
+			for (let i = 0; i < PRELOAD_CONCURRENCY; i++) pump();
+		};
+		const hasIdle = typeof window.requestIdleCallback === "function";
+		const idle = hasIdle
+			? window.requestIdleCallback(start, { timeout: 3000 })
+			: window.setTimeout(start, 1500);
+		return () => {
+			cancelled = true;
+			if (hasIdle) window.cancelIdleCallback(idle);
+			else window.clearTimeout(idle);
+			// Abort anything still downloading.
+			for (const img of inFlight) img.src = "";
+		};
+	}, [records, spanningIds, gridElRef]);
+}
+
 // How long the grid takes to glide a paged-to record into view — see
 // `smoothScrollCenterTo`. Slower than the browser's own native smooth
 // scroll (which has no duration knob to tune in the first place) so paging
 // through the record panel reads as a deliberate glide, not a blink.
 const GRID_SCROLL_DURATION_MS = 900;
 
-// Ease-in-out-expo, the same overall shape as the grid-focus-overlay's
-// fade-in ease-out-expo (see styles.css) but ramping up gently too rather
-// than starting at full speed — the grid-centring scroll should read as a
+// Ease-in-out-expo — ramps up gently rather than starting at full speed,
+// since the grid-centring scroll should read as a
 // deliberate glide from a dead stop, not just settle gently at the end.
 function easeInOutExpo(t: number): number {
 	if (t <= 0) return 0;
@@ -379,15 +487,6 @@ function smoothScrollCenterTo(el: HTMLElement, duration: number): void {
 	requestAnimationFrame(step);
 }
 
-// How much of the remaining distance to the spotlight's target the eased
-// position closes each animation frame — lower reads as laggier/dreamier,
-// higher snaps closer to instant (1 would be the old 1:1 tracking).
-const SPOTLIGHT_EASE = 0.09;
-// Below this many px from the target, the eased position just snaps the
-// rest of the way and the animation loop stops — otherwise it'd tick
-// forever, asymptotically approaching but never quite reaching it.
-const SPOTLIGHT_SETTLE_PX = 0.5;
-
 /**
  * Touch/no-hover devices (phones, tablets) get the scroll-driven "active
  * tile" + tilt-driven spotlight + fixed bottom tooltip in `CollectionGrid`
@@ -408,9 +507,9 @@ function useIsTouchDevice(): boolean {
 }
 
 /**
- * Read in a ref (not state) — it's only consulted from `setSpotlightTarget`,
- * which is called at pointer/tilt/scroll rate, so routing it through a
- * re-render would be wasted work for a value that never needs to trigger one.
+ * Read in a ref (not state) — it's only consulted from per-frame/scroll-rate
+ * code, so routing it through a re-render would be wasted work for a value
+ * that never needs to trigger one.
  */
 function usePrefersReducedMotionRef(): React.RefObject<boolean> {
 	const ref = useRef(false);
@@ -469,8 +568,7 @@ const COLUMN_CROSSFADE_RATIO = 0.5;
 // the scroll position can move several steps' worth of the steep trapezoid
 // between two samples, so writing targets straight to the DOM read as a snap.
 // Each tile's painted value chases its target by this fraction of the
-// remaining distance per frame instead (the same pattern as the desktop
-// spotlight's SPOTLIGHT_EASE), settling once within the epsilon.
+// remaining distance per frame instead, settling once within the epsilon.
 const AMBIENT_PROGRESS_EASE = 0.35;
 const AMBIENT_SETTLE_EPSILON = 0.01;
 // The disc's opacity ramps in ahead of its slide — fully opaque by half the
@@ -586,7 +684,7 @@ export function columnWeight(
  * content-visibility entirely; see the touch effect below for why.
  *
  * On touch devices (`useIsTouchDevice`), hover's whole job — which tile is
- * "active", plus the grayscale→colour/scale/disc-peek reveal — is driven by
+ * "active", plus the scale/disc-peek reveal — is driven by
  * one scroll-fed rAF loop (the touch effect below). Both touch and desktop
  * share one "active tile" concept (`activeId` below) and one shared, fixed
  * bottom bar (`NowShowing`) showing its title/artist — touch writes to it
@@ -605,12 +703,14 @@ export function CollectionGrid({
 	// in sync even while the panel covers the grid (e.g. paging prev/next
 	// inside it) so the grid is already scrolled to that tile underneath by
 	// the time the panel closes, instead of leaving you wherever you were
-	// before it opened. Also pins that tile "active" (see `RecordTile`) and
-	// the spotlight over it, since the panel covering the pointer means
-	// nothing would otherwise be hovered.
+	// before it opened. Also pins that tile "active" (see `RecordTile`),
+	// since the panel covering the pointer means nothing would otherwise be
+	// hovered.
 	focusedRecordId?: number | null;
 }) {
 	const spanningIds = useMemo(() => computeSpanningIds(records), [records]);
+	const gridElRef = useRef<HTMLDivElement>(null);
+	useCoverPreload(records, spanningIds, gridElRef);
 	const gridStyle: React.CSSProperties = {
 		display: "grid",
 		gridTemplateColumns: `repeat(auto-fill, minmax(${TILE_MIN_PX}px, 1fr))`,
@@ -619,7 +719,6 @@ export function CollectionGrid({
 		gap: `${GAP_REM}rem`,
 	};
 	const isTouch = useIsTouchDevice();
-	const gridElRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotionRef = usePrefersReducedMotionRef();
 
 	// Keeps the grid scrolled to whichever record the detail panel has open —
@@ -658,94 +757,23 @@ export function CollectionGrid({
 		}
 	}, [focusedRecordId, prefersReducedMotionRef]);
 
-	// Written straight to the DOM (not React state) so the gradient can track
-	// every pointer move at native rate — routing this through a re-render
-	// would both lag a frame behind the cursor and re-render every tile for a
-	// value none of them actually read.
-	const overlayRef = useRef<HTMLDivElement>(null);
-
-	// --- Eased spotlight position -------------------------------------------
-	// `target` is where the spotlight is headed (the pointer on desktop; the
-	// active tile's centre plus a tilt nudge on mobile — both set below);
-	// `current` is what's actually painted, chasing `target` by a fraction of
-	// the remaining distance every animation frame instead of snapping
-	// straight to it (see SPOTLIGHT_EASE). Both live in refs, not state, so
-	// tracking never itself triggers a React re-render.
-	const targetRef = useRef({ x: 0, y: 0 });
-	const currentRef = useRef({ x: 0, y: 0 });
-	const rafRef = useRef<number | null>(null);
-	// Whether the spotlight has ever been given a real position (desktop
-	// pointermove, or mobile's active-tile placement) — see `setSpotlightTarget`
-	// and the desktop scroll-recompute effect further down. Both refs above
-	// start at the arbitrary (0,0) origin; without this flag (a) the very
-	// first real position chases there FROM (0,0) — invisible normally since
-	// the overlay is still fading in from opacity 0 at the same time, but a
-	// visible swoop if the overlay's already fully visible (see next point),
-	// and (b) the scroll-recompute effect would trust (0,0) as a real
-	// last-known cursor position before any pointer event had actually fired
-	// — e.g. load the page and scroll via trackpad without ever moving the
-	// mouse: the browser's own `:hover` still re-targets on scroll (no JS
-	// event required), so the grid-focus-overlay correctly blurs/highlights
-	// off real `:hover`, but this component's own "active" tracking has no
-	// event to key off and was falling back to whatever tile sits at literal
-	// viewport (0,0) instead — a phantom activation disconnected from what
-	// `:hover` was actually showing.
-	const hasPositionedRef = useRef(false);
-
-	const tick = useCallback(() => {
-		const target = targetRef.current;
-		const current = currentRef.current;
-		const dx = target.x - current.x;
-		const dy = target.y - current.y;
-		if (
-			Math.abs(dx) < SPOTLIGHT_SETTLE_PX &&
-			Math.abs(dy) < SPOTLIGHT_SETTLE_PX
-		) {
-			current.x = target.x;
-			current.y = target.y;
-			rafRef.current = null;
-		} else {
-			current.x += dx * SPOTLIGHT_EASE;
-			current.y += dy * SPOTLIGHT_EASE;
-			rafRef.current = requestAnimationFrame(tick);
-		}
-		overlayRef.current?.style.setProperty("--overlay-x", `${current.x}px`);
-		overlayRef.current?.style.setProperty("--overlay-y", `${current.y}px`);
-	}, []);
-
-	const setSpotlightTarget = useCallback(
-		(x: number, y: number) => {
-			targetRef.current = { x, y };
-			const firstPosition = !hasPositionedRef.current;
-			hasPositionedRef.current = true;
-			// First-ever position, or reduced motion: jump straight to the target
-			// instead of chasing it frame by frame from the (0,0) default — the
-			// whole point of the eased rAF loop is the chase, but chasing from an
-			// origin that was never a real position is just a glitch, not motion.
-			if (firstPosition || prefersReducedMotionRef.current) {
-				if (rafRef.current != null) {
-					cancelAnimationFrame(rafRef.current);
-					rafRef.current = null;
-				}
-				currentRef.current = { x, y };
-				overlayRef.current?.style.setProperty("--overlay-x", `${x}px`);
-				overlayRef.current?.style.setProperty("--overlay-y", `${y}px`);
-				return;
-			}
-			if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick);
-		},
-		[tick, prefersReducedMotionRef],
-	);
-
-	useEffect(
-		() => () => {
-			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-		},
-		[],
-	);
+	// Last real cursor position (desktop), for re-deriving the tile under a
+	// stationary cursor on scroll — see the desktop scroll effect below.
+	// `null` until the first real pointermove: before that there's no
+	// last-known position to trust, and falling back to literal viewport
+	// (0,0) would activate whatever tile happens to sit there instead of
+	// whatever `:hover` (which the browser re-targets on scroll by itself)
+	// is actually showing.
+	const pointerRef = useRef<{ x: number; y: number } | null>(null);
 
 	// --- Shared "active tile" state (NowShowing's content) -------------------
-	const [activeId, setActiveId] = useState<number | null>(null);
+	// An external store, not React state: the active tile changes on every
+	// tile the pointer crosses (and every scrolled row on touch), and only
+	// `ActiveRecordBar` reads it. As `useState` here, each change re-rendered
+	// the whole grid — ~300 memo'd tiles diffed per hover, the biggest single
+	// main-thread cost in a profiled hover sweep. `setActiveId` is stable.
+	const [activeStore] = useState(createActiveStore);
+	const setActiveId = activeStore.set;
 
 	// `?perf` — dev-only frame meter (see `PerfMeter` below). Read in an
 	// effect, not during render, so SSR and first client render stay
@@ -771,7 +799,7 @@ export function CollectionGrid({
 
 	// The touch scroll system. One rAF loop is the *only* clock: it computes
 	// window membership, the active tile, and every tile's ambient progress
-	// (grayscale→colour, scale, disc peek + disc opacity), easing each painted
+	// (scale, disc peek + disc opacity), easing each painted
 	// value toward its target and writing styles directly to the DOM. Nothing
 	// else — no CSS transition (see `[data-touch]` in styles.css), no React
 	// state, no content-visibility catch-up, no IntersectionObserver delivery
@@ -951,7 +979,6 @@ export function CollectionGrid({
 			const el = info.el;
 			const img = el.querySelector<HTMLImageElement>("img");
 			if (img) {
-				img.style.filter = `grayscale(${1 - progress})`;
 				img.style.scale = String(1 + 0.05 * progress);
 			}
 			const peek = el.querySelector<HTMLElement>(".vinyl-peek");
@@ -989,7 +1016,6 @@ export function CollectionGrid({
 			const el = info.el;
 			const img = el.querySelector<HTMLImageElement>("img");
 			if (img) {
-				img.style.filter = "";
 				img.style.scale = "";
 			}
 			const peek = el.querySelector<HTMLElement>(".vinyl-peek");
@@ -1152,16 +1178,14 @@ export function CollectionGrid({
 
 	// Marks the grid `data-scrolling="true"` for the duration of a scroll
 	// gesture (plus a short settle window after it stops) — see `.collection-grid[data-scrolling="true"]`
-	// in styles.css, which pauses the notes dot's infinite glow animation and
-	// (desktop) drops the cover's grayscale↔colour `filter` transition to an
-	// instant snap for as long as this is set. Both are continuously-
-	// recomposited GPU work (`filter`/`blur()` far more so than plain
-	// `transform`/`opacity`) that a profiled Chrome CPU trace didn't surface —
+	// in styles.css, which pauses the notes dot's infinite glow animation for
+	// as long as this is set. It's continuously-recomposited GPU work
+	// (`filter: blur()` far more so than plain `transform`/`opacity`) that a
+	// profiled Chrome CPU trace didn't surface —
 	// that trace measures main-thread JS, not compositor/GPU cost. Matters
 	// most on desktop, where all ~300 tiles stay mounted; on touch the content
 	// window keeps the mounted-dot population small, but pausing the handful
-	// left is still free. Written straight to the DOM, not React state, for
-	// the same reason the spotlight position and `data-pointer-outside` are —
+	// left is still free. Written straight to the DOM, not React state —
 	// this never needs to trigger a re-render.
 	useEffect(() => {
 		const container = gridElRef.current;
@@ -1182,99 +1206,26 @@ export function CollectionGrid({
 		};
 	}, []);
 
-	const activeRecord = useMemo(
-		() => records.find((r) => r.id === activeId) ?? null,
-		[records, activeId],
-	);
-
-	// Keeps showing the last-active record's content while `NowShowing` fades
-	// out — `activeRecord` itself goes null the instant nothing's hovered/
-	// centred, which would otherwise blank the bar before its own opacity
-	// transition finishes. Same trick `collection-view.tsx` uses to keep the
-	// record panel's body rendered through its own close animation.
-	const lastActiveRecordRef = useRef<PublicRecord | null>(null);
-	if (activeRecord) lastActiveRecordRef.current = activeRecord;
-
-	// The pinned tile's on-screen centre is the spotlight's base position
-	// whenever there's no cursor to place it at directly — the record the
-	// detail panel currently has open (the panel covers the pointer, so a
-	// real hover can't). The grid-focus-overlay this drives is desktop-only
-	// (see its `!isTouch` guard below — touch never gets the pointer-fine
-	// hover this is meant to spotlight, and keeping its blur/rAF chase alive
-	// on scroll was a real contributor to iOS Safari scroll jank), so this no
-	// longer has a touch-only branch. Recomputed whenever the pinned tile
-	// changes, and again on scroll since the *tile* stays pinned across a
-	// scroll (or the panel's own prev/next glide) but its on-screen position
-	// doesn't.
-	const spotlightRecordId = focusedRecordId ?? null;
-	const activeCenterRef = useRef({ x: 0, y: 0 });
-
-	const recomputeActiveCenter = useCallback(() => {
-		if (spotlightRecordId == null || !gridElRef.current) return;
-		const el = gridElRef.current.querySelector<HTMLElement>(
-			`[data-record-id="${spotlightRecordId}"]`,
-		);
-		if (!el) return;
-		const rect = el.getBoundingClientRect();
-		activeCenterRef.current = {
-			x: rect.left + rect.width / 2,
-			y: rect.top + rect.height / 2,
-		};
-		setSpotlightTarget(activeCenterRef.current.x, activeCenterRef.current.y);
-	}, [spotlightRecordId, setSpotlightTarget]);
-
-	useEffect(() => {
-		recomputeActiveCenter();
-	}, [recomputeActiveCenter]);
-
-	useEffect(() => {
-		if (spotlightRecordId == null) return;
-		// rAF-throttled — scroll fires far faster than a `getBoundingClientRect`
-		// read needs to keep up with, and reading layout on every event risks
-		// forcing a synchronous layout mid-scroll. Also covers the panel's own
-		// programmatic prev/next glide (`smoothScrollCenterTo` above), which
-		// fires the same `scroll` event, so the spotlight tracks the tile as
-		// it moves instead of arriving already-settled at the old position.
-		let ticking = false;
-		const onScroll = () => {
-			if (ticking) return;
-			ticking = true;
-			requestAnimationFrame(() => {
-				recomputeActiveCenter();
-				ticking = false;
-			});
-		};
-		window.addEventListener("scroll", onScroll, { passive: true });
-		return () => window.removeEventListener("scroll", onScroll);
-	}, [spotlightRecordId, recomputeActiveCenter]);
-
 	// --- Desktop: keep the active tile in sync with the cursor while
 	// scrolling. A wheel/trackpad scroll moves the page under a stationary
 	// cursor without firing any pointer event, so the per-tile `onPointerEnter`
 	// that normally drives `activeId` never sees a tile scroll out from under
 	// it — without this, `NowShowing` would keep showing whichever record was
 	// last actually entered, arbitrarily stale once scrolling moves on.
-	// `targetRef` already holds the last real `clientX/Y` from `onPointerMove`
-	// (see the spotlight tracking above), so re-deriving from
-	// `elementFromPoint` at that fixed screen position is the same trick
-	// mobile's `recomputeActiveCenter` uses in reverse (there the tile is
-	// fixed and its on-screen position is re-measured; here the screen
-	// position is fixed and the tile underneath it is re-measured).
+	// `pointerRef` holds the last real `clientX/Y` from `onPointerMove`, so
+	// this re-derives the tile under that fixed screen position via
+	// `elementFromPoint`.
 	useEffect(() => {
 		if (isTouch) return;
 		let ticking = false;
 		const onScroll = () => {
-			// No real pointermove has fired yet — `targetRef` is still its (0,0)
-			// default, not a real last-known cursor position (see the comment on
-			// `hasPositionedRef`). Trusting it here would activate whatever tile
-			// happens to sit at literal viewport (0,0), disconnected from
-			// wherever `:hover` (which the browser keeps correctly re-targeted on
-			// scroll with no event needed) is actually showing.
-			if (ticking || !hasPositionedRef.current) return;
+			// No real pointermove has fired yet — see `pointerRef`.
+			if (ticking || !pointerRef.current) return;
 			ticking = true;
 			requestAnimationFrame(() => {
 				ticking = false;
-				const { x, y } = targetRef.current;
+				if (!pointerRef.current) return;
+				const { x, y } = pointerRef.current;
 				const el = document
 					.elementFromPoint(x, y)
 					?.closest<HTMLElement>("[data-record-id]");
@@ -1283,7 +1234,7 @@ export function CollectionGrid({
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
 		return () => window.removeEventListener("scroll", onScroll);
-	}, [isTouch]);
+	}, [isTouch, setActiveId]);
 
 	return (
 		<div
@@ -1299,48 +1250,16 @@ export function CollectionGrid({
 				isTouch
 					? undefined
 					: (e) => {
-							// Covers a gap `onPointerEnter` (below) misses: the record
-							// panel sliding over the grid triggers a real `pointerleave`
-							// (the panel is now what's under the cursor), setting
-							// `data-pointer-outside`. Closing the panel doesn't itself
-							// fire `pointerenter` to clear it — browsers only recompute
-							// hover targets on actual pointer movement across a boundary,
-							// not just because an overlapping element left the DOM — so
-							// without this, the very first gap-hop after closing the
-							// panel stays stuck on the quick fade instead of the long
-							// inter-tile linger. Any move over the grid is proof the
-							// pointer is inside it, so clear it here too.
-							if (e.currentTarget.hasAttribute("data-pointer-outside")) {
-								e.currentTarget.removeAttribute("data-pointer-outside");
-							}
-							setSpotlightTarget(e.clientX, e.clientY);
+							pointerRef.current = { x: e.clientX, y: e.clientY };
 						}
 			}
-			// `data-pointer-outside` (see `.grid-focus-overlay` in styles.css) tells
-			// the overlay's fade-out whether the pointer left the whole grid or just
-			// hopped the gap between two tiles — `onPointerLeave`/`Enter` (unlike
-			// `onPointerMove`) don't fire for that inner hop since they're the
-			// non-bubbling enter/leave pair, only the outer boundary crossing. Written
-			// straight to the DOM rather than React state — same reasoning as the
-			// spotlight position above, this never needs to trigger a re-render.
-			// Leaving the grid entirely is also the desktop equivalent of mobile's
+			// Leaving the grid entirely is the desktop equivalent of mobile's
 			// "scrolled past every tile" — clears `activeId` so `NowShowing`
 			// unmounts instead of showing a stale record. Hopping the gap *between*
-			// two tiles never fires this (see above), so the bar just swaps
-			// straight to the newly-entered tile without flickering off first.
-			onPointerLeave={
-				isTouch
-					? undefined
-					: (e) => {
-							e.currentTarget.setAttribute("data-pointer-outside", "true");
-							setActiveId(null);
-						}
-			}
-			onPointerEnter={
-				isTouch
-					? undefined
-					: (e) => e.currentTarget.removeAttribute("data-pointer-outside")
-			}
+			// two tiles never fires this (`pointerleave` doesn't bubble, so it's
+			// only the grid's outer boundary), so the bar just swaps straight to
+			// the newly-entered tile without flickering off first.
+			onPointerLeave={isTouch ? undefined : () => setActiveId(null)}
 		>
 			{records.map((record) => (
 				<RecordTile
@@ -1372,34 +1291,70 @@ export function CollectionGrid({
 					onCoverReady={isTouch ? handleCoverReady : undefined}
 				/>
 			))}
-			{/* Shared hover backdrop for every tile — see `.grid-focus-overlay` in
-			    styles.css. `position: fixed` excludes it from the grid's own auto-
-			    placement (an in-flow child here would otherwise consume a cell).
-			    Masked to a radial gradient centred on the eased spotlight position
-			    above (`--overlay-x/y`) so the blur opens up right where the
-			    cursor/active tile is instead of snapping between "sharp tile" and
-			    "blurred everything else" with nothing in between. Desktop-only —
-			    touch has no equivalent. Several attempts at one (a shared
-			    backdrop-filter overlay, then a per-tile filter: blur() driven by
-			    scroll position) each hit real problems specific to touch/iOS —
-			    see the `.grid-focus-overlay` comment in styles.css for the
-			    history — so touch just doesn't get this affordance for now. */}
-			{!isTouch && (
-				<div
-					ref={overlayRef}
-					aria-hidden="true"
-					className="grid-focus-overlay pointer-events-none fixed inset-0 bg-white/50 opacity-0 backdrop-blur-sm dark:bg-black/50"
-				/>
-			)}
-			{lastActiveRecordRef.current && (
-				<NowShowing
-					record={lastActiveRecordRef.current}
-					visible={activeRecord != null}
-					isTouch={isTouch}
-				/>
-			)}
+			<ActiveRecordBar
+				records={records}
+				store={activeStore}
+				isTouch={isTouch}
+			/>
 			{showPerf && <PerfMeter />}
 		</div>
+	);
+}
+
+type ActiveStore = ReturnType<typeof createActiveStore>;
+
+/** Minimal subscribable "which tile is active" cell — see `activeStore`. */
+function createActiveStore() {
+	let value: number | null = null;
+	const listeners = new Set<() => void>();
+	return {
+		get: () => value,
+		set: (next: number | null) => {
+			if (next === value) return;
+			value = next;
+			for (const listener of listeners) listener();
+		},
+		subscribe: (listener: () => void) => {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+	};
+}
+
+/**
+ * The only subscriber to the grid's active-tile store, so a hover change
+ * re-renders just this bar rather than the grid around it.
+ */
+function ActiveRecordBar({
+	records,
+	store,
+	isTouch,
+}: {
+	records: PublicRecord[];
+	store: ActiveStore;
+	isTouch: boolean;
+}) {
+	const activeId = useSyncExternalStore(store.subscribe, store.get, () => null);
+	const activeRecord = useMemo(
+		() => records.find((r) => r.id === activeId) ?? null,
+		[records, activeId],
+	);
+	// Keeps showing the last-active record's content while `NowShowing` fades
+	// out — `activeRecord` itself goes null the instant nothing's hovered/
+	// centred, which would otherwise blank the bar before its own opacity
+	// transition finishes. Same trick `collection-view.tsx` uses to keep the
+	// record panel's body rendered through its own close animation.
+	const lastActiveRecordRef = useRef<PublicRecord | null>(null);
+	if (activeRecord) lastActiveRecordRef.current = activeRecord;
+	if (!lastActiveRecordRef.current) return null;
+	return (
+		<NowShowing
+			record={lastActiveRecordRef.current}
+			visible={activeRecord != null}
+			isTouch={isTouch}
+		/>
 	);
 }
 

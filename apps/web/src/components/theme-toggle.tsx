@@ -1,4 +1,5 @@
 import { Moon, Sun } from "lucide-react";
+import { cn } from "#/lib/utils";
 
 /**
  * Light/dark toggle. Flips the `.dark` class on <html> and persists the choice
@@ -22,9 +23,10 @@ export function ThemeToggle({ className }: { className?: string }) {
 			onClick={toggle}
 			aria-label="Toggle dark mode"
 			title="Toggle dark mode"
-			className={`inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-accent hover:text-foreground ${
-				className ?? ""
-			}`}
+			className={cn(
+				"inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+				className,
+			)}
 		>
 			<Sun className="size-4 dark:hidden" />
 			<Moon className="hidden size-4 dark:block" />

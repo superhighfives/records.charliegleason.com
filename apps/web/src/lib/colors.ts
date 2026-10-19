@@ -8,11 +8,11 @@ import { getDb } from "#/db";
 import { type Color, colors, records } from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
 import { storeColorTextureUpload } from "#/lib/color-texture-upload";
+import { DEFAULT_COLOR_NAME } from "#/lib/default-color";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
 import { enqueueColorPalette, enqueueColorTexture } from "#/lib/queue";
 
-/** New records without an explicit color default to this chip — see `records.ts`. */
-export const DEFAULT_COLOR_NAME = "Black";
+export { DEFAULT_COLOR_NAME };
 
 /**
  * Get-or-create a color chip by name. Upserts on the unique `name` so calling

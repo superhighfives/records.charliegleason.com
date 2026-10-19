@@ -139,7 +139,7 @@ export function FadeImage({
 			}
 			// Same reasoning applies if this image's tile is currently being
 			// skipped by an ancestor's `content-visibility: auto` (see the
-			// collection grid's cover wrapper) — nothing is going to paint the
+			// collection grid's `.tile-art--deferred`) — nothing is going to paint the
 			// pre-reveal frame or the transition regardless of how many rAFs
 			// this waits for, so committing now vs. two frames from now makes
 			// no visible difference *while skipped*. What it does fix: on a
