@@ -92,12 +92,6 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 	const fontsReady = useFontsReady();
 
-	// Whether the open drawer should slide in. True only when this open was an
-	// in-app action — `openRecord` sets the flag before navigating; a direct-nav /
-	// SSR open leaves it false so the drawer appears in place. This view no longer
-	// remounts on open (the `_collection` layout keeps it mounted), so the intent
-	// is read at the open edge rather than captured per mount.
-
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
 	// paging + closing replace so arrow-keying through the collection (and the

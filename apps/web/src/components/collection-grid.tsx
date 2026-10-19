@@ -489,10 +489,9 @@ function smoothScrollCenterTo(el: HTMLElement, duration: number): void {
 
 /**
  * Touch/no-hover devices (phones, tablets) get the scroll-driven "active
- * tile" + tilt-driven spotlight + fixed bottom tooltip in `CollectionGrid`
- * below, instead of mouse-hover + a per-tile popover — there's no cursor or
- * hover state to drive either of those with. Re-checked on resize/rotation
- * (a foldable, or a mouse getting plugged in) rather than pinned at mount.
+ * tile" in `CollectionGrid` below instead of mouse-hover — there's no cursor
+ * or hover state to drive it with. Re-checked on resize/rotation (a foldable,
+ * or a mouse getting plugged in) rather than pinned at mount.
  */
 function useIsTouchDevice(): boolean {
 	const [isTouch, setIsTouch] = useState(false);
