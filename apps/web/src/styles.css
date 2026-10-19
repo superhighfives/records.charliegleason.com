@@ -200,6 +200,24 @@ body,
   }
 }
 
+/* With a classic (always-visible) scrollbar — e.g. macOS with a plain mouse
+   attached — the desktop drawer's scroll lock hides the page scrollbar, the
+   page gets ~15px wider, and the whole grid reflows sideways and shifts
+   under the panel. `scrollbar-gutter: stable` keeps the scrollbar's space
+   reserved whether or not it's showing, so locking changes nothing about
+   layout. That makes `react-remove-scroll`'s own fix for the same problem
+   — a `margin-right` the width of the scrollbar on `body` — a second,
+   now-wrong compensation, so it's zeroed (same `html body[...]` specificity
+   trick as above). No effect with overlay scrollbars, which never take
+   space in the first place. */
+html {
+  scrollbar-gutter: stable;
+}
+
+html body[data-scroll-locked] {
+  margin-right: 0 !important;
+}
+
 body {
   margin: 0;
   color: var(--foreground);
@@ -338,20 +356,107 @@ body {
   animation-play-state: paused;
 }
 
-/* Same `data-scrolling` signal, for the grid tile's own cover image —
- * `RecordTile` transitions `opacity,filter,scale` together (grayscale→colour
- * on hover/active, alongside the load fade), and `filter` is the expensive
- * one to animate: unlike `opacity`/`transform`, it can't be handled purely
- * by the compositor and forces re-rasterizing the image's pixels every
- * frame of the transition. The active tile changes roughly once per
- * scrolled row on touch (the `IntersectionObserver`-driven `activeId`), so
- * during a continuous flick scroll a fresh grayscale↔colour transition can
- * be kicking off on nearly every frame. Dropping the transition to `opacity`
- * only while scrolling makes the colour swap an instant snap instead of a
- * smooth 500ms fade — a fine trade during a fast scroll where it's barely
- * seen anyway — and re-enables the full fade once scrolling settles. */
-.collection-grid[data-scrolling="true"] img {
-  transition-property: opacity, scale;
+/* Every layer a grid tile draws — disc, disc mask, cover, notes dot (see
+ * `RecordTile`). Oversized past the tile by enough to hold the hovered disc
+ * peek (`min(25%, 64px)` right, plus its scale/rotation), because on
+ * desktop it's `content-visibility: auto` (`--deferred`), whose implied
+ * paint containment clips anything past the box. `.tile-art-box` insets
+ * back to exactly the tile, so children's `inset-[5%]`/`size-[90%]` etc.
+ * still resolve against the tile itself. `pointer-events: none` keeps the
+ * oversized margin from extending the tile's hover/click area — the
+ * button's own `aspect-square` box underneath stays the hit target.
+ *
+ * Deferring the whole tile as one unit, rather than just the cover's own
+ * wrapper, means a tile scrolled (or jumped) into view paints all its
+ * layers in the same frame — and offscreen tiles' notes-dot animations stop
+ * being serviced entirely, instead of restyling every frame unseen. Touch
+ * keeps everything painted (no `--deferred`): its content window already
+ * bounds the mounted tiles, and its ambient loop relies on mounted tiles
+ * always genuinely painting. No `contain-intrinsic-size` needed — the box
+ * is sized purely by its insets against the already-sized tile. */
+.tile-art {
+  position: absolute;
+  inset: -24px -112px -24px -24px;
+  pointer-events: none;
+}
+
+.tile-art--deferred {
+  content-visibility: auto;
+}
+
+.tile-art-box {
+  position: absolute;
+  inset: 24px 112px 24px 24px;
+}
+
+/* Grid tile cover (`RecordTile`'s `FadeImage`). Full colour at rest. While
+ * any record is hovered, every *other* cover drains to grey and dims a touch,
+ * so the one under the pointer is the only colour on the page. Unlayered,
+ * so it beats FadeImage's own Tailwind transition utilities.
+ *
+ * Timing is what makes it feel continuous rather than flickery:
+ * - The hovered cover floods back to colour fast (300ms).
+ * - A cover the pointer has just left waits 250ms, then drains slowly
+ *   (1.4s), so wiping across the grid leaves a short colour trail behind.
+ * - Leaving the grid entirely restores everything after a 150ms hold — long
+ *   enough that hopping the gap between two tiles (which briefly clears
+ *   `:has(.group:hover)`) never flashes the whole grid back to colour.
+ * Durations/delays are lists matching `transition-property` (opacity,
+ * scale, filter) so these rules only retime the filter. They never set
+ * `transition-property` itself — the touch rule further down narrows that
+ * to `opacity`, and must keep winning on touch (which has no hover, and
+ * now no desaturation at all).
+ *
+ * The recede rule's `.group:not(:hover)` (rather than a separate, more
+ * specific un-recede rule for the hovered tile) is deliberate: `:has()`
+ * takes its argument's specificity, which would otherwise outrank a plain
+ * `.group:hover .cover-art`. */
+.cover-art {
+  filter: grayscale(0) brightness(1);
+  transition-property: opacity, scale, filter;
+  transition-duration: 1000ms, 1000ms, 600ms;
+  transition-delay: 0s, 0s, 150ms;
+  transition-timing-function:
+    cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
+    cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+@media (pointer: fine) {
+  .collection-grid:has(.group:hover) .group:not(:hover) .cover-art {
+    filter: grayscale(1) brightness(0.82);
+    transition-duration: 1000ms, 1000ms, 1400ms;
+    transition-delay: 0s, 0s, 250ms;
+    transition-timing-function:
+      cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
+      cubic-bezier(0.45, 0, 0.55, 1);
+  }
+
+  .group:hover .cover-art {
+    transition-duration: 1000ms, 1000ms, 300ms;
+    transition-delay: 0s;
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+/* Same recede while a record is open in the panel (`data-active` marks the
+ * pinned tile): everything else stays grey for as long as the panel is up,
+ * leaving the open record the only colour on the page behind it. Not gated
+ * to `pointer: fine` — the pinned tile is explicit state on every device. */
+.collection-grid:has(.group[data-active="true"])
+  .group:not([data-active="true"])
+  .cover-art {
+  filter: grayscale(1) brightness(0.82);
+  transition-duration: 1000ms, 1000ms, 1400ms;
+  transition-delay: 0s, 0s, 250ms;
+  transition-timing-function:
+    cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
+    cubic-bezier(0.45, 0, 0.55, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cover-art {
+    transition: none;
+  }
 }
 
 /* Touch variant (`data-touch`, set by CollectionGrid on coarse-pointer
@@ -359,8 +464,8 @@ body {
  * cover and `transform`/`opacity` on the disc directly, every frame — a CSS
  * transition on any of those would smooth the already-eased values a second
  * time, lagging the loop's own motion. Only the cover's load fade (opacity)
- * keeps its transition. Declared after the `data-scrolling` rule above so it
- * wins their equal-specificity tie while both attributes are set. */
+ * keeps its transition. Out-specifies `.cover-art`'s `transition-property`
+ * above, which is why `.cover-art`'s hover/active rules only retime. */
 .collection-grid[data-touch="true"] img {
   transition-property: opacity;
   /* Promote each mounted cover to its own compositing layer. The touch loop
@@ -369,7 +474,7 @@ body {
    * (Simulator, real flings, the `?perf` meter) as 44-97ms frames vs a
    * 17-50ms baseline with the writes disabled. Layer memory is bounded by
    * the content window (~40 mounted tiles), not the ~300-tile collection. */
-  will-change: filter, scale;
+  will-change: scale;
 }
 
 .collection-grid[data-touch="true"] .vinyl-disc {
@@ -502,97 +607,43 @@ a {
  * touch-device tap could leave a tile's raised z-index (and the vinyl-disc
  * reveal below) stuck indefinitely, sometimes on more than one tile at once.
  * `data-active` — driven explicitly by the grid's own scroll/tap logic on
- * touch devices — is the only source of truth there instead. */
+ * touch devices — is the only source of truth there instead.
+ *
+ * Lowering is held, raising is instant. Dropping straight back the frame
+ * the pointer leaves sank the still-retracting disc under the next cell in
+ * a single frame, reading as it vanishing mid-animation. So a tile that's
+ * just been left steps down to 9 immediately and holds there for 450ms
+ * (the disc retracts in 400ms) before settling to 0. The 9 matters:
+ * merely *delaying* the drop kept the old tile at 10, tied with the newly
+ * hovered one, and a tie paints in DOM order — so moving right to left, the
+ * new tile's disc slid out *under* the tile just left, then flicked on top
+ * when that tile finally dropped. At 9 it stays above resting neighbours
+ * but always below the tile being hovered now.
+ *
+ * The step-and-hold is a `linear()` easing over the integer-interpolated
+ * z-index (10 → 0): progress jumps straight to 0.1 (= 9), holds, then jumps
+ * to 1 (= 0) at the end. The plain delayed transition before it is the
+ * fallback for browsers without `linear()`. The raised rules reset
+ * `transition` to instant, since the transition used is the one on the
+ * state being entered. Resting tiles get an explicit `0` rather than `auto`
+ * because `auto` can't be transitioned. Scoped to the grid since `.group`
+ * is also Tailwind's generic group marker elsewhere in the app. */
+.collection-grid > .group {
+  z-index: 0;
+  transition: z-index 0s linear 450ms;
+  transition: z-index 450ms linear(0, 0.1 0%, 0.1 100%, 1 100%);
+}
+
 @media (pointer: fine) {
-  .group:hover {
+  .collection-grid > .group:hover {
     z-index: 10;
+    transition: z-index 0s;
   }
 }
 
-.group[data-active="true"] {
+.collection-grid > .group[data-active="true"] {
   z-index: 10;
-}
-
-/* Full-viewport, blurred backdrop that appears the instant any tile is
- * hovered (or its tooltip is open — `data-active`, same trigger as the peek
- * above). Sits at z-index 5 — above every resting tile (z-index: auto) but
- * below the hovered one (z-index: 10, above) — so the hovered vinyl reads as
- * popping forward off the page while the rest of the grid recedes behind
- * glass. `:has()` keeps this a single shared, CSS-only toggle rather than a
- * mouseenter/leave handler wired to every tile. Desktop-only — touch has no
- * equivalent. Several attempts at one were tried and abandoned: a shared
- * `backdrop-filter` overlay (three mask variants — a JS-positioned radial
- * hole, a CSS-only radial hole, a plain linear-gradient — all hit the same
- * real-iOS-Safari-only failure, where the backdrop snapshot gets "locked" to
- * whatever's visible at the exact frame the filter activates instead of
- * correctly re-capturing, producing a hard-edged clip right as it fades in),
- * then a per-tile `filter: blur()` driven by scroll position (works, avoids
- * that bug, but a plain per-element filter can't apply a gradient *within*
- * one element — a tall 2×2 spanning tile clipped at either edge reads as
- * uniformly blurred rather than just its clipped portion, which looked worse
- * than no effect at all). Touch just doesn't get this affordance for now. */
-.grid-focus-overlay {
-  z-index: 5;
-  /* Keeps this element's compositing layer (and its backdrop-filter capture)
-   * alive continuously from mount, rather than Chrome creating it lazily the
-   * first time opacity goes from 0 to 1. Without this, the very first hover
-   * after a fresh page load (or after the sheet closes and this remounts)
-   * can fail to blur at all — the layer gets created too late to correctly
-   * capture what's behind it that frame. A later HMR-triggered re-render
-   * masked this by rebuilding the layer tree from scratch. */
-  will-change: opacity, backdrop-filter;
-  /* Fade *out* is a long, deliberate 4s linger by default so hopping between
-   * two tiles — which can briefly clear `:has()` while the pointer crosses
-   * the gap between them — doesn't flash the overlay off and back on. Fade
-   * *in* is quicker (1.2s, see below) so the blur still reads as responsive
-   * to the hover that triggered it; leaving the grid entirely also drops
-   * back to that quick 1.2s (see `data-pointer-outside` further down) since
-   * the long linger only makes sense while still moving between records.
-   * `cubic-bezier(0.16, 1, 0.3, 1)` (used for the fade-in) is an
-   * ease-out-expo curve — nearly all its motion happens in the first
-   * fraction of the duration. That reads fine at ~1s, but stretched to 4s it
-   * front-loads a jerky burst then crawls for the rest, so the default here
-   * uses ease-in-out instead, easing gently at both ends. */
-  transition: opacity 4000ms cubic-bezier(0.65, 0, 0.35, 1);
-  /* A hole in the overlay centred on the pointer (`--overlay-x/y`, written
-   * on pointer move in collection-grid.tsx) — fully open for the first
-   * 140px so the tile right under the cursor is never fogged, then a wide
-   * 320px ramp back to fully opaque so neighbouring tiles ease into the
-   * blur instead of the whole grid snapping blurred/sharp at once. Falls
-   * back to viewport centre before the first pointer move sets the vars. */
-  mask-image: radial-gradient(
-    circle at var(--overlay-x, 50%) var(--overlay-y, 50%),
-    transparent 0,
-    transparent 140px,
-    black 460px
-  );
-  -webkit-mask-image: radial-gradient(
-    circle at var(--overlay-x, 50%) var(--overlay-y, 50%),
-    transparent 0,
-    transparent 140px,
-    black 460px
-  );
-}
-
-.collection-grid:has(.group:hover, .group[data-active="true"])
-  .grid-focus-overlay {
-  opacity: 1;
-  transition-duration: 1200ms;
-  transition-delay: 0s;
-}
-
-/* Leaving the grid entirely (as opposed to hopping the gap between two
- * tiles, which also clears `:has()` above but keeps this attribute unset —
- * see `onPointerLeave`/`Enter` in collection-grid.tsx) fades out at the same
- * quick pace as the fade-in instead of the long 4s inter-tile linger. */
-.collection-grid[data-pointer-outside="true"] .grid-focus-overlay {
-  transition-duration: 1200ms;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .grid-focus-overlay {
-    transition: none;
-  }
+  transition: z-index 0s;
 }
 
 .vinyl-disc {
@@ -649,8 +700,7 @@ a {
     scale(1.06)
     rotate(
       calc(
-        6deg - 3deg *
-          (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
+        6deg - 3deg * (var(--vinyl-layers, 1) - 1 - var(--vinyl-stack-index, 0))
       )
     );
 }
@@ -949,7 +999,7 @@ a {
  * (even the settled `translateY(0)` an `animation ... both` leaves behind
  * after finishing) establishes a new containing block for any
  * `position: fixed` descendant, which would silently break `CollectionGrid`'s
- * own fixed children (`.grid-focus-overlay`, `NowShowing`) into being fixed
+ * own fixed child (`NowShowing`) into being fixed
  * to *this* box instead of the viewport. Use this for anything that has (or
  * might grow) a fixed-position descendant.
  */
@@ -1025,4 +1075,199 @@ a {
       0 0 0 1px var(--ring),
       0 0 0 4px color-mix(in oklab, var(--ring) 50%, transparent);
   }
+}
+
+/* --- Floating controls (collection-view.tsx) ------------------------------ */
+
+/* The page has no header — the logo link, search and theme toggle sit in
+ * one small pill fixed to the top-right corner. Above the grid's raised
+ * tiles (z-index 10), below the record sheet (z-50). */
+.floating-controls {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+@media (min-width: 640px) {
+  .floating-controls {
+    top: 1.5rem;
+    right: 1.5rem;
+  }
+}
+
+/* --- Filter strip (filter-strip.tsx) -------------------------------------- */
+
+/* Groups of chips in one row; on narrow screens it scrolls sideways instead
+ * of wrapping into a tall block, on wide ones it wraps so nothing hides off
+ * the edge. */
+.filter-strip {
+  display: flex;
+  align-items: center;
+  gap: 1.75rem;
+  margin-bottom: 2.5rem;
+  padding-block: 0.25rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+@media (min-width: 1024px) {
+  .filter-strip {
+    flex-wrap: wrap;
+    row-gap: 0.75rem;
+    overflow-x: visible;
+  }
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.filter-group > .kicker-muted {
+  margin-right: 0.375rem;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+  height: 1.75rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.filter-chip:hover {
+  color: var(--foreground);
+  border-color: var(--muted-foreground);
+}
+
+.filter-chip.is-empty {
+  opacity: 0.4;
+}
+
+.filter-chip.is-pressed {
+  color: var(--background);
+  background: var(--foreground);
+  border-color: var(--foreground);
+}
+
+.filter-chip:focus-visible,
+.filter-clear:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.filter-count {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  opacity: 0.6;
+}
+
+.filter-clear {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+
+.filter-clear:hover {
+  color: var(--foreground);
+}
+
+/* --- Footer stats sentence (collection-stats-sentence.tsx) ---------------- */
+
+/* One gradient for the whole paragraph, yellow at the top fading to the
+ * foreground colour at the bottom, clipped to its text. The surrounding
+ * prose keeps its own solid muted colour, which paints over the gradient,
+ * so only the stats (`.stats-highlight`, transparent) let it show through.
+ * Being one paragraph-sized gradient rather than one per word, the colour
+ * shifts line by line down the sentence instead of restarting in each stat. */
+.stats-sentence {
+  background-image: linear-gradient(
+    to bottom,
+    var(--accent-yellow-strong),
+    var(--foreground)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.stats-highlight {
+  color: transparent;
+}
+
+/* --- Hero write-in (collection-hero.tsx) ---------------------------------- */
+
+/* Each word of the opening statement rises out of a soft blur in turn
+ * (per-word `animation-delay` set inline). It's the page's loading moment,
+ * so `both` holds each word invisible until its turn. */
+.hero-word {
+  display: inline-block;
+  animation: hero-word-in 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes hero-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.35em);
+    filter: blur(8px);
+  }
+}
+
+/* The loading placeholder's caption only shows if the wait runs long. */
+.loading-hint {
+  animation: hero-word-in 600ms ease-out 1200ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-word,
+  .loading-hint {
+    animation-duration: 0.01ms;
+    animation-delay: 0ms;
+  }
+}
+
+/* --- Size badge (collection-grid.tsx) -------------------------------------- */
+
+/* The small "7″" / "10″" label in a smaller record's top-right corner. A
+ * frosted chip would cost a backdrop blur per tile, so it's a plain
+ * near-opaque pill that reads on any cover. */
+.size-badge {
+  position: absolute;
+  top: calc(100% / 12);
+  right: calc(100% / 12);
+  padding: 0.0625rem 0.375rem;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.72);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  pointer-events: none;
 }
