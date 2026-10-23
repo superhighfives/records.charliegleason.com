@@ -83,12 +83,19 @@ export async function generateColorTexture(colorId: number): Promise<void> {
 		.where(eq(colors.id, colorId));
 
 	try {
-		const prediction = await runVersion(COLOR_TEXTURE_MODEL, {
-			prompt: colorTexturePrompt(color.name),
-			aspect_ratio: "1:1",
-			num_outputs: 1,
-			output_format: "png",
-		});
+		// flux-schnell intermittently fails upstream ("Upstream provider is
+		// unavailable") or stalls past the poll timeout — both clear on a fresh
+		// prediction, so retry rather than marking the chip failed on one blip.
+		const prediction = await withRetry(
+			() =>
+				runVersion(COLOR_TEXTURE_MODEL, {
+					prompt: colorTexturePrompt(color.name),
+					aspect_ratio: "1:1",
+					num_outputs: 1,
+					output_format: "png",
+				}),
+			{ attempts: 3, baseMs: 5000 },
+		);
 		const url = firstOutputUrl(prediction.output);
 		if (!url) {
 			throw new NonRetryableError(

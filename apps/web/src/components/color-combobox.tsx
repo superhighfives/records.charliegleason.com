@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	AlertCircleIcon,
 	BlendIcon,
 	CheckIcon,
 	RefreshCwIcon,
@@ -213,7 +214,7 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 						)}
 					</Button>
 				</PopoverTrigger>
-				<PopoverContent className="w-64 space-y-2 p-2" align="start">
+				<PopoverContent className="w-80 space-y-2 p-2" align="start">
 					<Input
 						autoFocus
 						placeholder="Search or add a color…"
@@ -248,19 +249,26 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 										setQuery("");
 										setOpen(false);
 									}}
-									className="flex flex-1 items-center gap-1.5 text-left"
+									className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
 								>
-									<span className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium">
+									<span className="inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium">
 										<ColorSwatch color={c} className="size-3" />
-										{c.name}
+										<span className="truncate">{c.name}</span>
 									</span>
 									{c.textureStatus === "failed" && (
-										<span className="text-xs text-destructive">
-											texture failed
-										</span>
+										<AlertCircleIcon
+											role="img"
+											aria-label={`Texture failed: ${c.textureError ?? "unknown error"}`}
+											className="size-3.5 shrink-0 text-destructive"
+										>
+											<title>
+												Texture failed — {c.textureError ?? "unknown error"}.
+												Pick it again or hit regenerate to retry.
+											</title>
+										</AlertCircleIcon>
 									)}
 								</button>
-								<div className="flex items-center gap-1">
+								<div className="flex shrink-0 items-center gap-1">
 									<Button
 										type="button"
 										variant="ghost"
