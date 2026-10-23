@@ -1,4 +1,5 @@
-import { Download, Settings, ShoppingBag } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Crop, Download, Settings, ShoppingBag } from "lucide-react";
 import { useState } from "react";
 
 import { AmazonImportDialog } from "#/components/amazon-import-dialog";
@@ -12,8 +13,9 @@ import {
 } from "#/components/ui/dialog";
 
 /**
- * Admin settings: a full-collection backup download, and the Amazon order-history
- * importer (match unmatched records to Discogs from what you bought). The backup
+ * Admin settings: a link to the corner-review queue, a full-collection backup
+ * download, and the Amazon order-history importer (match unmatched records to
+ * Discogs from what you bought). The backup
  * link is a plain `<a download>` so the browser streams the zip straight from
  * `/api/admin/backup` (same-origin, session cookie rides along) rather than
  * buffering the whole archive in JS. Controlled so "Import from Amazon" can hand
@@ -39,10 +41,20 @@ export function SettingsModal() {
 					<DialogHeader>
 						<DialogTitle>Settings</DialogTitle>
 						<DialogDescription>
-							Manage the collection — back it up, or import from Amazon.
+							Manage the collection — review corners, back it up, or import from
+							Amazon.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-2">
+						<Button asChild variant="outline" className="w-full">
+							<Link
+								to="/admin/corner-review"
+								onClick={() => setSettingsOpen(false)}
+							>
+								<Crop />
+								Corner review
+							</Link>
+						</Button>
 						<Button
 							type="button"
 							variant="outline"
