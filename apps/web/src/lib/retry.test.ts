@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	isTransientContainerReset,
 	isTransientImagesError,
+	isTransientReplicateError,
 	NonRetryableError,
 	withRetry,
 } from "./retry";
@@ -173,5 +174,50 @@ describe("isTransientImagesError", () => {
 		).toBe(false);
 		expect(isTransientImagesError(new Error("decode failed"))).toBe(false);
 		expect(isTransientImagesError(null)).toBe(false);
+	});
+});
+
+describe("isTransientReplicateError", () => {
+	it("matches an upstream outage, a poll timeout, and a 429/5xx from the API", () => {
+		expect(
+			isTransientReplicateError(
+				new Error(
+					"Replicate prediction ccssck1twxrzy0d1crea34vvz8 failed: Model execution failed (Upstream provider is unavailable)",
+				),
+			),
+		).toBe(true);
+		expect(
+			isTransientReplicateError(
+				new Error("Replicate prediction 66mdcdrfynrnw0d008d9h3736w timed out"),
+			),
+		).toBe(true);
+		expect(
+			isTransientReplicateError(
+				new Error("Replicate create failed (503): Service Unavailable"),
+			),
+		).toBe(true);
+		expect(
+			isTransientReplicateError(
+				new Error("Replicate poll failed (429): slow down"),
+			),
+		).toBe(true);
+	});
+
+	it("is false for permanent failures — a missing key, a 4xx, a rejected prompt", () => {
+		expect(
+			isTransientReplicateError(new Error("REPLICATE_API_KEY is not set")),
+		).toBe(false);
+		expect(
+			isTransientReplicateError(
+				new Error("Replicate create failed (422): invalid input"),
+			),
+		).toBe(false);
+		expect(
+			isTransientReplicateError(
+				new Error(
+					"Replicate prediction abc failed: NSFW content detected. Try a different prompt.",
+				),
+			),
+		).toBe(false);
 	});
 });

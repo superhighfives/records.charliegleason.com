@@ -11,7 +11,11 @@ import {
 } from "#/lib/color-texture-config";
 import { blobStream, decodeRgba } from "#/lib/professional";
 import { firstOutputUrl, runVersion } from "#/lib/replicate";
-import { NonRetryableError, withRetry } from "#/lib/retry";
+import {
+	isTransientReplicateError,
+	NonRetryableError,
+	withRetry,
+} from "#/lib/retry";
 
 /**
  * Sample a title-gradient palette from encoded texture bytes (see
@@ -86,14 +90,24 @@ export async function generateColorTexture(colorId: number): Promise<void> {
 		// flux-schnell intermittently fails upstream ("Upstream provider is
 		// unavailable") or stalls past the poll timeout — both clear on a fresh
 		// prediction, so retry rather than marking the chip failed on one blip.
+		// Anything permanent (missing key, rejected prompt) fails fast. Worst case
+		// is ~3×120s polling plus backoff, well inside the 15-minute consumer budget.
 		const prediction = await withRetry(
-			() =>
-				runVersion(COLOR_TEXTURE_MODEL, {
-					prompt: colorTexturePrompt(color.name),
-					aspect_ratio: "1:1",
-					num_outputs: 1,
-					output_format: "png",
-				}),
+			async () => {
+				try {
+					return await runVersion(COLOR_TEXTURE_MODEL, {
+						prompt: colorTexturePrompt(color.name),
+						aspect_ratio: "1:1",
+						num_outputs: 1,
+						output_format: "png",
+					});
+				} catch (err) {
+					if (isTransientReplicateError(err)) throw err;
+					throw new NonRetryableError(
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+			},
 			{ attempts: 3, baseMs: 5000 },
 		);
 		const url = firstOutputUrl(prediction.output);

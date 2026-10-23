@@ -66,6 +66,22 @@ export function isTransientImagesError(err: unknown): boolean {
 	);
 }
 
+/**
+ * A transient Replicate failure that a fresh prediction recovers: the upstream model
+ * provider being briefly unavailable ("Model execution failed (Upstream provider is
+ * unavailable)", RECORDS-29), a prediction stalling past our poll timeout, or a
+ * 429/5xx from the create/poll endpoints. Everything else — a missing API key, a
+ * rejected prompt, a 4xx — is permanent, so the color-texture job fails fast on it
+ * rather than paying for two more predictions. Dependency-free + testable, same as
+ * {@link isTransientContainerReset}.
+ */
+export function isTransientReplicateError(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return /Upstream provider is unavailable|prediction \S+ timed out|Replicate (create|poll) failed \((429|5\d\d)\)/i.test(
+		message,
+	);
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**

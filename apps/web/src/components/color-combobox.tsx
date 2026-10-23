@@ -258,7 +258,6 @@ export function ColorCombobox({ value, onChange }: ColorComboboxProps) {
 									{c.textureStatus === "failed" && (
 										<AlertCircleIcon
 											role="img"
-											aria-label={`Texture failed: ${c.textureError ?? "unknown error"}`}
 											className="size-3.5 shrink-0 text-destructive"
 										>
 											<title>
