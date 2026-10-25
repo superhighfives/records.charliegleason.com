@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { Crop, Download, Settings, ShoppingBag } from "lucide-react";
+import {
+	Crop,
+	Download,
+	Palette,
+	Settings,
+	ShoppingBag,
+	SlidersHorizontal,
+} from "lucide-react";
 import { useState } from "react";
 
 import { AmazonImportDialog } from "#/components/amazon-import-dialog";
@@ -13,7 +20,7 @@ import {
 } from "#/components/ui/dialog";
 
 /**
- * Admin settings: a link to the corner-review queue, a full-collection backup
+ * Admin settings: links to the colors, filters and corner-review pages, a full-collection backup
  * download, and the Amazon order-history importer (match unmatched records to
  * Discogs from what you bought). The backup
  * link is a plain `<a download>` so the browser streams the zip straight from
@@ -41,11 +48,23 @@ export function SettingsModal() {
 					<DialogHeader>
 						<DialogTitle>Settings</DialogTitle>
 						<DialogDescription>
-							Manage the collection — review corners, back it up, or import from
-							Amazon.
+							Manage the collection — colors, filters, corner review, backups,
+							and Amazon imports.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-2">
+						<Button asChild variant="outline" className="w-full">
+							<Link to="/admin/colors" onClick={() => setSettingsOpen(false)}>
+								<Palette />
+								Colors
+							</Link>
+						</Button>
+						<Button asChild variant="outline" className="w-full">
+							<Link to="/admin/filters" onClick={() => setSettingsOpen(false)}>
+								<SlidersHorizontal />
+								Filters
+							</Link>
+						</Button>
 						<Button asChild variant="outline" className="w-full">
 							<Link
 								to="/admin/corner-review"

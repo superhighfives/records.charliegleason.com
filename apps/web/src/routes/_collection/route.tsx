@@ -4,6 +4,7 @@ import { CollectionSkeleton } from "#/components/collection-skeleton";
 import { CollectionView } from "#/components/collection-view";
 import { parseRecordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
+import { filterSettingsQueryOptions } from "#/lib/settings-queries";
 
 /**
  * Pathless layout shared by `/` and `/records/$id`. It renders the one
@@ -22,7 +23,10 @@ import { publicRecordsQueryOptions } from "#/lib/records-queries";
  */
 export const Route = createFileRoute("/_collection")({
 	loader: ({ context }) =>
-		context.queryClient.ensureQueryData(publicRecordsQueryOptions),
+		Promise.all([
+			context.queryClient.ensureQueryData(publicRecordsQueryOptions),
+			context.queryClient.ensureQueryData(filterSettingsQueryOptions),
+		]),
 	pendingComponent: CollectionSkeleton,
 	component: CollectionLayout,
 });

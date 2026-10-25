@@ -7,6 +7,7 @@ import { z } from "zod";
 import { getDb } from "#/db";
 import { type Color, colors, records } from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
+import { renameColorRefusal } from "#/lib/color-rename";
 import { storeColorTextureUpload } from "#/lib/color-texture-upload";
 import { DEFAULT_COLOR_NAME } from "#/lib/default-color";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
@@ -174,6 +175,46 @@ export const setColorTranslucent = createServerFn({ method: "POST" })
 				.update(colors)
 				.set({ translucent })
 				.where(eq(colors.id, colorId));
+		}),
+	);
+
+/**
+ * Rename a color chip — the colors page's inline edit. Names are the dedup key
+ * (unique), so renaming onto an existing name is refused rather than merged.
+ * The texture is kept as-is; regenerate it separately if the new name
+ * describes a different look. {@link DEFAULT_COLOR_NAME} can't be renamed:
+ * record creation and every reassignment look it up by name.
+ */
+export const renameColor = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) =>
+		z
+			.object({
+				colorId: z.number().int(),
+				name: z.string().trim().min(1, "Color name is required"),
+			})
+			.parse(data),
+	)
+	.handler(({ data: { colorId, name } }) =>
+		Sentry.startSpan({ name: "renameColor" }, async () => {
+			const db = getDb(env.DB);
+			const [color] = await db
+				.select({ name: colors.name })
+				.from(colors)
+				.where(eq(colors.id, colorId))
+				.limit(1);
+			const [clash] =
+				color && color.name !== name
+					? await db
+							.select({ id: colors.id })
+							.from(colors)
+							.where(eq(colors.name, name))
+							.limit(1)
+					: [];
+			const refusal = renameColorRefusal(color, name, !!clash);
+			if (refusal) throw new Error(refusal);
+			if (!color || color.name === name) return;
+			await db.update(colors).set({ name }).where(eq(colors.id, colorId));
 		}),
 	);
 

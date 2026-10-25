@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 import { cn } from "#/lib/utils";
 
 /**
@@ -75,7 +77,13 @@ export function VinylDisc({
 	const scale = scaleForSize(size);
 	const overlaySrc = overlaySrcForSize(size);
 	const layers = Math.min(Math.max(discCount ?? 1, 1), MAX_STACK);
-	const patternId = `vinyl-texture-${textureImageKey ?? "none"}`;
+	// Unique per instance, never derived from the texture key. Hundreds of discs
+	// share one colour (nearly all Black), and `url(#id)` resolves to the
+	// *first* element in the document with that id — so a shared id made every
+	// disc borrow one pattern that might be unmounted (touch windowing) or
+	// skipped (`content-visibility`). When it was, the fill resolved to nothing
+	// and only the clear-vinyl overlay drew: black records read as transparent.
+	const patternId = `vinyl-texture-${useId().replace(/[^\w-]/g, "")}`;
 	const hasTexture = textureStatus === "ready" && !!textureImageKey;
 
 	return (
@@ -93,70 +101,73 @@ export function VinylDisc({
 			aria-hidden="true"
 		>
 			{/* Back-most layer first so later (front) layers paint over it. */}
-			{Array.from({ length: layers }, (_, i) => layers - 1 - i).map((i) => (
-				<svg
-					key={i}
-					viewBox="0 0 100 100"
-					// A stacked disc's rest-state rotation (`.vinyl-disc` in styles.css,
-					// `-3deg` per layer behind the front one) rotates a *square* box,
-					// which grows its bounding box beyond the tile — a fixed px inset
-					// couldn't out-grow that on a big tile even though it was plenty on
-					// a small one. `inset-[5%]` scales with the tile instead, and 5% is
-					// enough margin to keep even a 3-disc stack's rotated corners from
-					// poking past the tile's own edge at any size. `size-[90%]` pairs
-					// with it explicitly rather than leaving width/height to be implied
-					// by the four insets — Safari doesn't derive a replaced element's
-					// (this `<svg>`, sized from its own `viewBox`) box size from `inset`
-					// the way it should per spec, and instead renders it at full
-					// intrinsic/container size regardless of the inset percentages,
-					// which read as the disc being oversized and poking out well past
-					// where the 5% margin should have kept it. An explicit `size-[90%]`
-					// (== 100% - 2×5%) gives Safari a width/height it can't ignore.
-					className="vinyl-disc absolute inset-[5%] size-[90%]"
-					style={{ "--vinyl-stack-index": i } as React.CSSProperties}
-				>
-					<title>{colorName ? `${colorName} vinyl` : "Vinyl record"}</title>
-					{hasTexture && (
-						<defs>
-							<pattern
-								id={patternId}
-								patternUnits="objectBoundingBox"
-								width="1"
-								height="1"
-							>
-								<image
-									href={`/api/photos/${textureImageKey}`}
-									x="0"
-									y="0"
-									width="100"
-									height="100"
-									preserveAspectRatio="xMidYMid slice"
-								/>
-							</pattern>
-						</defs>
-					)}
-					{/* Fill: the color/pattern, per `colors.textureImageKey`. Translucent
+			{Array.from({ length: layers }, (_, i) => layers - 1 - i).map((i) => {
+				const layerPatternId = `${patternId}-${i}`;
+				return (
+					<svg
+						key={i}
+						viewBox="0 0 100 100"
+						// A stacked disc's rest-state rotation (`.vinyl-disc` in styles.css,
+						// `-3deg` per layer behind the front one) rotates a *square* box,
+						// which grows its bounding box beyond the tile — a fixed px inset
+						// couldn't out-grow that on a big tile even though it was plenty on
+						// a small one. `inset-[5%]` scales with the tile instead, and 5% is
+						// enough margin to keep even a 3-disc stack's rotated corners from
+						// poking past the tile's own edge at any size. `size-[90%]` pairs
+						// with it explicitly rather than leaving width/height to be implied
+						// by the four insets — Safari doesn't derive a replaced element's
+						// (this `<svg>`, sized from its own `viewBox`) box size from `inset`
+						// the way it should per spec, and instead renders it at full
+						// intrinsic/container size regardless of the inset percentages,
+						// which read as the disc being oversized and poking out well past
+						// where the 5% margin should have kept it. An explicit `size-[90%]`
+						// (== 100% - 2×5%) gives Safari a width/height it can't ignore.
+						className="vinyl-disc absolute inset-[5%] size-[90%]"
+						style={{ "--vinyl-stack-index": i } as React.CSSProperties}
+					>
+						<title>{colorName ? `${colorName} vinyl` : "Vinyl record"}</title>
+						{hasTexture && (
+							<defs>
+								<pattern
+									id={layerPatternId}
+									patternUnits="objectBoundingBox"
+									width="1"
+									height="1"
+								>
+									<image
+										href={`/api/photos/${textureImageKey}`}
+										x="0"
+										y="0"
+										width="100"
+										height="100"
+										preserveAspectRatio="xMidYMid slice"
+									/>
+								</pattern>
+							</defs>
+						)}
+						{/* Fill: the color/pattern, per `colors.textureImageKey`. Translucent
 					    pressings drop the fill's opacity so the page shows through. */}
-					<circle
-						cx="50"
-						cy="50"
-						r="49"
-						fill={hasTexture ? `url(#${patternId})` : "currentColor"}
-						fillOpacity={translucent ? 0.45 : undefined}
-						className={hasTexture ? undefined : "text-foreground/70"}
-					/>
-					{/* Overlay: shared "clear vinyl" grooves + sheen art, blended on
+						<circle
+							cx="50"
+							cy="50"
+							r="49"
+							fill={hasTexture ? `url(#${layerPatternId})` : "currentColor"}
+							fillOpacity={translucent ? 0.45 : undefined}
+							className={hasTexture ? undefined : "text-foreground/70"}
+						/>
+						{/* Overlay: shared "clear vinyl" grooves + sheen art, blended on
 					    top of the fill (see `VINYL_OVERLAY_SRC` above). */}
-					<image
-						href={overlaySrc}
-						x="1"
-						y="1"
-						width="98"
-						height="98"
-						opacity="0.6"
-					/>
-				</svg>
-			))}
+						<image
+							href={overlaySrc}
+							x="1"
+							y="1"
+							width="98"
+							height="98"
+							opacity="0.6"
+						/>
+					</svg>
+				);
+			})}
 		</div>
 	);
 }

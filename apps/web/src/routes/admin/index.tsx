@@ -23,6 +23,7 @@ import {
 	BadgeCheck,
 	ChevronDownIcon,
 	EllipsisVertical,
+	SearchIcon,
 	TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -521,6 +522,54 @@ function EmptyState({ filtered }: { filtered: boolean }) {
 	);
 }
 
+function openRecordInNewTab(id: number) {
+	window.open(`/admin/records/${id}`, "_blank", "noopener");
+}
+
+/**
+ * The record thumbnail as a quick-view trigger: a magnifier fades in over it on
+ * hover so it reads as "preview", distinct from the row (which opens the full
+ * editor). A <button>, so the row's navigate-to-detail guard skips it.
+ */
+function QuickViewThumb({
+	src,
+	size,
+	onClick,
+}: {
+	src: string | null;
+	size: "sm" | "md";
+	onClick: () => void;
+}) {
+	const box = size === "sm" ? "size-10 min-w-10" : "size-14";
+	return (
+		<button
+			type="button"
+			aria-label="Quick view"
+			title="Quick view"
+			onClick={onClick}
+			className="group/thumb relative block shrink-0 rounded focus-visible:outline-2 focus-visible:outline-ring"
+		>
+			{src ? (
+				<FadeImage
+					src={src}
+					alt=""
+					loading="lazy"
+					decoding="async"
+					className={cn(box, "rounded object-cover")}
+				/>
+			) : (
+				<div className={cn(box, "rounded bg-muted")} />
+			)}
+			<span
+				aria-hidden="true"
+				className="absolute inset-0 flex items-center justify-center rounded bg-black/45 text-white opacity-0 transition-opacity duration-150 group-hover/thumb:opacity-100 group-focus-visible/thumb:opacity-100"
+			>
+				<SearchIcon className="size-4" />
+			</span>
+		</button>
+	);
+}
+
 /**
  * One desktop table row, memoised so toggling *another* row's selection (or the
  * filter) doesn't re-render all ~290 rows — only the row whose `isSelected` or
@@ -545,17 +594,28 @@ const AdminTableRow = memo(function AdminTableRow({
 			onClick={(e) => {
 				// Pointer convenience only — keyboard users (and screen readers)
 				// use the real links in the row. Let nested links/buttons handle
-				// their own clicks, and don't hijack ⌘/Ctrl/Shift-click (which
-				// the links use to open in a new tab).
+				// their own clicks (a link already opens a new tab on ⌘/Ctrl/
+				// Shift-click by itself).
+				if ((e.target as HTMLElement).closest("a, button, input, label")) {
+					return;
+				}
+				// The rest of the row isn't a link, so mirror a link's modifier
+				// behaviour: ⌘/Ctrl/Shift-click opens the record in a new tab.
+				if (e.metaKey || e.ctrlKey || e.shiftKey) {
+					openRecordInNewTab(row.original.id);
+					return;
+				}
+				onNavigate(row.original.id);
+			}}
+			onAuxClick={(e) => {
+				// Middle-click, likewise.
 				if (
-					e.metaKey ||
-					e.ctrlKey ||
-					e.shiftKey ||
+					e.button !== 1 ||
 					(e.target as HTMLElement).closest("a, button, input, label")
 				) {
 					return;
 				}
-				onNavigate(row.original.id);
+				openRecordInNewTab(row.original.id);
 			}}
 		>
 			{row.getVisibleCells().map((cell) => (
@@ -935,27 +995,13 @@ function AdminRecords() {
 						includeCapture: true,
 						preferCapture: true,
 					});
-					// The thumbnail opens the quick-view drawer (a <button>, so the row's
-					// navigate-to-detail guard skips it).
+					// The thumbnail opens the quick-view drawer.
 					return (
-						<button
-							type="button"
-							aria-label="Quick view"
+						<QuickViewThumb
+							src={key ? `/api/photos/${key}` : null}
+							size="sm"
 							onClick={() => setPreviewId(row.original.id)}
-							className="block rounded transition-opacity hover:opacity-80"
-						>
-							{key ? (
-								<FadeImage
-									src={`/api/photos/${key}`}
-									alt=""
-									loading="lazy"
-									decoding="async"
-									className="size-10 min-w-10 rounded object-cover"
-								/>
-							) : (
-								<div className="size-10 min-w-10 rounded bg-muted" />
-							)}
-						</button>
+						/>
 					);
 				},
 			},
@@ -1636,24 +1682,11 @@ function AdminRecords() {
 										onChange={row.getToggleSelectedHandler()}
 									/>
 								</label>
-								<button
-									type="button"
-									aria-label="Quick view"
+								<QuickViewThumb
+									src={thumb ? `/api/photos/${thumb}` : null}
+									size="md"
 									onClick={() => setPreviewId(r.id)}
-									className="shrink-0 rounded"
-								>
-									{thumb ? (
-										<FadeImage
-											src={`/api/photos/${thumb}`}
-											alt=""
-											loading="lazy"
-											decoding="async"
-											className="size-14 shrink-0 rounded object-cover"
-										/>
-									) : (
-										<div className="size-14 shrink-0 rounded bg-muted" />
-									)}
-								</button>
+								/>
 								<Link
 									to="/admin/records/$id"
 									params={{ id: String(r.id) }}

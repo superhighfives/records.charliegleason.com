@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -19,8 +19,10 @@ import {
 	NO_FILTERS,
 } from "#/lib/collection-filters";
 import { emojiSrc } from "#/lib/emoji";
+import { DEFAULT_FILTER_SETTINGS } from "#/lib/filter-settings";
 import { recordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
+import { filterSettingsQueryOptions } from "#/lib/settings-queries";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
 const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
@@ -88,6 +90,10 @@ function useFontsReady(): boolean {
  */
 export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
+	// Prefetched by the layout's loader; the defaults only cover a failed fetch.
+	const { data: filterSettings = DEFAULT_FILTER_SETTINGS } = useQuery(
+		filterSettingsQueryOptions,
+	);
 	const navigate = useNavigate();
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 	const fontsReady = useFontsReady();
@@ -240,6 +246,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 					records={data}
 					countRecords={searched}
 					filters={filters}
+					settings={filterSettings}
 					onChange={setFilters}
 				/>
 			</div>

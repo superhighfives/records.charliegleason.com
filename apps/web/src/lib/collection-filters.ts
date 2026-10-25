@@ -93,11 +93,11 @@ export interface CollectionFacets {
 const SIZE_ORDER = ['12"', '10"', '7"'];
 
 /**
- * What the strip can offer, with counts: colours by popularity (each needs
- * at least two records, so the row isn't padded with one-offs), sizes
- * largest first, decades newest first. A facet with only one value (say,
- * every record is a 12") is dropped — a filter that can't narrow anything
- * is just noise.
+ * Every value the collection has, with counts: colours by popularity, sizes
+ * largest first, decades newest first. Unfiltered — which of these the strip
+ * actually offers (thresholds, hidden chips, dropping a group that can't
+ * narrow anything) is the admin's call, applied by `stripGroups` in
+ * `filter-settings.ts`.
  */
 export function buildFacets(records: FilterableRecord[]): CollectionFacets {
 	const colors = new Map<string, ColorFacet>();
@@ -122,21 +122,14 @@ export function buildFacets(records: FilterableRecord[]): CollectionFacets {
 		if (decade != null) decades.set(decade, (decades.get(decade) ?? 0) + 1);
 		if (r.notes?.trim()) notes++;
 	}
-	const colorList = [...colors.values()]
-		.filter((c) => c.count >= 2)
-		.sort((a, b) => b.count - a.count);
+	const colorList = [...colors.values()].sort((a, b) => b.count - a.count);
 	const sizeList = [...sizes]
 		.map(([value, count]) => ({ value, count }))
 		.sort((a, b) => sizeRank(a.value) - sizeRank(b.value));
 	const decadeList = [...decades]
 		.map(([value, count]) => ({ value, count }))
 		.sort((a, b) => b.value - a.value);
-	return {
-		colors: colorList.length > 1 ? colorList : [],
-		sizes: sizeList.length > 1 ? sizeList : [],
-		decades: decadeList.length > 1 ? decadeList : [],
-		notes,
-	};
+	return { colors: colorList, sizes: sizeList, decades: decadeList, notes };
 }
 
 function sizeRank(size: string): number {

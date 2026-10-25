@@ -91,6 +91,7 @@ import {
 	serializeCornerBand,
 } from "#/lib/sleeve-corners";
 import type { DetectionSource } from "#/lib/sleeve-detect-wasm";
+import { sameAlbum } from "#/lib/the-fork";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
 
@@ -211,7 +212,16 @@ function toForm(
 		country: picked?.country ?? record.country ?? "",
 		genre: picked?.genre ?? pickedMaster?.genre ?? record.genre ?? "",
 		colorId: record.colorId?.toString() ?? "",
-		pitchforkScore: record.pitchforkScore?.toString() ?? "",
+		// A pick that renames the album blanks the old score (it was for the
+		// wrong album); saving looks the new one up — see `pitchforkRematchAction`.
+		pitchforkScore:
+			(picked || pickedMaster) &&
+			!sameAlbum(record, {
+				artist: picked?.artist || pickedMaster?.artist || record.artist,
+				title: picked?.title || pickedMaster?.title || record.title,
+			})
+				? ""
+				: (record.pitchforkScore?.toString() ?? ""),
 		notes: record.notes ?? "",
 		manualValue: record.manualValue?.toString() ?? "",
 	};

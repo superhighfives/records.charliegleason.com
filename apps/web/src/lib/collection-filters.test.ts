@@ -90,7 +90,7 @@ describe("toggleValue", () => {
 });
 
 describe("buildFacets", () => {
-	it("counts, orders, and drops one-off colours", () => {
+	it("counts and orders every value", () => {
 		const facets = buildFacets([
 			rec({ colorName: "Red", size: '7"', year: 1975 }),
 			rec({ colorName: "Red", year: 2003, notes: "x" }),
@@ -102,16 +102,11 @@ describe("buildFacets", () => {
 		expect(facets.colors.map((c) => [c.value, c.count])).toEqual([
 			["Black", 3],
 			["Red", 2],
+			["Blue", 1],
 		]);
 		expect(facets.sizes.map((s) => s.value)).toEqual(['12"', '10"', '7"']);
 		expect(facets.decades.map((d) => d.value)).toEqual([2000, 1990, 1970]);
 		expect(facets.notes).toBe(1);
-	});
-	it("drops a facet that can't narrow anything", () => {
-		const facets = buildFacets([rec(), rec()]);
-		expect(facets.sizes).toEqual([]);
-		expect(facets.decades).toEqual([]);
-		expect(facets.colors).toEqual([]);
 	});
 });
 

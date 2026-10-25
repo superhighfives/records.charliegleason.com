@@ -1178,6 +1178,13 @@ a {
   outline-offset: 2px;
 }
 
+.filter-swatch {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 25%, transparent);
+}
+
 .filter-count {
   font-family: var(--font-mono);
   font-size: 0.5rem;
