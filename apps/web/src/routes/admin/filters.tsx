@@ -73,7 +73,11 @@ function FiltersPage() {
 	});
 
 	if (!draft) {
-		return <p className="p-4 text-sm text-muted-foreground">Loading…</p>;
+		return (
+			<div className="mx-auto w-full max-w-2xl">
+				<p className="text-sm text-muted-foreground">Loading…</p>
+			</div>
+		);
 	}
 
 	const updateGroup = (
@@ -92,7 +96,7 @@ function FiltersPage() {
 	const shown = new Set(stripGroups(facets, draft).map((g) => g.id));
 
 	return (
-		<div className="mx-auto w-full max-w-4xl space-y-6 p-4">
+		<div className="mx-auto w-full max-w-2xl space-y-6">
 			<header className="flex flex-wrap items-start justify-between gap-3">
 				<div className="space-y-1">
 					<h1 className="text-lg font-semibold">Filters</h1>
