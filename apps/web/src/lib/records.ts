@@ -1360,6 +1360,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 						artist: records.artist,
 						title: records.title,
 						pitchforkScore: records.pitchforkScore,
+						pitchforkUrl: records.pitchforkUrl,
 					})
 					.from(records)
 					.where(eq(records.id, id))

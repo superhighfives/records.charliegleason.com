@@ -7,6 +7,7 @@ import { z } from "zod";
 import { getDb } from "#/db";
 import { type Color, colors, records } from "#/db/schema";
 import { authMiddleware, getAdminSession } from "#/lib/auth";
+import { renameColorRefusal } from "#/lib/color-rename";
 import { storeColorTextureUpload } from "#/lib/color-texture-upload";
 import { DEFAULT_COLOR_NAME } from "#/lib/default-color";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
@@ -202,19 +203,17 @@ export const renameColor = createServerFn({ method: "POST" })
 				.from(colors)
 				.where(eq(colors.id, colorId))
 				.limit(1);
-			if (!color) throw new Error("That color no longer exists.");
-			if (color.name === name) return;
-			if (color.name === DEFAULT_COLOR_NAME) {
-				throw new Error(
-					`"${DEFAULT_COLOR_NAME}" can't be renamed — it's the default records fall back to.`,
-				);
-			}
-			const [clash] = await db
-				.select({ id: colors.id })
-				.from(colors)
-				.where(eq(colors.name, name))
-				.limit(1);
-			if (clash) throw new Error(`There's already a color called "${name}".`);
+			const [clash] =
+				color && color.name !== name
+					? await db
+							.select({ id: colors.id })
+							.from(colors)
+							.where(eq(colors.name, name))
+							.limit(1)
+					: [];
+			const refusal = renameColorRefusal(color, name, !!clash);
+			if (refusal) throw new Error(refusal);
+			if (!color || color.name === name) return;
 			await db.update(colors).set({ name }).where(eq(colors.id, colorId));
 		}),
 	);

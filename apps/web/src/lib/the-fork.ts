@@ -52,30 +52,42 @@ export async function getPitchforkScore(
 	title: string,
 ): Promise<PitchforkScore | null> {
 	try {
-		const albums = await loadAlbums();
-		const a = normalize(artist);
-		const t = normalize(title);
-		if (!a || !t) return null;
-
-		const exact = albums.find(
-			(x) => normalize(x.artist) === a && normalize(x.title) === t,
-		);
-		const match =
-			exact ??
-			albums.find((x) => {
-				const xa = normalize(x.artist);
-				const xt = normalize(x.title);
-				return (xa === a || xa.includes(a) || a.includes(xa)) && xt === t;
-			});
-
-		if (!match || typeof match.score !== "number") return null;
-		return {
-			score: match.score,
-			url: match.url ? `${PITCHFORK}${match.url}` : null,
-		};
+		return await findPitchforkScore(artist, title);
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * {@link getPitchforkScore}, but a failed `albums.json` fetch throws rather
+ * than reading as "no review" — for callers where the two mean different
+ * things (see {@link pitchforkAfterRematch}).
+ */
+async function findPitchforkScore(
+	artist: string,
+	title: string,
+): Promise<PitchforkScore | null> {
+	const albums = await loadAlbums();
+	const a = normalize(artist);
+	const t = normalize(title);
+	if (!a || !t) return null;
+
+	const exact = albums.find(
+		(x) => normalize(x.artist) === a && normalize(x.title) === t,
+	);
+	const match =
+		exact ??
+		albums.find((x) => {
+			const xa = normalize(x.artist);
+			const xt = normalize(x.title);
+			return (xa === a || xa.includes(a) || a.includes(xa)) && xt === t;
+		});
+
+	if (!match || typeof match.score !== "number") return null;
+	return {
+		score: match.score,
+		url: match.url ? `${PITCHFORK}${match.url}` : null,
+	};
 }
 
 interface AlbumName {
@@ -114,9 +126,15 @@ export function pitchforkRematchAction(
 /**
  * The Pitchfork fields to write for a save that may have changed the album
  * (see {@link pitchforkRematchAction}), or `null` to leave them untouched.
+ * If the lookup itself fails (The Fork unreachable), the previous score and
+ * link are written back rather than cleared — a blip shouldn't read as "no
+ * review", and the editor may have blanked the field in the form.
  */
 export async function pitchforkAfterRematch(
-	prev: AlbumName & { pitchforkScore: number | null },
+	prev: AlbumName & {
+		pitchforkScore: number | null;
+		pitchforkUrl: string | null;
+	},
 	next: AlbumName,
 	typedScore?: number | null,
 ): Promise<{
@@ -129,14 +147,21 @@ export async function pitchforkAfterRematch(
 		case "manual":
 			return { pitchforkScore: typedScore ?? null, pitchforkUrl: null };
 		case "lookup": {
-			const found = await getPitchforkScore(
-				next.artist ?? "",
-				next.title ?? "",
-			);
-			return {
-				pitchforkScore: found?.score ?? null,
-				pitchforkUrl: found?.url ?? null,
-			};
+			try {
+				const found = await findPitchforkScore(
+					next.artist ?? "",
+					next.title ?? "",
+				);
+				return {
+					pitchforkScore: found?.score ?? null,
+					pitchforkUrl: found?.url ?? null,
+				};
+			} catch {
+				return {
+					pitchforkScore: prev.pitchforkScore,
+					pitchforkUrl: prev.pitchforkUrl,
+				};
+			}
 		}
 	}
 }
