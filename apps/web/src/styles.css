@@ -356,7 +356,7 @@ body {
   animation-play-state: paused;
 }
 
-/* Every layer a grid tile draws — disc, disc mask, cover, notes dot (see
+/* Every layer a grid tile draws — disc, cover, notes dot (see
  * `RecordTile`). Oversized past the tile by enough to hold the hovered disc
  * peek (`min(25%, 64px)` right, plus its scale/rotation), because on
  * desktop it's `content-visibility: auto` (`--deferred`), whose implied
@@ -490,8 +490,7 @@ body {
 }
 
 /* On touch the disc rests fully invisible (Tailwind `opacity-0` on
- * `.vinyl-peek` — see `RecordTile`; the loop fades it in with the peek),
- * which is what lets the touch path skip the `.disc-mask` desktop needs.
+ * `.vinyl-peek` — see `RecordTile`; the loop fades it in with the peek).
  * The panel-pinned tile's look is pure CSS (`data-active`), so it needs its
  * own override to reveal the disc — unlayered CSS beats the Tailwind
  * utility regardless of specificity, and the loop clears its inline opacity
@@ -705,27 +704,14 @@ a {
     );
 }
 
-/* `.disc-mask` (see its own comment in collection-grid.tsx) covers the disc's
- * *rest* silhouette so a transparent cover doesn't show a dark crescent where
- * there's no art. Desktop-only — the touch tile doesn't render it (the disc
- * rests at opacity 0 there instead; see `RecordTile`). Desktop's hover and
- * the pinned `data-active` look are pure-CSS, driven by the same
- * `.vinyl-disc` transforms above — without a matching rule here the mask
- * stays opaque through both, cutting into the exact peek it exists to
- * protect. Same transition timing as `.vinyl-disc` so the mask clears in
- * step with the disc sliding out from under it, not before or after. */
-.disc-mask {
-  transition: opacity 400ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@media (pointer: fine) {
-  .group:hover .disc-mask {
-    opacity: 0;
-  }
-}
-
-.group[data-active="true"] .disc-mask {
-  opacity: 0;
+/* Contact shadow under a grid tile's clipped cover (`RecordTile`). A parent
+ * `drop-shadow` follows the child's `clip-path` outline, where a box-shadow on
+ * the clipped element itself would be cut away with it. Desktop only: on touch
+ * the ambient loop writes `scale` on the cover every frame, and a filtered
+ * parent would have to re-rasterise its whole subtree each time. */
+.collection-grid:not([data-touch="true"]) .sleeve-shadow {
+  filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.18))
+    drop-shadow(0 4px 10px rgb(0 0 0 / 0.12));
 }
 
 /* Touch's stand-in for desktop's `:hover`-driven reveal above was, for a
@@ -772,8 +758,7 @@ a {
      instead. Tuned against actual measurements (a scaled-down disc measured
      only a few px past the cover's edge on one record) rather than
      eyeballed, since the overflow amount varies per record depending on how
-     much margin that record's own matte crop leaves around its visible
-     sleeve. `--vinyl-layers - 1 - --vinyl-stack-index` (see the equivalent
+     much margin the cover's rotation leaves on that edge. `--vinyl-layers - 1 - --vinyl-stack-index` (see the equivalent
      grid-tile comment above) counts how many layers sit behind this one —
      0 for the back-most — so subtracting `10px` per layer behind it anchors
      the back-most disc at exactly this same 30px a single disc travels,

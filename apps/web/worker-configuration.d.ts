@@ -39,12 +39,10 @@ interface __BaseEnv_Env {
 	// preview/dev: the route rejects all webhook calls without it.
 	MAILGUN_WEBHOOK_SIGNING_KEY?: string;
 	EMAIL?: SendEmail;
-	MATTE_CONTAINER?: DurableObjectNamespace<import("./src/server").MatteContainer>;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/server");
-		durableNamespaces: "MatteContainer";
 	}
 	interface PreviewEnv {
 		PHOTOS: R2Bucket;

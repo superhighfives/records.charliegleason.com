@@ -1,7 +1,7 @@
 /**
  * A tiny bounded-retry helper, kept dependency-free so it's unit-testable in plain Node
- * (see retry.test.ts) — its callers (`professional.ts`) pull in the Workers `env` binding
- * and Photon WASM and so can't be imported into a test, so the retryable control-flow lives
+ * (see retry.test.ts) — its callers (`color-texture.ts`) pull in the Workers `env` binding
+ * and so can't be imported into a test, so the retryable control-flow lives
  * here instead of inline in them.
  */
 
@@ -19,61 +19,12 @@ export class NonRetryableError extends Error {
 }
 
 /**
- * A transient Cloudflare error from a container-fronting Durable Object that a retry with a
- * fresh stub recovers. Six shapes, all of which lose only in-memory state and which
- * Cloudflare's guidance is to retry:
- *   - a DO storage op exceeds its ~30s timeout and the platform resets the object mid-request
- *     ("…storage operation exceeded timeout which caused object to be reset");
- *   - the DO is reset because its code was updated ("Durable Object reset because its code was
- *     updated") — a Worker version change landing mid-request;
- *   - during a container rollout the runtime signals the active instance to exit ("Runtime
- *     signalled the container to exit due to a new version") — a platform-initiated instance
- *     replacement, which with no drain grace kills the in-flight request outright;
- *   - the container's transport drops mid-request and it answers 5xx with "Container suddenly
- *     disconnected, try again" — the same class of loss, but surfaced as a response *body*
- *     rather than a thrown error, so the caller has to test the body text (see postToContainer);
- *   - no instance is available yet — a burst past `max_instances` or an instance still
- *     provisioning answers 503 with "There is no Container instance available at this time"
- *     (RECORDS-25) — a fresh stub/attempt gives the pool a moment to free up or finish booting;
- *   - the container fails to start with "Failed to start container: Network connection lost"
- *     (RECORDS-24) — a boot-time network blip, not a bad request.
- * A caller keeps {@link withRetry} retrying these (getRandom re-picks a fresh instance/stub)
- * while classifying everything else as {@link NonRetryableError}. Lives here (dependency-free)
- * so it's testable without importing its Workers-bound caller — same reason as the rest of
- * this module.
- */
-export function isTransientContainerReset(err: unknown): boolean {
-	const message = err instanceof Error ? err.message : String(err);
-	return /exceeded timeout|to be reset|code was updated|the container to exit|suddenly disconnected|no Container instance available|Failed to start container:.*Network connection lost/i.test(
-		message,
-	);
-}
-
-/**
- * A transient failure from the Cloudflare Images binding that a retry recovers — the binding
- * intermittently can't reach its backend and throws "IMAGES_TRANSFORM_ERROR 9502: Images
- * binding connection error" (the same load flakiness the matte pipeline routes *around* by
- * preferring the container's sharp path). It's a connection blip, not bad input, so the matte
- * audit sweep retries it with {@link withRetry} instead of failing the row and reporting to
- * Sentry; a genuinely corrupt/undecodable stored image throws a different error and stays a
- * {@link NonRetryableError} so it fails fast, exactly as before. Dependency-free + testable,
- * same as {@link isTransientContainerReset}.
- */
-export function isTransientImagesError(err: unknown): boolean {
-	const message = err instanceof Error ? err.message : String(err);
-	return /Images binding connection error|IMAGES_TRANSFORM_ERROR 9502/i.test(
-		message,
-	);
-}
-
-/**
  * A transient Replicate failure that a fresh prediction recovers: the upstream model
  * provider being briefly unavailable ("Model execution failed (Upstream provider is
  * unavailable)", RECORDS-29), a prediction stalling past our poll timeout, or a
  * 429/5xx from the create/poll endpoints. Everything else — a missing API key, a
  * rejected prompt, a 4xx — is permanent, so the color-texture job fails fast on it
- * rather than paying for two more predictions. Dependency-free + testable, same as
- * {@link isTransientContainerReset}.
+ * rather than paying for two more predictions. Dependency-free + testable.
  */
 export function isTransientReplicateError(err: unknown): boolean {
 	const message = err instanceof Error ? err.message : String(err);

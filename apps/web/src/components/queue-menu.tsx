@@ -23,9 +23,9 @@ import { cn } from "#/lib/utils";
 
 /**
  * Numbered, human labels for the fine-grained `jobStep` the consumer records as it works.
- * Both pipelines read as "(n/4) …" on a fixed denominator; the conditional steps (web-search
- * escalation, deterministic matte fallback) reuse their parent step's number rather than
- * bumping the total, so the count never jumps around mid-run.
+ * Analysis reads as "(n/4) …" on a fixed denominator; the conditional web-search escalation
+ * reuses its parent step's number rather than bumping the total, so the count never jumps
+ * around mid-run. Apply is a single step now.
  */
 const STEP_LABELS: Record<JobStep, string> = {
 	// analyze — reading → matching (→ web-search) → scoring → artwork
@@ -34,18 +34,19 @@ const STEP_LABELS: Record<JobStep, string> = {
 	"web-search": "(2/4) Searching the web",
 	scoring: "(3/4) Scoring",
 	artwork: "(4/4) Fetching artwork",
-	// apply — reframe → enhance → matte-ai | matte-fallback → finishing
-	reframe: "(1/4) Reframing sleeve",
-	enhance: "(2/4) Enhancing",
-	"matte-ai": "(3/4) Generating matte",
-	"matte-fallback": "(3/4) Generating matte (fallback)",
-	finishing: "(4/4) Finishing",
+	// apply
+	reframe: "Reframing sleeve",
+	// Retired with the enhance + matte stages; only matte-era rows still carry these.
+	enhance: "Generating photo",
+	"matte-ai": "Generating photo",
+	"matte-fallback": "Generating photo",
+	finishing: "Generating photo",
 };
 
 /**
  * The step label for a queued item: which stage of its pipeline it's actually in — waiting
  * in the queue vs actively running. A processing job that's recorded a fine-grained
- * `jobStep` shows that numbered sub-step ("(2/4) Enhancing"); the same row updates in place
+ * `jobStep` shows that sub-step ("(2/4) Matching on Discogs"); the same row updates in place
  * as the step advances on the next poll. Without one — a queued job, a freshly re-enqueued
  * one, or a legacy row — it falls back to the coarse stage label. `active` is true once the
  * job is actually running (not just queued), so the menu accents the live step in the brand
@@ -65,23 +66,15 @@ function stepLabel(item: InFlightItem): { text: string; active: boolean } {
 	if (item.kind === "amazon") {
 		return { text: "Looking up pressing on Amazon", active: false };
 	}
-	if (item.kind === "audit") {
-		return { text: "Scanning stored covers", active: true };
-	}
 	if (item.state !== "processing")
 		return { text: "Queued to generate", active: false };
-	if (item.stage === "cover")
-		return { text: "(1/2) Generating photo", active: true };
-	if (item.stage === "matte")
-		return { text: "(2/2) Generating matte", active: true };
 	return { text: "Generating photo", active: true };
 }
 
 /**
  * The label + colour for a finished row, keyed on its terminal outcome. A clean finish is
- * muted with no dot; a deterministic-matte fallback and a hard failure each get a coloured
- * status dot to the left (amber / red) so the outcome is legible at a glance, matching the
- * amber "Magic matte unavailable" / red "generation failed" states in the editor. `undefined`
+ * muted with no dot; a hard failure gets a red status dot to the left so the outcome is
+ * legible at a glance, matching the red "generation failed" state in the editor. `undefined`
  * (outcomes still loading, or an id not yet resolved) reads as a plain finish.
  */
 function FinishedLabel({
@@ -94,14 +87,6 @@ function FinishedLabel({
 			<span className="flex items-center gap-1.5 text-red-600 dark:text-red-400">
 				<span className="size-1.5 shrink-0 rounded-full bg-current" />
 				Failed
-			</span>
-		);
-	}
-	if (outcome === "fallback") {
-		return (
-			<span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-				<span className="size-1.5 shrink-0 rounded-full bg-current" />
-				Finished (no Magic matte)
 			</span>
 		);
 	}
@@ -316,29 +301,10 @@ function isAuthError(error: unknown): boolean {
 export function QueueMenu() {
 	const { data } = useQuery(inFlightQueryOptions);
 	const live = data ?? [];
-	// The audit sweep isn't a record — no thumbnail, no per-record outcome to show once
-	// it finishes — so it's excluded from the finished-history diff entirely; it just
-	// disappears from the live list when the sweep completes.
-	const historyLive = live.filter(
-		(item): item is InFlightItem & { id: number } => item.id != null,
-	);
-	const { finished, clear } = useQueueHistory(historyLive);
+	const { finished, clear } = useQueueHistory(live);
 	const queryClient = useQueryClient();
 
-	// The audit sweep updates records' matte-audit badges as it goes, but nothing else
-	// polls the plain records list while it runs — invalidate once the sweep's item
-	// disappears from `live` so flagged rows show up without a manual refresh.
-	const wasAuditing = useRef(false);
-	useEffect(() => {
-		const auditing = live.some((item) => item.kind === "audit");
-		if (wasAuditing.current && !auditing) {
-			queryClient.invalidateQueries({ queryKey: ["records"] });
-		}
-		wasAuditing.current = auditing;
-	}, [live, queryClient]);
-
-	// Resolve each finished row's terminal outcome (failed / deterministic-matte fallback /
-	// ok) — the in-flight diff loses it when the item departs, so we look it up by id here.
+	// Resolve each finished row's terminal outcome (failed / ok) — the in-flight diff loses it when the item departs, so we look it up by id here.
 	const { data: outcomes } = useQuery(
 		queueOutcomesQueryOptions(finished.map((f) => f.id)),
 	);

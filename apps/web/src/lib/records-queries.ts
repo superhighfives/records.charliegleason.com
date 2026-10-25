@@ -33,7 +33,7 @@ export const recordQueryOptions = (id: number) =>
 		queryFn: () => getRecord({ data: id }),
 		// While a background job is running on this record (analysis or an Apply photo
 		// generation), poll so the editor reflects the result — e.g. the freshly
-		// generated matte + cover — without a manual refresh. Idle otherwise.
+		// generated cover — without a manual refresh. Idle otherwise.
 		refetchInterval: (query) => {
 			const r = query.state.data;
 			const busy =
@@ -69,7 +69,7 @@ export const inFlightQueryOptions = queryOptions({
 });
 
 /**
- * Terminal outcomes (failed / deterministic-matte fallback / ok) for the header queue's
+ * Terminal outcomes (failed / ok) for the header queue's
  * finished rows, keyed on the exact id set so it refetches whenever an item joins or leaves
  * the client's session history. A finished item's outcome is stable — a retry moves it back
  * into the in-flight set, out of this list — so there's no interval; one fetch per id-set

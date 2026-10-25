@@ -14,9 +14,9 @@ import { cn } from "#/lib/utils.ts";
  * lone close button; the loader also clears on load, covering non-square images.
  *
  * By default the thumbnail is an `<img src>` cropped to the wrapper (`className`
- * sizes/positions it). Pass `children` for a custom trigger (e.g. a matte with a
- * different object-fit), and `overlay` for something floated over the trigger
- * (e.g. a matte tucked into the corner). `onOpenChange` surfaces open state so a
+ * sizes/positions it). Pass `children` for a custom trigger (e.g. a clipped or
+ * rotated thumbnail), and `overlay` for something floated over the trigger
+ * (e.g. a badge tucked into the corner). `onOpenChange` surfaces open state so a
  * caller can gate global keyboard shortcuts while the lightbox is up.
  */
 function ImageZoom({
@@ -38,7 +38,7 @@ function ImageZoom({
 	style?: CSSProperties;
 	/** Custom trigger content. Defaults to an `<img src>` cropped to the wrapper. */
 	children?: ReactNode;
-	/** Floated over the trigger — e.g. a matte tucked into the corner. */
+	/** Floated over the trigger — e.g. a badge tucked into the corner. */
 	overlay?: ReactNode;
 	/** Notified when the lightbox opens/closes (e.g. to gate global hotkeys). */
 	onOpenChange?: (open: boolean) => void;

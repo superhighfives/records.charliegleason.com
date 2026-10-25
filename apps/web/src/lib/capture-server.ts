@@ -93,8 +93,8 @@ export function createCaptureRecord(data: {
 			return failed ?? row;
 		}
 
-		// First-pass professional photo (detect corners, warp, deterministic
-		// matte) — its own queue message, best-effort and fully independent of
+		// First-pass professional photo (detect corners, warp) — its own queue
+		// message, best-effort and fully independent of
 		// analysis: an enqueue failure marks the professional* track (a manual
 		// re-crop retries) rather than failing the whole capture.
 		try {
@@ -131,7 +131,7 @@ export function replaceCaptureRecord(
 			.update(records)
 			.set({
 				capturePhotoKey,
-				// The old professional cover/matte were cut from the old capture (and
+				// The old professional cover (and any leftover matte) was cut from the old capture (and
 				// their objects are deleted below) — clear them so nothing points at a
 				// deleted R2 object while the first-pass regenerates.
 				professionalImageKey: null,

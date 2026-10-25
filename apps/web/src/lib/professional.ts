@@ -3,14 +3,6 @@ import { PhotonImage } from "@cf-wasm/photon";
 
 import type { Record } from "#/db/schema";
 import {
-	REAL_ESRGAN_VERSION,
-	UPSCALE_FACTOR,
-	UPSCALE_INPUT_MAX,
-	UPSCALE_MAX,
-} from "#/lib/esrgan-config";
-import { bytesToBase64 } from "#/lib/image-data";
-import { enhanceCoverInContainer } from "#/lib/matte-container";
-import {
 	applyPolish,
 	type RgbaImage,
 	reframeFromCorners,
@@ -21,8 +13,6 @@ import {
 	parseReframeParams,
 	type ReframeParams,
 } from "#/lib/reframe-params";
-import { firstOutputUrl, runVersion } from "#/lib/replicate";
-import { NonRetryableError, withRetry } from "#/lib/retry";
 import {
 	bandFromQuad,
 	type CornerBand,
@@ -57,12 +47,12 @@ import {
  *
  * The pixel math lives in {@link reframeFromCorners} (pure, unit-tested); Photon decodes
  * the capture and re-encodes the result, and the Images binding canonicalises to a
- * webp-with-alpha (like the cover pipeline) before storing under `professional/`.
+ * webp (like the cover pipeline) before storing under `professional/`.
  *
- * The reframe itself is free and deterministic, so it re-runs on demand whenever the
- * admin nudges the corners or the {@link ReframeParams} tone/polish knobs. The only
- * paid step is the optional, on-demand "Enhance" ({@link upscaleProfessional}), which
- * super-resolves an already-reframed image through Real-ESRGAN on Replicate.
+ * The whole thing is free and deterministic, so it re-runs on demand whenever the
+ * admin nudges the corners or the {@link ReframeParams} tone/polish knobs. (A paid
+ * Real-ESRGAN "Enhance" pass used to follow; it upscaled from a 1024px downscale of
+ * the 2000px square, so it was retired rather than kept as a sharpening step.)
  *
  * Server-only (pulls in `cloudflare:workers`); never import from a client route — the
  * shared knob/corner types + defaults live in `reframe-params.ts` / `sleeve-corners.ts`.
@@ -78,48 +68,6 @@ const FINAL_SHARPEN = 1.0;
 /** A fresh single-use stream over the same bytes (the Images binding consumes one per call). */
 export function blobStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 	return new Blob([bytes as BlobPart]).stream();
-}
-
-const IMAGES_FETCH_ATTEMPTS = 3;
-const IMAGES_RETRY_BASE_MS = 400;
-
-/**
- * Fetch a Replicate output image by URL and re-encode it to a bounded square webp through
- * the Images binding, returning the encoded bytes. Shared by {@link upscaleImage} and
- * {@link upscaleProfessional} — the two ESRGAN-output call sites.
- *
- * Two subtleties this centralises:
- *   - Buffer the CDN response to bytes BEFORE the transform. Streaming a live `res.body`
- *     straight into Images lets the (slow) transform pace the upstream read until the idle
- *     replicate.delivery connection is reaped, and the binding throws an uncatchable-looking
- *     "Network connection lost." mid-transform (Sentry culprit `images-api
- *     throwErrorIfErrorResponse`). Draining first hands Images stable in-memory input.
- *   - Retry that transient locally (a few cheap re-fetches of the same URL) rather than
- *     re-running the whole ~90s Replicate chain via the queue's outer retry. A non-2xx
- *     response (expired CDN link, 401/403 config) won't fix itself, so it's thrown
- *     {@link NonRetryableError} and surfaces immediately — like `discogsFetch`'s 401/404
- *     handling — instead of burning all attempts on it.
- */
-async function fetchScaledWebp(
-	url: string,
-	maxSize: number,
-): Promise<ArrayBuffer> {
-	return withRetry(
-		async () => {
-			const res = await fetch(url);
-			if (!res.ok) {
-				throw new NonRetryableError(
-					`Fetching the upscaled image failed (${res.status})`,
-				);
-			}
-			const bytes = new Uint8Array(await res.arrayBuffer());
-			const out = await env.IMAGES.input(blobStream(bytes))
-				.transform({ width: maxSize, height: maxSize, fit: "scale-down" })
-				.output({ format: "image/webp", quality: 92 });
-			return out.response().arrayBuffer();
-		},
-		{ attempts: IMAGES_FETCH_ATTEMPTS, baseMs: IMAGES_RETRY_BASE_MS },
-	);
 }
 
 /** Decode encoded image bytes to an {@link RgbaImage} via Photon. */
@@ -157,7 +105,7 @@ export function encodePng(image: RgbaImage): Uint8Array {
 // A normalised capture is a ~2048² webp, comfortably under ~2 MB. Anything materially
 // larger is the raw-original storage fallback (`storeCapturePhotoFromR2`, when Image
 // Transformations are unavailable) — a straight-off-the-phone HEIC/JPEG that would decode
-// to a 40+ MB RGBA buffer and, stacked with the matte pipeline's other buffers, OOM the
+// to a 40+ MB RGBA buffer and, stacked with the warp's other buffers, OOM the
 // generation isolate outright. Route only those through the Images binding first (it
 // decodes off the JS heap) to bound the decode to CAPTURE_DECODE_MAX; the normal path
 // decodes the stored bytes directly with zero added latency.
@@ -184,7 +132,7 @@ export async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
 
 /**
  * The core pixel work: warp the decoded `capture` to a square using the sleeve `corners`,
- * pad/tone per the {@link ReframeParams} knobs, canonicalise to a webp-with-alpha via the
+ * pad/tone per the {@link ReframeParams} knobs, canonicalise to a webp via the
  * Images binding, and store it under `professional/`. Returns the new R2 key.
  */
 async function warpEncodeStore(
@@ -197,7 +145,7 @@ async function warpEncodeStore(
 		capture,
 		// The cover is opaque edge-to-edge, so it warps from the band's INNER quad —
 		// certified wholly on the sleeve, so it can never drag a sliver of background
-		// into its border. The matte paths use the full band (they resolve the true edge).
+		// into its border.
 		toPixelCorners(band.inner, capture.width, capture.height),
 		{
 			canvasSize: CANVAS_SIZE,
@@ -244,101 +192,6 @@ export async function reframeFromCapture(
 	params: ReframeParams = {},
 ): Promise<{ key: string }> {
 	return warpEncodeStore(await loadCapture(capturePhotoKey), band, params);
-}
-
-/**
- * Super-resolve an in-memory RGBA image through Real-ESRGAN — the reusable core the
- * matte pipeline shares with {@link upscaleProfessional}. Downscales under the model's
- * input-pixel ceiling first, ships it as a data URI, and returns the model's (larger)
- * output decoded back to RGBA, capped at `maxSize` (default {@link UPSCALE_MAX}) so a
- * big result can't run the pure-JS matte math too hot or blow the Worker's memory.
- * Opaque input only — ESRGAN drops alpha, so callers re-attach their own.
- */
-export async function upscaleImage(
-	img: RgbaImage,
-	opts: { maxSize?: number } = {},
-): Promise<RgbaImage> {
-	const cap = opts.maxSize ?? UPSCALE_MAX;
-	const fitted = await env.IMAGES.input(blobStream(encodePng(img)))
-		.transform({
-			width: UPSCALE_INPUT_MAX,
-			height: UPSCALE_INPUT_MAX,
-			fit: "scale-down",
-		})
-		.output({ format: "image/webp", quality: 92 });
-	const fittedBytes = new Uint8Array(await fitted.response().arrayBuffer());
-	const dataUri = `data:image/webp;base64,${bytesToBase64(fittedBytes)}`;
-
-	const prediction = await runVersion(REAL_ESRGAN_VERSION, {
-		image: dataUri,
-		scale: UPSCALE_FACTOR,
-		face_enhance: false,
-	});
-	const url = firstOutputUrl(prediction.output);
-	if (!url) throw new Error("Replicate returned no upscaled image");
-	return decodeRgba(new Uint8Array(await fetchScaledWebp(url, cap)));
-}
-
-/**
- * In-Worker enhance (the preview fallback, where the matte container isn't bound): downscale
- * under the model's input ceiling via the Images binding, run Real-ESRGAN, then fetch + cap the
- * output back to a bounded webp — also through the Images binding. In production the container
- * path below is used instead, keeping this (load-flaky) binding off the hot path.
- */
-async function enhanceCoverInWorker(bytes: Uint8Array): Promise<Uint8Array> {
-	// Downscale under the model's input-pixel ceiling before sending. A no-op if the
-	// source is already small enough; otherwise this is what the model upscales from.
-	const fitted = await env.IMAGES.input(blobStream(bytes))
-		.transform({
-			width: UPSCALE_INPUT_MAX,
-			height: UPSCALE_INPUT_MAX,
-			fit: "scale-down",
-		})
-		.output({ format: "image/webp", quality: 92 });
-	const fittedBytes = new Uint8Array(await fitted.response().arrayBuffer());
-	const dataUri = `data:image/webp;base64,${bytesToBase64(fittedBytes)}`;
-
-	const prediction = await runVersion(REAL_ESRGAN_VERSION, {
-		image: dataUri,
-		scale: UPSCALE_FACTOR,
-		// Album art, not portraits — GFPGAN face restoration would meddle with cover
-		// faces/text, so leave it off for a faithful upscale.
-		face_enhance: false,
-	});
-	const outputUrl = firstOutputUrl(prediction.output);
-	if (!outputUrl) throw new Error("Replicate returned no upscaled image");
-
-	// Same fetch-then-Images-transform as upscaleImage — see fetchScaledWebp for the
-	// buffer-before-transform + local-retry rationale.
-	return new Uint8Array(await fetchScaledWebp(outputUrl, UPSCALE_MAX));
-}
-
-/**
- * The PAID "Enhance" step: super-resolve an existing professional image (an R2 key)
- * through Real-ESRGAN and store the higher-res master under a fresh `professional/` key.
- * The heavy lifting runs in the matte container (sharp: the ESRGAN call + the quality webp
- * encode), off the Cloudflare Images binding that was dropping connections ("Network
- * connection lost") on the reframe→webp step under Apply-burst load. Where the container
- * isn't bound (preview), it falls back to {@link enhanceCoverInWorker}. Either way it returns
- * the new key and throws on any failure, so the caller can leave the current cover untouched.
- */
-export async function upscaleProfessional(
-	professionalKey: string,
-): Promise<{ key: string }> {
-	const object = await env.PHOTOS.get(professionalKey);
-	if (!object)
-		throw new Error(`professional photo missing in R2: ${professionalKey}`);
-	const bytes = new Uint8Array(await object.arrayBuffer());
-
-	const webp = env.MATTE_CONTAINER
-		? await enhanceCoverInContainer({ image: bytes })
-		: await enhanceCoverInWorker(bytes);
-
-	const key = `professional/${crypto.randomUUID()}.webp`;
-	await env.PHOTOS.put(key, webp, {
-		httpMetadata: { contentType: "image/webp" },
-	});
-	return { key };
 }
 
 /**

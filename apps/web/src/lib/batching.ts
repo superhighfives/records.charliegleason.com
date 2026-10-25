@@ -1,54 +1,44 @@
 /**
  * Pure queue helpers kept dependency-free so both the server data-access layer and the
  * queue producer/consumer can share them — and so the logic is unit-testable without a
- * Workers runtime (see batching.test.ts). Covers the bulk-splitting math (bounded by two
- * hard platform limits) and the Apply pipeline's matte state machine:
+ * Workers runtime (see batching.test.ts). Covers the bulk-splitting math, bounded by two
+ * hard platform limits:
  *
  *  - D1 rejects any query with more than 100 bound parameters.
  *  - Cloudflare Queues accept at most 100 messages per `sendBatch` call.
  */
 
+/**
+ * Modes retired with the alpha matte. Messages already on the queue at deploy time can
+ * still carry them, so the consumer acks them as no-ops instead of letting them fall
+ * through to the analyze pipeline. Safe to delete once a deploy has drained the queue.
+ */
+export type LegacyRecordMode =
+	| "capture-first-pass-matte"
+	| "professional-matte"
+	| "professional-matte-fallback";
+
+export const LEGACY_RECORD_MODES: ReadonlySet<string> =
+	new Set<LegacyRecordMode>([
+		"capture-first-pass-matte",
+		"professional-matte",
+		"professional-matte-fallback",
+	]);
+
 /** A `records`-keyed message for the analyze consumer. See {@link AnalyzeMessage}. */
 export interface AnalyzeRecordMessage {
 	recordId: number;
 	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls the
-	// Discogs release for an already-identified record. The paid Apply pipeline is
-	// split across messages so each memory-heavy step gets its own fresh isolate (a
-	// single invocation running reframe+enhance+matte brushed the 128 MB ceiling and
-	// OOM'd): "professional" does the reframe + Real-ESRGAN enhance (the cover), then
-	// enqueues "professional-matte" for the Magic matte + the final atomic commit. If that
-	// Magic matte fails, its (larger) deterministic fallback is deferred to yet another
-	// isolate — "professional-matte-fallback" — rather than run inline, since stacking
-	// the failed AI attempt's buffers with the ~3000² deterministic deskew on one isolate
-	// is itself what OOM'd.
-	// "capture-first-pass" / "capture-first-pass-matte" are the free on-capture
-	// professional seed (detect + warp, then the deterministic matte) — split out of
-	// the capture POST after the inline pass OOM'd the request isolate, and split
-	// from each other for the same reason the Apply stages are: each is a
-	// near-ceiling render on its own.
+	// Discogs release for an already-identified record. "professional" is the admin's
+	// Apply: re-warp the square from the stored corners + tone and promote it live.
+	// "capture-first-pass" is the free on-capture seed (detect + warp), split out of the
+	// capture POST after the inline pass OOM'd the request isolate.
 	mode?:
 		| "analyze"
 		| "refresh"
 		| "capture-first-pass"
-		| "capture-first-pass-matte"
 		| "professional"
-		| "professional-matte"
-		| "professional-matte-fallback";
-	// Only set on "professional-matte": the stage-1 result — the cover key + the exact
-	// (serialized) capture/band/params the cover was built from. Carried forward so the
-	// matte stage (a) renders the matte from and re-persists the SAME inputs, keeping
-	// cover and matte mutually consistent even if the record changed after stage 1, and
-	// (b) swaps the new cover + matte in together in one atomic DB write (no public gap).
-	coverKey?: string;
-	enhanced?: boolean;
-	captureKey?: string;
-	bandJson?: string;
-	paramsJson?: string;
-	// Only set on "professional-matte-fallback": the Magic matte's actual failure reason
-	// (why we're running the deterministic fallback at all). Carried so a *successful*
-	// fallback can still record it in the admin UI — otherwise the AI failure is invisible
-	// there, only in Sentry. Not shown publicly (`professionalError` is admin-only).
-	aiMatteError?: string;
+		| LegacyRecordMode;
 }
 
 /**
@@ -88,12 +78,7 @@ export interface ResolveAsinMessage {
 	country: string | null;
 }
 
-/**
- * Not keyed to any `records`/`colors` row — sweeps one stalest-first batch of stored
- * mattes (see `runMatteAudit` in matte-audit.ts) and self-enqueues another of these
- * until a pass comes back short of a full batch. Global progress lives in the
- * `matteAuditState` singleton row, not on the message itself.
- */
+/** Retired with the matte audit — acked as a no-op if one is still queued at deploy. */
 export interface AuditMattesMessage {
 	mode: "audit-mattes";
 }
@@ -143,27 +128,6 @@ export function toQueueBatches(
 	return chunk(recordIds, QUEUE_BATCH_SIZE).map((slice) =>
 		slice.map((recordId) => ({ body: { recordId, mode } })),
 	);
-}
-
-/** What the `professional-matte` consumer should do after a Magic-matte attempt. */
-export type MatteAction = "commit" | "retry-ai" | "fallback";
-
-/**
- * Decide the next step of the Magic-matte stage (`professional-matte`) — the "prefer AI"
- * state machine, pulled out pure so it's testable without the Queue/DB plumbing. A
- * successful render commits; a failure retries the AI stage while the queue's redelivery
- * budget lasts (so a transient Replicate/network blip gets another AI attempt rather than
- * an immediate downgrade), and only falls back to the deterministic render once AI is
- * genuinely exhausted. `attempts` is the current delivery's `message.attempts`; the
- * comparison mirrors the queue's own `willRetry` (attempts ≤ `maxRetries` ⇒ retry).
- */
-export function nextMatteAction(
-	aiSucceeded: boolean,
-	attempts: number,
-	maxRetries: number,
-): MatteAction {
-	if (aiSucceeded) return "commit";
-	return attempts <= maxRetries ? "retry-ai" : "fallback";
 }
 
 /**

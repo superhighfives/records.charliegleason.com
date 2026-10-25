@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-	isTransientContainerReset,
-	isTransientImagesError,
 	isTransientReplicateError,
 	NonRetryableError,
 	withRetry,
@@ -53,127 +51,6 @@ describe("withRetry", () => {
 		await expect(withRetry(op, opts)).rejects.toBeInstanceOf(NonRetryableError);
 		// One transient retry, then the permanent error stops it (2, not the full 3).
 		expect(op).toHaveBeenCalledTimes(2);
-	});
-});
-
-describe("isTransientContainerReset", () => {
-	it("matches the DO storage-timeout reset error (full platform message)", () => {
-		const err = new Error(
-			"Durable Object storage operation exceeded timeout which caused object to be reset.",
-		);
-		expect(isTransientContainerReset(err)).toBe(true);
-	});
-
-	it("matches either half of the message, and non-Error values", () => {
-		expect(isTransientContainerReset(new Error("… object to be reset"))).toBe(
-			true,
-		);
-		expect(
-			isTransientContainerReset("storage operation exceeded timeout"),
-		).toBe(true);
-	});
-
-	it("matches the container's 'suddenly disconnected' 5xx body (surfaced from the response, not a throw)", () => {
-		expect(
-			isTransientContainerReset(
-				new Error("container 500: Container suddenly disconnected, try again"),
-			),
-		).toBe(true);
-		expect(
-			isTransientContainerReset("Container suddenly disconnected, try again"),
-		).toBe(true);
-	});
-
-	it("matches the code-update DO reset and the container-rollout exit (the mass-fail signals)", () => {
-		expect(
-			isTransientContainerReset(
-				new Error("Durable Object reset because its code was updated."),
-			),
-		).toBe(true);
-		expect(
-			isTransientContainerReset(
-				new Error(
-					"Container error: Error: Runtime signalled the container to exit due to a new version.",
-				),
-			),
-		).toBe(true);
-	});
-
-	it("matches no-instance-available (503) and failed-to-start (500) — RECORDS-25 / RECORDS-24", () => {
-		expect(
-			isTransientContainerReset(
-				new Error(
-					"enhance container 503: There is no Container instance available at this time.",
-				),
-			),
-		).toBe(true);
-		expect(
-			isTransientContainerReset(
-				new Error(
-					"matte container 500: Failed to start container: Network connection lost.",
-				),
-			),
-		).toBe(true);
-	});
-
-	it("is false for unrelated failures — so only the reset is retried", () => {
-		expect(
-			isTransientContainerReset(new Error("matte container 500: boom")),
-		).toBe(false);
-		expect(isTransientContainerReset(null)).toBe(false);
-	});
-
-	it("drives withRetry: retries a reset, fails fast on anything else", async () => {
-		// Mirrors postToContainer's classifier — the reset stays retryable, everything
-		// else is wrapped NonRetryableError so it surfaces at once.
-		const wrap = (err: unknown) => {
-			if (isTransientContainerReset(err)) throw err;
-			throw new NonRetryableError(
-				err instanceof Error ? err.message : String(err),
-			);
-		};
-
-		const reset = new Error("object to be reset");
-		const resettingThenOk = vi
-			.fn()
-			.mockRejectedValueOnce(reset)
-			.mockResolvedValue("ok");
-		await expect(
-			withRetry(() => resettingThenOk().catch(wrap), opts),
-		).resolves.toBe("ok");
-		expect(resettingThenOk).toHaveBeenCalledTimes(2);
-
-		const other = vi.fn().mockRejectedValue(new Error("500 boom"));
-		await expect(
-			withRetry(() => other().catch(wrap), opts),
-		).rejects.toBeInstanceOf(NonRetryableError);
-		// Non-reset error fails fast — one call, not the full 3.
-		expect(other).toHaveBeenCalledTimes(1);
-	});
-});
-
-describe("isTransientImagesError", () => {
-	it("matches the Images binding connection error (9502), by code or by text", () => {
-		expect(
-			isTransientImagesError(
-				new Error(
-					"IMAGES_TRANSFORM_ERROR 9502: Images binding connection error",
-				),
-			),
-		).toBe(true);
-		expect(isTransientImagesError("Images binding connection error")).toBe(
-			true,
-		);
-	});
-
-	it("is false for a corrupt/undecodable image and other failures — so only a blip retries", () => {
-		expect(
-			isTransientImagesError(
-				new Error("IMAGES_TRANSFORM_ERROR 9412: input is not an image"),
-			),
-		).toBe(false);
-		expect(isTransientImagesError(new Error("decode failed"))).toBe(false);
-		expect(isTransientImagesError(null)).toBe(false);
 	});
 });
 

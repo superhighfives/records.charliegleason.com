@@ -33,9 +33,10 @@ import { VinylDisc } from "#/components/vinyl-disc";
 import type { Record } from "#/db/schema";
 import { parseColorPalette } from "#/lib/color-palette";
 import { DEFAULT_COLOR_NAME } from "#/lib/colors";
-import { displayCoverKey, displayMatteKey, photoUrl } from "#/lib/cover";
+import { displayCoverKey, photoUrl } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { recordPath } from "#/lib/records-path";
+import { sleeveEdgeClipPath } from "#/lib/sleeve-edge";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney, parseValueBreakdown } from "#/lib/value";
 
@@ -175,22 +176,21 @@ function AdminValuation({ record }: { record: PanelRecord }) {
 }
 
 /**
- * The panel's header artwork: the floating matte (transparent, true-edged sleeve
- * with a baked shadow) when the record has one, falling back to the square cover
- * and then a placeholder. Tapping it opens a lightbox of the full cover.
- * Positioning is supplied by the caller via `className` so it can overhang the
- * header edge.
+ * The panel's header artwork: the square cover with its per-record sleeve edge
+ * (see {@link sleeveEdgeClipPath}), falling back to a placeholder. Tapping it
+ * opens a lightbox of the full cover. Positioning is supplied by the caller via
+ * `className` so it can overhang the header edge.
  */
 function CoverZoom({
 	coverKey,
-	matteKey,
+	seed,
 	className,
 	onOpenChange,
 	onReveal,
-	admin = false,
 }: {
 	coverKey: string | null;
-	matteKey: string | null;
+	/** Seeds the sleeve edge — the record id, matching its grid tile. */
+	seed: number;
 	className?: string;
 	/**
 	 * Notified when the lightbox opens/closes so the panel can gate its arrow-key
@@ -200,14 +200,7 @@ function CoverZoom({
 	onOpenChange?: (open: boolean) => void;
 	/** Fires once the thumbnail has faded in — see {@link FadeImage}'s `onReady`. */
 	onReveal?: () => void;
-	/** Admin drawer: show the matte's transparency on a checkerboard (mirrors
-	 *  {@link ProPreview}'s edit-page treatment) so alpha fraying is visible
-	 *  without opening the edit page. */
-	admin?: boolean;
 }) {
-	// Matte preferred as the thumbnail; the cover is what the lightbox blows up.
-	const thumbKey = matteKey ?? coverKey;
-	const zoomKey = coverKey ?? thumbKey;
 	// 500, not some smaller width tuned to this `w-44` (176px) rotated
 	// thumbnail: it matches the grid tile's own default cover width (see
 	// `collection-grid.tsx`), so this request is a browser cache *hit* off the
@@ -215,8 +208,8 @@ function CoverZoom({
 	// resize — the whole reason `instant` (below) has anything to show
 	// instantly. A spanning grid tile requests 900 instead, which this still
 	// misses, but that's the minority case.
-	const thumbSrc = thumbKey ? photoUrl(thumbKey, 500) : null;
-	const zoomSrc = zoomKey ? photoUrl(zoomKey, 1600) : null;
+	const thumbSrc = coverKey ? photoUrl(coverKey, 500) : null;
+	const zoomSrc = coverKey ? photoUrl(coverKey, 1600) : null;
 	if (!thumbSrc || !zoomSrc) {
 		return (
 			<div className={className}>
@@ -228,19 +221,11 @@ function CoverZoom({
 		<ImageZoom
 			src={zoomSrc}
 			alt="cover"
-			className={className}
+			// `drop-shadow` on the wrapper, not the image: the image's clip-path
+			// would cut a box-shadow off, but a parent filter follows the clipped
+			// outline.
+			className={cn("drop-shadow-xl", className)}
 			onOpenChange={onOpenChange}
-			// A checkerboard behind the matte, so its transparent margin + soft
-			// edges read as transparency (not a solid fill) — mirrors ProPreview.
-			style={
-				admin && matteKey
-					? {
-							backgroundImage:
-								"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
-							backgroundSize: "12px 12px",
-						}
-					: undefined
-			}
 		>
 			<FadeImage
 				src={thumbSrc}
@@ -251,12 +236,8 @@ function CoverZoom({
 				// an image that's already sitting in cache, which reads as an
 				// unwanted flicker/reload rather than a real load-in.
 				instant
-				className={cn(
-					"size-full rotate-3",
-					matteKey
-						? "object-contain drop-shadow-xl"
-						: "rounded-sm object-cover shadow-lg",
-				)}
+				className="size-full rotate-3 object-cover"
+				style={{ clipPath: sleeveEdgeClipPath(seed) }}
 			/>
 		</ImageZoom>
 	);
@@ -353,8 +334,6 @@ export function RecordPanel({
 	// Admin drawer falls back to the raw capture so an in-progress record still
 	// shows an image; the public panel shows only an approved photo (else nothing).
 	const cover = displayCoverKey(record, { includeCapture: admin });
-	// The floating matte (only present on approved photos) is the header thumbnail.
-	const matte = displayMatteKey(record);
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
@@ -379,7 +358,7 @@ export function RecordPanel({
 
 	// The header is a square cover hero with the title copy pinned to its bottom
 	// edge. It sticks with a negative `top` so the empty top of the square scrolls
-	// away and only the bottom band — the title and matte — stays fixed. That offset
+	// away and only the bottom band — the title and thumbnail — stays fixed. That offset
 	// is (title height − hero height); both depend on layout (panel width, title
 	// length), so it's measured here and kept current with a ResizeObserver rather
 	// than hard-coded.
@@ -396,7 +375,7 @@ export function RecordPanel({
 		let raf = 0;
 		// `--hero` runs 0 (at the top) → 1 (once pinned); the backdrop reads it to
 		// fade out as the hero collapses, so the pinned band is just the title and
-		// matte. Written straight onto the node, so scrolling never re-renders.
+		// thumbnail. Written straight onto the node, so scrolling never re-renders.
 		const paint = () => {
 			raf = 0;
 			el.style.setProperty(
@@ -453,13 +432,13 @@ export function RecordPanel({
 				</div>
 			</SignedIn>
 			{/* The panel scrolls in one column. The header is a square cover hero: the
-			    cover (never the matte) heavily faded as a backdrop, the title copy at
-			    its bottom edge, and the matte floating over that edge. It sticks with a
+			    cover heavily faded as a backdrop, the title copy at
+			    its bottom edge, and the cover thumbnail floating over that edge. It sticks with a
 			    negative `top` (set in the effect above) so the empty top scrolls away
-			    and only the bottom band — title and matte — stays pinned while the
+			    and only the bottom band — title and thumbnail — stays pinned while the
 			    specs and notes scroll beneath. `bg-background` hides that content
 			    behind the band, and the backdrop fades out via `--hero` as it
-			    collapses, leaving just the title and matte once pinned. */}
+			    collapses, leaving just the title and thumbnail once pinned. */}
 			<div ref={scrollRef} className="relative flex-1 overflow-y-auto">
 				<div
 					ref={headerRef}
@@ -563,9 +542,8 @@ export function RecordPanel({
 							// this static thumbnail has no hover) slides it out to a small
 							// permanent peek, delayed to start only once the cover's own fade
 							// has finished — see styles.css. Inset a bit (twMerge overrides the
-							// base `inset-0`): the matte thumbnail's own visible sleeve doesn't
-							// fill its whole square (it has a margin for the drop shadow), so a
-							// full-bleed disc reads as overflowing past the visible artwork
+							// base `inset-0`): the thumbnail is rotated and clipped to a slightly
+							// worn sleeve edge, so a full-bleed disc reads as overflowing past the visible artwork
 							// rather than peeking from behind it. The extra `scale` in
 							// `.vinyl-peek--static` below shrinks the disc a bit further still —
 							// the static peek's fixed translate distance (tuned to clear the
@@ -584,11 +562,10 @@ export function RecordPanel({
 						/>
 						<CoverZoom
 							coverKey={cover}
-							matteKey={matte}
+							seed={record.id}
 							onOpenChange={setZoomOpen}
 							onReveal={() => setCoverReady(true)}
 							className="relative size-full"
-							admin={admin}
 						/>
 					</div>
 				</div>

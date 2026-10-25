@@ -1,5 +1,7 @@
 # Brainstorm: a second "alpha / matte" sleeve image
 
+> **Retired 2026-10-25.** The alpha matte was removed in favour of a plain square crop with a CSS sleeve edge — see [`plans/in-progress/simplify-record-crop.md`](../plans/in-progress/simplify-record-crop.md). Kept as design history.
+
 _Status: brainstorm, not a spec. Written on the `claude/photo-generation-issues` branch to think through whether the tooling we just built opens up generating a transparent, true-edged version of each record alongside the square hero._
 
 ## The idea

@@ -9,10 +9,6 @@ import { runLinkHealthCheck } from "#/lib/master-health";
 const LINK_CHECK_CRON = "0 9 * * *";
 const DAILY_RECORD_CRON = "0 13 * * *";
 
-// Re-export the container Durable Object so wrangler can bind it (see wrangler.jsonc
-// `containers` + `durable_objects`). It fronts the matte render image in `containers/matte/`.
-export { MatteContainer } from "#/lib/matte-container";
-
 import { type AnalyzeMessage, handleAnalyzeBatch } from "#/lib/queue";
 
 /**

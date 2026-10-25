@@ -18,10 +18,6 @@ import {
 	useDiscogsSearch,
 } from "#/components/discogs-search-field";
 import { DuplicateBadge } from "#/components/duplicate-badge";
-import {
-	describeMatteAuditReason,
-	MatteAuditBadge,
-} from "#/components/matte-audit-badge";
 import { Pager } from "#/components/pager";
 import { ProPreview } from "#/components/pro-preview";
 import { RecordForm } from "#/components/record-form";
@@ -49,7 +45,7 @@ import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import { uploadReplacementCapture } from "#/lib/capture-upload";
-import { displayCoverKey, displayMatteKey } from "#/lib/cover";
+import { displayCoverKey } from "#/lib/cover";
 import type {
 	DiscogsCandidate,
 	DiscogsMasterCandidate,
@@ -57,7 +53,6 @@ import type {
 } from "#/lib/discogs";
 import { groupCandidates } from "#/lib/discogs-candidate";
 import { likelyDuplicateOf } from "#/lib/duplicates";
-import { hasMatteAuditFixReason } from "#/lib/photo-processing";
 import { orderRecordsForReview } from "#/lib/record-order";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
@@ -72,8 +67,6 @@ import {
 	publishRecord,
 	reframeRecord,
 	reprocessRecord,
-	retryFlaggedMattes,
-	retryProfessionalMatte,
 	unlinkCopy,
 	unpublishRecord,
 } from "#/lib/records";
@@ -148,7 +141,7 @@ function Knob({
 export const Route = createFileRoute("/admin/records/$id")({
 	// `edit` carries the editor-open state across back/next paging, so stepping to
 	// the next record lands straight back in the crop/tone editor — the whole point
-	// of the pager is to blitz through setting mattes without re-opening it each time.
+	// of the pager is to blitz through setting crops without re-opening it each time.
 	validateSearch: (
 		search: globalThis.Record<string, unknown>,
 	): { edit?: boolean } =>
@@ -809,43 +802,6 @@ function RecordDetail() {
 		}
 	}
 
-	// Re-run just the Magic matte after a record fell back to the deterministic path
-	// (the amber note below the capture actions). Re-enqueues stage 2 only — the cover
-	// stays live and swaps its matte in atomically if the AI attempt lands this time.
-	const retryMatte = useMutation({
-		mutationFn: () => retryProfessionalMatte({ data: { id: recordId } }),
-		onSuccess: async (row) => {
-			if (row)
-				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-			await invalidate();
-			toast.success("Retrying the Magic matte… this runs in the background.");
-		},
-		onError: (err) =>
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't retry the Magic matte.",
-			),
-	});
-
-	// Re-cut the matte after the "Audit covers" sweep flagged it (a tint, edge overrun, or
-	// under-crop) — same underlying action as the bulk "Retry flagged mattes" list action,
-	// scoped to just this record. Unlike `retryMatte` above, this runs regardless of
-	// `professionalAlphaSource` (an AI matte can be flagged too, not just a fallback).
-	const retryFlaggedMatte = useMutation({
-		mutationFn: () => retryFlaggedMattes({ data: [recordId] }),
-		onSuccess: async ({ count }) => {
-			await invalidate();
-			toast.success(
-				count > 0
-					? "Retrying the matte… this runs in the background."
-					: "Couldn't re-cut — the capture or cover this matte was built from is missing.",
-			);
-		},
-		onError: (err) =>
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't re-cut the matte.",
-			),
-	});
-
 	const retry = useMutation({
 		mutationFn: () => reprocessRecord({ data: recordId }),
 		onSuccess: invalidate,
@@ -1090,14 +1046,13 @@ function RecordDetail() {
 	const failure =
 		record.status === "failed" ? describeAnalysisError(record.error) : null;
 
-	// A background Apply job (reframe + enhance + matte) is queued or running for this
-	// record — the record view polls, so this flips true/false on its own. Drives the
-	// "Generating photo…" hint next to the capture actions below.
+	// A background Apply job is queued or running for this record — the record view
+	// polls, so this flips true/false on its own. Drives the "Generating photo…" hint next to the capture actions below.
 	const proGenerating =
 		record.professionalJobStatus === "queued" ||
 		record.professionalJobStatus === "processing";
 
-	// Whether the record has a cover/matte that would actually show publicly — the
+	// Whether the record has a cover that would actually show publicly — the
 	// approved professional photo (displayCoverKey without the capture fallback).
 	// Publishing needs this as well as an album; without it the record would go live
 	// as a placeholder.
@@ -1108,13 +1063,6 @@ function RecordDetail() {
 	const headerCoverKey = displayCoverKey(record, { includeCapture: true });
 	const headerPhotoSrc = headerCoverKey
 		? `/api/photos/${headerCoverKey}`
-		: null;
-
-	// When an approved professional matte exists, float it over the bottom-right
-	// corner of the header cover as a small preview of the public grid treatment.
-	const headerMatteKey = displayMatteKey(record);
-	const headerMatteSrc = headerMatteKey
-		? `/api/photos/${headerMatteKey}`
 		: null;
 
 	return (
@@ -1147,16 +1095,6 @@ function RecordDetail() {
 							src={headerPhotoSrc}
 							alt="Record photo"
 							className="aspect-square w-full shrink-0 sm:w-1/2"
-							overlay={
-								headerMatteSrc ? (
-									<img
-										src={headerMatteSrc}
-										alt=""
-										aria-hidden
-										className="pointer-events-none absolute -bottom-[10px] right-[10px] w-1/4"
-									/>
-								) : undefined
-							}
 						/>
 					)}
 					<div className="min-w-0 flex-1">
@@ -1287,82 +1225,15 @@ function RecordDetail() {
 						record.professionalError && (
 							<span className="text-xs text-red-600 dark:text-red-400">
 								{/* The recovery guidance lives here (not in the error strings)
-								    so every professional failure — reaper note or matte failure
-								    — surfaces it exactly once. A line break separates it from the
+								    so every professional failure surfaces it exactly once. A line break separates it from the
 								    error, which may or may not end in punctuation. */}
 								Last generation failed: {record.professionalError}
 								<br />
 								Open the editor and Apply again to retry.
 							</span>
 						)}
-					{/* A non-fatal note on a *successful* render — e.g. the Magic matte fell back
-					    to the deterministic path. Gated on approved + idle (not just "job not
-					    failed"), because `professionalError` is shared with the free capture-time
-					    pipeline, which sets `professionalStatus: "failed"` (never touching
-					    professionalJobStatus) — a real failure we must not repaint as a benign
-					    amber note. Approved+idle uniquely means the queued Apply landed a live
-					    cover and left a downgrade note, so no red / retry prompt. */}
-					{record.professionalStatus === "approved" &&
-						record.professionalJobStatus === "idle" &&
-						record.professionalError && (
-							<span className="text-xs text-amber-600 dark:text-amber-400">
-								{record.professionalError}
-								{/* Offer a one-click re-run only when we're actually on the
-								    deterministic matte (the case a retry can upgrade) — the AI
-								    stage re-enqueues on its own, leaving the fallback cover live
-								    until/unless it succeeds. */}
-								{record.professionalAlphaSource === "deterministic" && (
-									<>
-										{" "}
-										<button
-											type="button"
-											disabled={retryMatte.isPending}
-											onClick={() => retryMatte.mutate()}
-											className="font-medium underline underline-offset-4 disabled:opacity-60"
-										>
-											{retryMatte.isPending ? "Retrying…" : "Retry Magic matte"}
-										</button>
-									</>
-								)}
-							</span>
-						)}
 				</div>
 			)}
-
-			{/* The offline "Audit covers" sweep (matte-audit.ts) flagged this record's
-			    stored matte for a likely defect — independent of the deterministic-fallback
-			    note above, since an *AI* matte can be flagged too (an edge overrun or an
-			    under-crop the model itself produced). "Re-cut this matte" runs regardless of
-			    `professionalAlphaSource`. A `tint`-only result doesn't get this actionable
-			    box — see the minor colour-cast note below instead. */}
-			{record.professionalMatteAuditReason &&
-				(hasMatteAuditFixReason(record.professionalMatteAuditReason) ? (
-					<div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40">
-						<MatteAuditBadge reason={record.professionalMatteAuditReason} />
-						<p className="min-w-0 flex-1 text-xs text-red-700 dark:text-red-300">
-							Flagged for{" "}
-							{describeMatteAuditReason(record.professionalMatteAuditReason)}.
-						</p>
-						<button
-							type="button"
-							disabled={retryFlaggedMatte.isPending}
-							onClick={() => retryFlaggedMatte.mutate()}
-							className="shrink-0 text-xs font-medium text-red-600 underline underline-offset-4 disabled:opacity-60 dark:text-red-400"
-						>
-							{retryFlaggedMatte.isPending ? "Retrying…" : "Re-cut this matte"}
-						</button>
-					</div>
-				) : (
-					// Colour cast alone is a minor, non-gating note — no re-cut action, just a
-					// heads-up (see `hasMatteAuditFixReason`).
-					<div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
-						<MatteAuditBadge reason={record.professionalMatteAuditReason} />
-						<p className="min-w-0 flex-1 text-xs text-amber-700 dark:text-amber-300">
-							{describeMatteAuditReason(record.professionalMatteAuditReason)}{" "}
-							noted — minor, not flagged for a re-cut.
-						</p>
-					</div>
-				))}
 
 			{/* In-flight: just wait and poll. */}
 			{inFlight && (
@@ -1737,7 +1608,7 @@ function RecordDetail() {
 							defaultValues={toForm(record, picked, pickedMaster)}
 							submitLabel={
 								// Publishing needs an identity (album and/or release) *and* an
-								// approved cover/matte. Without either, the save can only keep
+								// approved cover. Without either, the save can only keep
 								// the record as a draft.
 								!hasIdentity || !hasPublicCover
 									? "Save draft"
@@ -1782,7 +1653,7 @@ function RecordDetail() {
 										"Saved as a draft. Link an album or release to publish it.",
 									);
 								} else if (result.needsCover) {
-									// Saved as a draft — album linked, but no approved cover/matte to
+									// Saved as a draft — album linked, but no approved cover to
 									// display, so it can't go live yet.
 									toast.warning(
 										"Saved as a draft. Approve a cover photo to publish it.",
@@ -1909,7 +1780,7 @@ function RecordEditorHost() {
 		[navigate, id, editParam],
 	);
 
-	// ← / → page through the collection, so you can blitz through setting mattes from
+	// ← / → page through the collection, so you can blitz through setting crops from
 	// the keyboard — including from inside the editor, where the crop handles and tone
 	// sliders own the arrows only while they're focused. useHotkeys matches the *bare*
 	// arrows only, so modified combos — notably Cmd/Alt+Arrow for browser back/forward —
@@ -1951,7 +1822,7 @@ function RecordEditorHost() {
 				<DialogHeader>
 					{/* Title + the same back/next pager as the page header. `pr-8` keeps it
 					    clear of the dialog's absolute close button. Paging from here keeps the
-					    editor open so you can run straight down the collection setting mattes. */}
+					    editor open so you can run straight down the collection setting crops. */}
 					<div className="flex items-start justify-between gap-4 pr-8">
 						<DialogTitle>Edit image</DialogTitle>
 						<Pager
@@ -1967,8 +1838,7 @@ function RecordEditorHost() {
 					<DialogDescription>
 						Drag the outer frame onto the background and the inner one onto the
 						sleeve (or auto-detect), then tune the tone — the preview updates
-						live. Apply runs the whole pipeline (enhance + Magic matte) and can
-						take a minute.
+						live. Apply re-warps the square and makes it the live cover.
 					</DialogDescription>
 				</DialogHeader>
 				{record?.capturePhotoKey && (
@@ -2035,11 +1905,8 @@ function RecordEditorBody({
 			setBand(parseCornerBand(record.sleeveCornersJson));
 		}
 	}, [record.sleeveCornersJson]);
-	// Which output the live editing preview shows — the matte (default, the primary
-	// render) or the square cover — toggled by the switch in the preview's top-right.
-	const [previewMode, setPreviewMode] = useState<"matte" | "cover">("matte");
 	// Which panel below the crop/preview shows — the tone knobs ("Edit") or the links to
-	// the stored renders ("Outputs"). Same little tab style as the matte/cover toggle.
+	// the stored renders ("Outputs").
 	const [toolTab, setToolTab] = useState<"edit" | "outputs">("edit");
 	// `/api/photos/…` srcs of saved renders that failed to load, so a stale/missing key
 	// hides that image instead of showing a broken-image glyph.
@@ -2059,10 +1926,10 @@ function RecordEditorBody({
 		wasGeneratingRef.current = generating;
 	}, [record.professionalJobStatus]);
 
-	// Apply the edit: persist the current corner band + tone and enqueue the paid pipeline
-	// (reframe + Real-ESRGAN enhance + Magic matte), which runs in the background. Returns
-	// immediately; the editor stays open showing the regenerating state, and the record
-	// view polls and swaps in the generated cover + matte in place when it lands.
+	// Apply the edit: persist the current corner band + tone and enqueue the re-warp, which
+	// runs in the background. Returns immediately; the editor stays open showing the
+	// regenerating state, and the record view polls and swaps in the new cover in place
+	// when it lands.
 	const applyPro = useMutation({
 		mutationFn: () => reframeRecord({ data: { id: recordId, band, params } }),
 		onSuccess: async (row) => {
@@ -2076,29 +1943,6 @@ function RecordEditorBody({
 		onError: (err) =>
 			toast.error(
 				err instanceof Error ? err.message : "Couldn't apply the changes.",
-			),
-	});
-
-	// Re-roll ONLY the Magic matte for the live cover, without touching the crop or tone.
-	// The matte is the non-deterministic AI step, so a re-run can shake off an artifact (a
-	// background halo, or an edge biting into the sleeve) that the last cut happened to
-	// land — the square cover rides through unchanged (no paid reframe + Real-ESRGAN
-	// re-render), only the matte variants are re-cut, swapping in atomically if it lands.
-	// Surfaced as "Re-apply matte" in the footer when the cover is live + unchanged (the
-	// one state where the primary button is otherwise just a plain Close).
-	const reapplyMatte = useMutation({
-		mutationFn: () => retryProfessionalMatte({ data: { id: recordId } }),
-		onSuccess: async (row) => {
-			if (row)
-				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
-			await invalidate();
-			toast.success(
-				"Re-applying the Magic matte… this runs in the background.",
-			);
-		},
-		onError: (err) =>
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't re-apply the matte.",
 			),
 	});
 
@@ -2143,13 +1987,13 @@ function RecordEditorBody({
 	//  - "live"    → approved *and* unchanged, so the primary button is a plain Close;
 	//  - "Re-apply" only makes sense against a live cover; anything else is a first Apply.
 	const isApproved = record.professionalStatus === "approved";
-	// The last background job ended in an error (e.g. a transient matte failure that
-	// preserved the old cover/matte). The primary button offers a retry even when the
+	// The last background job ended in an error (the old cover stays live). The primary
+	// button offers a retry even when the
 	// cover is live and unchanged, so a hiccup isn't a dead end behind a plain "Close".
 	const jobFailed = record.professionalJobStatus === "failed";
 	const proIsLive = isApproved && !isDirty;
-	// A background Apply job (reframe + enhance + matte) is queued or running for this
-	// record — the record view polls, so this flips true/false on its own.
+	// A background Apply job is queued or running for this record — the record view
+	// polls, so this flips true/false on its own.
 	const proGenerating =
 		record.professionalJobStatus === "queued" ||
 		record.professionalJobStatus === "processing";
@@ -2158,12 +2002,10 @@ function RecordEditorBody({
 	const editorBusy = applyPro.isPending || proGenerating;
 
 	// Links to every stored render for this record, for the "Outputs" tab — the original
-	// capture, the square hero, and both matte variants. Only the keys that exist show.
+	// capture and the square cover. Only the keys that exist show.
 	const referenceImages = [
 		{ label: "Original capture", key: record.capturePhotoKey },
 		{ label: "Square cover", key: record.professionalImageKey },
-		{ label: "Matte (shadow)", key: record.professionalAlphaKey },
-		{ label: "Matte (cutout)", key: record.professionalAlphaCutoutKey },
 	].filter((r): r is { label: string; key: string } => r.key != null);
 
 	return (
@@ -2202,90 +2044,45 @@ function RecordEditorBody({
 						<p className="text-xs font-medium text-muted-foreground">
 							{proIsLive ? "Generated" : "Preview"}
 						</p>
-						{/* Matte / Cover toggle — picks which saved render the generated
-						    view shows. Only shown once generated: both saved renders are
-						    high-res, whereas the live editing preview's client-side matte
-						    is too low-res to be useful, so editing just shows the cover. */}
-						{proIsLive && record.capturePhotoKey && (
-							<div className="flex items-center gap-3 text-[10px]">
-								{(["matte", "cover"] as const).map((m) => (
-									<button
-										key={m}
-										type="button"
-										aria-pressed={previewMode === m}
-										onClick={() => setPreviewMode(m)}
-										className={cn(
-											"capitalize transition-colors",
-											previewMode === m
-												? "text-foreground underline underline-offset-4"
-												: "text-muted-foreground/70 hover:text-foreground",
-										)}
-									>
-										{m}
-									</button>
-								))}
-							</div>
-						)}
 					</div>
 					{record.capturePhotoKey &&
 						(proGenerating ? (
 							// A job is running: don't keep showing the stale saved render
-							// (it "flicks" the old matte back in until the swap). Show a
+							// (it "flicks" the old cover back in until the swap). Show a
 							// neutral placeholder + spinner so it reads as regenerating.
 							<div className="flex aspect-square items-center justify-center rounded-md border bg-muted">
 								<Loader2 className="size-6 animate-spin text-muted-foreground" />
 							</div>
 						) : proIsLive ? (
 							(() => {
-								// Generated + unchanged: show the saved render for the selected
-								// tab in high res. Editing any corner/knob drops back to the
-								// live preview below until Apply/Reset.
-								const saved =
-									previewMode === "matte"
-										? { key: record.professionalAlphaKey, checker: true }
-										: {
-												key: record.professionalImageKey,
-												checker: false,
-											};
-								const src = saved.key ? `/api/photos/${saved.key}` : null;
+								// Generated + unchanged: show the saved cover in high res.
+								// Editing any corner/knob drops back to the live preview below
+								// until Apply/Reset.
+								const key = record.professionalImageKey;
+								const src = key ? `/api/photos/${key}` : null;
 								if (!src || savedImgError.has(src)) {
 									return (
 										<div className="flex aspect-square items-center justify-center rounded-md border bg-muted/30 text-xs text-muted-foreground">
-											No {previewMode} generated
+											No cover generated
 										</div>
 									);
 								}
 								return (
-									<div
-										className="overflow-hidden rounded-md border bg-background"
-										style={
-											saved.checker
-												? {
-														backgroundImage:
-															"repeating-conic-gradient(hsl(var(--muted)) 0% 25%, transparent 0% 50%)",
-														backgroundSize: "24px 24px",
-													}
-												: undefined
-										}
-									>
+									<div className="overflow-hidden rounded-md border bg-background">
 										<img
 											src={src}
-											alt={`Saved ${previewMode}`}
+											alt="Saved cover"
 											onError={() =>
 												setSavedImgError((s) => new Set(s).add(src))
 											}
-											className={cn(
-												"block aspect-square size-full",
-												saved.checker ? "object-contain" : "object-cover",
-											)}
+											className="block aspect-square size-full object-cover"
 										/>
 									</div>
 								);
 							})()
 						) : (
 							// Editing (never applied, or dirty): the live client-side cover
-							// preview, updating as band/knobs change. No matte here — the
-							// client-side matte is too low-res; the real one comes on Apply.
+							// preview, updating as band/knobs change.
 							<ProPreview
 								src={`/api/photos/${record.capturePhotoKey}`}
 								band={band}
@@ -2295,8 +2092,7 @@ function RecordEditorBody({
 				</div>
 			</div>
 
-			{/* Edit / Outputs tabs — the tone knobs vs links to the stored renders,
-			    switched with the same little tab style as the matte/cover toggle. */}
+			{/* Edit / Outputs tabs — the tone knobs vs links to the stored renders. */}
 			<div className="space-y-3">
 				<div className="flex items-center gap-3 text-[10px]">
 					{(
@@ -2428,12 +2224,7 @@ function RecordEditorBody({
 						type="button"
 						size="sm"
 						variant="destructive"
-						disabled={
-							removeCover.isPending ||
-							applyPro.isPending ||
-							editorBusy ||
-							reapplyMatte.isPending
-						}
+						disabled={removeCover.isPending || applyPro.isPending || editorBusy}
 						onClick={() => removeCover.mutate()}
 					>
 						{removeCover.isPending ? "Removing…" : "Remove cover"}
@@ -2458,26 +2249,6 @@ function RecordEditorBody({
 					>
 						Reset
 					</Button>
-					{/* Re-roll just the Magic matte on a live, unchanged cover — the one
-					    state where the primary button is otherwise a dead-end Close. The
-					    matte is the non-deterministic AI step, so this is the one-click way
-					    to shake off an artifact (a background halo, an edge biting into the
-					    sleeve) without nudging a knob or paying for a full re-render. Hidden
-					    while editing (the primary "Re-apply" already re-cuts the matte) and
-					    on a failed job (the primary "Retry" is the recovery there). */}
-					{proIsLive && !jobFailed && record.professionalImageKey && (
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							disabled={editorBusy || reapplyMatte.isPending}
-							onClick={() => reapplyMatte.mutate()}
-						>
-							{editorBusy || reapplyMatte.isPending
-								? "Re-applying…"
-								: "Re-apply matte"}
-						</Button>
-					)}
 					{/* One primary action, three states: Apply (nothing live yet),
 					    Re-apply (live, but the crop/tone has been nudged), or a
 					    plain Close (live and unchanged — nothing left to do). Only
@@ -2493,9 +2264,7 @@ function RecordEditorBody({
 						// clamp-colliding trimap can't be applied. When live + idle it's
 						// a plain Close, which is always allowed.
 						disabled={
-							editorBusy ||
-							reapplyMatte.isPending ||
-							(!(proIsLive && !jobFailed) && !isBandValid(band))
+							editorBusy || (!(proIsLive && !jobFailed) && !isBandValid(band))
 						}
 						onClick={() =>
 							proIsLive && !jobFailed ? onClose() : applyPro.mutate()
