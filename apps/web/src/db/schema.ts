@@ -320,3 +320,17 @@ export type MatteAuditState = typeof matteAuditState.$inferSelect;
 
 /** A fine-grained display-only sub-step of a running pipeline (see `records.jobStep`). */
 export type JobStep = NonNullable<Record["jobStep"]>;
+
+/**
+ * Small site-wide settings the admin edits, one JSON blob per `key` — e.g.
+ * `"filters"`, the public filter strip's config (see `filter-settings.ts`).
+ * Readers parse and merge over defaults, so a missing row or an older shape
+ * still yields a complete config.
+ */
+export const settings = sqliteTable("settings", {
+	key: text("key").primaryKey(),
+	value: text("value").notNull(),
+	updatedAt: integer("updated_at", { mode: "timestamp" }).default(
+		sql`(unixepoch())`,
+	),
+});

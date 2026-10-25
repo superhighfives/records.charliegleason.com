@@ -178,6 +178,48 @@ export const setColorTranslucent = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Rename a color chip — the colors page's inline edit. Names are the dedup key
+ * (unique), so renaming onto an existing name is refused rather than merged.
+ * The texture is kept as-is; regenerate it separately if the new name
+ * describes a different look. {@link DEFAULT_COLOR_NAME} can't be renamed:
+ * record creation and every reassignment look it up by name.
+ */
+export const renameColor = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) =>
+		z
+			.object({
+				colorId: z.number().int(),
+				name: z.string().trim().min(1, "Color name is required"),
+			})
+			.parse(data),
+	)
+	.handler(({ data: { colorId, name } }) =>
+		Sentry.startSpan({ name: "renameColor" }, async () => {
+			const db = getDb(env.DB);
+			const [color] = await db
+				.select({ name: colors.name })
+				.from(colors)
+				.where(eq(colors.id, colorId))
+				.limit(1);
+			if (!color) throw new Error("That color no longer exists.");
+			if (color.name === name) return;
+			if (color.name === DEFAULT_COLOR_NAME) {
+				throw new Error(
+					`"${DEFAULT_COLOR_NAME}" can't be renamed — it's the default records fall back to.`,
+				);
+			}
+			const [clash] = await db
+				.select({ id: colors.id })
+				.from(colors)
+				.where(eq(colors.name, name))
+				.limit(1);
+			if (clash) throw new Error(`There's already a color called "${name}".`);
+			await db.update(colors).set({ name }).where(eq(colors.id, colorId));
+		}),
+	);
+
+/**
  * Upload a color's reference vinyl texture directly, in place of the
  * AI-generated one — the combobox's upload affordance. Same storage shape as a
  * generated texture (see `color-texture-upload.ts`), so `VinylDisc` can't tell
