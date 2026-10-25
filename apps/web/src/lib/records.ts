@@ -86,6 +86,7 @@ import {
 	parseNormalizedCornerBand,
 	serializeCornerBand,
 } from "#/lib/sleeve-corners";
+import { pitchforkAfterRematch } from "#/lib/the-fork";
 
 /**
  * Server-side data access for the records collection.
@@ -916,10 +917,19 @@ export const publishRecord = createServerFn({ method: "POST" })
 				// (release) — some releases have no master group on Discogs at all.
 				const hasIdentity = Boolean(masterId || discogsId);
 
+				// Picking the right match renames the album; the analysis-time score
+				// was for the wrong one (see `pitchforkRematchAction`).
+				const pitchfork = await pitchforkAfterRematch(
+					current,
+					data,
+					data.pitchforkScore,
+				);
+
 				const [row] = await db
 					.update(records)
 					.set({
 						...data,
+						...pitchfork,
 						masterId,
 						masterUrl,
 						discogsId,
@@ -1343,9 +1353,26 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 			Sentry.startSpan({ name: "assignRecordIdentity" }, async () => {
 				const db = getDb(env.DB);
 				const now = new Date();
+				// A pick that renames the album re-scores it — the old score was for
+				// whatever analysis guessed (see `pitchforkRematchAction`).
+				const [current] = await db
+					.select({
+						artist: records.artist,
+						title: records.title,
+						pitchforkScore: records.pitchforkScore,
+					})
+					.from(records)
+					.where(eq(records.id, id))
+					.limit(1);
+				if (!current) return null;
+				const pitchfork = await pitchforkAfterRematch(current, {
+					artist: meta.artist || current.artist,
+					title: meta.title || current.title,
+				});
 				const [row] = await db
 					.update(records)
 					.set({
+						...pitchfork,
 						// Set a link only when provided. Re-linking is the fix for a broken
 						// link, so clear the matching health flag and stamp the check
 						// (optimistic — the cron re-validates and re-flags if the new link

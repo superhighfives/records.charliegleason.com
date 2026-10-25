@@ -77,3 +77,66 @@ export async function getPitchforkScore(
 		return null;
 	}
 }
+
+interface AlbumName {
+	artist: string | null;
+	title: string | null;
+}
+
+/** Same artist and title, ignoring case, accents and punctuation. */
+export function sameAlbum(a: AlbumName, b: AlbumName): boolean {
+	return (
+		normalize(a.artist ?? "") === normalize(b.artist ?? "") &&
+		normalize(a.title ?? "") === normalize(b.title ?? "")
+	);
+}
+
+/**
+ * What a save should do with the Pitchfork fields, given the album before and
+ * after it. Analysis scores whatever it *guessed* the record was, so when the
+ * collector picks the right match the old score belongs to a different album:
+ *  - "keep": the album didn't change — leave the score alone.
+ *  - "manual": it changed, but a score was typed in that differs from the old
+ *    one — trust it, but drop the old review link.
+ *  - "lookup": it changed and the score is untouched (or blank, or not part
+ *    of this save) — look the new album up, clearing the score if there's none.
+ */
+export function pitchforkRematchAction(
+	prev: AlbumName & { pitchforkScore: number | null },
+	next: AlbumName,
+	typedScore?: number | null,
+): "keep" | "manual" | "lookup" {
+	if (sameAlbum(prev, next)) return "keep";
+	if (typedScore != null && typedScore !== prev.pitchforkScore) return "manual";
+	return "lookup";
+}
+
+/**
+ * The Pitchfork fields to write for a save that may have changed the album
+ * (see {@link pitchforkRematchAction}), or `null` to leave them untouched.
+ */
+export async function pitchforkAfterRematch(
+	prev: AlbumName & { pitchforkScore: number | null },
+	next: AlbumName,
+	typedScore?: number | null,
+): Promise<{
+	pitchforkScore: number | null;
+	pitchforkUrl: string | null;
+} | null> {
+	switch (pitchforkRematchAction(prev, next, typedScore)) {
+		case "keep":
+			return null;
+		case "manual":
+			return { pitchforkScore: typedScore ?? null, pitchforkUrl: null };
+		case "lookup": {
+			const found = await getPitchforkScore(
+				next.artist ?? "",
+				next.title ?? "",
+			);
+			return {
+				pitchforkScore: found?.score ?? null,
+				pitchforkUrl: found?.url ?? null,
+			};
+		}
+	}
+}
