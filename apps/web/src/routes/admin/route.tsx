@@ -9,7 +9,6 @@ import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 
 import { QueueMenu } from "#/components/queue-menu";
-import { SettingsModal } from "#/components/settings-modal";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { isAdmin } from "#/lib/roles";
 
@@ -25,6 +24,14 @@ import { isAdmin } from "#/lib/roles";
  * is where `AdminSessionError` actually gets caught.
  */
 export const Route = createFileRoute("/admin")({ component: AdminLayout });
+
+/** The admin's own pages, linked from the header next to the records list. */
+const ADMIN_PAGES = [
+	{ to: "/admin/colors", label: "Colors" },
+	{ to: "/admin/filters", label: "Filters" },
+	{ to: "/admin/review", label: "Review" },
+	{ to: "/admin/settings", label: "Settings" },
+] as const;
 
 function AdminLayout() {
 	return (
@@ -66,7 +73,7 @@ function AdminGate() {
 	return (
 		<HotkeysProvider>
 			<div className="flex min-h-dvh flex-col">
-				<header className="flex items-center justify-between border-b border-border px-6 py-4">
+				<header className="flex items-center justify-between gap-4 border-b border-border px-6 py-4">
 					<nav className="flex items-center gap-2">
 						<span className="size-2 rounded-full bg-brand" />
 						<Link to="/" className="font-semibold tracking-tight">
@@ -76,9 +83,26 @@ function AdminGate() {
 							/ admin
 						</Link>
 					</nav>
+					<nav
+						aria-label="Admin pages"
+						className="-my-2 flex min-w-0 items-center gap-1 overflow-x-auto"
+					>
+						{ADMIN_PAGES.map((page) => (
+							<Link
+								key={page.to}
+								to={page.to}
+								className="rounded-md px-3 py-1.5 text-sm whitespace-nowrap text-muted-foreground hover:bg-accent hover:text-foreground"
+								activeProps={{
+									className: "bg-accent text-foreground",
+									"aria-current": "page",
+								}}
+							>
+								{page.label}
+							</Link>
+						))}
+					</nav>
 					<div className="flex items-center gap-3">
 						<QueueMenu />
-						<SettingsModal />
 						<ThemeToggle />
 						<UserButton />
 					</div>

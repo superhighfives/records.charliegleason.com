@@ -3,7 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { cornerReviewQueueQueryOptions } from "#/lib/records-queries";
 import { cn } from "#/lib/utils";
 
-export const Route = createFileRoute("/admin/corner-review")({
+export const Route = createFileRoute("/admin/review")({
 	component: CornerReview,
 });
 
