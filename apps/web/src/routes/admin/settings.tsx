@@ -20,7 +20,7 @@ function SettingsPage() {
 	const [importOpen, setImportOpen] = useState(false);
 
 	return (
-		<div className="mx-auto w-full max-w-3xl space-y-4 p-4">
+		<div className="mx-auto w-full max-w-2xl space-y-4">
 			<header className="space-y-1">
 				<h1 className="text-lg font-semibold">Settings</h1>
 				<p className="text-sm text-muted-foreground">

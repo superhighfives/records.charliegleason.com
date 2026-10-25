@@ -25,8 +25,9 @@ import { isAdmin } from "#/lib/roles";
  */
 export const Route = createFileRoute("/admin")({ component: AdminLayout });
 
-/** The admin's own pages, linked from the header next to the records list. */
+/** The admin's pages, linked from the header. */
 const ADMIN_PAGES = [
+	{ to: "/admin", label: "List" },
 	{ to: "/admin/colors", label: "Colors" },
 	{ to: "/admin/filters", label: "Filters" },
 	{ to: "/admin/review", label: "Review" },
@@ -91,6 +92,8 @@ function AdminGate() {
 							<Link
 								key={page.to}
 								to={page.to}
+								// `/admin` is every page's parent, so List only lights up on itself.
+								activeOptions={{ exact: page.to === "/admin" }}
 								className="rounded-md px-3 py-1.5 text-sm whitespace-nowrap text-muted-foreground hover:bg-accent hover:text-foreground"
 								activeProps={{
 									className: "bg-accent text-foreground",
