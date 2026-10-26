@@ -12,6 +12,7 @@ import {
 	PRESIZED_QUALITY,
 	PRESIZED_WIDTHS,
 	presizedKey,
+	withPresizedKeys,
 } from "#/lib/photo-variants";
 import {
 	DEFAULT_REFRAME_PARAMS,
@@ -183,7 +184,14 @@ async function warpEncodeStore(
 	await env.PHOTOS.put(key, buffer, {
 		httpMetadata: { contentType: "image/webp" },
 	});
-	await storePresizedCopies(key, new Uint8Array(buffer));
+	try {
+		await storePresizedCopies(key, new Uint8Array(buffer));
+	} catch (err) {
+		// Nothing references `key` yet, so bin the master and any copies already
+		// written before the caller's retry writes a fresh set under a new key.
+		await env.PHOTOS.delete(withPresizedKeys(key)).catch(() => {});
+		throw err;
+	}
 
 	return { key };
 }
@@ -192,7 +200,8 @@ async function warpEncodeStore(
  * Write the pre-sized copies `/api/photos/$` serves for `?w=` (see `photo-variants.ts`),
  * so a grid tile is a plain R2 read rather than an on-the-fly resize of the master.
  * Sequential, smallest first — each is a small Images call. A failure throws like the
- * master write does: the caller's retry regenerates the whole set under a new key.
+ * master write does (the caller bins the partial set first); the retry regenerates the
+ * whole set under a new key.
  */
 async function storePresizedCopies(
 	key: string,
