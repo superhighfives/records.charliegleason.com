@@ -714,6 +714,16 @@ a {
     drop-shadow(0 4px 10px rgb(0 0 0 / 0.12));
 }
 
+/* `?noclip` / `?noshadow` debug switches (see `CollectionGrid`) — `!important`
+ * beats the clip-path's inline style. */
+.collection-grid[data-noclip="true"] .sleeve-clip {
+  clip-path: none !important;
+}
+
+.collection-grid[data-noshadow="true"] .sleeve-shadow {
+  filter: none;
+}
+
 /* Touch's stand-in for desktop's `:hover`-driven reveal above was, for a
  * while, a pure-CSS `animation-timeline: view()` version of this same idea —
  * each tile driving its own grayscale/scale/peek from its own scroll

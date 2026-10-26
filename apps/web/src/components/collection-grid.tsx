@@ -242,7 +242,7 @@ const RecordTile = memo(function RecordTile({
 								/>
 								<div className="sleeve-shadow absolute inset-[3%]">
 									<div
-										className="absolute inset-0 overflow-hidden"
+										className="sleeve-clip absolute inset-0 overflow-hidden"
 										style={{ clipPath }}
 									>
 										{/* Shown behind the cover while it loads — `-z-10` (rather
@@ -757,12 +757,23 @@ export function CollectionGrid({
 	const [activeStore] = useState(createActiveStore);
 	const setActiveId = activeStore.set;
 
-	// `?perf` — dev-only frame meter (see `PerfMeter` below). Read in an
-	// effect, not during render, so SSR and first client render stay
+	// `?perf` — dev-only frame meter (see `PerfMeter` below). `?noclip` and
+	// `?noshadow` switch off the sleeve edge / its shadow (via `data-` flags
+	// styles.css keys off), so their cost can be A/B'd on a real device. Read
+	// in an effect, not during render, so SSR and first client render stay
 	// identical for hydration.
 	const [showPerf, setShowPerf] = useState(false);
+	const [debugFlags, setDebugFlags] = useState({
+		noclip: false,
+		noshadow: false,
+	});
 	useEffect(() => {
-		setShowPerf(new URLSearchParams(window.location.search).has("perf"));
+		const params = new URLSearchParams(window.location.search);
+		setShowPerf(params.has("perf"));
+		setDebugFlags({
+			noclip: params.has("noclip"),
+			noshadow: params.has("noshadow"),
+		});
 	}, []);
 
 	// --- Touch: windowed content + one-clock scroll system -------------------
@@ -1228,6 +1239,8 @@ export function CollectionGrid({
 			// drives per-frame, so CSS smoothing never re-eases (= lags) the
 			// loop's own easing.
 			data-touch={isTouch ? "true" : undefined}
+			data-noclip={debugFlags.noclip ? "true" : undefined}
+			data-noshadow={debugFlags.noshadow ? "true" : undefined}
 			onPointerMove={
 				isTouch
 					? undefined
@@ -1342,8 +1355,8 @@ function ActiveRecordBar({
 
 /**
  * Dev instrumentation, mounted only with `?perf` in the URL: a fixed badge
- * showing, once a second, the worst main-thread frame gap and how many
- * frames blew a 34ms (two-vsync) budget in that second. Exists because none
+ * showing, once a second, the frame rate, the worst main-thread frame gap,
+ * and how many frames blew a 34ms (two-vsync) budget in that second. Exists because none
  * of the usual tools can measure this where it matters — Chrome traces run
  * the wrong engine for iOS work, and WebDriver's automation banner blocks
  * real touch input on the Simulator — while this shows up legibly in a plain
@@ -1361,18 +1374,23 @@ function PerfMeter() {
 		let windowStart = last;
 		let worst = 0;
 		let slow = 0;
+		let frames = 0;
 		const tick = (now: number) => {
 			const delta = now - last;
 			last = now;
+			frames++;
 			if (delta > worst) worst = delta;
 			if (delta > 34) slow++;
-			if (now - windowStart > 1000) {
+			const elapsed = now - windowStart;
+			if (elapsed > 1000) {
 				if (ref.current) {
-					ref.current.textContent = `worst ${Math.round(worst)}ms · >34ms ×${slow}`;
+					const fps = Math.round((frames * 1000) / elapsed);
+					ref.current.textContent = `${fps} fps · worst ${Math.round(worst)}ms · >34ms ×${slow}`;
 				}
 				windowStart = now;
 				worst = 0;
 				slow = 0;
+				frames = 0;
 			}
 			raf = requestAnimationFrame(tick);
 		};
