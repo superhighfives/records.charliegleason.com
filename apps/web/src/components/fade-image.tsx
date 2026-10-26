@@ -9,7 +9,7 @@ import {
 import { cn } from "#/lib/utils";
 
 /**
- * An `<img>` that fades in once it has decoded, so cover art and mattes settle
+ * An `<img>` that fades in once it has decoded, so cover art settles
  * onto the page instead of popping in as the bytes arrive (which reads as janky,
  * especially for the lazy-loaded grid tiles). Not used in the image editor — the
  * live preview there wants the raw, immediate pixels.

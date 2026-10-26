@@ -17,11 +17,8 @@ name: Preview
 #   • Each PR gets its OWN analyze Queue (`records-analyze-pr-<n>`), so its Worker
 #     registers a consumer without fighting production's single consumer — the
 #     background analysis pipeline works on the preview.
-#   • The matte CONTAINER + its Durable Object are DROPPED in preview (building a
-#     Docker image per PR is slow/expensive, and `deploy` would try to). With no
-#     MATTE_CONTAINER binding the Apply pipeline falls back to the in-Worker matte
-#     render (see renderAiMatte / renderDeterministicMatte) — same as the old
-#     preview did.
+#   • DO migrations are DROPPED in preview (a `versions upload` deploy can't apply
+#     them; there are no Durable Objects left to bind anyway).
 #   • Cron (weekly digest), custom routes, and email are dropped — preview serves
 #     only on its workers.dev URL and sends no mail.
 #   • Secrets are set per-PR from repo secrets (below), test-mode where it matters.
@@ -34,7 +31,7 @@ name: Preview
 #   VITE_CLERK_PUBLISHABLE_KEY_PREVIEW           — Clerk pk_test_… (client, dev instance)
 #   PREVIEW_CLERK_SECRET_KEY                     — Clerk sk_test_… (server, dev instance)
 #   DISCOGS_TOKEN, LASTFM_API_KEY                — reuse the prod values (read-only lookups)
-#   REPLICATE_API_KEY                            — Apply pipeline (ESRGAN enhance + AI matte);
+#   REPLICATE_API_KEY                            — vinyl colour textures (flux-schnell);
 #                                                  reuse prod, or a low-cap token for preview
 #   VITE_SENTRY_DSN / VITE_SENTRY_ORG / VITE_SENTRY_PROJECT / SENTRY_AUTH_TOKEN
 #   Optional (skipped if unset): SERPAPI_KEY, CRON_SECRET, DISCOGS_PROXY_URL,
@@ -96,7 +93,7 @@ jobs:
 
       # Rewrite wrangler.jsonc in place (ephemeral CI checkout, never committed):
       # unique Worker name, per-PR queue, prod D1/R2 kept, and everything a per-PR
-      # ephemeral Worker shouldn't carry (routes, container/DO, cron, email)
+      # ephemeral Worker shouldn't carry (routes, DO migrations, cron, email)
       # stripped. The build (below) reads this rewritten config via the vite plugin.
       - name: Rewrite wrangler config for preview
         uses: actions/github-script@v7
@@ -137,13 +134,9 @@ jobs:
                 .map(({ dead_letter_queue, ...c }) => ({ ...c, queue: q }));
             }
 
-            // Drop the matte container + its DO — preview falls back to the
-            // in-Worker matte. `migrations: []` (empty, not removed) mirrors the
-            // old env.preview, which proved a `wrangler deploy` succeeds with the
-            // MatteContainer class exported but unbound + no DO migration. Also drop
-            // the weekly cron and email; a preview serves HTTP only.
-            delete config.containers;
-            delete config.durable_objects;
+            // No DO migrations in preview (`migrations: []`, empty rather than
+            // removed, mirrors the old env.preview). Also drop the weekly cron and
+            // email; a preview serves HTTP only.
             config.migrations = [];
             delete config.triggers;
             delete config.send_email;
@@ -193,9 +186,7 @@ jobs:
           CLERK_SECRET_KEY: ${{ secrets.PREVIEW_CLERK_SECRET_KEY }}
           DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
-          # Apply pipeline (ESRGAN enhance + AI matte) calls Replicate directly —
-          # needed even in preview, where the matte container is dropped and the
-          # in-Worker matte/enhance run instead.
+          # Colour textures call Replicate directly — needed even in preview.
           REPLICATE_API_KEY: ${{ secrets.REPLICATE_API_KEY }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}

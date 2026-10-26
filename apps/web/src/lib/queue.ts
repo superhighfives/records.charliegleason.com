@@ -3,26 +3,17 @@ import * as Sentry from "@sentry/cloudflare";
 import { eq, inArray } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import {
-	type JobStep,
-	matteAuditState,
-	type Record,
-	records,
-} from "#/db/schema";
+import { type JobStep, type Record, records } from "#/db/schema";
 import { analyzeCapture } from "#/lib/analyze";
 import { identifyFromAsin } from "#/lib/asin";
 import {
 	type AnalyzeMessage,
 	type AnalyzeRecordMessage,
 	chunk,
-	nextMatteAction,
-	QUEUE_BATCH_SIZE,
+	LEGACY_RECORD_MODES,
 	toQueueBatches,
 } from "#/lib/batching";
-import {
-	runCaptureFirstPass,
-	runCaptureFirstPassMatte,
-} from "#/lib/capture-first-pass";
+import { runCaptureFirstPass } from "#/lib/capture-first-pass";
 import {
 	extractStoredColorPalette,
 	generateColorTexture,
@@ -35,15 +26,7 @@ import {
 	searchMasters,
 	searchReleases,
 } from "#/lib/discogs";
-import { stepMatteAuditSweep } from "#/lib/matte-audit";
-import {
-	type CoverStageResult,
-	commitProfessionalMatte,
-	generateProfessionalCover,
-	type MatteKeys,
-	renderAiMatte,
-	renderDeterministicMatte,
-} from "#/lib/professional-pipeline";
+import { applyProfessional } from "#/lib/professional-pipeline";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -68,7 +51,7 @@ function backoffSeconds(attempts: number): number {
 /**
  * Flag a professional (Apply) job failed on the row. Only `professionalJobStatus` flips —
  * the display `professionalStatus` is preserved so an already-approved cover survives a
- * failed regeneration. Shared by both Apply stages (cover + matte). Best-effort.
+ * failed regeneration. Best-effort.
  */
 async function markProfessionalFailed(
 	db: ReturnType<typeof getDb>,
@@ -145,21 +128,6 @@ export async function enqueueCaptureFirstPass(recordId: number): Promise<void> {
 }
 
 /**
- * Stage 2 of the first-pass: the deterministic matte, in its own isolate (see
- * `runCaptureFirstPassMatte`). Enqueued by the stage-1 consumer, not the UI.
- */
-export async function enqueueCaptureFirstPassMatte(
-	recordId: number,
-): Promise<void> {
-	await captureQueue().send({ recordId, mode: "capture-first-pass-matte" });
-}
-
-/** Enqueue one batch of the background matte-quality audit sweep. */
-export async function enqueueAuditMattes(): Promise<void> {
-	await analyzeQueue().send({ mode: "audit-mattes" });
-}
-
-/**
  * Enqueue Amazon ASIN→pressing resolutions in bulk (the importer's "queue
  * lookups"). Each message barcode-resolves one ASIN and pins the exact pressing on
  * its record in the background. Sent in batches (Cloudflare caps `sendBatch` at
@@ -214,74 +182,18 @@ export async function enqueueColorPalette(colorId: number): Promise<void> {
 	await analyzeQueue().send({ mode: "color-palette", colorId });
 }
 
-/**
- * Enqueue a record for the paid Apply pipeline. Kicks off stage 1 (reframe + enhance);
- * that stage enqueues stage 2 (the Magic matte) itself via {@link enqueueProfessionalMatte},
- * so each memory-heavy step runs in its own isolate.
- */
+/** Enqueue a record for Apply — re-warp its square from the stored corners and go live. */
 export async function enqueueProfessional(recordId: number): Promise<void> {
 	await analyzeQueue().send({ recordId, mode: "professional" });
 }
 
 /**
- * Enqueue stage 2 of the Apply pipeline — the Magic matte + final commit — carrying the
- * stage-1 result (cover key + the exact inputs it was built from) so the matte is cut
- * from the same snapshot and both swap in atomically. Called by the stage-1 consumer,
- * not the UI.
- */
-export async function enqueueProfessionalMatte(
-	recordId: number,
-	stage: CoverStageResult,
-): Promise<void> {
-	await analyzeQueue().send({ recordId, mode: "professional-matte", ...stage });
-}
-
-/**
- * Bulk variant of {@link enqueueProfessional} — kicks the full Apply pipeline (stage 1
- * cover → stage 2 matte) for many records in chunked `sendBatch` calls rather than one
- * `send` per id, so a bulk "Retry generation" over a large selection doesn't fan out into
- * hundreds of individual queue writes.
+ * Bulk variant of {@link enqueueProfessional}, in chunked `sendBatch` calls rather than
+ * one `send` per id, so a bulk "Retry generation" over a large selection doesn't fan out
+ * into hundreds of individual queue writes.
  */
 export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
 	return enqueueBatch(recordIds, "professional");
-}
-
-/**
- * Bulk variant of {@link enqueueProfessionalMatte} — re-runs ONLY stage 2 (the Magic matte +
- * commit) for many records, each carrying its own stage-1 snapshot, in chunked `sendBatch`
- * calls. Used by the admin "Retry Magic matte" bulk action. Unlike {@link enqueueBatch}, the
- * bodies differ per record (each has its own cover snapshot), so it can't go through the
- * id-only {@link toQueueBatches} path; it chunks the pre-built messages here.
- */
-export async function enqueueProfessionalMatteBatch(
-	items: Array<{ recordId: number; stage: CoverStageResult }>,
-): Promise<void> {
-	const messages = items.map(({ recordId, stage }) => ({
-		body: { recordId, mode: "professional-matte" as const, ...stage },
-	}));
-	for (const batch of chunk(messages, QUEUE_BATCH_SIZE)) {
-		await analyzeQueue().sendBatch(batch);
-	}
-}
-
-/**
- * Enqueue the deterministic-matte fallback — stage 2b — after the Magic matte failed. Runs
- * the (larger, ~3000² deskew) deterministic render in its OWN fresh isolate rather than
- * inline in the AI stage, then commits the same stage-1 cover with it. Carries the same
- * snapshot so the committed cover + matte stay cut from one set of inputs, plus the AI
- * failure reason so a successful fallback can still surface it in the admin UI.
- */
-export async function enqueueProfessionalMatteFallback(
-	recordId: number,
-	stage: CoverStageResult,
-	aiMatteError: string,
-): Promise<void> {
-	await analyzeQueue().send({
-		recordId,
-		mode: "professional-matte-fallback",
-		...stage,
-		aiMatteError,
-	});
 }
 
 /**
@@ -687,63 +599,27 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
-	// Background matte-quality sweep — not keyed to any record. Runs one bounded batch
-	// (see MATTE_AUDIT_BATCH) and, if that batch came back full (more may be due),
-	// self-enqueues another before acking — the same "consumer enqueues the next stage"
-	// pattern the Apply pipeline uses between "professional" and "professional-matte".
+	// Retired with the matte audit — a sweep message still queued at deploy is a no-op.
 	if (message.body.mode === "audit-mattes") {
-		try {
-			const { more } = await stepMatteAuditSweep();
-			if (more) await enqueueAuditMattes();
-			message.ack();
-		} catch (err) {
-			const willRetry = message.attempts <= MAX_RETRIES;
-			console.error(
-				`[queue] audit-mattes step failed (attempt ${message.attempts}, willRetry=${willRetry}): ${
-					err instanceof Error ? err.message : String(err)
-				}`,
-			);
-			Sentry.captureException(err);
-			if (willRetry) {
-				// A transient D1/network blip — same backoff-and-retry the other stages
-				// use, rather than abandoning the sweep on the first hiccup.
-				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
-				return;
-			}
-			// Retries exhausted — don't leave the sweep stuck "running" forever with no
-			// further messages coming; flag it stopped so the queue menu doesn't show a
-			// phantom sweep. Best-effort: if this write also fails, log rather than
-			// silently swallow — a double failure here is exactly the kind of thing that
-			// would otherwise leave a permanently "running" sweep with zero trace of why.
-			await getDb(env.DB)
-				.update(matteAuditState)
-				.set({ running: false, updatedAt: new Date() })
-				.where(eq(matteAuditState.id, 1))
-				.catch((cleanupErr) => {
-					console.error(
-						"[queue] audit-mattes: failed to clear running state",
-						cleanupErr,
-					);
-					Sentry.captureException(cleanupErr);
-				});
-			message.ack();
-		}
+		message.ack();
 		return;
 	}
 
 	const { recordId, mode } = message.body;
 	const db = getDb(env.DB);
 
-	// The free on-capture professional seed, one near-ceiling render per isolate
-	// (see `capture-first-pass.ts` for why neither can run inline in the capture
-	// POST). Both record their own failures and never throw — always ack.
-	if (mode === "capture-first-pass") {
-		await runCaptureFirstPass(recordId);
+	// Matte-era messages still queued at deploy — ack rather than let them fall
+	// through to the analyze pipeline below.
+	if (mode && LEGACY_RECORD_MODES.has(mode)) {
 		message.ack();
 		return;
 	}
-	if (mode === "capture-first-pass-matte") {
-		await runCaptureFirstPassMatte(recordId);
+
+	// The free on-capture professional seed (see `capture-first-pass.ts` for why it
+	// can't run inline in the capture POST). Records its own failure and never
+	// throws — always ack.
+	if (mode === "capture-first-pass") {
+		await runCaptureFirstPass(recordId);
 		message.ack();
 		return;
 	}
@@ -765,13 +641,9 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
-	// The paid Apply pipeline, stage 1 — reframe + Real-ESRGAN enhance (the cover).
-	// Runs the cover in its own isolate, then hands the cover key to stage 2 (the AI
-	// matte) via `enqueueProfessionalMatte` so the two memory-heavy Replicate steps
-	// never share a 128 MB isolate. The display `professionalStatus` is left untouched
-	// throughout (an already-live cover stays live); `professionalJobStatus` stays
-	// `processing` across both stages so the header "in flight" menu and the editor keep
-	// showing progress until stage 2 commits.
+	// Apply — re-warp the square and promote it. The display `professionalStatus` is
+	// left untouched until the commit (an already-live cover stays live), while
+	// `professionalJobStatus` shows the job in the header "in flight" menu.
 	if (mode === "professional") {
 		try {
 			const [record] = await db
@@ -779,7 +651,6 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				.set({
 					professionalJobStatus: "processing",
 					professionalStage: "cover",
-					// First visible sub-step; the enhance checkpoint follows via the callback.
 					jobStep: "reframe",
 					professionalError: null,
 					updatedAt: new Date(),
@@ -793,169 +664,13 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				return;
 			}
 
-			const stage = await generateProfessionalCover(record, (step) =>
-				setJobStep(db, recordId, step),
-			);
-			// Do NOT delete stage.coverKey if this throws: a queue `send` can fail on the
-			// client (timed-out ack) after the message was actually accepted server-side.
-			// Deleting the key then would leave that in-flight matte message committing
-			// `professionalImageKey` = a *deleted* R2 object (a broken cover). So on a
-			// throw we just retry stage 1, which mints a fresh cover key; the worst case
-			// is a rare orphaned cover object (storage only), never a dangling reference.
-			await enqueueProfessionalMatte(recordId, stage);
+			await applyProfessional(record);
 			message.ack();
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
 			const willRetry = message.attempts <= MAX_RETRIES;
 			console.error(
-				`[queue] professional (cover) failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
-			);
-			Sentry.captureException(err);
-			await markProfessionalFailed(db, recordId, willRetry, detail);
-			if (willRetry) {
-				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
-			} else {
-				message.ack();
-			}
-		}
-		return;
-	}
-
-	// Stage 2 — the matte + the final atomic commit, in a fresh isolate (none of stage 1's
-	// reframe/enhance residue). Two modes, so the AI attempt and its (larger) deterministic
-	// fallback each get their OWN isolate — stacking a failed AI attempt's buffers with the
-	// ~3000² deterministic deskew on one 128 MB isolate is what OOM'd:
-	//   - "professional-matte": try the Magic matte only (`renderAiMatte`, no inline fallback).
-	//     On success, commit cover + Magic matte. On failure, log the real error to Sentry and
-	//     retry the AI stage until the queue's retries run out — only THEN re-enqueue the
-	//     deterministic fallback to a clean isolate (we prefer AI; deterministic is a last
-	//     resort, not the response to a transient blip).
-	//   - "professional-matte-fallback": render the deterministic matte here and commit it
-	//     (or, if it too fails, preserve the existing matte + flag `failed`).
-	// The cover key + input snapshot from stage 1 rides on the message in both, so whichever
-	// matte wins swaps in with the same cover atomically (no public gap).
-	if (mode === "professional-matte" || mode === "professional-matte-fallback") {
-		const isFallback = mode === "professional-matte-fallback";
-		const {
-			coverKey,
-			enhanced,
-			captureKey,
-			bandJson,
-			paramsJson,
-			aiMatteError,
-		} = message.body;
-		try {
-			const [record] = await db
-				.update(records)
-				.set({
-					professionalJobStatus: "processing",
-					professionalStage: "matte",
-					// The AI attempt vs the (last-resort) deterministic render read differently
-					// in the menu; the finishing checkpoint is stamped just before the commit.
-					jobStep: isFallback ? "matte-fallback" : "matte-ai",
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, recordId))
-				.returning();
-
-			// Deleted between stages — bin the orphaned (never-committed) cover key.
-			if (!record) {
-				if (coverKey) await env.PHOTOS.delete(coverKey).catch(() => {});
-				message.ack();
-				return;
-			}
-			if (
-				!coverKey ||
-				captureKey == null ||
-				bandJson == null ||
-				paramsJson == null
-			) {
-				throw new Error(
-					"professional-matte message missing the stage-1 snapshot",
-				);
-			}
-			const stage: CoverStageResult = {
-				coverKey,
-				enhanced: enhanced ?? false,
-				captureKey,
-				bandJson,
-				paramsJson,
-			};
-
-			if (isFallback) {
-				// The Magic matte already failed for good (its retries were exhausted upstream)
-				// — render the deterministic matte here on a clean heap. If it too dies,
-				// commit the cover with the existing matte preserved and flag `failed` (both
-				// paths gone → keep the good matte).
-				let matteError: unknown = null;
-				const matte = await renderDeterministicMatte(stage).catch((err) => {
-					console.error(
-						`[pro] deterministic matte failed for ${recordId}`,
-						err,
-					);
-					Sentry.captureException(err);
-					matteError = err;
-					return null;
-				});
-				await setJobStep(db, recordId, "finishing");
-				// A successful deterministic fallback still notes why AI was skipped, so the
-				// silent downgrade is visible in the admin UI (not just Sentry).
-				await commitProfessionalMatte(record, stage, matte, matteError, {
-					aiFallbackReason: aiMatteError ?? null,
-				});
-				message.ack();
-				return;
-			}
-
-			// Magic matte only — no inline deterministic fallback (that would stack the two big
-			// renders on one isolate). We PREFER the Magic matte, so a failure isn't an
-			// immediate downgrade; `nextMatteAction` (pure, tested) decides between commit,
-			// another AI attempt, or the last-resort deterministic fallback.
-			let aiMatte: MatteKeys | null = null;
-			let aiError: unknown = null;
-			try {
-				aiMatte = await renderAiMatte(stage);
-			} catch (err) {
-				aiError = err;
-			}
-
-			const action = nextMatteAction(
-				aiMatte != null,
-				message.attempts,
-				MAX_RETRIES,
-			);
-			if (action === "commit") {
-				await setJobStep(db, recordId, "finishing");
-				await commitProfessionalMatte(record, stage, aiMatte, null);
-				message.ack();
-				return;
-			}
-
-			// AI failed — capture the ACTUAL error (Replicate error, fetch status, OOM, …)
-			// so the fallback can't silently mask why AI never ran.
-			const detail =
-				aiError instanceof Error ? aiError.message : String(aiError);
-			console.warn(
-				`[queue] Magic matte failed for record ${recordId} (attempt ${message.attempts}, action=${action}): ${detail}`,
-			);
-			Sentry.captureException(aiError);
-			if (action === "retry-ai") {
-				// Keep trying AI — don't drop to deterministic yet.
-				await markProfessionalFailed(db, recordId, true, detail);
-				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
-				return;
-			}
-			// action === "fallback" — AI genuinely exhausted, defer the deterministic
-			// render to its own fresh isolate (carrying the AI reason so a successful
-			// fallback can still show it in the admin UI).
-			await enqueueProfessionalMatteFallback(recordId, stage, detail);
-			message.ack();
-			return;
-		} catch (err) {
-			const detail = err instanceof Error ? err.message : String(err);
-			const willRetry = message.attempts <= MAX_RETRIES;
-			console.error(
-				`[queue] professional (matte${isFallback ? " fallback" : ""}) failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
+				`[queue] professional failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
 			);
 			Sentry.captureException(err);
 			await markProfessionalFailed(db, recordId, willRetry, detail);

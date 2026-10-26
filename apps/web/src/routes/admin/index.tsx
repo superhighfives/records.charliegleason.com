@@ -41,9 +41,6 @@ import { BulkAssignMasterDialog } from "#/components/bulk-assign-master-dialog";
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { FadeImage } from "#/components/fade-image";
 import { GenerationFailedBadge } from "#/components/generation-failed-badge";
-import { MatteAuditBadge } from "#/components/matte-audit-badge";
-import { MatteFallbackBadge } from "#/components/matte-fallback-badge";
-import { MatteStaleBadge } from "#/components/matte-stale-badge";
 import { RecordPanel } from "#/components/record-panel";
 import { RecordLoading } from "#/components/spinning-record";
 import { StatusBadge } from "#/components/status-badge";
@@ -69,17 +66,14 @@ import { backfillColorPalettes } from "#/lib/colors";
 import { colorsQueryOptions } from "#/lib/colors-queries";
 import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
-import { hasMatteAuditFixReason } from "#/lib/photo-processing";
 import { orderRecordsForReview } from "#/lib/record-order";
 import {
 	checkLinkHealth,
 	deleteRecord,
 	deleteRecords,
 	publishRecords,
-	retryFlaggedMattes,
+	reapplyAllProfessional,
 	retryProfessionalGenerations,
-	retryProfessionalMattes,
-	startMatteAuditSweep,
 	unpublishRecords,
 } from "#/lib/records";
 import {
@@ -228,32 +222,6 @@ const FACET_GROUPS: Array<{
 			},
 		],
 	},
-	{
-		// Which matte cut the sleeve out. `professionalAlphaSource` is null until Apply
-		// runs, then "ai" (the paid matting model) or "deterministic" — the free edge-snap
-		// fallback the queue lands when the Magic matte fails. "Lo-fi matte" is thus the same
-		// set the old amber "Magic matte failed" flag surfaced, now framed as a matte source
-		// alongside its siblings rather than a standalone attention flag.
-		key: "matte",
-		label: "Matte",
-		options: [
-			{
-				token: "noMatte",
-				label: "No matte",
-				test: (r) => r.professionalAlphaSource == null,
-			},
-			{
-				token: "aiMatte",
-				label: "Magic matte",
-				test: (r) => r.professionalAlphaSource === "ai",
-			},
-			{
-				token: "lofiMatte",
-				label: "Lo-fi matte",
-				test: (r) => r.professionalAlphaSource === "deterministic",
-			},
-		],
-	},
 ];
 
 // Attention states that aren't clean opposites — simple on/off toggles. (There's
@@ -271,24 +239,6 @@ const FLAG_FACETS: FacetOption[] = [
 		token: "genFailed",
 		label: "Image failed",
 		test: (r) => r.professionalJobStatus === "failed",
-	},
-	// The deterministic-matte-fallback case (paid Magic matte failed) is now the "Lo-fi
-	// matte" side of the `matte` facet group above, not a standalone flag.
-	// Flagged by the on-demand "Audit covers" sweep (matte-audit.ts) — a likely colour
-	// cast or edge overrun in the stored matte, independent of which source cut it.
-	{
-		token: "matteFlagged",
-		label: "Matte flagged",
-		test: (r) => hasMatteAuditFixReason(r.professionalMatteAuditReason),
-	},
-	// The same audit sweep's `tint` reason, surfaced on its own: excluded from
-	// `matteFlagged` because it false-positives on legit near-black covers, but still
-	// useful as an opt-in shortlist when a colour cast is visibly wrong across a batch.
-	{
-		token: "colorCast",
-		label: "Color cast",
-		test: (r) =>
-			(r.professionalMatteAuditReason ?? "").split(",").includes("tint"),
 	},
 	{
 		token: "duplicate",
@@ -308,14 +258,6 @@ const FLAG_COLORS: globalThis.Record<string, { active: string; idle: string }> =
 		genFailed: {
 			active: "border-red-600 bg-red-600 text-white",
 			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
-		},
-		matteFlagged: {
-			active: "border-red-600 bg-red-600 text-white",
-			idle: "border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400",
-		},
-		colorCast: {
-			active: "border-orange-600 bg-orange-600 text-white",
-			idle: "border-orange-500/40 text-orange-600 hover:bg-orange-500/10 dark:text-orange-400",
 		},
 		duplicate: {
 			active: "border-orange-600 bg-orange-600 text-white",
@@ -421,13 +363,7 @@ function writeStoredFilters(next: { f?: string; filter?: string }): void {
 // (off the homepage, still in the queue), `delete` removes them. Publish and
 // unpublish share one toolbar slot — see `bulkActions`. Each endpoint returns
 // how many rows it acted on.
-type BulkAction =
-	| "publish"
-	| "unpublish"
-	| "retryGeneration"
-	| "retryMatte"
-	| "retryFlaggedMatte"
-	| "delete";
+type BulkAction = "publish" | "unpublish" | "retryGeneration" | "delete";
 const BULK_ACTIONS: {
 	[K in BulkAction]: {
 		label: string;
@@ -447,22 +383,12 @@ const BULK_ACTIONS: {
 		fn: unpublishRecords,
 	},
 	// The count these return can be lower than the selection: the server skips rows with
-	// nothing to act on (no capture for regeneration; no cover/capture for the matte), so
+	// nothing to act on (no capture to regenerate from), so
 	// the toast reflects what was actually re-queued.
 	retryGeneration: {
 		label: "Retry generation",
 		verb: "queued for regeneration",
 		fn: retryProfessionalGenerations,
-	},
-	retryMatte: {
-		label: "Retry Magic matte",
-		verb: "queued for Magic matte",
-		fn: retryProfessionalMattes,
-	},
-	retryFlaggedMatte: {
-		label: "Retry flagged mattes",
-		verb: "queued for a matte re-cut",
-		fn: retryFlaggedMattes,
 	},
 	delete: {
 		label: "Delete",
@@ -654,7 +580,7 @@ function useIsDesktop() {
 }
 
 /** One segmented group — pick a side, another, or none (= don't care). Two options is
- * the common case; the matte group has three. */
+ * the common case. */
 function SegmentedFilter({
 	group,
 	active,
@@ -887,39 +813,30 @@ function AdminRecords() {
 		onError: () => toast.error("Couldn't check links. Try again."),
 	});
 
-	// A sweep already running (polled via the same query the header queue menu uses) —
-	// guards against a second click restarting the accumulated checked/suspects counters
-	// and racing a duplicate chain of queue messages against the first.
-	const { data: inFlight } = useQuery(inFlightQueryOptions);
-	const auditAlreadyRunning = (inFlight ?? []).some(
-		(item) => item.kind === "audit",
-	);
-
-	// Kick off a matte-quality audit sweep in the background (see matte-audit.ts): a
-	// cheap, non-AI pixel scan of stored covers that flags a likely colour cast or edge
-	// overrun — the regression classes the Parachutes matte fix addressed, for records
-	// whose bad render predates the fix. Unlike "Check links" this doesn't block the
-	// request — it self-chains through the whole stalest-first backlog via the queue, so
-	// progress (and its finish) shows up in the header queue menu rather than a toast at
-	// the end of one bounded batch. Flagged rows show a badge and can be selected for
-	// "Retry flagged mattes".
-	const auditMatteMutation = useMutation({
-		mutationFn: () => startMatteAuditSweep(),
-		onSuccess: async ({ started }) => {
-			// Invalidate the in-flight query directly (not just recordsQueryOptions) — its
-			// polling only re-arms once it sees a non-empty result, so without this a sweep
-			// started while nothing else was running wouldn't show in the queue menu until
-			// some unrelated refetch (e.g. window focus) happened to occur.
-			await queryClient.invalidateQueries({
-				queryKey: inFlightQueryOptions.queryKey,
-			});
+	// Re-run Apply for every live cover — rebuilds the masters at 2000px and writes the
+	// pre-sized copies the grid serves (see `reapplyAllProfessional`). Free, but it's a
+	// few hundred background jobs, so it confirms first; progress shows in the queue menu.
+	const reapplyAllMutation = useMutation({
+		mutationFn: () => reapplyAllProfessional(),
+		onSuccess: async ({ count }) => {
+			// Invalidate the in-flight query directly — its polling only re-arms once it
+			// sees a non-empty result, so the queue menu wouldn't otherwise pick these up
+			// until some unrelated refetch.
+			await Promise.all([
+				queryClient.invalidateQueries({
+					queryKey: inFlightQueryOptions.queryKey,
+				}),
+				queryClient.invalidateQueries({
+					queryKey: recordsQueryOptions.queryKey,
+				}),
+			]);
 			toast.success(
-				started
-					? "Started auditing covers — watch progress in the queue menu."
-					: "A sweep is already running — check the queue menu for progress.",
+				count === 0
+					? "No live covers to re-apply."
+					: `Re-applying ${count} cover${count === 1 ? "" : "s"} — watch progress in the queue menu.`,
 			);
 		},
-		onError: () => toast.error("Couldn't start the audit. Try again."),
+		onError: () => toast.error("Couldn't start the re-apply. Try again."),
 	});
 
 	// Selected-rows actions: hand the ids to the matching batched endpoint and
@@ -1096,21 +1013,6 @@ function AdminRecords() {
 						{row.original.professionalJobStatus === "failed" && (
 							<GenerationFailedBadge />
 						)}
-						{row.original.professionalAlphaSource === "deterministic" && (
-							<MatteFallbackBadge />
-						)}
-						{/* A Magic (AI) matte survives from an earlier completed Apply even
-							    when the latest job failed — flag that it may be out of date
-							    rather than letting the "Magic matte" filter imply it's current. */}
-						{row.original.professionalAlphaSource === "ai" &&
-							row.original.professionalJobStatus === "failed" && (
-								<MatteStaleBadge />
-							)}
-						{row.original.professionalMatteAuditReason && (
-							<MatteAuditBadge
-								reason={row.original.professionalMatteAuditReason}
-							/>
-						)}
 						<StatusError record={row.original} />
 					</Link>
 				),
@@ -1203,23 +1105,14 @@ function AdminRecords() {
 	const allPublished =
 		hasSelection &&
 		selectedRows.every((r) => (r.original.status ?? "complete") === "complete");
-	// The two retry actions only appear when the selection actually contains rows they'd
-	// act on — a failed generation, or a matte that fell back to the deterministic path —
-	// so the toolbar stays uncluttered for a normal selection.
+	// The retry action only appears when the selection actually contains a failed
+	// generation, so the toolbar stays uncluttered for a normal selection.
 	const anyGenFailed = selectedRows.some(
 		(r) => r.original.professionalJobStatus === "failed",
-	);
-	const anyMatteFallback = selectedRows.some(
-		(r) => r.original.professionalAlphaSource === "deterministic",
-	);
-	const anyMatteFlagged = selectedRows.some((r) =>
-		hasMatteAuditFixReason(r.original.professionalMatteAuditReason),
 	);
 	const bulkActions: BulkAction[] = [
 		allPublished ? "unpublish" : "publish",
 		...(anyGenFailed ? (["retryGeneration"] as const) : []),
-		...(anyMatteFallback ? (["retryMatte"] as const) : []),
-		...(anyMatteFlagged ? (["retryFlaggedMatte"] as const) : []),
 		"delete",
 	];
 	// Rows visible under the current tab + search. Drives the empty state and
@@ -1275,21 +1168,6 @@ function AdminRecords() {
 		if (
 			BULK_ACTIONS[action].destructive &&
 			!confirm(`Delete ${n} ${noun}? This can't be undone.`)
-		) {
-			return;
-		}
-		// The retries fan out paid background jobs (Real-ESRGAN / the matting model), so
-		// confirm before spending on a whole selection — rows with nothing to redo are
-		// skipped server-side, so the actual job count may be lower.
-		if (
-			(action === "retryGeneration" ||
-				action === "retryMatte" ||
-				action === "retryFlaggedMatte") &&
-			!confirm(
-				`Re-run ${
-					action === "retryGeneration" ? "generation" : "the Magic matte"
-				} for ${n} selected ${noun}? This runs paid background jobs.`,
-			)
 		) {
 			return;
 		}
@@ -1471,15 +1349,19 @@ function AdminRecords() {
 									{checkLinksMutation.isPending ? "Checking…" : "Check links"}
 								</DropdownMenuItem>
 								<DropdownMenuItem
-									disabled={auditMatteMutation.isPending || auditAlreadyRunning}
-									onSelect={() => auditMatteMutation.mutate()}
-									title="Sweep stored covers in the background for a likely matte colour cast or edge overrun — no AI calls, just a pixel check. Flagged rows can be retried with 'Retry flagged mattes'. Progress shows in the queue menu."
+									disabled={reapplyAllMutation.isPending}
+									onSelect={() => {
+										if (
+											confirm(
+												"Re-apply every live cover? Each is re-warped from its saved crop and tone. Covers stay live until their replacement lands.",
+											)
+										) {
+											reapplyAllMutation.mutate();
+										}
+									}}
+									title="Re-run Apply for every live cover from its saved crop and tone — rebuilds the 2000px masters and the pre-sized copies the grid loads"
 								>
-									{auditAlreadyRunning
-										? "Auditing…"
-										: auditMatteMutation.isPending
-											? "Starting…"
-											: "Audit covers"}
+									{reapplyAllMutation.isPending ? "Queuing…" : "Re-apply all"}
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
@@ -1525,10 +1407,10 @@ function AdminRecords() {
 			{/* Missing-palette banner. Informational, not a failure — the cover and
 			    disc render fine either way, only the title's on-hover gradient is
 			    missing (see `.title-palette` in styles.css) — so it reads amber like
-			    `MatteFallbackBadge`/`UnmatchedBadge`, not red. Fix queues a
+			    `UnmatchedBadge`, not red. Fix queues a
 			    palette-only re-extraction from each color's existing texture (no
 			    Replicate call — `extractStoredColorPalette`); results land async via
-			    the queue, same as the matte-audit sweep. */}
+			    the queue. */}
 			{pendingPaletteColors.length > 0 && (
 				<output className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
 					<TriangleAlertIcon className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
@@ -1710,22 +1592,10 @@ function AdminRecords() {
 											{r.professionalJobStatus === "failed" && (
 												<GenerationFailedBadge />
 											)}
-											{r.professionalAlphaSource === "deterministic" && (
-												<MatteFallbackBadge />
-											)}
 											{r.pitchforkScore != null && (
 												<span className="text-xs text-muted-foreground tabular-nums">
 													Pitchfork {r.pitchforkScore}
 												</span>
-											)}
-											{r.professionalAlphaSource === "ai" &&
-												r.professionalJobStatus === "failed" && (
-													<MatteStaleBadge />
-												)}
-											{r.professionalMatteAuditReason && (
-												<MatteAuditBadge
-													reason={r.professionalMatteAuditReason}
-												/>
 											)}
 											<StatusError record={r} />
 										</div>

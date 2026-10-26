@@ -35,20 +35,6 @@ export function displayCoverKey(
 }
 
 /**
- * The record's alpha matte — the transparent, true-edged sleeve floating on a margin
- * with a soft shadow — for surfaces that want the object rather than the square hero
- * (the homepage grid). Like {@link displayCoverKey}, only an *approved* photo's matte
- * goes live; callers fall back to {@link displayCoverKey} when this is null.
- */
-export function displayMatteKey(
-	record: Pick<Record, "professionalAlphaKey" | "professionalStatus">,
-): string | null {
-	return record.professionalStatus === "approved" && record.professionalAlphaKey
-		? record.professionalAlphaKey
-		: null;
-}
-
-/**
  * A display URL for a stored photo. Masters live in R2 at full resolution (up to
  * 4096px, often ~1MB) so there's headroom to reprocess later; `width` asks
  * `/api/photos/$` to resize + re-encode to webp on the way out via the Cloudflare

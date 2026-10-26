@@ -1,5 +1,7 @@
 # The record "matte" — current state
 
+> **Retired 2026-10-25.** The alpha matte was removed in favour of a plain square crop with a CSS sleeve edge — see [`plans/in-progress/simplify-record-crop.md`](../plans/in-progress/simplify-record-crop.md). Kept as design history.
+
 _A working summary of how the alpha/matte sleeve image is generated, what we
 store, where it breaks, and the approaches we tried and dropped. Companion to the
 original brainstorm in [`alpha-matte-sleeves.md`](./alpha-matte-sleeves.md),

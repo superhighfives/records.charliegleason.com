@@ -2,260 +2,60 @@ import { env } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
-import { type JobStep, type Record, records } from "#/db/schema";
-import {
-	generateMatteFromCapture,
-	generateMatteViaContainer,
-} from "#/lib/matte";
-import { reframeFromCapture, upscaleProfessional } from "#/lib/professional";
+import { type Record, records } from "#/db/schema";
+import { withPresizedKeys } from "#/lib/photo-variants";
+import { reframeFromCapture } from "#/lib/professional";
 import { parseReframeParams } from "#/lib/reframe-params";
 import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
 
 /**
- * The paid "Apply" pipeline, split across two queue messages so each memory-heavy step
- * runs in its own invocation — {@link generateProfessionalCover} (reframe + Real-ESRGAN
- * enhance), then {@link commitProfessionalMatte} (Magic matte + the final commit). A single
- * invocation doing all three stacked a reframe buffer, the enhance, and the matte's
- * full-resolution RGBA buffers (~2000² warp + ESRGAN + 2400² matte warp) on one 128 MB
- * isolate — enough to tip a marginal run into an uncatchable OOM that left the record
- * stuck `processing` with no error (the runtime even shed the in-flight Replicate
- * connections as it died — "Network connection lost."). Splitting means the matte, the
- * real hog, starts from a clean heap with none of the reframe/enhance residue.
+ * The admin's "Apply": re-warp the square cover from the record's stored corners + tone
+ * and promote it live, in one queue message. Free and deterministic — no Replicate call,
+ * no second stage. Kept out of `records.ts` to avoid an import cycle with the queue
+ * (records → queue → this module).
  *
- * Atomicity AND input-consistency are preserved across the split. Atomicity: the cover
- * stage writes nothing to the record's display fields — it hands its result to the matte
- * stage via the queue message, and the matte stage swaps in the new cover *and* matte in
- * one DB write, so an already-live cover only changes at the very end (no public gap).
- * Consistency: the cover stage also carries its exact inputs (capture + band + params)
- * forward on the message ({@link CoverStageResult}); the matte stage renders from THAT
- * snapshot, not a fresh record read, so the cover and matte are always cut from the same
- * capture — the guarantee the old single-invocation had. (Without this, a record edited
- * between stages — e.g. a concurrent Replace capture — could pair a stage-1 cover with a
- * matte cut from a different capture.)
- *
- * The enhance is required (a hiccup throws → the queue retries, then flags the job
- * `failed`, rather than committing a worse plain reframe). The matte stays best-effort:
- * a hiccup falls back (AI → deterministic, and a total matte failure preserves the
- * existing matte and flags the job `failed` rather than binning a good one). Kept out
- * of `records.ts` to avoid an import cycle with the queue (records → queue → this module).
+ * The new cover is written to a fresh key and swapped in with one DB write, so an
+ * already-live cover only changes at the very end (no public gap). The superseded cover
+ * and its pre-sized copies are then binned. Any alpha matte left over from before the
+ * cut-out was retired is left alone (keys and R2 objects) until it's cleaned up in bulk.
  */
-
-/**
- * The stage-1 result handed to the matte stage over the queue message: the new cover
- * key + whether it was enhanced, AND the exact inputs the cover was built from —
- * serialized so they ride on the message. Carrying the inputs forward (rather than
- * re-reading the record in stage 2) is what keeps the cover and matte mutually
- * consistent: both are rendered from this one snapshot, even if the record changes
- * between stages (e.g. a concurrent Replace capture).
- */
-export interface CoverStageResult {
-	coverKey: string;
-	enhanced: boolean;
-	captureKey: string;
-	bandJson: string; // serialized (normalised) CornerBand
-	paramsJson: string; // serialized ReframeParams
-}
-
-/**
- * Stage 1 — the cover. Reframe the square from the record's stored corners + tone, then
- * Real-ESRGAN enhance it (required — a failure throws and fails the job). Returns the cover key + the input snapshot it was
- * built from (see {@link CoverStageResult}); writes nothing to the DB (the matte stage
- * commits). The reframe is cheap and the enhance streams through the Images binding (no
- * big in-JS RGBA), so this stage's memory footprint is modest — the heavy work is
- * deferred to {@link commitProfessionalMatte}.
- */
-export async function generateProfessionalCover(
-	record: Record,
-	// Fired as each visible sub-step begins so the caller can surface it (see
-	// `records.jobStep`). Best-effort/display-only — the caller swallows write errors.
-	onStep?: (step: JobStep) => Promise<void>,
-): Promise<CoverStageResult> {
+export async function applyProfessional(record: Record): Promise<void> {
 	if (!record.capturePhotoKey) {
 		throw new Error("This record has no capture photo to generate from.");
 	}
-	const captureKey = record.capturePhotoKey;
 	const band = parseCornerBand(record.sleeveCornersJson);
 	const params = parseReframeParams(record.professionalParamsJson);
-
-	// The square hero (free) — staging for the enhance.
-	const { key: baseKey } = await reframeFromCapture(captureKey, band, params);
-	await onStep?.("enhance");
-	// Enhance is required, not best-effort: a Replicate hiccup throws so the queue retries
-	// and — once retries are exhausted — flags the Apply job `failed` (the "Image failed"
-	// filter), rather than silently committing a worse, un-enhanced plain reframe. We'd
-	// rather it fail loudly than accumulate a "succeeded but degraded" state.
-	const { key: enhancedKey } = await upscaleProfessional(baseKey).catch(
-		async (err) => {
-			// The staging reframe is now orphaned; bin it before the throw propagates.
-			await env.PHOTOS.delete(baseKey).catch(() => {});
-			throw err;
-		},
+	const { key: coverKey } = await reframeFromCapture(
+		record.capturePhotoKey,
+		band,
+		params,
 	);
-	// The base reframe was only a staging step for the enhance — bin it.
-	await env.PHOTOS.delete(baseKey).catch(() => {});
-	return {
-		coverKey: enhancedKey,
-		enhanced: true,
-		// The exact inputs the cover came from — the matte stage renders from and
-		// re-persists these same values (not a fresh record read).
-		captureKey,
-		bandJson: serializeCornerBand(band),
-		paramsJson: JSON.stringify(params),
-	};
-}
-
-/** The two R2 matte keys + which path produced them — what a matte render returns. */
-export type MatteKeys = {
-	shadowKey: string;
-	cutoutKey: string;
-	source: "ai" | "deterministic";
-};
-
-/**
- * Render ONLY the paid Magic matte from a stage-1 {@link CoverStageResult} snapshot. Where the
- * matte container is bound (production) it renders there — real RAM, off the 128 MB
- * queue-consumer isolate that OOM-looped on this render. Where it isn't (preview, whose
- * `versions upload` deploy can't host the container's DO), it falls back to the in-Worker
- * render. Either way it throws on AI failure without a deterministic fallback, so the queue's
- * retry then deterministic-fallback logic is unchanged (see {@link renderDeterministicMatte}).
- */
-export function renderAiMatte(stage: CoverStageResult): Promise<MatteKeys> {
-	const band = parseCornerBand(stage.bandJson);
-	const params = parseReframeParams(stage.paramsJson);
-	if (env.MATTE_CONTAINER) {
-		return generateMatteViaContainer(stage.captureKey, band, params, "ai");
-	}
-	return generateMatteFromCapture(stage.captureKey, band, params, {
-		useAi: true,
-		fallback: false,
-	});
-}
-
-/**
- * Render ONLY the free deterministic matte from the stage-1 snapshot — the fallback the queue
- * runs after {@link renderAiMatte}'s AI attempts are exhausted. Renders in the container where
- * bound (so the ~3000² deskew never touches the Worker isolate), else in-Worker (preview).
- */
-export function renderDeterministicMatte(
-	stage: CoverStageResult,
-): Promise<MatteKeys> {
-	const band = parseCornerBand(stage.bandJson);
-	const params = parseReframeParams(stage.paramsJson);
-	if (env.MATTE_CONTAINER) {
-		return generateMatteViaContainer(
-			stage.captureKey,
-			band,
-			params,
-			"deterministic",
-		);
-	}
-	return generateMatteFromCapture(stage.captureKey, band, params, {
-		useAi: false,
-	});
-}
-
-/**
- * Stage 2 — commit a rendered matte alongside the stage-1 cover in one atomic DB write,
- * promoting the professional photo to live. The `matte` is rendered separately (by the
- * queue, per-isolate: {@link renderAiMatte} then, on failure, {@link renderDeterministicMatte}
- * in a fresh isolate) and passed in — NOT generated here — so the two memory-heavy renders
- * never share this commit's isolate. All display fields (cover + matte) are written from the
- * stage-1 {@link CoverStageResult} snapshot (capture + corners + tone), so the committed
- * cover and matte are always cut from the same inputs even if the record changed between
- * stages. The record is re-read only for the atomic write target + binning the superseded
- * cover/matte from R2. `enhanced` records whether `coverKey` came from the Real-ESRGAN pass.
- *
- * Pass `matte: null` with the `matteError` that killed BOTH the AI and deterministic paths
- * to preserve the existing matte, commit the (fresh) cover anyway, and flag the job
- * `failed` so the editor offers a retry — rather than binning a good matte we already had.
- *
- * `opts.aiFallbackReason` is the Magic matte's failure reason when this commit is the
- * *deterministic fallback succeeding* — recorded as a non-fatal note on `professionalError`
- * (job stays `idle`, not `failed`) so the admin can see the AI path was skipped and why,
- * rather than the downgrade being silent (Sentry-only).
- */
-export async function commitProfessionalMatte(
-	record: Record,
-	stage: CoverStageResult,
-	matte: MatteKeys | null,
-	matteError: unknown,
-	opts: { aiFallbackReason?: string | null } = {},
-): Promise<void> {
-	const { coverKey, enhanced, bandJson, paramsJson } = stage;
-
-	// A matte failure must NOT wipe a matte we already had. Reaching here with `matte:
-	// null` means *both* the AI and deterministic renders died (each in its own isolate)
-	// — almost always a transient R2/Images blip (e.g. "Network connection lost."). Keep
-	// the existing matte live, commit the (fresh) cover, and flag the job `failed` with
-	// the error so the editor offers a retry — rather than silently degrading to no matte
-	// and binning the good one.
-	const matteFailed = matteError != null;
-	const shadowKey = matteFailed
-		? record.professionalAlphaKey
-		: (matte?.shadowKey ?? null);
-	const cutoutKey = matteFailed
-		? record.professionalAlphaCutoutKey
-		: (matte?.cutoutKey ?? null);
-	const alphaSource = matteFailed
-		? record.professionalAlphaSource
-		: (matte?.source ?? null);
 
 	const db = getDb(env.DB);
 	await db
 		.update(records)
 		.set({
-			// Persist the SAME (normalised) band + params the cover + matte were built
-			// from — carried from stage 1 — so the stored inputs match the stored images
-			// (and legacy single-quad rows upgrade to the band shape on their next Apply).
-			sleeveCornersJson: bandJson,
+			// Persist the SAME (normalised) band + params the cover was built from, so the
+			// stored inputs match the stored image.
+			sleeveCornersJson: serializeCornerBand(band),
 			professionalImageKey: coverKey,
-			professionalParamsJson: paramsJson,
-			professionalAlphaKey: shadowKey,
-			professionalAlphaCutoutKey: cutoutKey,
-			professionalAlphaSource: alphaSource,
-			professionalEnhanced: enhanced,
-			// Apply promotes the (new) cover to live regardless — the matte is best-effort.
+			professionalParamsJson: JSON.stringify(params),
+			professionalEnhanced: false,
 			professionalStatus: "approved",
-			professionalJobStatus: matteFailed ? "failed" : "idle",
-			// The two-step pipeline finished — clear the progress markers.
+			professionalJobStatus: "idle",
 			professionalStage: null,
 			jobStep: null,
-			// Generation reached a committed cover — clear the reaper's auto-retry budget (a
-			// fresh Apply / reprocess starts a new one). Even the matte-failed path is
-			// terminal-with-action, not a reap target, so resetting here is safe.
+			// Generation reached a committed cover — clear the reaper's auto-retry budget.
 			professionalRetryCount: 0,
-			// A fresh matte invalidates any prior audit result (see matte-audit.ts) — clear
-			// it so the next sweep re-checks the new image rather than reporting on the
-			// superseded one. A matte failure keeps the existing matte live, so its audit
-			// result (if any) is still accurate and stays untouched.
-			professionalMatteAuditCheckedAt: matteFailed
-				? record.professionalMatteAuditCheckedAt
-				: null,
-			professionalMatteAuditReason: matteFailed
-				? record.professionalMatteAuditReason
-				: null,
-			professionalError: matteFailed
-				? `Matte generation failed: ${matteError instanceof Error ? matteError.message : String(matteError)}`
-				: opts.aiFallbackReason
-					? `Magic matte unavailable — used the deterministic fallback: ${opts.aiFallbackReason}`
-					: null,
+			professionalError: null,
 			updatedAt: new Date(),
 		})
 		.where(eq(records.id, record.id));
 
-	// Bin the superseded professional image + matte so re-applies don't accumulate
-	// orphaned R2 objects — but never delete a key we're still pointing at (the
-	// preserved matte on a matte failure, or the just-committed cover). Best-effort.
-	const keptKeys = new Set(
-		[coverKey, shadowKey, cutoutKey].filter((k): k is string => k != null),
-	);
-	for (const staleKey of [
-		record.professionalImageKey,
-		record.professionalAlphaKey,
-		record.professionalAlphaCutoutKey,
-	]) {
-		if (staleKey && !keptKeys.has(staleKey)) {
-			await env.PHOTOS.delete(staleKey).catch(() => {});
-		}
+	// Bin the superseded cover + its pre-sized copies so re-applies don't accumulate
+	// orphaned R2 objects. Best-effort.
+	const stale = record.professionalImageKey;
+	if (stale && stale !== coverKey) {
+		await env.PHOTOS.delete(withPresizedKeys(stale)).catch(() => {});
 	}
 }

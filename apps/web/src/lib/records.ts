@@ -11,6 +11,7 @@ import {
 	inArray,
 	isNotNull,
 	isNull,
+	notInArray,
 	or,
 } from "drizzle-orm";
 
@@ -18,7 +19,6 @@ import { getDb } from "#/db";
 import {
 	colors,
 	type JobStep,
-	matteAuditState,
 	type Record as RecordRow,
 	records,
 } from "#/db/schema";
@@ -56,18 +56,13 @@ import {
 	MANUAL_CHECK_BATCH,
 	runLinkHealthCheck,
 } from "#/lib/master-health";
-import { beginMatteAuditSweep, getRunningMatteAudit } from "#/lib/matte-audit";
-import { hasMatteAuditFixReason } from "#/lib/photo-processing";
+import { withPresizedKeys } from "#/lib/photo-variants";
 import { detectCaptureCorners } from "#/lib/professional";
-import type { CoverStageResult } from "#/lib/professional-pipeline";
 import {
 	enqueueAnalyze,
 	enqueueAnalyzeBatch,
-	enqueueAuditMattes,
 	enqueueProfessional,
 	enqueueProfessionalBatch,
-	enqueueProfessionalMatte,
-	enqueueProfessionalMatteBatch,
 	enqueueRefreshBatch,
 	enqueueResolveAsinBatch,
 	fetchValueForRecord,
@@ -75,7 +70,6 @@ import {
 } from "#/lib/queue";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 import {
-	parseReframeParams,
 	type ReframeParams,
 	sanitizeReframeParams,
 } from "#/lib/reframe-params";
@@ -126,8 +120,12 @@ const ADMIN_ONLY_FIELDS = [
 	"sleeveCornersJson",
 	"professionalParamsJson",
 	"professionalPredictionId",
-	// Whether the matte came from the matting model or the deterministic path — internal.
+	// The retired alpha matte (and its audit) — never shown publicly any more.
+	"professionalAlphaKey",
+	"professionalAlphaCutoutKey",
 	"professionalAlphaSource",
+	"professionalMatteAuditCheckedAt",
+	"professionalMatteAuditReason",
 ] as const;
 
 /** A `records` row joined with its `colors` chip — see `listPublicRecords`. */
@@ -174,21 +172,21 @@ export function toPublicRecord(
 		sleeveCornersJson: _corners,
 		professionalParamsJson: _proParams,
 		professionalPredictionId: _proPrediction,
+		professionalAlphaKey: _alphaKey,
+		professionalAlphaCutoutKey: _alphaCutoutKey,
 		professionalAlphaSource: _alphaSource,
+		professionalMatteAuditCheckedAt: _auditCheckedAt,
+		professionalMatteAuditReason: _auditReason,
 		...rest
 	} = row;
 	const approved = rest.professionalStatus === "approved";
 	return {
 		...rest,
 		copies,
-		// Only expose the professional image + matte once approved. `/api/photos/$`
-		// serves any R2 key by passthrough, so leaking a `ready` (unreviewed) key
-		// here would make the generation publicly fetchable and bypass the review gate.
+		// Only expose the professional image once approved. `/api/photos/$` serves any
+		// R2 key by passthrough, so leaking a `ready` (unreviewed) key here would make
+		// the generation publicly fetchable and bypass the review gate.
 		professionalImageKey: approved ? rest.professionalImageKey : null,
-		professionalAlphaKey: approved ? rest.professionalAlphaKey : null,
-		professionalAlphaCutoutKey: approved
-			? rest.professionalAlphaCutoutKey
-			: null,
 	};
 }
 
@@ -321,12 +319,8 @@ export const getRecord = createServerFn({ method: "GET" })
 /** The terminal result of a record's last job, for the header queue's finished rows. */
 export interface QueueOutcome {
 	id: number;
-	/**
-	 * `failed` — the analyze or Apply job ended in `failed`; `fallback` — the Apply landed a
-	 * cover but on the deterministic matte, not the AI one (Magic matte unavailable); `ok` —
-	 * a clean finish.
-	 */
-	outcome: "ok" | "fallback" | "failed";
+	/** `failed` — the analyze or Apply job ended in `failed`; `ok` — a clean finish. */
+	outcome: "ok" | "failed";
 	/**
 	 * The record's *current* display cover key, so the finished row can render a live thumbnail
 	 * instead of the key the client froze into its session history — a later re-Apply rewrites
@@ -340,8 +334,8 @@ export interface QueueOutcome {
  * Terminal outcomes for a set of records, for the header queue's finished rows. The queue
  * derives "finished" client-side by diffing the in-flight set, so an item just vanishes the
  * instant its job ends — the client never sees the final state. This fills that gap: given
- * the ids the client is holding in its session history, report whether each failed, landed
- * on the deterministic matte, or finished clean, so the menu can flag them. Admin-only; ids
+ * the ids the client is holding in its session history, report whether each failed or
+ * finished clean, so the menu can flag them. Admin-only; ids
  * come from the bounded client history (≤ MAX_FINISHED), so this is a single small lookup.
  */
 export const listQueueOutcomes = createServerFn({ method: "GET" })
@@ -361,7 +355,6 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 					id: records.id,
 					status: records.status,
 					professionalJobStatus: records.professionalJobStatus,
-					professionalAlphaSource: records.professionalAlphaSource,
 					professionalStatus: records.professionalStatus,
 					professionalImageKey: records.professionalImageKey,
 					capturePhotoKey: records.capturePhotoKey,
@@ -377,8 +370,7 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 				// frozen (possibly-since-deleted) key. Admin surface, so include the capture.
 				const coverKey = displayCoverKey(row, { includeCapture: true });
 				// A hard failure on either pipeline (or a failed Amazon resolve — the "amazon"
-				// InFlightItem kind departs into this same finished-history flow) reads red; a
-				// landed-but-downgraded matte (AI unavailable → deterministic) reads amber;
+				// InFlightItem kind departs into this same finished-history flow) reads red;
 				// anything else is a clean finish.
 				if (
 					row.status === "failed" ||
@@ -386,8 +378,6 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 					row.amazonResolveStatus === "failed"
 				)
 					return { id: row.id, outcome: "failed", coverKey };
-				if (row.professionalAlphaSource === "deterministic")
-					return { id: row.id, outcome: "fallback", coverKey };
 				return { id: row.id, outcome: "ok", coverKey };
 			});
 		}),
@@ -396,8 +386,7 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 /**
  * The error stamped on a reaped job. The analyze note carries its own retry guidance
  * (its failure display shows the note verbatim). The pro note deliberately does NOT: the
- * editor appends the "Apply again" guidance to *every* professional failure — reaper note
- * or matte failure — uniformly (see records.$id.tsx), so embedding it here too would
+ * editor appends the "Apply again" guidance to *every* professional failure uniformly (see records.$id.tsx), so embedding it here too would
  * double it on the reaper case.
  */
 const STALE_ANALYZE_NOTE =
@@ -407,27 +396,23 @@ const STALE_PRO_NOTE =
 
 /** One entry in the header "in flight" menu — a record with a running background job. */
 export interface InFlightItem {
-	/**
-	 * Null only for `kind: "audit"` — a sweep isn't a single record, so there's nowhere
-	 * for the menu to link it. Every other kind is always a real record id.
-	 */
-	id: number | null;
+	id: number;
 	artist: string;
 	title: string;
 	thumbKey: string | null;
 	/** What's running, for the menu label. */
-	kind: "analyze" | "professional" | "amazon" | "audit";
+	kind: "analyze" | "professional" | "amazon";
 	/** The finer-grained state (all actively running — the menu shows a spinner). */
 	state: "pending" | "processing" | "queued";
 	/**
-	 * For a processing `professional` job, which of the two Apply stages it's in, so the
-	 * menu can show "(1/2)" (cover) vs "(2/2)" (matte). Null for analyze jobs, queued
-	 * professional jobs, and legacy rows with no stage recorded.
+	 * For a processing `professional` job, the Apply stage it's in (now only ever
+	 * "cover"; "matte" survives on rows from before the matte was retired). Null for
+	 * analyze jobs, queued professional jobs, and legacy rows with no stage recorded.
 	 */
 	stage: "cover" | "matte" | null;
 	/**
 	 * The fine-grained sub-step within whichever pipeline is running (see `records.jobStep`),
-	 * so the menu can show "(2/4) Enhancing" / "(1/4) Reading cover". Null for a queued job
+	 * so the menu can show "Reframing" / "(1/4) Reading cover". Null for a queued job
 	 * not yet started, a freshly re-enqueued one, and legacy rows — the menu falls back to
 	 * the coarse stage label.
 	 */
@@ -436,13 +421,13 @@ export interface InFlightItem {
 
 /**
  * Terminally fail every in-flight job — the "Fail all" escape hatch in the header queue,
- * for when the pipeline is thrashing (e.g. a matte stage OOM-looping: it dies uncatchably,
+ * for when the pipeline is thrashing (e.g. a stage OOM-looping: it dies uncatchably,
  * the row stays `processing`, and the reaper keeps re-enqueuing it). Flags both pipelines
  * failed so the reaper stops touching them and each becomes a manual-retry-able row —
  * `professionalStatus` / analysis fields are left intact, so an already-live cover or a
  * prior analysis survives. Clears the progress markers (`professionalStage`, `jobStep`).
- * Also stops the two non-record job kinds the queue menu can show (`amazonResolveStatus`
- * queued rows, and a running matte-audit sweep) — like the record pipelines above, this
+ * Also stops the non-record job kind the queue menu can show (`amazonResolveStatus`
+ * queued rows) — like the record pipelines above, this
  * flips the DB-tracked state so the UI/reaper stop treating them as running; it can't
  * cancel an already-sent queue message (Cloudflare Queues has no cancel API), so a
  * genuinely in-flight message still runs to completion and may overwrite the stopped
@@ -489,10 +474,6 @@ export const failAllInFlight = createServerFn({ method: "POST" })
 					})
 					.where(eq(records.amazonResolveStatus, "queued"))
 					.returning({ id: records.id }),
-				db
-					.update(matteAuditState)
-					.set({ running: false, updatedAt: new Date() })
-					.where(eq(matteAuditState.id, 1)),
 			]);
 
 			// A record with both a running analyze and pro job is one stopped row, not two.
@@ -515,11 +496,11 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		const db = getDb(env.DB);
 		// Projected to only the columns InFlightItem + displayCoverKey need — this is
 		// polled on a short interval, so pulling the whole row (incl. large JSON/text
-		// columns) every few seconds would be wasted D1 work as the table grows. The three
+		// columns) every few seconds would be wasted D1 work as the table grows. The two
 		// selects are independent (none depends on another's result), so they run
 		// concurrently rather than adding up their round-trip latencies on a path that's
 		// polled every few seconds while anything is in flight.
-		const [rows, amazonRows, auditProgress] = await Promise.all([
+		const [rows, amazonRows] = await Promise.all([
 			db
 				.select({
 					id: records.id,
@@ -561,8 +542,6 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 				})
 				.from(records)
 				.where(eq(records.amazonResolveStatus, "queued")),
-			// A running audit sweep is one item, not one per record — id null, no thumb.
-			getRunningMatteAudit(),
 		]);
 
 		// Reap dead jobs so they don't spin forever. Each is either re-enqueued (a fresh,
@@ -741,21 +720,6 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 				step: null,
 			}));
 
-		const auditItems: InFlightItem[] = auditProgress
-			? [
-					{
-						id: null,
-						artist: "Auditing covers",
-						title: `${auditProgress.checked} checked · ${auditProgress.suspects} flagged so far`,
-						thumbKey: null,
-						kind: "audit",
-						state: "processing",
-						stage: null,
-						step: null,
-					},
-				]
-			: [];
-
 		return [
 			...rows
 				.filter((row) => !dropped.has(row.id))
@@ -789,7 +753,6 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 					};
 				}),
 			...amazonItems,
-			...auditItems,
 		];
 	}),
 );
@@ -907,7 +870,7 @@ export const publishRecord = createServerFn({ method: "POST" })
 					coverIsUpload = false;
 				}
 
-				// The public site shows the approved professional photo (and its matte),
+				// The public site shows the approved professional photo,
 				// never the Discogs cover — so a record with no approved photo would
 				// publish to a placeholder. Gate on the SAME rule the UI displays by
 				// (displayCoverKey), so the publish gate can't drift from what goes live.
@@ -1061,9 +1024,8 @@ export const detectCorners = createServerFn({ method: "POST" })
 	);
 
 /**
- * Kick off the paid "Apply" pipeline for a record — reframe + Real-ESRGAN enhance + AI
- * matte. The actual GPU work (~a minute) runs in the queue consumer, split across two
- * isolates ({@link generateProfessionalCover} then {@link commitProfessionalMatte}). This
+ * Kick off "Apply" for a record — re-warp the square from the edited corners + tone and
+ * promote it live. The warp runs in the queue consumer ({@link applyProfessional}). This
  * server fn only persists the edited corners + tone knobs, flags
  * `professionalJobStatus: "queued"`, and enqueues the job — returning as soon as that's done
  * so the editor can close and the admin can move on (one exception: it also awaits
@@ -1128,65 +1090,6 @@ export const reframeRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Re-run ONLY the Magic matte for a record whose last Apply landed the deterministic fallback
- * (the amber "Magic matte unavailable…" note) — a transient stage-2 blip, not a bad cover. It
- * reconstructs the stage-1 {@link CoverStageResult} snapshot from the row (the already-good
- * `professionalImageKey` as `coverKey`, plus the same capture + corners + tone the cover was
- * cut from) and re-enqueues stage 2 via {@link enqueueProfessionalMatte} — skipping the
- * (successful) reframe + Real-ESRGAN enhance that {@link reframeRecord} would redo. The matte
- * is still cut from the capture + band + params, so it stays consistent with the live cover,
- * which swaps in atomically only if the Magic matte succeeds. Like `reframeRecord`, this leaves
- * the display `professionalStatus` untouched (the fallback cover stays live) and only flips
- * `professionalJobStatus: "queued"`. Throws if there's no cover/capture to matte from.
- */
-export const retryProfessionalMatte = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((input: { id: number }) => ({ id: input.id }))
-	.handler(({ data: { id } }) =>
-		Sentry.startSpan({ name: "retryProfessionalMatte" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record) return null;
-			if (!record.capturePhotoKey) {
-				throw new Error("This record has no capture photo to matte from.");
-			}
-			if (!record.professionalImageKey) {
-				throw new Error("This record has no professional cover to matte.");
-			}
-			// Rebuild the exact stage-1 snapshot the cover was committed from (mirrors
-			// generateProfessionalCover's output) so the re-run matte is cut from the same
-			// inputs as the live cover — the cover key rides through unchanged and re-commits
-			// to itself (never binned), only the matte keys are replaced.
-			const band = parseCornerBand(record.sleeveCornersJson);
-			const params = parseReframeParams(record.professionalParamsJson);
-			const stage: CoverStageResult = {
-				coverKey: record.professionalImageKey,
-				enhanced: record.professionalEnhanced ?? false,
-				captureKey: record.capturePhotoKey,
-				bandJson: serializeCornerBand(band),
-				paramsJson: JSON.stringify(params),
-			};
-			const [row] = await db
-				.update(records)
-				.set({
-					professionalJobStatus: "queued",
-					professionalError: null,
-					// Fresh manual retry → reset the reaper's auto-retry budget.
-					professionalRetryCount: 0,
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, id))
-				.returning();
-			await enqueueProfessionalMatte(id, stage);
-			return row ?? null;
-		}),
-	);
-
-/**
  * Approve (promote) or unapprove the generated professional photo. Only
  * `approved` makes it the displayed cover (see displayCoverKey); unapproving
  * drops it back to `ready` — kept in R2, just not shown — so the site falls back
@@ -1240,7 +1143,9 @@ export const clearProfessional = createServerFn({ method: "POST" })
 				.limit(1);
 			if (!record) return null;
 			const stale = [
-				record.professionalImageKey,
+				...(record.professionalImageKey
+					? withPresizedKeys(record.professionalImageKey)
+					: []),
 				record.professionalAlphaKey,
 				record.professionalAlphaCutoutKey,
 			].filter((k): k is string => Boolean(k));
@@ -1251,7 +1156,7 @@ export const clearProfessional = createServerFn({ method: "POST" })
 					professionalStatus: "idle",
 					professionalEnhanced: false,
 					professionalError: null,
-					// Drop the matte alongside the square — both rebuild from a later edit.
+					// Drop any leftover matte from before it was retired.
 					professionalAlphaKey: null,
 					professionalAlphaCutoutKey: null,
 					professionalAlphaSource: null,
@@ -1426,30 +1331,6 @@ export const checkLinkHealth = createServerFn({ method: "POST" })
 	.handler(
 		(): Promise<LinkHealthResult> => runLinkHealthCheck(MANUAL_CHECK_BATCH),
 	);
-
-/**
- * Kick off the matte-quality audit in the background, for the "Audit covers" action.
- * Unlike the synchronous "Check links", this doesn't block the request — a sweep over
- * the whole collection can run to many batches, so it self-chains through the queue
- * (see `stepMatteAuditSweep`/the `audit-mattes` mode in queue.ts) rather than the admin
- * waiting on one request. Progress (checked/suspects so far) is polled from
- * `listInFlight`, same as any other background job. Flags likely tint/edge-overrun
- * regressions — the same classes of bug the Parachutes matte fix addressed — for
- * records with a stale, bad render already baked into R2; purely diagnostic, flagged
- * rows still need a manual re-Apply or "Retry flagged mattes" to actually regenerate.
- * `beginMatteAuditSweep` atomically claims the sweep, so a second call while one is
- * already running (a race the client-side "already running" check can still lose —
- * another tab, a click before the poll catches up) is a no-op: `started: false` and
- * nothing gets enqueued, rather than starting a second chain that would corrupt the
- * shared checked/suspects counters.
- */
-export const startMatteAuditSweep = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.handler(async () => {
-		const { started } = await beginMatteAuditSweep();
-		if (started) await enqueueAuditMattes();
-		return { started };
-	});
 
 /**
  * Link a record as an intentional duplicate copy of another — the admin "I own two
@@ -1729,7 +1610,9 @@ export const deleteRecord = createServerFn({ method: "POST" })
 				const keys = [
 					row.capturePhotoKey,
 					row.coverImageKey,
-					row.professionalImageKey,
+					...(row.professionalImageKey
+						? withPresizedKeys(row.professionalImageKey)
+						: []),
 					row.professionalAlphaKey,
 					row.professionalAlphaCutoutKey,
 				].filter((key): key is string => Boolean(key));
@@ -1816,7 +1699,7 @@ export const retryRecords = createServerFn({ method: "POST" })
  * Bulk publish. Flips the selected rows to `complete` so they appear on the
  * public homepage. Shares one timestamp across chunks. Returns how many rows were
  * published — rows without an identity (`masterId` or `discogsId`) or an approved
- * cover/matte are silently skipped (a record needs both to be publishable), so the
+ * cover are silently skipped (a record needs both to be publishable), so the
  * count can be lower than the selection.
  */
 export const publishRecords = createServerFn({ method: "POST" })
@@ -1835,7 +1718,7 @@ export const publishRecords = createServerFn({ method: "POST" })
 					// so publishing a previously-failed row must not leave it behind.
 					.set({ status: "complete", error: null, updatedAt: now })
 					// A record is only publishable once it has an identity (a master
-					// album and/or a specific release) and an approved cover/matte to
+					// album and/or a specific release) and an approved cover to
 					// display (see displayCoverKey).
 					.where(
 						and(
@@ -1880,8 +1763,7 @@ export const unpublishRecords = createServerFn({ method: "POST" })
 	);
 
 /**
- * Bulk "Retry generation". Re-runs the full Apply pipeline (reframe + Real-ESRGAN enhance +
- * Magic matte) for every selected record that has a capture to generate from — mirroring the
+ * Bulk "Retry generation". Re-runs Apply for every selected record that has a capture to generate from — mirroring the
  * per-record {@link reframeRecord} but keyed only by id (uses each row's stored corners +
  * tone). Only rows currently flagged `failed` with a capture are acted on — a mixed
  * selection's healthy rows are left untouched. Flips each to `queued`, clears the
@@ -1903,8 +1785,8 @@ export const retryProfessionalGenerations = createServerFn({ method: "POST" })
 					.update(records)
 					.set({
 						professionalJobStatus: "queued",
-						// Restart at stage 1 — mirrors the per-record reframeRecord so a row
-						// that failed mid-stage-2 doesn't carry a stale "matte" marker.
+						// Mirrors the per-record reframeRecord, so a matte-era row doesn't
+						// carry a stale "matte" marker.
 						professionalStage: "cover",
 						professionalError: null,
 						professionalRetryCount: 0,
@@ -1928,163 +1810,45 @@ export const retryProfessionalGenerations = createServerFn({ method: "POST" })
 	);
 
 /**
- * Bulk "Retry Magic matte". Re-runs ONLY stage 2 (the Magic matte + commit) for every selected
- * record that has a live cover + its source capture — mirroring the per-record
- * {@link retryProfessionalMatte}, reconstructing each row's stage-1 snapshot so the re-cut
- * matte stays consistent with the live cover (which swaps in atomically only if the AI
- * matte lands). Skips the reframe + enhance the full pipeline would redo. Only rows on the
- * deterministic fallback with a cover + capture are acted on; everything else in the
- * selection is silently skipped. Returns how many were re-queued.
+ * "Re-apply all" (admin menu). Re-runs Apply for every live cover — approved, with a
+ * capture to warp, and no job already running — from each row's stored corners + tone.
+ * Rebuilds the masters at the standard 2000px (replacing the old ESRGAN ones) and
+ * writes their pre-sized copies (see `photo-variants.ts`). Free: no Replicate call.
+ * Same queue bookkeeping as {@link retryProfessionalGenerations}; the display
+ * `professionalStatus` stays `approved` throughout, so every cover stays live until its
+ * replacement swaps in. Returns how many were queued.
  */
-export const retryProfessionalMattes = createServerFn({ method: "POST" })
+export const reapplyAllProfessional = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator(idList)
-	.handler(({ data: ids }) =>
-		Sentry.startSpan({ name: "retryProfessionalMattes" }, async () => {
-			if (ids.length === 0) return { count: 0 };
+	.handler(() =>
+		Sentry.startSpan({ name: "reapplyAllProfessional" }, async () => {
 			const db = getDb(env.DB);
-			const now = new Date();
-			const items: Array<{ recordId: number; stage: CoverStageResult }> = [];
-			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
-				const rows = await db
-					.select()
-					.from(records)
-					.where(inArray(records.id, batch));
-				for (const record of rows) {
-					// Only rows actually on the deterministic fallback (what "Retry Magic matte"
-					// upgrades) — a mixed selection's Magic-matte / no-matte rows are left alone.
-					if (record.professionalAlphaSource !== "deterministic") continue;
-					// Need a committed cover + its source capture to re-cut the matte from.
-					if (!record.capturePhotoKey || !record.professionalImageKey) continue;
-					const band = parseCornerBand(record.sleeveCornersJson);
-					const params = parseReframeParams(record.professionalParamsJson);
-					items.push({
-						recordId: record.id,
-						stage: {
-							coverKey: record.professionalImageKey,
-							enhanced: record.professionalEnhanced ?? false,
-							captureKey: record.capturePhotoKey,
-							bandJson: serializeCornerBand(band),
-							paramsJson: JSON.stringify(params),
-						},
-					});
-				}
-			}
-			if (items.length === 0) return { count: 0 };
-			const byId = new Map(items.map((i) => [i.recordId, i]));
-			// Re-apply the eligibility predicate in the UPDATE itself, atomically with the
-			// flip — a row that changed between the SELECT above and this write (e.g. a
-			// concurrent editor Apply that just landed a Magic matte, so it's no longer
-			// `deterministic`) is skipped rather than blindly re-queued and re-enqueued from
-			// a now-stale snapshot, which would clobber what that job produced. Enqueue only
-			// the rows this UPDATE actually flipped (its returned ids).
-			const flipped: number[] = [];
-			for (const batch of chunk([...byId.keys()], D1_PARAM_CHUNK)) {
-				const rows = await db
-					.update(records)
-					.set({
-						professionalJobStatus: "queued",
-						professionalError: null,
-						professionalRetryCount: 0,
-						updatedAt: now,
-					})
-					.where(
-						and(
-							inArray(records.id, batch),
-							eq(records.professionalAlphaSource, "deterministic"),
-							isNotNull(records.capturePhotoKey),
-							isNotNull(records.professionalImageKey),
+			const rows = await db
+				.update(records)
+				.set({
+					professionalJobStatus: "queued",
+					professionalStage: "cover",
+					professionalError: null,
+					professionalRetryCount: 0,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(records.professionalStatus, "approved"),
+						isNotNull(records.capturePhotoKey),
+						or(
+							isNull(records.professionalJobStatus),
+							notInArray(records.professionalJobStatus, [
+								"queued",
+								"processing",
+							]),
 						),
-					)
-					.returning({ id: records.id });
-				flipped.push(...rows.map(({ id }) => id));
-			}
-			const toEnqueue = flipped
-				.map((id) => byId.get(id))
-				.filter(
-					(i): i is { recordId: number; stage: CoverStageResult } => i != null,
-				);
-			if (toEnqueue.length === 0) return { count: 0 };
-			await enqueueProfessionalMatteBatch(toEnqueue);
-			return { count: toEnqueue.length };
-		}),
-	);
-
-/**
- * Bulk re-cut the matte for records the audit shortlisted with a fix-worthy reason (see
- * `hasMatteAuditFixReason` in photo-processing.ts — a `tint`-only result is a minor note,
- * not eligible here), regardless of `professionalAlphaSource` — unlike
- * {@link retryProfessionalMattes}, which only upgrades the deterministic fallback, an
- * audit-flagged row can perfectly well have come from the AI path (that's exactly the
- * edge-overrun/under-crop bug class this exists for). Only re-cuts rows still actually
- * flagged at write time (re-applies the eligibility predicate atomically with the flip,
- * same pattern as {@link retryProfessionalMattes}) and clears the flag so a clean result
- * isn't re-surfaced before the next audit sweep confirms it. Matte-only — reframe/enhance
- * are untouched, same division of labour as "Retry Magic matte".
- */
-export const retryFlaggedMattes = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(idList)
-	.handler(({ data: ids }) =>
-		Sentry.startSpan({ name: "retryFlaggedMattes" }, async () => {
-			if (ids.length === 0) return { count: 0 };
-			const db = getDb(env.DB);
-			const now = new Date();
-			const items: Array<{ recordId: number; stage: CoverStageResult }> = [];
-			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
-				const rows = await db
-					.select()
-					.from(records)
-					.where(inArray(records.id, batch));
-				for (const record of rows) {
-					if (!hasMatteAuditFixReason(record.professionalMatteAuditReason))
-						continue;
-					if (!record.capturePhotoKey || !record.professionalImageKey) continue;
-					const band = parseCornerBand(record.sleeveCornersJson);
-					const params = parseReframeParams(record.professionalParamsJson);
-					items.push({
-						recordId: record.id,
-						stage: {
-							coverKey: record.professionalImageKey,
-							enhanced: record.professionalEnhanced ?? false,
-							captureKey: record.capturePhotoKey,
-							bandJson: serializeCornerBand(band),
-							paramsJson: JSON.stringify(params),
-						},
-					});
-				}
-			}
-			if (items.length === 0) return { count: 0 };
-			const byId = new Map(items.map((i) => [i.recordId, i]));
-			const flipped: number[] = [];
-			for (const batch of chunk([...byId.keys()], D1_PARAM_CHUNK)) {
-				const rows = await db
-					.update(records)
-					.set({
-						professionalJobStatus: "queued",
-						professionalError: null,
-						professionalRetryCount: 0,
-						updatedAt: now,
-					})
-					.where(
-						and(
-							inArray(records.id, batch),
-							isNotNull(records.professionalMatteAuditReason),
-							isNotNull(records.capturePhotoKey),
-							isNotNull(records.professionalImageKey),
-						),
-					)
-					.returning({ id: records.id });
-				flipped.push(...rows.map(({ id }) => id));
-			}
-			const toEnqueue = flipped
-				.map((id) => byId.get(id))
-				.filter(
-					(i): i is { recordId: number; stage: CoverStageResult } => i != null,
-				);
-			if (toEnqueue.length === 0) return { count: 0 };
-			await enqueueProfessionalMatteBatch(toEnqueue);
-			return { count: toEnqueue.length };
+					),
+				)
+				.returning({ id: records.id });
+			const ids = rows.map(({ id }) => id);
+			await enqueueProfessionalBatch(ids);
+			return { count: ids.length };
 		}),
 	);
 

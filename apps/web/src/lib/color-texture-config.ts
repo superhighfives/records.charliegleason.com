@@ -1,7 +1,6 @@
 /**
  * Vinyl color texture generation — tunable constants, kept in their own pure module
- * (no `cloudflare:workers`) alongside the other `*-config.ts` files (see
- * `esrgan-config.ts`, `matte-config.ts`).
+ * (no `cloudflare:workers`).
  */
 
 // black-forest-labs/flux-schnell — a first-party Replicate "official model". Unlike

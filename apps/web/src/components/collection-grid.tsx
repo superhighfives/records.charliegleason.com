@@ -12,8 +12,9 @@ import { FadeImage, isImageDecoded } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Skeleton } from "#/components/ui/skeleton";
 import { VinylDisc } from "#/components/vinyl-disc";
-import { displayCoverKey, displayMatteKey, photoUrl } from "#/lib/cover";
+import { displayCoverKey, photoUrl } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
+import { sleeveEdgeClipPath } from "#/lib/sleeve-edge";
 import { cn } from "#/lib/utils";
 
 // Tailwind `gap-5` (1.25rem / 20px) — the grid's column *and* row gap.
@@ -103,14 +104,16 @@ function computeSpanningIds(records: PublicRecord[]): Set<number> {
  * while the outer grid slot (same span, same square box) stays mounted, so
  * dense auto-flow placement — which depends on every earlier child — never
  * changes as the window moves. See the windowing comment in
- * `CollectionGrid`. The touch variant also drops two desktop-only
- * mechanisms outright: the deferred `.tile-art--deferred` box (a
- * windowed tile that's mounted should always be genuinely painted — the
- * async paint catch-up that attribute schedules is exactly the unobservable
- * clock the old touch effect kept losing races against) and the
- * `.disc-mask` circle (on touch the disc rests at opacity 0 and is faded in
- * by the ambient loop as it peeks, so there's no rest-state silhouette to
- * hide behind the alpha-transparent covers).
+ * `CollectionGrid`. The touch variant also drops the desktop-only
+ * deferred `.tile-art--deferred` box (a windowed tile that's mounted should
+ * always be genuinely painted — the async paint catch-up that attribute
+ * schedules is exactly the unobservable clock the old touch effect kept
+ * losing races against).
+ *
+ * The cover is the opaque square, inset 3% and clipped to a per-record
+ * sleeve edge (see `sleeveEdgeClipPath`). The inset keeps the breathing room
+ * the old alpha mattes had, and is small enough that the resting disc
+ * (inset 1/16) stays fully hidden behind it.
  */
 const RecordTile = memo(function RecordTile({
 	record,
@@ -138,8 +141,8 @@ const RecordTile = memo(function RecordTile({
 	 */
 	onCoverReady?: () => void;
 }) {
-	const matte = displayMatteKey(record);
-	const cover = matte ?? displayCoverKey(record);
+	const cover = displayCoverKey(record);
+	const clipPath = useMemo(() => sleeveEdgeClipPath(record.id), [record.id]);
 	const coverSrc = tileCoverSrc(record, spanning);
 	// Desktop: fades the disc in behind the cover once it's up (see the
 	// `VinylDisc` className below). Also gates the loading skeleton below.
@@ -224,10 +227,7 @@ const RecordTile = memo(function RecordTile({
 									className={
 										// Touch: rests fully invisible — the ambient loop fades
 										// it in (inline `opacity` on `.vinyl-peek`) in step with
-										// the peek itself, so there's never a rest-state disc
-										// silhouette showing through the alpha-transparent
-										// covers, and nothing for a disc mask to hide. No
-										// transition classes: the loop is the only easing (see
+										// the peek itself. No transition classes: the loop is the only easing (see
 										// `[data-touch]` in styles.css). Desktop: kept faded
 										// out until the cover is up, then revealed on a delay
 										// so a slow first-ever load never flashes a bold disc
@@ -240,73 +240,56 @@ const RecordTile = memo(function RecordTile({
 												)
 									}
 								/>
-								{/* Desktop only: masks the disc's rest-state silhouette once
-							    `coverReady` — the covers are alpha-transparent with ragged
-							    edges (the whole collection is served via
-							    `/api/photos/alpha/…`, `object-contain`), so without this
-							    the resting disc shows through them constantly. A circle
-							    matching the `inset-[5%] size-[90%]` box the disc's own
-							    SVGs draw into, in `bg-background` so wherever it shows
-							    through it reads as the page behind a transparent image
-							    (which it is) rather than a distinct overlay. CSS clears
-							    it on hover/pinned in step with the disc sliding out (see
-							    `.disc-mask` in styles.css). Touch doesn't render it at
-							    all — the disc rests at opacity 0 there instead (see the
-							    `VinylDisc` className above), which is the whole reason
-							    the touch path has no mask-timing races left to lose. */}
-								{!isTouch && coverReady && (
+								<div className="sleeve-shadow absolute inset-[3%]">
 									<div
-										aria-hidden="true"
-										className="disc-mask absolute inset-[5%] size-[90%] rounded-full bg-background"
-									/>
-								)}
-								<div className="absolute inset-0 overflow-hidden">
-									{/* Shown behind the cover while it loads — `-z-10` (rather
+										className="sleeve-clip absolute inset-0 overflow-hidden"
+										style={{ clipPath }}
+									>
+										{/* Shown behind the cover while it loads — `-z-10` (rather
 								    than unmounting once ready) so it never has to fight
 								    FadeImage's own opacity for stacking order; the opaque
 								    cover simply paints over it once revealed. Cover-less
 								    tiles skip straight to the placeholder, so no skeleton
-								    for those. Same circle as the windowing placeholder and
-								    (desktop) disc mask, so every not-yet-content state
+								    for those. Same circle as the windowing placeholder, so every not-yet-content state
 								    reads as one consistent affordance. */}
-									{cover && !coverReady && (
-										<Skeleton className="absolute inset-[5%] size-[90%] -z-10 rounded-full" />
-									)}
-									{cover ? (
-										<FadeImage
-											src={coverSrc}
-											alt={`${record.artist} — ${record.title}`}
-											onReady={() => setCoverReady(true)}
-											className={cn(
-												// `.cover-art` (styles.css) owns the rest/hover
-												// filter and every transition here — the load fade,
-												// the colour wipe and its trailing fade back. Opacity
-												// itself stays driven by FadeImage's
-												// own `loaded` state (via onReady below just for the
-												// disc) — mirroring it here too would round-trip
-												// through a second component's state update, which
-												// can resolve before the browser ever paints the
-												// hidden frame, skipping the fade entirely. Scale is
-												// active-only (the panel-pinned tile) — a gentle
-												// zoom marking the tile the panel has open. The parent's `overflow-hidden`
-												// clips it, so it zooms in place rather than growing
-												// the tile's footprint. Tailwind v4's `scale-*`
-												// compiles to the native CSS `scale` property, not
-												// `transform` — transitioning `transform` here would
-												// silently do nothing to it. On touch, `[data-touch]`
-												// in styles.css narrows the transition to opacity
-												// only — filter/scale there are driven per-frame by
-												// the ambient loop, whose easing a CSS transition
-												// would smooth *again*, lagging it.
-												"cover-art size-full group-data-[active=true]:scale-105",
-												matte ? "object-contain" : "object-cover",
-											)}
-											loading="lazy"
-											decoding="async"
-										/>
-									) : (
-										<SleevePlaceholder />
-									)}
+										{cover && !coverReady && (
+											<Skeleton className="absolute inset-[5%] size-[90%] -z-10 rounded-full" />
+										)}
+										{cover ? (
+											<FadeImage
+												src={coverSrc}
+												alt={`${record.artist} — ${record.title}`}
+												onReady={() => setCoverReady(true)}
+												className={cn(
+													// `.cover-art` (styles.css) owns the rest/hover
+													// filter and every transition here — the load fade,
+													// the colour wipe and its trailing fade back. Opacity
+													// itself stays driven by FadeImage's
+													// own `loaded` state (via onReady below just for the
+													// disc) — mirroring it here too would round-trip
+													// through a second component's state update, which
+													// can resolve before the browser ever paints the
+													// hidden frame, skipping the fade entirely. Scale is
+													// active-only (the panel-pinned tile) — a gentle
+													// zoom marking the tile the panel has open. The parent's `overflow-hidden`
+													// clips it, so it zooms in place rather than growing
+													// the tile's footprint. Tailwind v4's `scale-*`
+													// compiles to the native CSS `scale` property, not
+													// `transform` — transitioning `transform` here would
+													// silently do nothing to it. On touch, `[data-touch]`
+													// in styles.css narrows the transition to opacity
+													// only — filter/scale there are driven per-frame by
+													// the ambient loop, whose easing a CSS transition
+													// would smooth *again*, lagging it.
+													"cover-art size-full object-cover group-data-[active=true]:scale-105",
+												)}
+												loading="lazy"
+												decoding="async"
+											/>
+										) : (
+											<SleevePlaceholder />
+										)}
+									</div>
 								</div>
 								{/* Signals "this one has notes" at rest — the 2×2 span (when
 							    throttled-eligible, see `computeSpanningIds`) is a size
@@ -355,7 +338,7 @@ function tileCoverSrc(
 	record: PublicRecord,
 	spanning: boolean,
 ): string | undefined {
-	const cover = displayMatteKey(record) ?? displayCoverKey(record);
+	const cover = displayCoverKey(record);
 	return cover ? photoUrl(cover, spanning ? 900 : 500) : undefined;
 }
 
@@ -774,12 +757,23 @@ export function CollectionGrid({
 	const [activeStore] = useState(createActiveStore);
 	const setActiveId = activeStore.set;
 
-	// `?perf` — dev-only frame meter (see `PerfMeter` below). Read in an
-	// effect, not during render, so SSR and first client render stay
+	// `?perf` — dev-only frame meter (see `PerfMeter` below). `?noclip` and
+	// `?noshadow` switch off the sleeve edge / its shadow (via `data-` flags
+	// styles.css keys off), so their cost can be A/B'd on a real device. Read
+	// in an effect, not during render, so SSR and first client render stay
 	// identical for hydration.
 	const [showPerf, setShowPerf] = useState(false);
+	const [debugFlags, setDebugFlags] = useState({
+		noclip: false,
+		noshadow: false,
+	});
 	useEffect(() => {
-		setShowPerf(new URLSearchParams(window.location.search).has("perf"));
+		const params = new URLSearchParams(window.location.search);
+		setShowPerf(params.has("perf"));
+		setDebugFlags({
+			noclip: params.has("noclip"),
+			noshadow: params.has("noshadow"),
+		});
 	}, []);
 
 	// --- Touch: windowed content + one-clock scroll system -------------------
@@ -1245,6 +1239,8 @@ export function CollectionGrid({
 			// drives per-frame, so CSS smoothing never re-eases (= lags) the
 			// loop's own easing.
 			data-touch={isTouch ? "true" : undefined}
+			data-noclip={debugFlags.noclip ? "true" : undefined}
+			data-noshadow={debugFlags.noshadow ? "true" : undefined}
 			onPointerMove={
 				isTouch
 					? undefined
@@ -1359,8 +1355,8 @@ function ActiveRecordBar({
 
 /**
  * Dev instrumentation, mounted only with `?perf` in the URL: a fixed badge
- * showing, once a second, the worst main-thread frame gap and how many
- * frames blew a 34ms (two-vsync) budget in that second. Exists because none
+ * showing, once a second, the frame rate, the worst main-thread frame gap,
+ * and how many frames blew a 34ms (two-vsync) budget in that second. Exists because none
  * of the usual tools can measure this where it matters — Chrome traces run
  * the wrong engine for iOS work, and WebDriver's automation banner blocks
  * real touch input on the Simulator — while this shows up legibly in a plain
@@ -1378,18 +1374,23 @@ function PerfMeter() {
 		let windowStart = last;
 		let worst = 0;
 		let slow = 0;
+		let frames = 0;
 		const tick = (now: number) => {
 			const delta = now - last;
 			last = now;
+			frames++;
 			if (delta > worst) worst = delta;
 			if (delta > 34) slow++;
-			if (now - windowStart > 1000) {
+			const elapsed = now - windowStart;
+			if (elapsed > 1000) {
 				if (ref.current) {
-					ref.current.textContent = `worst ${Math.round(worst)}ms · >34ms ×${slow}`;
+					const fps = Math.round((frames * 1000) / elapsed);
+					ref.current.textContent = `${fps} fps · worst ${Math.round(worst)}ms · >34ms ×${slow}`;
 				}
 				windowStart = now;
 				worst = 0;
 				slow = 0;
+				frames = 0;
 			}
 			raf = requestAnimationFrame(tick);
 		};
