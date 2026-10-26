@@ -188,6 +188,30 @@ export async function enqueueProfessional(recordId: number): Promise<void> {
 }
 
 /**
+ * How long a replaced cover stays in R2 before it's deleted — long enough for any open
+ * page holding the old key (e.g. the collection, mid "Re-apply all") to finish with it.
+ */
+const STALE_PHOTO_GRACE_SECONDS = 60 * 60;
+
+/**
+ * Delete R2 objects after {@link STALE_PHOTO_GRACE_SECONDS} instead of immediately (see
+ * `DeletePhotosMessage`). If the send itself fails, deletes now — an occasional broken
+ * stale page beats an orphaned object nothing will ever clean up.
+ */
+export async function enqueueDeletePhotos(keys: string[]): Promise<void> {
+	if (keys.length === 0) return;
+	try {
+		await analyzeQueue().send(
+			{ mode: "delete-photos", keys },
+			{ delaySeconds: STALE_PHOTO_GRACE_SECONDS },
+		);
+	} catch (err) {
+		console.error("[queue] couldn't defer photo deletion, deleting now", err);
+		await env.PHOTOS.delete(keys).catch(() => {});
+	}
+}
+
+/**
  * Bulk variant of {@link enqueueProfessional}, in chunked `sendBatch` calls rather than
  * one `send` per id, so a bulk "Retry generation" over a large selection doesn't fan out
  * into hundreds of individual queue writes.
@@ -599,6 +623,24 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
+	// Deferred R2 cleanup (see `enqueueDeletePhotos`). Deleting a missing key is a no-op,
+	// so a redelivery is harmless; a failure retries with backoff, then gives up (an
+	// orphaned object costs storage, nothing else).
+	if (message.body.mode === "delete-photos") {
+		try {
+			await env.PHOTOS.delete(message.body.keys);
+			message.ack();
+		} catch (err) {
+			console.error("[queue] delete-photos failed", err);
+			if (message.attempts <= MAX_RETRIES) {
+				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
+			} else {
+				message.ack();
+			}
+		}
+		return;
+	}
+
 	// Retired with the matte audit — a sweep message still queued at deploy is a no-op.
 	if (message.body.mode === "audit-mattes") {
 		message.ack();
@@ -664,7 +706,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				return;
 			}
 
-			await applyProfessional(record);
+			const { staleKeys } = await applyProfessional(record);
+			await enqueueDeletePhotos(staleKeys);
 			message.ack();
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);

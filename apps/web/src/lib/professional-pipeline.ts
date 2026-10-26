@@ -15,11 +15,14 @@ import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
  * (records → queue → this module).
  *
  * The new cover is written to a fresh key and swapped in with one DB write, so an
- * already-live cover only changes at the very end (no public gap). The superseded cover
- * and its pre-sized copies are then binned. Any alpha matte left over from before the
+ * already-live cover only changes at the very end (no public gap). Returns the
+ * superseded cover + its pre-sized copies for the caller to bin — later, not now (see
+ * `enqueueDeletePhotos`), so pages still holding the old key don't 404. Any alpha matte left over from before the
  * cut-out was retired is left alone (keys and R2 objects) until it's cleaned up in bulk.
  */
-export async function applyProfessional(record: Record): Promise<void> {
+export async function applyProfessional(
+	record: Record,
+): Promise<{ staleKeys: string[] }> {
 	if (!record.capturePhotoKey) {
 		throw new Error("This record has no capture photo to generate from.");
 	}
@@ -52,10 +55,8 @@ export async function applyProfessional(record: Record): Promise<void> {
 		})
 		.where(eq(records.id, record.id));
 
-	// Bin the superseded cover + its pre-sized copies so re-applies don't accumulate
-	// orphaned R2 objects. Best-effort.
 	const stale = record.professionalImageKey;
-	if (stale && stale !== coverKey) {
-		await env.PHOTOS.delete(withPresizedKeys(stale)).catch(() => {});
-	}
+	return {
+		staleKeys: stale && stale !== coverKey ? withPresizedKeys(stale) : [],
+	};
 }

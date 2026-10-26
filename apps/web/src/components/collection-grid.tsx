@@ -241,10 +241,7 @@ const RecordTile = memo(function RecordTile({
 									}
 								/>
 								<div className="sleeve-shadow absolute inset-[3%]">
-									<div
-										className="sleeve-clip absolute inset-0 overflow-hidden"
-										style={{ clipPath }}
-									>
+									<div className="absolute inset-0">
 										{/* Shown behind the cover while it loads — `-z-10` (rather
 								    than unmounting once ready) so it never has to fight
 								    FadeImage's own opacity for stacking order; the opaque
@@ -271,9 +268,11 @@ const RecordTile = memo(function RecordTile({
 													// can resolve before the browser ever paints the
 													// hidden frame, skipping the fade entirely. Scale is
 													// active-only (the panel-pinned tile) — a gentle
-													// zoom marking the tile the panel has open. The parent's `overflow-hidden`
-													// clips it, so it zooms in place rather than growing
-													// the tile's footprint. Tailwind v4's `scale-*`
+													// zoom marking the tile the panel has open. The
+													// sleeve edge is this element's own `clip-path`, which
+													// `scale` applies after — so the whole sleeve grows
+													// (into the 3% inset), edge and all, rather than the
+													// art zooming inside a fixed frame. Tailwind v4's `scale-*`
 													// compiles to the native CSS `scale` property, not
 													// `transform` — transitioning `transform` here would
 													// silently do nothing to it. On touch, `[data-touch]`
@@ -281,8 +280,9 @@ const RecordTile = memo(function RecordTile({
 													// only — filter/scale there are driven per-frame by
 													// the ambient loop, whose easing a CSS transition
 													// would smooth *again*, lagging it.
-													"cover-art size-full object-cover group-data-[active=true]:scale-105",
+													"cover-art sleeve-clip size-full object-cover group-data-[active=true]:scale-105",
 												)}
+												style={{ clipPath }}
 												loading="lazy"
 												decoding="async"
 											/>

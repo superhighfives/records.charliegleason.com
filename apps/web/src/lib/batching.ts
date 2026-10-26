@@ -83,13 +83,24 @@ export interface AuditMattesMessage {
 	mode: "audit-mattes";
 }
 
+/**
+ * Deletes R2 objects later rather than now — sent with a delay by Apply for the cover
+ * it just replaced, so a page still holding the old key (an open collection while
+ * "Re-apply all" runs) keeps loading it instead of 404ing. See `enqueueDeletePhotos`.
+ */
+export interface DeletePhotosMessage {
+	mode: "delete-photos";
+	keys: string[];
+}
+
 /** Message enqueued for the analyze consumer. Re-exported from `#/lib/queue`. */
 export type AnalyzeMessage =
 	| AnalyzeRecordMessage
 	| ColorTextureMessage
 	| ColorPaletteMessage
 	| ResolveAsinMessage
-	| AuditMattesMessage;
+	| AuditMattesMessage
+	| DeletePhotosMessage;
 
 /**
  * Chunk size for bulk `inArray(id, ids)` queries. Kept comfortably under D1's
