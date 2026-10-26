@@ -287,7 +287,14 @@ const RecordTile = memo(function RecordTile({
 												decoding="async"
 											/>
 										) : (
-											<SleevePlaceholder />
+											// Same rough edge as a cover, so `.sleeve-shadow`
+											// follows the sleeve rather than a plain square.
+											<div
+												className="sleeve-clip size-full"
+												style={{ clipPath }}
+											>
+												<SleevePlaceholder />
+											</div>
 										)}
 									</div>
 								</div>
