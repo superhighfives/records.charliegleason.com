@@ -188,11 +188,18 @@ PR 1 (branch `simplify-record-crop`): Phases 1 and 2, plus dropping ESRGAN.
 - [ ] After deploy: check the matte container application is gone from the Cloudflare
       dashboard. If it lingers, delete it with `wrangler containers delete`. Archive the
       `superhighfives/vitmatte-trimap` model on Replicate.
-- [ ] Cover load time: the existing squares are ESRGAN masters (0.8–2.8 MB, up to 4096px),
-      and a cold `?w=500` resize measured 0.6–1.1 s against ~0.15 s for the warm alpha
-      images. Either warm the `?w=500` / `?w=900` variants after deploy, or re-Apply
-      everything (bulk "Retry generation" works on failed rows only, so this needs a small
-      bulk action) to get ~2000px masters.
+- [x] Cover load time. A cold `?w=500` resize of the old ESRGAN masters measured
+      0.83 s median across all 310 covers, against 0.19 s once edge-cached. Scroll FPS
+      matched production, and turning `?noclip` / `?noshadow` on made no consistent
+      difference, so images were the bottleneck. The fix:
+      - Apply writes pre-sized `@500` / `@800` / `@1600` webp copies next to each master
+        (`photo-variants.ts`).
+      - `/api/photos/$` serves a copy directly when one exists, and falls back to the
+        on-the-fly resize when it doesn't.
+      - The admin menu has a "Re-apply all" action that rebuilds every live cover
+        (2000px master + copies).
+      - Re-apply leaves the old `alpha/` files and keys alone.
+- [ ] Run "Re-apply all" after deploy.
 - [ ] Raise the capture upload size and quality (`image-resize.ts` `TARGET_SIZE`,
       `professional.ts` `CAPTURE_DECODE_MAX`). Verify the warp's memory at ~3000px first.
 

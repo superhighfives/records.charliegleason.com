@@ -72,10 +72,14 @@ import {
 	deleteRecord,
 	deleteRecords,
 	publishRecords,
+	reapplyAllProfessional,
 	retryProfessionalGenerations,
 	unpublishRecords,
 } from "#/lib/records";
-import { recordsQueryOptions } from "#/lib/records-queries";
+import {
+	inFlightQueryOptions,
+	recordsQueryOptions,
+} from "#/lib/records-queries";
 import { cn } from "#/lib/utils";
 import { effectiveValue, formatMoney } from "#/lib/value";
 
@@ -809,6 +813,32 @@ function AdminRecords() {
 		onError: () => toast.error("Couldn't check links. Try again."),
 	});
 
+	// Re-run Apply for every live cover — rebuilds the masters at 2000px and writes the
+	// pre-sized copies the grid serves (see `reapplyAllProfessional`). Free, but it's a
+	// few hundred background jobs, so it confirms first; progress shows in the queue menu.
+	const reapplyAllMutation = useMutation({
+		mutationFn: () => reapplyAllProfessional(),
+		onSuccess: async ({ count }) => {
+			// Invalidate the in-flight query directly — its polling only re-arms once it
+			// sees a non-empty result, so the queue menu wouldn't otherwise pick these up
+			// until some unrelated refetch.
+			await Promise.all([
+				queryClient.invalidateQueries({
+					queryKey: inFlightQueryOptions.queryKey,
+				}),
+				queryClient.invalidateQueries({
+					queryKey: recordsQueryOptions.queryKey,
+				}),
+			]);
+			toast.success(
+				count === 0
+					? "No live covers to re-apply."
+					: `Re-applying ${count} cover${count === 1 ? "" : "s"} — watch progress in the queue menu.`,
+			);
+		},
+		onError: () => toast.error("Couldn't start the re-apply. Try again."),
+	});
+
 	// Selected-rows actions: hand the ids to the matching batched endpoint and
 	// report a single summary toast off the count it actually acted on.
 	const bulkMutation = useMutation({
@@ -1317,6 +1347,21 @@ function AdminRecords() {
 									title="Validate a batch of linked Discogs masters and releases now, flagging any that were deleted or merged"
 								>
 									{checkLinksMutation.isPending ? "Checking…" : "Check links"}
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									disabled={reapplyAllMutation.isPending}
+									onSelect={() => {
+										if (
+											confirm(
+												"Re-apply every live cover? Each is re-warped from its saved crop and tone. Covers stay live until their replacement lands.",
+											)
+										) {
+											reapplyAllMutation.mutate();
+										}
+									}}
+									title="Re-run Apply for every live cover from its saved crop and tone — rebuilds the 2000px masters and the pre-sized copies the grid loads"
+								>
+									{reapplyAllMutation.isPending ? "Queuing…" : "Re-apply all"}
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>

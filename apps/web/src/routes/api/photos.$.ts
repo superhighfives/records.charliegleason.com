@@ -1,6 +1,12 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { createFileRoute } from "@tanstack/react-router";
 
+import {
+	hasPresizedVariants,
+	PRESIZED_WIDTHS,
+	presizedKey,
+} from "#/lib/photo-variants";
+
 // The exact widths callers request (see `photoUrl` call sites) — snapping `?w=`
 // to this set means every request lands on the same handful of cached variants
 // instead of a public, unauthenticated caller being able to force up to 2048
@@ -78,6 +84,16 @@ async function cachedResponse(
 }
 
 async function servePhoto(key: string, request: Request): Promise<Response> {
+	const presized = await getPresized(key, request);
+	if (presized) {
+		return new Response(presized.body, {
+			headers: {
+				"content-type": "image/webp",
+				"cache-control": IMMUTABLE_CACHE,
+			},
+		});
+	}
+
 	const object = await env.PHOTOS.get(key);
 	if (!object) return new Response("Not found", { status: 404 });
 
@@ -157,6 +173,29 @@ async function servePhoto(key: string, request: Request): Promise<Response> {
 			},
 		});
 	}
+}
+
+/**
+ * The pre-sized copy Apply wrote for this webp `?w=` request (see `photo-variants.ts`),
+ * or null — not a professional master, a width with no copy, a jpeg request (the rec
+ * board's baseline-jpeg path), or a cover generated before copies existed. Null falls
+ * through to the on-the-fly resize, so older covers keep working until re-applied.
+ */
+async function getPresized(
+	key: string,
+	request: Request,
+): Promise<R2ObjectBody | null> {
+	if (!hasPresizedVariants(key)) return null;
+	const searchParams = new URL(request.url).searchParams;
+	if (searchParams.get("format") === "jpeg") return null;
+	const width = clampWidth(searchParams.get("w"));
+	if (
+		width == null ||
+		!(PRESIZED_WIDTHS as readonly number[]).includes(width)
+	) {
+		return null;
+	}
+	return env.PHOTOS.get(presizedKey(key, width));
 }
 
 function clampWidth(raw: string | null): number | null {

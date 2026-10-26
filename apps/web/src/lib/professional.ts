@@ -9,6 +9,11 @@ import {
 	toPixelCorners,
 } from "#/lib/photo-processing";
 import {
+	PRESIZED_QUALITY,
+	PRESIZED_WIDTHS,
+	presizedKey,
+} from "#/lib/photo-variants";
+import {
 	DEFAULT_REFRAME_PARAMS,
 	parseReframeParams,
 	type ReframeParams,
@@ -133,7 +138,8 @@ export async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
 /**
  * The core pixel work: warp the decoded `capture` to a square using the sleeve `corners`,
  * pad/tone per the {@link ReframeParams} knobs, canonicalise to a webp via the
- * Images binding, and store it under `professional/`. Returns the new R2 key.
+ * Images binding, and store it under `professional/` (plus its pre-sized copies).
+ * Returns the new R2 key.
  */
 async function warpEncodeStore(
 	capture: RgbaImage,
@@ -177,8 +183,31 @@ async function warpEncodeStore(
 	await env.PHOTOS.put(key, buffer, {
 		httpMetadata: { contentType: "image/webp" },
 	});
+	await storePresizedCopies(key, new Uint8Array(buffer));
 
 	return { key };
+}
+
+/**
+ * Write the pre-sized copies `/api/photos/$` serves for `?w=` (see `photo-variants.ts`),
+ * so a grid tile is a plain R2 read rather than an on-the-fly resize of the master.
+ * Sequential, smallest first — each is a small Images call. A failure throws like the
+ * master write does: the caller's retry regenerates the whole set under a new key.
+ */
+async function storePresizedCopies(
+	key: string,
+	master: Uint8Array,
+): Promise<void> {
+	for (const width of PRESIZED_WIDTHS) {
+		const out = await env.IMAGES.input(blobStream(master))
+			.transform({ width, fit: "scale-down" })
+			.output({ format: "image/webp", quality: PRESIZED_QUALITY });
+		await env.PHOTOS.put(
+			presizedKey(key, width),
+			await out.response().arrayBuffer(),
+			{ httpMetadata: { contentType: "image/webp" } },
+		);
+	}
 }
 
 /**

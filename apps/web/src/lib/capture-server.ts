@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "#/db";
 import { type Record as RecordRow, records } from "#/db/schema";
 import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
+import { withPresizedKeys } from "#/lib/photo-variants";
 import { enqueueAnalyze, enqueueCaptureFirstPass } from "#/lib/queue";
 
 /**
@@ -155,7 +156,9 @@ export function replaceCaptureRecord(
 		// leaves an orphan rather than breaking the (already-updated) row.
 		for (const staleKey of [
 			record.capturePhotoKey,
-			record.professionalImageKey,
+			...(record.professionalImageKey
+				? withPresizedKeys(record.professionalImageKey)
+				: []),
 			record.professionalAlphaKey,
 			record.professionalAlphaCutoutKey,
 		]) {

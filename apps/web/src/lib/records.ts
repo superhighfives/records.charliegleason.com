@@ -11,6 +11,7 @@ import {
 	inArray,
 	isNotNull,
 	isNull,
+	notInArray,
 	or,
 } from "drizzle-orm";
 
@@ -55,6 +56,7 @@ import {
 	MANUAL_CHECK_BATCH,
 	runLinkHealthCheck,
 } from "#/lib/master-health";
+import { withPresizedKeys } from "#/lib/photo-variants";
 import { detectCaptureCorners } from "#/lib/professional";
 import {
 	enqueueAnalyze,
@@ -1141,7 +1143,9 @@ export const clearProfessional = createServerFn({ method: "POST" })
 				.limit(1);
 			if (!record) return null;
 			const stale = [
-				record.professionalImageKey,
+				...(record.professionalImageKey
+					? withPresizedKeys(record.professionalImageKey)
+					: []),
 				record.professionalAlphaKey,
 				record.professionalAlphaCutoutKey,
 			].filter((k): k is string => Boolean(k));
@@ -1606,7 +1610,9 @@ export const deleteRecord = createServerFn({ method: "POST" })
 				const keys = [
 					row.capturePhotoKey,
 					row.coverImageKey,
-					row.professionalImageKey,
+					...(row.professionalImageKey
+						? withPresizedKeys(row.professionalImageKey)
+						: []),
 					row.professionalAlphaKey,
 					row.professionalAlphaCutoutKey,
 				].filter((key): key is string => Boolean(key));
@@ -1800,6 +1806,49 @@ export const retryProfessionalGenerations = createServerFn({ method: "POST" })
 			}
 			await enqueueProfessionalBatch(requeued);
 			return { count: requeued.length };
+		}),
+	);
+
+/**
+ * "Re-apply all" (admin menu). Re-runs Apply for every live cover — approved, with a
+ * capture to warp, and no job already running — from each row's stored corners + tone.
+ * Rebuilds the masters at the standard 2000px (replacing the old ESRGAN ones) and
+ * writes their pre-sized copies (see `photo-variants.ts`). Free: no Replicate call.
+ * Same queue bookkeeping as {@link retryProfessionalGenerations}; the display
+ * `professionalStatus` stays `approved` throughout, so every cover stays live until its
+ * replacement swaps in. Returns how many were queued.
+ */
+export const reapplyAllProfessional = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.handler(() =>
+		Sentry.startSpan({ name: "reapplyAllProfessional" }, async () => {
+			const db = getDb(env.DB);
+			const rows = await db
+				.update(records)
+				.set({
+					professionalJobStatus: "queued",
+					professionalStage: "cover",
+					professionalError: null,
+					professionalRetryCount: 0,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(records.professionalStatus, "approved"),
+						isNotNull(records.capturePhotoKey),
+						or(
+							isNull(records.professionalJobStatus),
+							notInArray(records.professionalJobStatus, [
+								"queued",
+								"processing",
+							]),
+						),
+					),
+				)
+				.returning({ id: records.id });
+			const ids = rows.map(({ id }) => id);
+			await enqueueProfessionalBatch(ids);
+			return { count: ids.length };
 		}),
 	);
 
