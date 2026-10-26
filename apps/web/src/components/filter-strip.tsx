@@ -1,3 +1,4 @@
+import { XIcon } from "lucide-react";
 import { useMemo } from "react";
 import {
 	buildFacets,
@@ -75,10 +76,11 @@ export function FilterStrip({
 			{active && (
 				<button
 					type="button"
-					className="filter-clear"
+					className="filter-chip filter-clear"
 					onClick={() => onChange(NO_FILTERS)}
 				>
 					Clear
+					<XIcon aria-hidden="true" className="size-3" />
 				</button>
 			)}
 		</nav>

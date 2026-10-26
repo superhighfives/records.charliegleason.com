@@ -1167,8 +1167,7 @@ a {
   border-color: var(--foreground);
 }
 
-.filter-chip:focus-visible,
-.filter-clear:focus-visible {
+.filter-chip:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
@@ -1186,19 +1185,15 @@ a {
   opacity: 0.6;
 }
 
+/* "Clear" is a `.filter-chip` too, set apart by a full-strength border and an
+ * X icon (filter-strip.tsx), so it reads as a control rather than a filter. */
 .filter-clear {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  white-space: nowrap;
-  color: var(--muted-foreground);
-  text-decoration: underline;
-  text-underline-offset: 4px;
-  cursor: pointer;
+  color: var(--foreground);
+  border-color: var(--foreground);
 }
 
 .filter-clear:hover {
-  color: var(--foreground);
+  border-color: var(--foreground);
 }
 
 /* --- Footer stats sentence (collection-stats-sentence.tsx) ---------------- */
