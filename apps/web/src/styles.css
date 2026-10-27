@@ -19,6 +19,14 @@
   --accent-yellow: #eab308; /* yellow-500 */
   --accent-yellow-strong: #ca8a04; /* yellow-600 */
   --accent-yellow-soft: #fde047; /* yellow-300 */
+  /* Where the hero/footer text gradients end: tinted toward the foreground
+   * rather than reaching it, so the last line still reads as yellow. Both
+   * inputs resolve per theme. */
+  --text-gradient-end: color-mix(
+    in oklab,
+    var(--accent-yellow-strong) 65%,
+    var(--foreground)
+  );
 
   /* shadcn tokens — neutral light theme */
   --background: #ffffff;
@@ -1198,17 +1206,18 @@ a {
 
 /* --- Footer stats sentence (collection-stats-sentence.tsx) ---------------- */
 
-/* One gradient for the whole paragraph, yellow at the top fading to the
- * foreground colour at the bottom, clipped to its text. The surrounding
- * prose keeps its own solid muted colour, which paints over the gradient,
- * so only the stats (`.stats-highlight`, transparent) let it show through.
- * Being one paragraph-sized gradient rather than one per word, the colour
- * shifts line by line down the sentence instead of restarting in each stat. */
+/* One gradient for the whole paragraph, yellow at the top fading toward the
+ * foreground colour at the bottom (`--text-gradient-end`), clipped to its
+ * text. The surrounding prose keeps its own solid muted colour, which paints
+ * over the gradient, so only the stats (`.stats-highlight`, transparent) let
+ * it show through. Being one paragraph-sized gradient rather than one per
+ * word, the colour shifts line by line down the sentence instead of
+ * restarting in each stat. */
 .stats-sentence {
   background-image: linear-gradient(
     to bottom,
     var(--accent-yellow-strong),
-    var(--foreground)
+    var(--text-gradient-end)
   );
   -webkit-background-clip: text;
   background-clip: text;
@@ -1220,7 +1229,7 @@ a {
 
 /* --- Hero write-in (collection-hero.tsx) ---------------------------------- */
 
-/* Same yellow-to-white gradient as the footer's `.stats-sentence`, through
+/* Same yellow gradient as the footer's `.stats-sentence`, through
  * the accent words only; the number keeps its solid foreground colour. It
  * can't be one gradient on the statement itself like the footer's: each
  * word animates `transform`/`filter`, which makes it its own layer, and a
@@ -1234,7 +1243,7 @@ a {
  * statement's, and `background-clip: text` only paints where there's
  * background. So the padding (cancelled by an equal negative margin) grows
  * each word's clip box, and the gradient runs 1em past the statement at
- * either end, holding solid yellow above and solid foreground below. */
+ * either end, holding its end colours there. */
 .hero-accent {
   color: transparent;
   padding: 0.25em 0.15em 0.45em;
@@ -1242,7 +1251,7 @@ a {
   background-image: linear-gradient(
     to bottom,
     var(--accent-yellow-strong) 1em,
-    var(--foreground) calc(1em + var(--hero-h, 1em))
+    var(--text-gradient-end) calc(1em + var(--hero-h, 1em))
   );
   background-size: 100% calc(var(--hero-h, 1em) + 2em);
   background-position: 0 calc(var(--hero-y, 0px) - 1em);
