@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as CrateRouteImport } from './routes/crate'
 import { Route as R500RouteImport } from './routes/500'
 import { Route as R404RouteImport } from './routes/404'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
@@ -34,6 +35,11 @@ import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdRouteImport } from './routes/admin/records.$id'
 import { Route as CollectionRecordsIdRouteImport } from './routes/_collection/records.$id'
 
+const CrateRoute = CrateRouteImport.update({
+  id: '/crate',
+  path: '/crate',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const R500Route = R500RouteImport.update({
   id: '/500',
   path: '/500',
@@ -159,6 +165,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRouteRouteWithChildren
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/crate': typeof CrateRoute
   '/admin/capture': typeof AdminCaptureRoute
   '/admin/colors': typeof AdminColorsRoute
   '/admin/filters': typeof AdminFiltersRoute
@@ -182,6 +189,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/crate': typeof CrateRoute
   '/admin/capture': typeof AdminCaptureRoute
   '/admin/colors': typeof AdminColorsRoute
   '/admin/filters': typeof AdminFiltersRoute
@@ -209,6 +217,7 @@ export interface FileRoutesById {
   '/admin': typeof AdminRouteRouteWithChildren
   '/404': typeof R404Route
   '/500': typeof R500Route
+  '/crate': typeof CrateRoute
   '/admin/capture': typeof AdminCaptureRoute
   '/admin/colors': typeof AdminColorsRoute
   '/admin/filters': typeof AdminFiltersRoute
@@ -237,6 +246,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/404'
     | '/500'
+    | '/crate'
     | '/admin/capture'
     | '/admin/colors'
     | '/admin/filters'
@@ -260,6 +270,7 @@ export interface FileRouteTypes {
   to:
     | '/404'
     | '/500'
+    | '/crate'
     | '/admin/capture'
     | '/admin/colors'
     | '/admin/filters'
@@ -286,6 +297,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/404'
     | '/500'
+    | '/crate'
     | '/admin/capture'
     | '/admin/colors'
     | '/admin/filters'
@@ -313,6 +325,7 @@ export interface RootRouteChildren {
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
   R404Route: typeof R404Route
   R500Route: typeof R500Route
+  CrateRoute: typeof CrateRoute
   ApiRecordsRoute: typeof ApiRecordsRouteWithChildren
   ApiAdminBackupRoute: typeof ApiAdminBackupRoute
   ApiAdminCaptureRoute: typeof ApiAdminCaptureRoute
@@ -326,6 +339,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/crate': {
+      id: '/crate'
+      path: '/crate'
+      fullPath: '/crate'
+      preLoaderRoute: typeof CrateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/500': {
       id: '/500'
       path: '/500'
@@ -554,6 +574,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRouteRoute: AdminRouteRouteWithChildren,
   R404Route: R404Route,
   R500Route: R500Route,
+  CrateRoute: CrateRoute,
   ApiRecordsRoute: ApiRecordsRouteWithChildren,
   ApiAdminBackupRoute: ApiAdminBackupRoute,
   ApiAdminCaptureRoute: ApiAdminCaptureRoute,
