@@ -1,4 +1,4 @@
-import { Sparkles, Stats } from "@react-three/drei";
+import { Stats } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
 	DepthOfField,
@@ -9,11 +9,16 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import {
+	GRID_SCROLL_DURATION_MS,
+	smoothScrollTo,
+} from "#/components/collection-grid";
+import {
 	makeGrooveTexture,
 	type StreamTarget,
 	useTextureStream,
 } from "#/components/three/texture-stream";
 import type { PublicRecord } from "#/lib/records";
+import { Dust } from "./dust";
 
 /**
  * Prototype: the collection grid as records hung on a dark, gently curved
@@ -55,6 +60,11 @@ const LIFT_Z = 0.42;
 /** How far the hovered record's vinyl slides out to the right. */
 const DISC_SLIDE = 0.4;
 const WALL_Z = -0.32;
+/** Space above the first row / below the last, in world units. */
+const TOP_PAD = 0.1;
+const BOTTOM_PAD = 0.45;
+/** Clearance kept between the selected record and the record panel's edge. */
+const PANEL_MARGIN = 0.35;
 
 const SIZE_SCALE: Record<string, number> = {
 	'12"': 1,
@@ -76,6 +86,12 @@ export type WallSceneProps = {
 	slot: HTMLElement;
 	onActiveChange: (index: number | null) => void;
 	onOpen: (record: PublicRecord) => void;
+	/**
+	 * The record the panel has open, if any: it stays lifted and lit, the page
+	 * scrolls to keep it in view as the panel pages, and the camera pans right
+	 * just enough to keep it clear of the panel.
+	 */
+	focusedRecordId: number | null;
 	/** The slot height the wall needs, in CSS px. */
 	onContentHeight: (px: number) => void;
 	theme: WallTheme;
@@ -144,6 +160,7 @@ function Wall({
 	slot,
 	onActiveChange,
 	onOpen,
+	focusedRecordId,
 	onContentHeight,
 	theme,
 	isTouch,
@@ -157,11 +174,11 @@ function Wall({
 	const gridWidth = cols * PITCH - GAP;
 	const tanHalf = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
 	const aspect = size.width / size.height;
-	const distance = (gridWidth * 1.12) / 2 / (tanHalf * aspect);
+	const distance = (gridWidth * 1.2) / 2 / (tanHalf * aspect);
 	const viewHeight = 2 * distance * tanHalf;
 	const viewWidth = viewHeight * aspect;
 	const unitsPerPx = viewHeight / size.height;
-	const wallHeight = rows * PITCH;
+	const wallHeight = TOP_PAD + rows * PITCH - GAP + BOTTOM_PAD;
 
 	useEffect(() => {
 		onContentHeight(wallHeight / unitsPerPx);
@@ -208,8 +225,55 @@ function Wall({
 	const lastCenter = useRef(-1);
 	const parallax = useRef(new THREE.Vector2());
 	const spot = useRef<THREE.SpotLight>(null);
-	const dust = useRef<THREE.Group>(null);
 	const wall = useRef<THREE.Mesh>(null);
+	/** Camera travel down the wall, in world units (drives the dust). */
+	const travel = useRef(0);
+	const getTravel = useCallback(() => travel.current, []);
+	/** Rightward camera pan that keeps the selected record clear of the panel. */
+	const panelShift = useRef(0);
+
+	const focusedIndex = useMemo(
+		() =>
+			focusedRecordId == null
+				? -1
+				: records.findIndex((r) => r.id === focusedRecordId),
+		[records, focusedRecordId],
+	);
+	const focusedRef = useRef(focusedIndex);
+	focusedRef.current = focusedIndex;
+
+	// Keep the selected record on screen as the panel pages through records —
+	// the same eased scroll the DOM grid uses. The first run (a direct link to
+	// a record) jumps straight there instead.
+	const firstFocus = useRef(true);
+	useEffect(() => {
+		if (focusedIndex < 0) return;
+		const row = Math.floor(focusedIndex / cols);
+		const slotDocTop = slot.getBoundingClientRect().top + window.scrollY;
+		const fromSlotTop = (TOP_PAD + TILE / 2 + row * PITCH) / unitsPerPx;
+		const target = slotDocTop + fromSlotTop - window.innerHeight / 2;
+		const reduced = window.matchMedia(
+			"(prefers-reduced-motion: reduce)",
+		).matches;
+		if (firstFocus.current || reduced) window.scrollTo(0, target);
+		else smoothScrollTo(target, GRID_SCROLL_DURATION_MS);
+		firstFocus.current = false;
+	}, [focusedIndex, cols, unitsPerPx, slot]);
+
+	// The shadow-catching wall bows back exactly like the records do (see the
+	// curve in the frame loop), so a record never passes through it.
+	const wallGeometry = useMemo(() => {
+		const g = new THREE.PlaneGeometry(viewWidth * 3, viewHeight * 3, 1, 120);
+		const pos = g.attributes.position;
+		const half = viewHeight / 2;
+		for (let i = 0; i < pos.count; i++) {
+			const dy = pos.getY(i) / half;
+			pos.setZ(i, -CURVE_DEPTH * dy * dy);
+		}
+		g.computeVertexNormals();
+		return g;
+	}, [viewWidth, viewHeight]);
+	useEffect(() => () => wallGeometry.dispose(), [wallGeometry]);
 	const lookAt = useMemo(() => new THREE.Vector3(), []);
 	const raycaster = useMemo(() => new THREE.Raycaster(), []);
 	/** Pointer in NDC (-1…1), and whether it's over the slot right now. */
@@ -294,24 +358,48 @@ function Wall({
 		// Where the slot's top edge is on screen → where row 0 sits in the
 		// view. Row 0's top edge (y = TILE / 2) lines up with the slot's top.
 		const slotTop = slot.getBoundingClientRect().top;
-		const camY = TILE / 2 - (size.height / 2 - slotTop) * unitsPerPx;
+		const camY = TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
+		travel.current = -camY;
+		const focused = focusedRef.current;
+
+		// With the record panel open, pan right just enough that the selected
+		// record sits clear of the panel's left edge (desktop — on phones the
+		// panel covers everything anyway).
+		let shiftGoal = 0;
+		if (focused >= 0 && !isTouch) {
+			const panel = document.querySelector('[data-slot="sheet-content"]');
+			const left = panel?.getBoundingClientRect().left ?? size.width;
+			if (left > size.width * 0.3) {
+				const visibleRight = ((left / size.width) * 2 - 1) * (viewWidth / 2);
+				const tileRight = layout[focused].x + TILE / 2 + PANEL_MARGIN;
+				shiftGoal = Math.max(0, tileRight - visibleRight);
+			}
+		}
+		panelShift.current = THREE.MathUtils.damp(
+			panelShift.current,
+			shiftGoal,
+			4,
+			dt,
+		);
 
 		// Parallax: the camera drifts toward the pointer (a slow idle sway on
 		// touch, where there's no pointer to follow).
-		const goalX = isTouch ? Math.sin(t * 0.3) * 0.12 : ndc.x * 0.35;
-		const goalY = isTouch ? Math.cos(t * 0.23) * 0.08 : ndc.y * 0.22;
+		const goalX = isTouch ? Math.sin(t * 0.3) * 0.12 : ndc.x * 0.18;
+		const goalY = isTouch ? Math.cos(t * 0.23) * 0.08 : ndc.y * 0.14;
 		const p = parallax.current;
 		p.x = THREE.MathUtils.damp(p.x, goalX, 3, dt);
 		p.y = THREE.MathUtils.damp(p.y, goalY, 3, dt);
-		camera.position.set(p.x, camY + p.y, distance);
-		lookAt.set(0, camY, 0);
+		camera.position.set(p.x + panelShift.current, camY + p.y, distance);
+		lookAt.set(panelShift.current, camY, 0);
 		camera.lookAt(lookAt);
 		camera.updateMatrixWorld();
 
 		const centerRow = Math.round(-camY / PITCH);
 		// Desktop: whatever's under the pointer. Touch has no hover: the record
 		// at the centre of the screen is it, while the wall is on screen.
-		if (!isTouch) {
+		if (focused >= 0) {
+			hovered.current = focused;
+		} else if (!isTouch) {
 			hovered.current = pointer.current.overSlot ? pick(ndc) : null;
 			document.body.style.cursor = hovered.current == null ? "" : "pointer";
 		} else {
@@ -337,9 +425,13 @@ function Wall({
 		textures.flush(isTouch ? 1 : 2);
 
 		// The spotlight tracks the pointer across the wall (on touch, it rests
-		// on the centred record).
-		const lightX = isTouch ? 0 : (ndc.x * viewWidth) / 2;
-		const lightY = isTouch ? camY : camY + (ndc.y * viewHeight) / 2;
+		// on the centred record; with the panel open, on the selected one).
+		let lightX = isTouch ? 0 : (ndc.x * viewWidth) / 2 + panelShift.current;
+		let lightY = isTouch ? camY : camY + (ndc.y * viewHeight) / 2;
+		if (focused >= 0) {
+			lightX = layout[focused].x;
+			lightY = layout[focused].y;
+		}
 		if (spot.current) {
 			const s = spot.current;
 			s.position.x = THREE.MathUtils.damp(s.position.x, lightX, 5, dt);
@@ -348,7 +440,6 @@ function Wall({
 			s.target.position.set(s.position.x, s.position.y - 0.6, 0);
 			s.target.updateMatrixWorld();
 		}
-		if (dust.current) dust.current.position.y = camY;
 		if (wall.current) wall.current.position.y = camY;
 
 		// Only rows near the viewport are animated (and drawn, and pickable).
@@ -416,22 +507,41 @@ function Wall({
 				castShadow={!isTouch}
 			/>
 			{/* The wall the records hang on — there to catch shadows. */}
-			<mesh ref={wall} position={[0, 0, WALL_Z]} receiveShadow>
-				<planeGeometry args={[viewWidth * 3, viewHeight * 3]} />
+			<mesh
+				ref={wall}
+				geometry={wallGeometry}
+				position={[0, 0, WALL_Z]}
+				receiveShadow
+			>
 				<meshStandardMaterial color={theme.background} roughness={1} />
 			</mesh>
-			<group ref={dust}>
-				<Sparkles
-					count={isTouch ? 60 : 140}
-					scale={[viewWidth, viewHeight, 3]}
-					position={[0, 0, 1]}
-					size={1.4}
-					speed={0.18}
-					opacity={theme.dark ? 0.35 : 0.25}
-					noise={0.6}
-					color={theme.dark ? "#fff1d0" : "#8a7a5a"}
-				/>
-			</group>
+			{/* Dust in two layers: a fine one just off the wall that drifts slower
+			    than the scroll, and a sparse, larger one near the camera that
+			    moves faster (and lands in the depth of field's blur). */}
+			<Dust
+				count={isTouch ? 40 : 90}
+				width={viewWidth * 1.2}
+				height={viewHeight * 1.6}
+				depth={0.5}
+				z={0.1}
+				parallax={0.75}
+				size={1.6}
+				opacity={theme.dark ? 0.35 : 0.22}
+				color={theme.dark ? "#fff1d0" : "#8a7a5a"}
+				getScroll={getTravel}
+			/>
+			<Dust
+				count={isTouch ? 14 : 36}
+				width={viewWidth}
+				height={viewHeight * 1.6}
+				depth={1.5}
+				z={2.4}
+				parallax={1.45}
+				size={2.6}
+				opacity={theme.dark ? 0.3 : 0.18}
+				color={theme.dark ? "#fff1d0" : "#8a7a5a"}
+				getScroll={getTravel}
+			/>
 			{records.map((record, i) => (
 				<Tile
 					key={record.id}

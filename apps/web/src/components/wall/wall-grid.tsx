@@ -16,16 +16,22 @@ const WallScene = lazy(() => import("./wall-scene"));
  * paint it over the hero and footer.
  *
  * Also drives the page parallax: any element marked `data-parallax="<f>"`
- * drifts against the scroll by factor `f` (0 = scrolls normally; 0.3 =
- * moves 30% slower), so the header and footer move independently of the
- * wall. Transforms only — no layout — written once per scrolled frame.
+ * drifts against the scroll by factor `f` — 0 scrolls normally, positive
+ * moves slower than the page (lags behind), negative moves faster — so the
+ * header and footer move independently of the wall. Add `data-parallax-fade`
+ * and it also fades and blurs out as it leaves the top of the screen, and in
+ * ("fades up") as it arrives from the bottom. Transform/opacity/filter only —
+ * no layout — written once per scrolled frame.
  */
 export function WallGrid({
 	records,
 	onOpen,
+	focusedRecordId,
 }: {
 	records: PublicRecord[];
 	onOpen: (record: PublicRecord) => void;
+	/** The record the panel has open — see `WallSceneProps`. */
+	focusedRecordId: number | null;
 }) {
 	const [slot, setSlot] = useState<HTMLDivElement | null>(null);
 	const [height, setHeight] = useState<number | null>(null);
@@ -63,6 +69,7 @@ export function WallGrid({
 								slot={slot}
 								onActiveChange={setActive}
 								onOpen={onOpen}
+								focusedRecordId={focusedRecordId}
 								onContentHeight={onContentHeight}
 								theme={theme}
 								isTouch={env.isTouch}
@@ -116,31 +123,68 @@ function useWallTheme(): WallTheme | null {
 	return theme;
 }
 
-/** See `WallGrid`: `data-parallax` elements drift against the scroll. */
+/** See `WallGrid`: `data-parallax` elements drift (and fade) with scroll. */
 function useParallax() {
 	useEffect(() => {
-		type Entry = { el: HTMLElement; factor: number; centre: number };
+		type Entry = {
+			el: HTMLElement;
+			factor: number;
+			fade: boolean;
+			/** Document-space top and height, measured without our transform. */
+			top: number;
+			height: number;
+			/** Last written style, so unchanged frames write nothing. */
+			last: string;
+		};
 		let entries: Entry[] = [];
 		const measure = () => {
 			entries = [
 				...document.querySelectorAll<HTMLElement>("[data-parallax]"),
 			].map((el) => {
-				// Measure without our own transform in the way.
 				el.style.transform = "";
 				const r = el.getBoundingClientRect();
+				const fade = el.hasAttribute("data-parallax-fade");
+				if (fade) el.style.willChange = "transform, opacity, filter";
 				return {
 					el,
 					factor: Number(el.dataset.parallax) || 0,
-					centre: r.top + window.scrollY + r.height / 2,
+					fade,
+					top: r.top + window.scrollY,
+					height: r.height,
+					last: "",
 				};
 			});
 			apply();
 		};
 		const apply = () => {
-			const viewCentre = window.scrollY + window.innerHeight / 2;
-			for (const { el, factor, centre } of entries) {
-				const offset = -(centre - viewCentre) * factor;
-				el.style.transform = `translate3d(0, ${offset.toFixed(1)}px, 0)`;
+			const vh = window.innerHeight;
+			const viewCentre = window.scrollY + vh / 2;
+			for (const e of entries) {
+				const offset = -(e.top + e.height / 2 - viewCentre) * e.factor;
+				let visible = 1;
+				if (e.fade) {
+					// On screen, after the parallax offset.
+					const top = e.top + offset - window.scrollY;
+					const bottom = top + e.height;
+					visible =
+						top > vh / 2
+							? // Arriving from below: fully in once its top is 35% up.
+								Math.min(1, Math.max(0, (vh - top) / (vh * 0.35)))
+							: // Leaving the top: gone once its bottom reaches the top edge.
+								Math.min(1, Math.max(0, bottom / (vh * 0.5)));
+					// Ease, and quantise so a slow scroll doesn't rewrite the
+					// filter every frame for invisible changes.
+					visible = Math.round(visible * visible * (3 - 2 * visible) * 40) / 40;
+				}
+				const blur = (1 - visible) * 10;
+				const style = `${offset.toFixed(1)}|${visible}`;
+				if (style === e.last) continue;
+				e.last = style;
+				e.el.style.transform = `translate3d(0, ${offset.toFixed(1)}px, 0)`;
+				if (e.fade) {
+					e.el.style.opacity = String(visible);
+					e.el.style.filter = blur > 0.05 ? `blur(${blur.toFixed(1)}px)` : "";
+				}
 			}
 		};
 		let raf = 0;
@@ -159,7 +203,12 @@ function useParallax() {
 			observer.disconnect();
 			window.removeEventListener("scroll", onScroll);
 			cancelAnimationFrame(raf);
-			for (const { el } of entries) el.style.transform = "";
+			for (const { el } of entries) {
+				el.style.transform = "";
+				el.style.opacity = "";
+				el.style.filter = "";
+				el.style.willChange = "";
+			}
 		};
 	}, []);
 }

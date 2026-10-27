@@ -264,13 +264,16 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 
 			{/* `data-parallax` (wall mode only): see `WallGrid`. */}
 			{!search.trim() && (
-				<div data-parallax={wallMode ? 0.35 : undefined}>
+				<div
+					data-parallax={wallMode ? -0.3 : undefined}
+					data-parallax-fade={wallMode ? "" : undefined}
+				>
 					<CollectionHero count={data.length} />
 				</div>
 			)}
 
 			<div className="rise-in" style={{ animationDelay: `${revealMs}ms` }}>
-				<div data-parallax={wallMode ? 0.12 : undefined}>
+				<div>
 					<FilterStrip
 						records={data}
 						countRecords={searched}
@@ -307,7 +310,11 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 							: "No records match those filters."}
 					</p>
 				) : wallMode ? (
-					<WallGrid records={filtered} onOpen={openRecord} />
+					<WallGrid
+						records={filtered}
+						onOpen={openRecord}
+						focusedRecordId={selected?.id ?? null}
+					/>
 				) : (
 					<CollectionGrid
 						records={filtered}
@@ -346,12 +353,15 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			</Sheet>
 
 			<footer className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground">
-				<div data-parallax={wallMode ? 0.25 : undefined}>
+				<div
+					data-parallax={wallMode ? -0.2 : undefined}
+					data-parallax-fade={wallMode ? "" : undefined}
+				>
 					<CollectionStatsSentence records={data} />
 				</div>
 				<div
 					className="mt-24 flex flex-wrap items-end justify-between gap-4"
-					data-parallax={wallMode ? 0.08 : undefined}
+					data-parallax={wallMode ? -0.08 : undefined}
 				>
 					<div>
 						<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
