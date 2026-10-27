@@ -70,6 +70,7 @@ export function DebugOverlay() {
 			next = param != null && param !== "0";
 		}
 		setEnabled(next);
+		let on = next;
 		for (const { key } of FLAGS) {
 			if (params.has(key)) document.documentElement.dataset[key] = "true";
 		}
@@ -77,13 +78,15 @@ export function DebugOverlay() {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.code !== "KeyD" || !e.shiftKey || !e.altKey) return;
 			e.preventDefault();
-			setEnabled((on) => {
-				try {
-					if (on) localStorage.removeItem(STORAGE_KEY);
-					else localStorage.setItem(STORAGE_KEY, "1");
-				} catch {}
-				return !on;
-			});
+			on = !on;
+			try {
+				if (on) localStorage.setItem(STORAGE_KEY, "1");
+				else localStorage.removeItem(STORAGE_KEY);
+			} catch {
+				// No storage (private mode, quota): the toggle still works for
+				// this page, it just won't be remembered.
+			}
+			setEnabled(on);
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
@@ -93,17 +96,20 @@ export function DebugOverlay() {
 }
 
 function DebugPanel() {
-	const statsRef = useRef<HTMLDivElement>(null);
+	const statsRef = useRef<HTMLSpanElement>(null);
 	const longRef = useRef<HTMLDivElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const longFramesRef = useRef<LongFrame[]>([]);
 	const [collapsed, setCollapsed] = useState(false);
 	const [flags, setFlags] = useState<Record<FlagKey, boolean>>(() => {
-		const out = {} as Record<FlagKey, boolean>;
-		for (const { key } of FLAGS) {
-			out[key] = document.documentElement.dataset[key] === "true";
-		}
-		return out;
+		const isSet = (key: FlagKey) =>
+			document.documentElement.dataset[key] === "true";
+		return {
+			noclip: isSet("noclip"),
+			noshadow: isSet("noshadow"),
+			noanim: isSet("noanim"),
+			nofilter: isSet("nofilter"),
+		};
 	});
 
 	useEffect(() => {
@@ -268,9 +274,9 @@ function DebugPanel() {
 				className="w-full text-left"
 				aria-expanded={!collapsed}
 			>
-				<div ref={statsRef} className="whitespace-pre">
+				<span ref={statsRef} className="block whitespace-pre">
 					measuring…
-				</div>
+				</span>
 			</button>
 			<div className={collapsed ? "hidden" : undefined}>
 				{import.meta.env.DEV && (
