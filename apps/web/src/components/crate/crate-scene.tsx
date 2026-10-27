@@ -8,7 +8,11 @@ import {
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
-import { displayCoverKey, photoUrl } from "#/lib/cover";
+import {
+	makeGrooveTexture,
+	useTextureStream,
+} from "#/components/three/texture-stream";
+import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 
 /**
@@ -111,14 +115,12 @@ function useSharedResources() {
 			color: "#bfb6a3",
 			roughness: 0.85,
 		});
-		const loader = new THREE.TextureLoader();
 		const grooves = makeGrooveTexture();
 		return {
 			sleeveGeometry,
 			discGeometry,
 			cardboard,
 			sleeveBack,
-			loader,
 			grooves,
 		};
 	}, []);
@@ -145,15 +147,15 @@ function Crate({
 	const lastReported = useRef(-1);
 	const camera = useThree((s) => s.camera);
 	const size = useThree((s) => s.size);
-	const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
 	const lookAt = useMemo(() => new THREE.Vector3(), []);
 	const camGoal = useMemo(() => new THREE.Vector3(), []);
-	const textures = useTextureStream(
-		records,
-		shared.loader,
-		maxAnisotropy,
-		handles,
-	);
+	const getTarget = useCallback((i: number) => handles.current[i], []);
+	const textures = useTextureStream(records, getTarget, {
+		coverPx: COVER_PX,
+		window: TEXTURE_WINDOW,
+		discWindow: 2,
+		cacheMax: TEXTURE_CACHE_MAX,
+	});
 
 	const portrait = size.width < size.height;
 
@@ -205,10 +207,6 @@ function Crate({
 		lookAt.set(0, 0.42, zc - 0.15);
 		camera.lookAt(lookAt);
 	});
-
-	useEffect(() => {
-		return () => textures.disposeAll();
-	}, [textures]);
 
 	const crateLength = records.length * GAP + 2;
 	const register = useCallback((i: number, h: RecordHandle | null) => {
@@ -361,129 +359,4 @@ function CrateBox({ length }: { length: number }) {
 			))}
 		</group>
 	);
-}
-
-/**
- * Loads cover + vinyl textures for records near the cursor and evicts the
- * oldest beyond `TEXTURE_CACHE_MAX`, so a 300-record crate never holds 300
- * textures on the GPU at once.
- */
-function useTextureStream(
-	records: PublicRecord[],
-	loader: THREE.TextureLoader,
-	anisotropy: number,
-	handles: React.RefObject<(RecordHandle | null)[]>,
-) {
-	return useMemo(() => {
-		const cache = new Map<string, THREE.Texture>();
-		const pending = new Set<string>();
-
-		const load = (url: string, apply: (t: THREE.Texture) => void) => {
-			const hit = cache.get(url);
-			if (hit) {
-				// Refresh LRU position.
-				cache.delete(url);
-				cache.set(url, hit);
-				apply(hit);
-				return;
-			}
-			if (pending.has(url)) return;
-			pending.add(url);
-			loader.load(
-				url,
-				(texture) => {
-					pending.delete(url);
-					texture.colorSpace = THREE.SRGBColorSpace;
-					texture.anisotropy = anisotropy;
-					cache.set(url, texture);
-					apply(texture);
-					while (cache.size > TEXTURE_CACHE_MAX) {
-						const [oldUrl, old] = cache.entries().next().value as [
-							string,
-							THREE.Texture,
-						];
-						cache.delete(oldUrl);
-						for (const h of handles.current ?? []) {
-							if (h?.cover.map === old) setMap(h.cover, null);
-							if (h?.discMaterial.map === old) setMap(h.discMaterial, null);
-						}
-						old.dispose();
-					}
-				},
-				undefined,
-				() => pending.delete(url),
-			);
-		};
-
-		const update = (center: number) => {
-			// Nearest first, so the record you're on loads before its neighbours.
-			const order: number[] = [];
-			for (let r = 0; r <= TEXTURE_WINDOW; r++) {
-				if (r === 0) order.push(center);
-				else order.push(center + r, center - r);
-			}
-			for (const i of order) {
-				const record = records[i];
-				const h = handles.current?.[i];
-				if (!record || !h) continue;
-				const key = displayCoverKey(record);
-				if (key) load(photoUrl(key, COVER_PX), (t) => setMap(h.cover, t));
-				if (record.colorTextureImageKey && Math.abs(i - center) <= 2) {
-					load(photoUrl(record.colorTextureImageKey, 256), (t) =>
-						setMap(h.discMaterial, t),
-					);
-				}
-			}
-		};
-
-		const disposeAll = () => {
-			for (const t of cache.values()) t.dispose();
-			cache.clear();
-		};
-
-		return { update, disposeAll };
-	}, [records, loader, anisotropy, handles]);
-}
-
-function setMap(
-	material: THREE.MeshStandardMaterial,
-	map: THREE.Texture | null,
-) {
-	if (material.map === map) return;
-	material.map = map;
-	material.needsUpdate = true;
-}
-
-/**
- * A radial groove pattern for the disc caps (CylinderGeometry maps its caps
- * as a unit square, so a centred canvas lines up with the disc). Grey levels
- * vary ring to ring; used as both bump and roughness.
- */
-function makeGrooveTexture() {
-	const size = 512;
-	const canvas = document.createElement("canvas");
-	canvas.width = size;
-	canvas.height = size;
-	const ctx = canvas.getContext("2d");
-	if (ctx) {
-		const c = size / 2;
-		ctx.fillStyle = "#777";
-		ctx.fillRect(0, 0, size, size);
-		for (let r = c; r > c * 0.36; r -= 1.5) {
-			const shade = 110 + Math.round(Math.sin(r * 0.9) * 30 + (r % 7) * 4);
-			ctx.strokeStyle = `rgb(${shade},${shade},${shade})`;
-			ctx.lineWidth = 1;
-			ctx.beginPath();
-			ctx.arc(c, c, r, 0, Math.PI * 2);
-			ctx.stroke();
-		}
-		// Smooth run-out between the grooves and the label.
-		ctx.fillStyle = "#555";
-		ctx.beginPath();
-		ctx.arc(c, c, c * 0.36, 0, Math.PI * 2);
-		ctx.fill();
-	}
-	const texture = new THREE.CanvasTexture(canvas);
-	texture.anisotropy = 4;
-	return texture;
 }
