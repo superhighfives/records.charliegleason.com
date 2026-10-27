@@ -37,12 +37,17 @@ export function WallGrid({
 	const [height, setHeight] = useState<number | null>(null);
 	const [active, setActive] = useState<number | null>(null);
 	const theme = useWallTheme();
-	const [env, setEnv] = useState<{ isTouch: boolean; showStats: boolean }>();
+	const [env, setEnv] = useState<{
+		isTouch: boolean;
+		showStats: boolean;
+		dof: boolean;
+	}>();
 
 	useEffect(() => {
 		setEnv({
 			isTouch: window.matchMedia("(hover: none) and (pointer: coarse)").matches,
 			showStats: new URLSearchParams(window.location.search).has("stats"),
+			dof: !new URLSearchParams(window.location.search).has("nodof"),
 		});
 	}, []);
 	useParallax();
@@ -74,6 +79,7 @@ export function WallGrid({
 								theme={theme}
 								isTouch={env.isTouch}
 								showStats={env.showStats}
+								dof={env.dof}
 							/>
 						</Suspense>
 					</div>,

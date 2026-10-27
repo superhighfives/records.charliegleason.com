@@ -5,6 +5,7 @@ import {
 	EffectComposer,
 	Vignette,
 } from "@react-three/postprocessing";
+import type { DepthOfFieldEffect } from "postprocessing";
 import {
 	memo,
 	useCallback,
@@ -30,6 +31,7 @@ import {
 } from "#/components/three/texture-stream";
 import type { PublicRecord } from "#/lib/records";
 import { Dust } from "./dust";
+import { loadNoteFont, makeNoteTexture, noteExcerpt } from "./note-texture";
 import { packDense } from "./pack";
 
 /**
@@ -124,6 +126,7 @@ export type WallSceneProps = {
 	theme: WallTheme;
 	isTouch: boolean;
 	showStats?: boolean;
+	dof?: boolean;
 };
 
 /**
@@ -131,6 +134,11 @@ export type WallSceneProps = {
  * now-showing bar), and that must not re-render 300 tiles with it.
  */
 export default memo(function WallScene(props: WallSceneProps) {
+	// The point depth of field keeps sharp. The frame loop moves it with the
+	// camera; reading the camera's position at render instead caught it at its
+	// initial z, before the loop placed it, and left the whole wall out of
+	// focus.
+	const [focusTarget] = useState(() => new THREE.Vector3());
 	return (
 		<Canvas
 			dpr={[1, 2]}
@@ -138,26 +146,57 @@ export default memo(function WallScene(props: WallSceneProps) {
 			camera={{ fov: FOV, near: 0.1, far: 60, position: [0, 0, 10] }}
 			gl={{ antialias: false, alpha: false }}
 		>
-			<Wall {...props} />
-			<Effects isTouch={props.isTouch} dark={props.theme.dark} />
+			<Wall {...props} focusTarget={focusTarget} />
+			<Effects
+				isTouch={props.isTouch}
+				dark={props.theme.dark}
+				focusTarget={focusTarget}
+				dof={props.dof ?? true}
+			/>
 			{props.showStats && <Stats />}
 		</Canvas>
 	);
 });
 
-function Effects({ isTouch, dark }: { isTouch: boolean; dark: boolean }) {
-	const camera = useThree((s) => s.camera);
-	// The wall's centre sits at z = 0 and the camera looks straight at it.
-	const focus = camera.position.z;
+function Effects({
+	isTouch,
+	dark,
+	focusTarget,
+	dof,
+}: {
+	isTouch: boolean;
+	dark: boolean;
+	focusTarget: THREE.Vector3;
+	/** `?nodof` turns depth of field off, for comparing. */
+	dof: boolean;
+}) {
+	// R3F copies a vector prop into the effect's own target once, at render,
+	// rather than keeping a reference — so the moving focus point has to be
+	// copied in every frame (after `Wall`'s loop has placed it).
+	const dofRef = useRef<DepthOfFieldEffect>(null);
+	useFrame(() => {
+		dofRef.current?.target?.copy(focusTarget);
+	});
+	const vignette = <Vignette offset={0.25} darkness={dark ? 0.75 : 0.35} />;
+	if (!dof) {
+		return (
+			<EffectComposer multisampling={isTouch ? 0 : 4}>
+				{vignette}
+			</EffectComposer>
+		);
+	}
 	return (
 		<EffectComposer multisampling={isTouch ? 0 : 4}>
 			<DepthOfField
-				focusDistance={focus}
-				focusRange={1.1}
-				bokehScale={isTouch ? 2 : 3.5}
+				ref={dofRef}
+				target={focusTarget}
+				// Wide enough that the middle of the screen — and a record lifted
+				// off it — stays sharp; only rows curving away soften.
+				focusRange={1.6}
+				bokehScale={isTouch ? 2 : 3}
 				resolutionScale={isTouch ? 0.35 : 0.5}
 			/>
-			<Vignette offset={0.25} darkness={dark ? 0.75 : 0.35} />
+			{vignette}
 		</EffectComposer>
 	);
 }
@@ -208,6 +247,7 @@ type Shared = {
 };
 
 function Wall({
+	focusTarget,
 	records,
 	slot,
 	onActiveChange,
@@ -216,7 +256,7 @@ function Wall({
 	onContentHeight,
 	theme,
 	isTouch,
-}: WallSceneProps) {
+}: WallSceneProps & { focusTarget: THREE.Vector3 }) {
 	const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
 	const size = useThree((s) => s.size);
 	// The wall spans the slot's full width (the page's content column, same
@@ -540,6 +580,9 @@ function Wall({
 		camera.position.set(p.x + panelShift.current, camY + p.y, distance);
 		lookAt.set(panelShift.current, camY, 0);
 		camera.lookAt(lookAt);
+		// Focus just in front of the wall: between the records on it and one
+		// lifted off it, so both stay sharp.
+		focusTarget.set(lookAt.x, camY, LIFT_Z / 2);
 		camera.updateMatrixWorld();
 
 		const centerRow = Math.round(-camY / PITCH);
@@ -813,6 +856,29 @@ const Tile = memo(function Tile({
 	const disc = useRef<THREE.Mesh>(null);
 	const slip = useRef<THREE.Mesh>(null);
 	const withNotes = hasNotes(record);
+	// Each note slip carries its own handwriting: plain paper until the hand
+	// font arrives, then the opening words of the record's notes.
+	const slipMaterial = useMemo(
+		() => (withNotes ? shared.slip.clone() : null),
+		[withNotes, shared],
+	);
+	useEffect(() => {
+		if (!slipMaterial || !record.notes) return;
+		let texture: THREE.Texture | null = null;
+		let cancelled = false;
+		loadNoteFont().then(() => {
+			if (cancelled || !record.notes) return;
+			texture = makeNoteTexture(noteExcerpt(record.notes), record.id);
+			slipMaterial.map = texture;
+			slipMaterial.color.set("#ffffff");
+			slipMaterial.needsUpdate = true;
+		});
+		return () => {
+			cancelled = true;
+			texture?.dispose();
+			slipMaterial.dispose();
+		};
+	}, [slipMaterial, record.notes, record.id]);
 	const scale = SIZE_SCALE[record.size ?? ""] ?? 1;
 	// Created once per record; theme changes are applied by `Wall`.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation
@@ -904,7 +970,7 @@ const Tile = memo(function Tile({
 				<mesh
 					ref={slip}
 					geometry={shared.slipGeometry}
-					material={shared.slip}
+					material={slipMaterial ?? shared.slip}
 					position={[0.16, TILE / 2 + SLIP_PEEK - SLIP_H / 2, 0]}
 					rotation={[0, 0, -0.07]}
 					castShadow
