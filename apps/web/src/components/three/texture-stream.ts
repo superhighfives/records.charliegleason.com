@@ -7,6 +7,12 @@ import type { PublicRecord } from "#/lib/records";
 
 /** The materials a streamed record's textures land on. */
 export type StreamTarget = {
+	/**
+	 * The record these materials belong to. Checked before loading, so a
+	 * frame where indices and handles briefly disagree (mid re-filter) can't
+	 * send one record's cover to another record's material.
+	 */
+	id?: number;
 	cover: THREE.MeshStandardMaterial;
 	discMaterial: THREE.MeshStandardMaterial;
 };
@@ -44,7 +50,8 @@ export function useTextureStream(
 	options: StreamOptions,
 ) {
 	const anisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
-	const { coverPx, window, discWindow, cacheMax } = options;
+	// `window` renamed: as a local it would shadow the global.
+	const { coverPx, window: span, discWindow, cacheMax } = options;
 	const recordsRef = useRef(records);
 	recordsRef.current = records;
 	// Read through a ref: a per-record function is usually a fresh closure
@@ -60,7 +67,8 @@ export function useTextureStream(
 			texture: THREE.Texture;
 			material: THREE.MeshStandardMaterial;
 		}[] = [];
-		const pending = new Set<string>();
+		/** In-flight loads, with every material waiting on each one. */
+		const pending = new Map<string, Set<THREE.MeshStandardMaterial>>();
 		// Which materials each cached texture is applied to, for eviction.
 		const users = new Map<THREE.Texture, Set<THREE.MeshStandardMaterial>>();
 
@@ -99,11 +107,18 @@ export function useTextureStream(
 				apply(material, hit);
 				return;
 			}
-			if (pending.has(url)) return;
-			pending.add(url);
+			// Already loading: wait on it too. (Many records share one vinyl
+			// colour swatch, and a re-filter can re-request a cover mid-flight.)
+			const waiting = pending.get(url);
+			if (waiting) {
+				waiting.add(material);
+				return;
+			}
+			pending.set(url, new Set([material]));
 			loader.load(
 				url,
 				(bitmap) => {
+					const waiting = pending.get(url) ?? new Set();
 					pending.delete(url);
 					const texture = new THREE.Texture(bitmap);
 					// The bitmap was decoded pre-flipped (see `setOptions`).
@@ -112,7 +127,7 @@ export function useTextureStream(
 					texture.anisotropy = anisotropy;
 					texture.needsUpdate = true;
 					cache.set(url, texture);
-					ready.push({ texture, material });
+					for (const m of waiting) ready.push({ texture, material: m });
 					evict();
 				},
 				undefined,
@@ -123,11 +138,12 @@ export function useTextureStream(
 		const update = (center: number) => {
 			const records = recordsRef.current;
 			// Nearest first, so what you're looking at loads before its neighbours.
-			for (let r = 0; r <= window; r++) {
+			for (let r = 0; r <= span; r++) {
 				for (const i of r === 0 ? [center] : [center + r, center - r]) {
 					const record = records[i];
 					const target = getTarget(i);
 					if (!record || !target) continue;
+					if (target.id != null && target.id !== record.id) continue;
 					const key = displayCoverKey(record);
 					if (key) {
 						const size = coverPxRef.current;
@@ -169,7 +185,7 @@ export function useTextureStream(
 		};
 
 		return { update, flush, disposeAll };
-	}, [getTarget, anisotropy, window, discWindow, cacheMax]);
+	}, [getTarget, anisotropy, span, discWindow, cacheMax]);
 
 	useEffect(() => () => stream.disposeAll(), [stream]);
 	return stream;

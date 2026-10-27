@@ -5,12 +5,21 @@ import {
 	EffectComposer,
 	Vignette,
 } from "@react-three/postprocessing";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+	memo,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import * as THREE from "three";
 
 import {
 	computeSpanningIds,
 	GRID_SCROLL_DURATION_MS,
+	hasNotes,
 	smoothScrollTo,
 	TILE_MIN_PX,
 } from "#/components/collection-grid";
@@ -63,9 +72,24 @@ const LIFT_Z = 0.42;
 /** How far the hovered record's vinyl slides out to the right. */
 const DISC_SLIDE = 0.4;
 const WALL_Z = -0.32;
+/**
+ * Spotlight peak. Kept modest: a lifted record sits closer to the light, so
+ * it's hit harder than the wall around it, and a hotter spot washed covers out.
+ */
+const SPOT_DARK = 17;
+const SPOT_LIGHT = 10;
 /** Space above the first row / below the last, in world units. */
 const TOP_PAD = 0.1;
 const BOTTOM_PAD = 0.45;
+/**
+ * A record with notes has a slip of paper tucked into its sleeve, peeking out
+ * of the top — the wall's version of the DOM grid's yellow notes dot.
+ */
+const SLIP_W = 0.4;
+const SLIP_H = 0.3;
+/** How far the slip pokes above the sleeve at rest, and extra on hover. */
+const SLIP_PEEK = 0.09;
+const SLIP_PULL = 0.07;
 /** Clearance kept between the selected record and the record panel's edge. */
 const PANEL_MARGIN = 0.35;
 
@@ -157,7 +181,21 @@ type TileHandle = StreamTarget & {
 	group: THREE.Group;
 	sleeve: THREE.Mesh;
 	disc: THREE.Mesh;
+	/** The tucked-in note slip, for records with notes. */
+	slip: THREE.Mesh | null;
 	scale: number;
+};
+
+/** Where a record is drawn right now, easing toward its packed slot. */
+type TileAnim = { x: number; y: number; spanScale: number; presence: number };
+
+/** A record filtered out, kept around while it sinks back into the wall. */
+type Exiting = {
+	record: PublicRecord;
+	anim: TileAnim;
+	z: number;
+	row: number;
+	span: number;
 };
 
 type Shared = {
@@ -165,6 +203,8 @@ type Shared = {
 	discGeometry: THREE.CylinderGeometry;
 	edge: THREE.MeshStandardMaterial;
 	grooves: THREE.Texture;
+	slipGeometry: THREE.PlaneGeometry;
+	slip: THREE.MeshStandardMaterial;
 };
 
 function Wall({
@@ -257,6 +297,13 @@ function Wall({
 			discGeometry,
 			edge,
 			grooves: makeGrooveTexture(),
+			slipGeometry: new THREE.PlaneGeometry(SLIP_W, SLIP_H),
+			// The brand yellow the DOM grid's notes dot used, as paper.
+			slip: new THREE.MeshStandardMaterial({
+				color: "#eab308",
+				roughness: 0.85,
+				side: THREE.DoubleSide,
+			}),
 		};
 	}, []);
 
@@ -267,6 +314,51 @@ function Wall({
 	}
 	const recordsRef = useRef(records);
 	recordsRef.current = records;
+
+	// Filtering animates: records that stay glide to their new slot, new ones
+	// rise out of the wall and grow in, and filtered-out ones sink back into
+	// it (kept in `exiting` until they're gone). Keyed by record id, since a
+	// re-filter moves every index.
+	const anims = useRef(new Map<number, TileAnim>());
+	/** False until the first re-filter — the initial load doesn't animate in. */
+	const animateIn = useRef(false);
+	const [exiting, setExiting] = useState<Exiting[]>([]);
+	const exitingRef = useRef(exiting);
+	exitingRef.current = exiting;
+	const exitHandles = useRef(new Map<number, TileHandle>());
+	const prevRecords = useRef(records);
+	const prevLayout = useRef<typeof layout>(layout);
+	useEffect(() => {
+		const before = prevRecords.current;
+		const beforeLayout = prevLayout.current;
+		prevRecords.current = records;
+		prevLayout.current = layout;
+		if (before === records) return;
+		animateIn.current = true;
+		const kept = new Set(records.map((r) => r.id));
+		// A record filtered back in mid-exit picks up from where it was.
+		for (const e of exitingRef.current) {
+			if (kept.has(e.record.id)) anims.current.set(e.record.id, e.anim);
+		}
+		const leaving: Exiting[] = [];
+		before.forEach((record, i) => {
+			if (kept.has(record.id)) return;
+			const anim = anims.current.get(record.id);
+			anims.current.delete(record.id);
+			const pos = beforeLayout[i];
+			if (!anim || !pos) return;
+			leaving.push({ record, anim, z: pos.z, row: pos.row, span: pos.span });
+		});
+		setExiting((current) => [
+			...current.filter((e) => !kept.has(e.record.id)),
+			...leaving,
+		]);
+	}, [records, layout]);
+	const reducedMotion = useMemo(
+		() => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+		[],
+	);
+
 	const hovered = useRef<number | null>(null);
 	const active = useRef<number | null>(null);
 	const lastCenter = useRef(-1);
@@ -499,7 +591,7 @@ function Wall({
 			s.target.updateMatrixWorld();
 			s.intensity = THREE.MathUtils.damp(
 				s.intensity,
-				(theme.dark ? 26 : 14) * onWall,
+				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall,
 				4,
 				dt,
 			);
@@ -508,14 +600,74 @@ function Wall({
 
 		// Only rows near the viewport are animated (and drawn, and pickable).
 		const halfRows = Math.ceil(viewHeight / 2 / PITCH) + 2;
+		const half = viewHeight / 2;
+		const inView = (row: number, span: number) =>
+			row <= centerRow + halfRows && row + span - 1 >= centerRow - halfRows;
+
+		// Places one record: the curve (rows recede and tip back the further
+		// they are from the middle of the screen, which the depth of field then
+		// blurs), the hover lift, and presence (0 = sunk into the wall).
+		const place = (
+			h: TileHandle,
+			anim: TileAnim,
+			z: number,
+			l: number,
+			presence: number,
+		) => {
+			const dy = (anim.y - camY) / half;
+			const grow = presence * presence * (3 - 2 * presence);
+			h.group.position.set(
+				anim.x,
+				anim.y,
+				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5,
+			);
+			h.group.rotation.x =
+				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -ndc.y * 0.18;
+			h.group.rotation.y = -anim.x * 0.035 + l * ndc.x * 0.25;
+			h.group.scale.setScalar(
+				Math.max(0.001, h.scale * anim.spanScale * (1 + l * 0.05) * grow),
+			);
+			h.disc.visible = l > 0.01;
+			if (h.disc.visible) {
+				h.disc.position.x = (l * DISC_SLIDE) / h.scale;
+				h.disc.rotation.z -= dt * 1.2 * l;
+			}
+			if (h.slip) {
+				// Roughly the same size on a 2×2 as on a 1×1 — it's a note, not
+				// part of the sleeve, so it shouldn't scale up with it.
+				const k = 1 / Math.sqrt(anim.spanScale);
+				h.slip.scale.setScalar(k);
+				h.slip.position.y =
+					TILE / 2 + (SLIP_PEEK - SLIP_H / 2 + l * SLIP_PULL) * k;
+			}
+		};
+
 		pickable.current.length = 0;
+		const ease = reducedMotion ? 1 : 1 - Math.exp(-6 * dt);
 		for (let i = 0; i < records.length; i++) {
 			const h = handles.current[i];
 			if (!h) continue;
 			const pos = layout[i];
-			const visible =
-				pos.row <= centerRow + halfRows &&
-				pos.row + pos.span - 1 >= centerRow - halfRows;
+			const id = records[i].id;
+			let anim = anims.current.get(id);
+			if (!anim) {
+				anim = {
+					x: pos.x,
+					y: pos.y,
+					spanScale: pos.spanScale,
+					presence: animateIn.current && !reducedMotion ? 0 : 1,
+				};
+				anims.current.set(id, anim);
+			}
+			anim.x += (pos.x - anim.x) * ease;
+			anim.y += (pos.y - anim.y) * ease;
+			anim.spanScale += (pos.spanScale - anim.spanScale) * ease;
+			anim.presence += (1 - anim.presence) * ease;
+
+			// Drawn while its slot — or where it's still gliding from — is near
+			// the view.
+			const travelRow = Math.round(-anim.y / PITCH);
+			const visible = inView(pos.row, pos.span) || inView(travelRow, pos.span);
 			h.group.visible = visible;
 			if (!visible) {
 				lift.current[i] = 0;
@@ -525,32 +677,37 @@ function Wall({
 			const goal = hovered.current === i ? 1 : 0;
 			const l = THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
 			lift.current[i] = l;
-
-			// The curve: rows recede (and tip back) the further they are from
-			// the middle of the screen, which the depth of field then blurs.
-			const half = viewHeight / 2;
-			const dy = (pos.y - camY) / half;
-			h.group.position.set(
-				pos.x,
-				pos.y,
-				pos.z - CURVE_DEPTH * dy * dy + l * LIFT_Z,
-			);
-			h.group.rotation.x =
-				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -ndc.y * 0.18;
-			h.group.rotation.y = -pos.x * 0.035 + l * ndc.x * 0.25;
-			h.group.scale.setScalar(h.scale * pos.spanScale * (1 + l * 0.05));
-
-			h.disc.visible = l > 0.01;
-			if (h.disc.visible) {
-				h.disc.position.x = (l * DISC_SLIDE) / h.scale;
-				h.disc.rotation.z -= dt * 1.2 * l;
-			}
+			place(h, anim, pos.z, l, anim.presence);
 		}
+
+		// Filtered-out records sink back into the wall, then unmount.
+		let stillLeaving = false;
+		for (const e of exiting) {
+			e.anim.presence += (0 - e.anim.presence) * ease;
+			const h = exitHandles.current.get(e.record.id);
+			if (!h) continue;
+			if (e.anim.presence > 0.01) stillLeaving = true;
+			h.group.visible =
+				e.anim.presence > 0.01 && inView(Math.round(-e.anim.y / PITCH), e.span);
+			if (h.group.visible) place(h, e.anim, e.z, 0, e.anim.presence);
+		}
+		if (exiting.length > 0 && !stillLeaving) setExiting([]);
 	});
 
-	const register = useCallback((i: number, h: TileHandle | null) => {
-		handles.current[i] = h;
-	}, []);
+	const liveIds = useMemo(() => new Set(records.map((r) => r.id)), [records]);
+	const register = useCallback(
+		(i: number, _id: number, h: TileHandle | null) => {
+			handles.current[i] = h;
+		},
+		[],
+	);
+	const registerExit = useCallback(
+		(_i: number, id: number, h: TileHandle | null) => {
+			if (h) exitHandles.current.set(id, h);
+			else exitHandles.current.delete(id);
+		},
+		[],
+	);
 
 	return (
 		<>
@@ -558,13 +715,13 @@ function Wall({
 			{/* Touch gets more fill light: its spotlight can't follow a pointer, so it
 			    can't sweep light over the rows above and below the middle. */}
 			<ambientLight
-				intensity={(theme.dark ? 0.3 : 0.8) + (isTouch ? 0.35 : 0)}
+				intensity={(theme.dark ? 0.4 : 0.85) + (isTouch ? 0.35 : 0)}
 			/>
 			<hemisphereLight args={["#fff6e0", "#20160c", theme.dark ? 0.3 : 0.5]} />
 			<spotLight
 				ref={spot}
 				color="#ffe7c2"
-				intensity={theme.dark ? 26 : 14}
+				intensity={theme.dark ? SPOT_DARK : SPOT_LIGHT}
 				angle={isTouch ? 0.9 : 0.6}
 				penumbra={1}
 				distance={12}
@@ -607,16 +764,33 @@ function Wall({
 				color={theme.dark ? "#fff1d0" : "#8a7a5a"}
 				getScroll={getTravel}
 			/>
-			{records.map((record, i) => (
-				<Tile
-					key={record.id}
-					index={i}
-					record={record}
-					shared={shared}
-					placeholder={theme.placeholder}
-					register={register}
-				/>
-			))}
+			{/* One keyed list for live and leaving records, so a record that gets
+			    filtered out keeps its component (and loaded cover) as it sinks
+			    away, rather than remounting blank. */}
+			{[
+				...records.map((record, i) => (
+					<Tile
+						key={record.id}
+						index={i}
+						record={record}
+						shared={shared}
+						placeholder={theme.placeholder}
+						register={register}
+					/>
+				)),
+				...exiting
+					.filter((e) => !liveIds.has(e.record.id))
+					.map((e) => (
+						<Tile
+							key={e.record.id}
+							index={-1}
+							record={e.record}
+							shared={shared}
+							placeholder={theme.placeholder}
+							register={registerExit}
+						/>
+					)),
+			]}
 		</>
 	);
 }
@@ -632,18 +806,22 @@ const Tile = memo(function Tile({
 	record: PublicRecord;
 	shared: Shared;
 	placeholder: string;
-	register: (index: number, handle: TileHandle | null) => void;
+	register: (index: number, id: number, handle: TileHandle | null) => void;
 }) {
 	const group = useRef<THREE.Group>(null);
 	const sleeve = useRef<THREE.Mesh>(null);
 	const disc = useRef<THREE.Mesh>(null);
+	const slip = useRef<THREE.Mesh>(null);
+	const withNotes = hasNotes(record);
 	const scale = SIZE_SCALE[record.size ?? ""] ?? 1;
 	// Created once per record; theme changes are applied by `Wall`.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation
 	const cover = useMemo(() => {
 		const m = new THREE.MeshStandardMaterial({
 			color: placeholder,
-			roughness: 0.6,
+			// Matte, like printed card — a glossier cover caught a hot glare
+			// from the spotlight once lifted toward it.
+			roughness: 0.85,
 		});
 		m.userData.placeholder = placeholder;
 		return m;
@@ -685,20 +863,24 @@ const Tile = memo(function Tile({
 		[cover, discMaterial],
 	);
 
-	useEffect(() => {
+	// A layout effect, so handles match the new indices before the next frame
+	// draws (a passive effect can land a frame late after a re-filter).
+	useLayoutEffect(() => {
 		if (!group.current || !sleeve.current || !disc.current) return;
 		// The picker reads the index straight off the hit mesh.
 		sleeve.current.userData.index = index;
-		register(index, {
+		register(index, record.id, {
+			id: record.id,
 			group: group.current,
 			sleeve: sleeve.current,
 			disc: disc.current,
+			slip: slip.current,
 			cover,
 			discMaterial,
 			scale,
 		});
-		return () => register(index, null);
-	}, [index, register, cover, discMaterial, scale]);
+		return () => register(index, record.id, null);
+	}, [index, record.id, register, cover, discMaterial, scale]);
 
 	return (
 		<group ref={group}>
@@ -716,6 +898,18 @@ const Tile = memo(function Tile({
 				material={materials}
 				castShadow
 			/>
+			{withNotes && (
+				// Tucked into the sleeve's open top (centred in its thickness, so
+				// the front and back hide what's inside) and a little askew.
+				<mesh
+					ref={slip}
+					geometry={shared.slipGeometry}
+					material={shared.slip}
+					position={[0.16, TILE / 2 + SLIP_PEEK - SLIP_H / 2, 0]}
+					rotation={[0, 0, -0.07]}
+					castShadow
+				/>
+			)}
 		</group>
 	);
 });
