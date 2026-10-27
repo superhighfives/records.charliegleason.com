@@ -764,25 +764,6 @@ export function CollectionGrid({
 	const [activeStore] = useState(createActiveStore);
 	const setActiveId = activeStore.set;
 
-	// `?perf` — dev-only frame meter (see `PerfMeter` below). `?noclip` and
-	// `?noshadow` switch off the sleeve edge / its shadow (via `data-` flags
-	// styles.css keys off), so their cost can be A/B'd on a real device. Read
-	// in an effect, not during render, so SSR and first client render stay
-	// identical for hydration.
-	const [showPerf, setShowPerf] = useState(false);
-	const [debugFlags, setDebugFlags] = useState({
-		noclip: false,
-		noshadow: false,
-	});
-	useEffect(() => {
-		const params = new URLSearchParams(window.location.search);
-		setShowPerf(params.has("perf"));
-		setDebugFlags({
-			noclip: params.has("noclip"),
-			noshadow: params.has("noshadow"),
-		});
-	}, []);
-
 	// --- Touch: windowed content + one-clock scroll system -------------------
 	// Which records currently have their full tile content (cover, discs)
 	// mounted — `null` means all of them (desktop, and touch before its first
@@ -1246,8 +1227,6 @@ export function CollectionGrid({
 			// drives per-frame, so CSS smoothing never re-eases (= lags) the
 			// loop's own easing.
 			data-touch={isTouch ? "true" : undefined}
-			data-noclip={debugFlags.noclip ? "true" : undefined}
-			data-noshadow={debugFlags.noshadow ? "true" : undefined}
 			onPointerMove={
 				isTouch
 					? undefined
@@ -1298,7 +1277,6 @@ export function CollectionGrid({
 				store={activeStore}
 				isTouch={isTouch}
 			/>
-			{showPerf && <PerfMeter />}
 		</div>
 	);
 }
@@ -1356,58 +1334,6 @@ function ActiveRecordBar({
 			record={lastActiveRecordRef.current}
 			visible={activeRecord != null}
 			isTouch={isTouch}
-		/>
-	);
-}
-
-/**
- * Dev instrumentation, mounted only with `?perf` in the URL: a fixed badge
- * showing, once a second, the frame rate, the worst main-thread frame gap,
- * and how many frames blew a 34ms (two-vsync) budget in that second. Exists because none
- * of the usual tools can measure this where it matters — Chrome traces run
- * the wrong engine for iOS work, and WebDriver's automation banner blocks
- * real touch input on the Simulator — while this shows up legibly in a plain
- * screen recording of a real fling. One caveat when reading it: WebKit can
- * suppress rAF entirely during parts of a native momentum scroll, which
- * reports as one huge gap right as scrolling settles — that's the main
- * thread being *idle* while the compositor scrolls, not a hitch; the number
- * that matters is the worst frame while updates are actually flowing.
- */
-function PerfMeter() {
-	const ref = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		let raf = 0;
-		let last = performance.now();
-		let windowStart = last;
-		let worst = 0;
-		let slow = 0;
-		let frames = 0;
-		const tick = (now: number) => {
-			const delta = now - last;
-			last = now;
-			frames++;
-			if (delta > worst) worst = delta;
-			if (delta > 34) slow++;
-			const elapsed = now - windowStart;
-			if (elapsed > 1000) {
-				if (ref.current) {
-					const fps = Math.round((frames * 1000) / elapsed);
-					ref.current.textContent = `${fps} fps · worst ${Math.round(worst)}ms · >34ms ×${slow}`;
-				}
-				windowStart = now;
-				worst = 0;
-				slow = 0;
-				frames = 0;
-			}
-			raf = requestAnimationFrame(tick);
-		};
-		raf = requestAnimationFrame(tick);
-		return () => cancelAnimationFrame(raf);
-	}, []);
-	return (
-		<div
-			ref={ref}
-			className="fixed top-14 left-2 z-50 rounded bg-black/80 px-2 py-1 font-mono text-[11px] text-white"
 		/>
 	);
 }

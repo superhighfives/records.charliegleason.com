@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { CollectionUIProvider } from "../components/collection-ui";
+import { DebugOverlay } from "../components/debug-overlay";
 import { Toaster } from "../components/ui/sonner";
 import ClerkProvider from "../integrations/clerk/provider";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
@@ -134,6 +135,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 						<div className="flex min-h-0 flex-1 flex-col">{children}</div>
 					</CollectionUIProvider>
 					<Toaster />
+					<DebugOverlay />
 					{/* Dev-only: keep the router/query devtools out of the production bundle. */}
 					{import.meta.env.DEV && (
 						<TanStackDevtools
