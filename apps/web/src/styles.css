@@ -1220,6 +1220,37 @@ a {
 
 /* --- Hero write-in (collection-hero.tsx) ---------------------------------- */
 
+/* Same yellow-to-white gradient as the footer's `.stats-sentence`, through
+ * the accent words only; the number keeps its solid foreground colour. It
+ * can't be one gradient on the statement itself like the footer's: each
+ * word animates `transform`/`filter`, which makes it its own layer, and a
+ * parent's `background-clip: text` doesn't reach into those (the accent
+ * words just vanish). So each accent word carries its own copy, sized to the
+ * whole statement and shifted up by the word's own offset within it
+ * (`--hero-h` / `--hero-y`, measured in collection-hero.tsx), which lines
+ * the copies up into one continuous gradient.
+ *
+ * Italic swashes and descenders overhang both the word's box and the
+ * statement's, and `background-clip: text` only paints where there's
+ * background. So the padding (cancelled by an equal negative margin) grows
+ * each word's clip box, and the gradient runs 1em past the statement at
+ * either end, holding solid yellow above and solid foreground below. */
+.hero-accent {
+  color: transparent;
+  padding: 0.25em 0.15em 0.45em;
+  margin: -0.25em -0.15em -0.45em;
+  background-image: linear-gradient(
+    to bottom,
+    var(--accent-yellow-strong) 1em,
+    var(--foreground) calc(1em + var(--hero-h, 1em))
+  );
+  background-size: 100% calc(var(--hero-h, 1em) + 2em);
+  background-position: 0 calc(var(--hero-y, 0px) - 1em);
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
 /* Each word of the opening statement rises out of a soft blur in turn
  * (per-word `animation-delay` set inline). It's the page's loading moment,
  * so `both` holds each word invisible until its turn. */

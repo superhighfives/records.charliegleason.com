@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { numberToWords } from "#/lib/number-to-words";
 
 /** Per-word stagger for the statement's write-in — see `.hero-word`. */
@@ -41,15 +42,39 @@ export function heroDurationMs(count: number): number {
  */
 export function CollectionHero({ count }: { count: number }) {
 	const words = heroWords(count);
+	const ref = useRef<HTMLParagraphElement>(null);
+	// Lines each accent word's gradient copy up with the statement as a whole
+	// (see `.hero-accent`). Re-measured whenever the statement resizes, which
+	// covers rewrapping and the web font swapping in. `offsetTop` ignores the
+	// write-in's transforms, so mid-animation measurements are still right.
+	useLayoutEffect(() => {
+		const el = ref.current;
+		if (!el) return;
+		const measure = () => {
+			el.style.setProperty("--hero-h", `${el.offsetHeight}px`);
+			for (const word of el.querySelectorAll<HTMLElement>(".hero-accent")) {
+				word.style.setProperty("--hero-y", `${-word.offsetTop}px`);
+			}
+		};
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, []);
 	return (
-		<p className="mt-16 mb-24 max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:mt-20 sm:mb-32 sm:text-6xl lg:text-8xl">
+		<p
+			ref={ref}
+			className="relative mt-16 mb-24 max-w-6xl font-serif text-5xl font-medium tracking-tight text-pretty sm:mt-20 sm:mb-32 sm:text-6xl lg:text-8xl"
+		>
 			{words.map((word, i) => (
 				// biome-ignore lint/suspicious/noArrayIndexKey: fixed word order
 				<span key={i}>
 					{i > 0 && " "}
 					<span
 						className={
-							word.accent ? "hero-word text-brand italic" : "hero-word"
+							word.accent
+								? "hero-word hero-accent italic"
+								: "hero-word text-foreground"
 						}
 						style={{
 							animationDelay: `${HERO_START_MS + i * HERO_WORD_STAGGER_MS}ms`,
