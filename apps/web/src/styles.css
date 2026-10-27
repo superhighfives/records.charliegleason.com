@@ -714,14 +714,25 @@ a {
     drop-shadow(0 4px 10px rgb(0 0 0 / 0.12));
 }
 
-/* `?noclip` / `?noshadow` debug switches (see `CollectionGrid`) — `!important`
- * beats the clip-path's inline style. */
-.collection-grid[data-noclip="true"] .sleeve-clip {
+/* Debug switches, toggled from the `?debug` overlay (`DebugOverlay`) or
+ * preset with `?noclip` / `?noshadow` / `?noanim` / `?nofilter`, so a
+ * suspected-expensive effect can be A/B'd live on a real device.
+ * `!important` beats inline styles (the clip-path is one). */
+:root[data-noclip="true"] .sleeve-clip {
   clip-path: none !important;
 }
 
-.collection-grid[data-noshadow="true"] .sleeve-shadow {
+:root[data-noshadow="true"] .sleeve-shadow {
   filter: none;
+}
+
+:root[data-noanim="true"] *:not([data-debug-overlay] *) {
+  animation: none !important;
+}
+
+:root[data-nofilter="true"] *:not([data-debug-overlay] *) {
+  filter: none !important;
+  backdrop-filter: none !important;
 }
 
 /* Touch's stand-in for desktop's `:hover`-driven reveal above was, for a
