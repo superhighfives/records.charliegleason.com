@@ -1,5 +1,5 @@
 import { useThree } from "@react-three/fiber";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import { displayCoverKey, photoUrl } from "#/lib/cover";
@@ -26,7 +26,17 @@ type StreamOptions = {
  * Streams cover + vinyl textures for records near a moving centre index and
  * evicts the least recently used beyond `cacheMax`, so a 300-record scene
  * never holds 300 textures on the GPU (phones kill tabs that try).
- * `update(center)` is cheap to call every time the centre changes.
+ * `update(center)` is cheap to call every time the centre changes. The cache
+ * outlives `records` changes (filtering), so a re-filter reuses what's loaded.
+ *
+ * A material shows `userData.placeholder` (a theme colour) until its texture
+ * arrives, and again if the texture is evicted — never a white flash.
+ *
+ * Images decode off the main thread (`ImageBitmapLoader`), and finished
+ * textures queue until `flush(n)` — called once per frame — hands at most
+ * `n` to their materials. Each one costs a GPU upload the first time it's
+ * drawn, and a fast scroll otherwise lands a dozen uploads in one frame (the
+ * single biggest cost in a profiled throttled-phone scroll).
  */
 export function useTextureStream(
 	records: PublicRecord[],
@@ -35,9 +45,17 @@ export function useTextureStream(
 ) {
 	const anisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
 	const { coverPx, window, discWindow, cacheMax } = options;
+	const recordsRef = useRef(records);
+	recordsRef.current = records;
 	const stream = useMemo(() => {
-		const loader = new THREE.TextureLoader();
+		const loader = new THREE.ImageBitmapLoader();
+		loader.setOptions({ imageOrientation: "flipY" });
 		const cache = new Map<string, THREE.Texture>();
+		/** Decoded, waiting for their turn to be handed to a material. */
+		const ready: {
+			texture: THREE.Texture;
+			material: THREE.MeshStandardMaterial;
+		}[] = [];
 		const pending = new Set<string>();
 		// Which materials each cached texture is applied to, for eviction.
 		const users = new Map<THREE.Texture, Set<THREE.MeshStandardMaterial>>();
@@ -64,6 +82,7 @@ export function useTextureStream(
 				}
 				users.delete(old);
 				old.dispose();
+				(old.image as ImageBitmap | undefined)?.close?.();
 			}
 		};
 
@@ -80,12 +99,16 @@ export function useTextureStream(
 			pending.add(url);
 			loader.load(
 				url,
-				(texture) => {
+				(bitmap) => {
 					pending.delete(url);
+					const texture = new THREE.Texture(bitmap);
+					// The bitmap was decoded pre-flipped (see `setOptions`).
+					texture.flipY = false;
 					texture.colorSpace = THREE.SRGBColorSpace;
 					texture.anisotropy = anisotropy;
+					texture.needsUpdate = true;
 					cache.set(url, texture);
-					apply(material, texture);
+					ready.push({ texture, material });
 					evict();
 				},
 				undefined,
@@ -94,6 +117,7 @@ export function useTextureStream(
 		};
 
 		const update = (center: number) => {
+			const records = recordsRef.current;
 			// Nearest first, so what you're looking at loads before its neighbours.
 			for (let r = 0; r <= window; r++) {
 				for (const i of r === 0 ? [center] : [center + r, center - r]) {
@@ -112,14 +136,32 @@ export function useTextureStream(
 			}
 		};
 
-		const disposeAll = () => {
-			for (const t of cache.values()) t.dispose();
-			cache.clear();
-			users.clear();
+		const flush = (max: number) => {
+			for (let n = 0; n < max && ready.length > 0; n++) {
+				const next = ready.shift();
+				// Skip anything evicted while it waited.
+				if (next && cache.has(urlOf(next.texture))) {
+					apply(next.material, next.texture);
+				}
+			}
+		};
+		const urlOf = (t: THREE.Texture) => {
+			for (const [url, cached] of cache) if (cached === t) return url;
+			return "";
 		};
 
-		return { update, disposeAll };
-	}, [records, getTarget, anisotropy, coverPx, window, discWindow, cacheMax]);
+		const disposeAll = () => {
+			for (const t of cache.values()) {
+				t.dispose();
+				(t.image as ImageBitmap | undefined)?.close?.();
+			}
+			cache.clear();
+			users.clear();
+			ready.length = 0;
+		};
+
+		return { update, flush, disposeAll };
+	}, [getTarget, anisotropy, coverPx, window, discWindow, cacheMax]);
 
 	useEffect(() => () => stream.disposeAll(), [stream]);
 	return stream;
@@ -131,6 +173,9 @@ function setMap(
 ) {
 	if (material.map === map) return;
 	material.map = map;
+	material.color.set(
+		map ? "#ffffff" : (material.userData.placeholder ?? "#2a2a2a"),
+	);
 	material.needsUpdate = true;
 }
 

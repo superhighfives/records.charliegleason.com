@@ -174,6 +174,7 @@ function Crate({
 			onCurrentChange(nearest);
 			textures.update(nearest);
 		}
+		textures.flush(2);
 
 		for (let i = 0; i < records.length; i++) {
 			const h = handles.current[i];

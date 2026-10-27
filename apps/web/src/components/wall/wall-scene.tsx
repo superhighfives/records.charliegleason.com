@@ -1,11 +1,11 @@
 import { Sparkles, Stats } from "@react-three/drei";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
-	Canvas,
-	type ThreeEvent,
-	useFrame,
-	useThree,
-} from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+	DepthOfField,
+	EffectComposer,
+	Vignette,
+} from "@react-three/postprocessing";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import {
@@ -13,20 +13,30 @@ import {
 	type StreamTarget,
 	useTextureStream,
 } from "#/components/three/texture-stream";
-import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 
 /**
- * Prototype: the collection as a grid hung on a dark wall. Covers sit at
- * slightly different depths and tilt gently as they pass, the camera drifts
- * with the pointer (parallax against the wall and the dust), a spotlight
- * follows the cursor and throws each cover's shadow onto the wall, and the
- * hovered record lifts off the wall with its vinyl sliding out.
+ * Prototype: the collection grid as records hung on a dark, gently curved
+ * wall. The canvas sits fixed *behind* the page (see `WallGrid`), which
+ * reserves the grid's space with a slot element; the camera tracks that
+ * slot's position on screen, so native page scroll moves the wall exactly
+ * like it moved the DOM grid — header, filters and footer scroll over it.
  *
- * Scrolling is the page's own native scroll (a spacer sized from
- * `onContentHeight`), so iOS momentum works for free; the camera reads
- * `window.scrollY` every frame. On touch, the record at the centre of the
- * screen is the "hovered" one.
+ * - The wall curves away above and below the middle of the screen, and depth
+ *   of field focuses on the middle, so rows blur as they recede.
+ * - The camera drifts with the pointer (parallax against wall and dust), and a
+ *   spotlight follows the cursor, throwing each cover's shadow on the wall.
+ * - The hovered record lifts off the wall and its vinyl slides out. On touch,
+ *   the record at the centre of the screen is the "hovered" one.
+ *
+ * Page content covers the canvas, so the canvas never gets pointer events
+ * itself. The scene tracks the pointer on `window` and raycasts against the
+ * visible records itself (once per frame for hover, once per click) — and
+ * only for events whose DOM target is the slot, never through the header,
+ * the filters or an open record panel. (R3F's own per-mesh events, driven
+ * from `document.body`, intermittently stopped reporting hovers after a
+ * re-filter; doing it by hand is also cheaper than R3F tracking every record
+ * as interactive.)
  */
 
 const TILE = 1;
@@ -34,8 +44,12 @@ const GAP = 0.24;
 const PITCH = TILE + GAP;
 const SLEEVE_DEPTH = 0.02;
 const FOV = 30;
-/** Space above the first row, in world units. */
-const TOP_PAD = 0.7;
+/**
+ * How far the wall bows away at the top/bottom edge of the screen, in world
+ * units. Relative to the view height so a tall phone screen curves the same
+ * as a wide desktop one.
+ */
+const CURVE_DEPTH = 0.45;
 /** How far a hovered record comes off the wall. */
 const LIFT_Z = 0.42;
 /** How far the hovered record's vinyl slides out to the right. */
@@ -48,29 +62,60 @@ const SIZE_SCALE: Record<string, number> = {
 	'7"': 0.72,
 };
 
+export type WallTheme = {
+	dark: boolean;
+	/** Page background — also the wall's colour. */
+	background: string;
+	/** Cover colour until its texture loads. */
+	placeholder: string;
+};
+
 export type WallSceneProps = {
 	records: PublicRecord[];
+	/** The in-page element that reserves the wall's space. */
+	slot: HTMLElement;
 	onActiveChange: (index: number | null) => void;
 	onOpen: (record: PublicRecord) => void;
-	/** The scroll height the page needs for the whole wall, in CSS px. */
+	/** The slot height the wall needs, in CSS px. */
 	onContentHeight: (px: number) => void;
-	background: string;
+	theme: WallTheme;
 	isTouch: boolean;
 	showStats?: boolean;
 };
 
-export default function WallScene(props: WallSceneProps) {
+/**
+ * Memoised: `WallGrid` re-renders whenever the active record changes (its
+ * now-showing bar), and that must not re-render 300 tiles with it.
+ */
+export default memo(function WallScene(props: WallSceneProps) {
 	return (
 		<Canvas
 			dpr={[1, 2]}
 			shadows={props.isTouch ? false : "percentage"}
 			camera={{ fov: FOV, near: 0.1, far: 60, position: [0, 0, 10] }}
-			gl={{ antialias: true, alpha: true }}
-			style={{ touchAction: "pan-y" }}
+			gl={{ antialias: false, alpha: false }}
 		>
 			<Wall {...props} />
+			<Effects isTouch={props.isTouch} dark={props.theme.dark} />
 			{props.showStats && <Stats />}
 		</Canvas>
+	);
+});
+
+function Effects({ isTouch, dark }: { isTouch: boolean; dark: boolean }) {
+	const camera = useThree((s) => s.camera);
+	// The wall's centre sits at z = 0 and the camera looks straight at it.
+	const focus = camera.position.z;
+	return (
+		<EffectComposer multisampling={isTouch ? 0 : 4}>
+			<DepthOfField
+				focusDistance={focus}
+				focusRange={1.1}
+				bokehScale={isTouch ? 2 : 3.5}
+				resolutionScale={isTouch ? 0.35 : 0.5}
+			/>
+			<Vignette offset={0.25} darkness={dark ? 0.75 : 0.35} />
+		</EffectComposer>
 	);
 }
 
@@ -82,16 +127,25 @@ function columnsFor(width: number) {
 
 type TileHandle = StreamTarget & {
 	group: THREE.Group;
+	sleeve: THREE.Mesh;
 	disc: THREE.Mesh;
 	scale: number;
 };
 
+type Shared = {
+	sleeveGeometry: THREE.BoxGeometry;
+	discGeometry: THREE.CylinderGeometry;
+	edge: THREE.MeshStandardMaterial;
+	grooves: THREE.Texture;
+};
+
 function Wall({
 	records,
+	slot,
 	onActiveChange,
 	onOpen,
 	onContentHeight,
-	background,
+	theme,
 	isTouch,
 }: WallSceneProps) {
 	const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
@@ -107,16 +161,13 @@ function Wall({
 	const viewHeight = 2 * distance * tanHalf;
 	const viewWidth = viewHeight * aspect;
 	const unitsPerPx = viewHeight / size.height;
-	// Camera y when scrolled to the top: first row just under the top edge.
-	const topY = -viewHeight / 2 + TILE / 2 + TOP_PAD;
-	const wallHeight = rows * PITCH + TOP_PAD * 2;
+	const wallHeight = rows * PITCH;
 
 	useEffect(() => {
 		onContentHeight(wallHeight / unitsPerPx);
 	}, [wallHeight, unitsPerPx, onContentHeight]);
 
-	// Stable per-tile layout: grid slot plus a little depth jitter, so the
-	// parallax has layers to work with.
+	// Grid slot plus a little depth jitter, so the parallax has layers.
 	const layout = useMemo(
 		() =>
 			records.map((record, i) => {
@@ -132,14 +183,11 @@ function Wall({
 		[records, cols],
 	);
 
-	const shared = useMemo(() => {
+	const shared = useMemo<Shared>(() => {
 		const sleeveGeometry = new THREE.BoxGeometry(TILE, TILE, SLEEVE_DEPTH);
 		const discGeometry = new THREE.CylinderGeometry(0.46, 0.46, 0.006, 96);
 		discGeometry.rotateX(Math.PI / 2);
-		const edge = new THREE.MeshStandardMaterial({
-			color: "#cfc7b6",
-			roughness: 0.9,
-		});
+		const edge = new THREE.MeshStandardMaterial({ roughness: 0.9 });
 		return {
 			sleeveGeometry,
 			discGeometry,
@@ -149,7 +197,12 @@ function Wall({
 	}, []);
 
 	const handles = useRef<(TileHandle | null)[]>([]);
-	const lift = useRef(new Float32Array(records.length));
+	const lift = useRef(new Float32Array(0));
+	if (lift.current.length !== records.length) {
+		lift.current = new Float32Array(records.length);
+	}
+	const recordsRef = useRef(records);
+	recordsRef.current = records;
 	const hovered = useRef<number | null>(null);
 	const active = useRef<number | null>(null);
 	const lastCenter = useRef(-1);
@@ -158,81 +211,153 @@ function Wall({
 	const dust = useRef<THREE.Group>(null);
 	const wall = useRef<THREE.Mesh>(null);
 	const lookAt = useMemo(() => new THREE.Vector3(), []);
+	const raycaster = useMemo(() => new THREE.Raycaster(), []);
+	/** Pointer in NDC (-1…1), and whether it's over the slot right now. */
+	const pointer = useRef({ ndc: new THREE.Vector2(), overSlot: false });
+	/** Sleeves drawn last frame — the only things worth raycasting. */
+	const pickable = useRef<THREE.Mesh[]>([]);
+
+	const pick = useCallback(
+		(ndc: THREE.Vector2): number | null => {
+			raycaster.setFromCamera(ndc, camera);
+			const hit = raycaster.intersectObjects(pickable.current, false)[0];
+			const index = hit?.object.userData.index;
+			return typeof index === "number" ? index : null;
+		},
+		[raycaster, camera],
+	);
+
+	// Pointer + click, from `window` (the page covers the canvas).
+	useEffect(() => {
+		if (isTouch) return;
+		const toNdc = (e: MouseEvent) =>
+			pointer.current.ndc.set(
+				(e.clientX / window.innerWidth) * 2 - 1,
+				-(e.clientY / window.innerHeight) * 2 + 1,
+			);
+		const onMove = (e: PointerEvent) => {
+			toNdc(e);
+			pointer.current.overSlot = e.target === slot;
+		};
+		const onClick = (e: MouseEvent) => {
+			if (e.target !== slot) return;
+			const index = pick(toNdc(e));
+			if (index != null) onOpen(recordsRef.current[index]);
+		};
+		window.addEventListener("pointermove", onMove, { passive: true });
+		window.addEventListener("click", onClick);
+		return () => {
+			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("click", onClick);
+			document.body.style.cursor = "";
+		};
+	}, [isTouch, slot, pick, onOpen]);
 
 	const getTarget = useCallback((i: number) => handles.current[i], []);
 	const textures = useTextureStream(records, getTarget, {
-		coverPx: 512,
+		// Phone tiles are ~120 CSS px wide; 256px covers are plenty there.
+		coverPx: isTouch ? 256 : 512,
 		window: cols * 4,
 		discWindow: cols,
 		cacheMax: cols * 12,
 	});
 
+	// A re-filter changes what's at the centre — force a texture pass.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: see above
+	useEffect(() => {
+		lastCenter.current = -1;
+		hovered.current = null;
+	}, [records]);
+
+	// Theme: sleeve edges and not-yet-loaded covers follow light/dark.
+	useEffect(() => {
+		shared.edge.color.set(theme.dark ? "#3a3632" : "#d6d0c4");
+		for (const h of handles.current) {
+			if (!h) continue;
+			h.cover.userData.placeholder = theme.placeholder;
+			if (!h.cover.map) h.cover.color.set(theme.placeholder);
+		}
+	}, [theme, shared]);
+
 	useEffect(() => {
 		if (spot.current) {
 			spot.current.shadow.mapSize.set(1024, 1024);
 			spot.current.shadow.bias = -0.0004;
-			spot.current.shadow.radius = 6;
 		}
 	}, []);
 
 	useFrame((state, delta) => {
 		const dt = Math.min(delta, 0.05);
 		const t = state.clock.elapsedTime;
-		const camY = topY - window.scrollY * unitsPerPx;
+		const ndc = pointer.current.ndc;
 
-		// Parallax: the camera drifts toward the pointer (or a slow idle sway
-		// on touch, where there's no pointer to follow).
-		const goalX = isTouch ? Math.sin(t * 0.3) * 0.12 : state.pointer.x * 0.35;
-		const goalY = isTouch ? Math.cos(t * 0.23) * 0.08 : state.pointer.y * 0.22;
-		parallax.current.x = THREE.MathUtils.damp(parallax.current.x, goalX, 3, dt);
-		parallax.current.y = THREE.MathUtils.damp(parallax.current.y, goalY, 3, dt);
-		camera.position.set(
-			parallax.current.x,
-			camY + parallax.current.y,
-			distance,
-		);
+		// Where the slot's top edge is on screen → where row 0 sits in the
+		// view. Row 0's top edge (y = TILE / 2) lines up with the slot's top.
+		const slotTop = slot.getBoundingClientRect().top;
+		const camY = TILE / 2 - (size.height / 2 - slotTop) * unitsPerPx;
+
+		// Parallax: the camera drifts toward the pointer (a slow idle sway on
+		// touch, where there's no pointer to follow).
+		const goalX = isTouch ? Math.sin(t * 0.3) * 0.12 : ndc.x * 0.35;
+		const goalY = isTouch ? Math.cos(t * 0.23) * 0.08 : ndc.y * 0.22;
+		const p = parallax.current;
+		p.x = THREE.MathUtils.damp(p.x, goalX, 3, dt);
+		p.y = THREE.MathUtils.damp(p.y, goalY, 3, dt);
+		camera.position.set(p.x, camY + p.y, distance);
 		lookAt.set(0, camY, 0);
 		camera.lookAt(lookAt);
+		camera.updateMatrixWorld();
 
-		// Touch has no hover: whatever sits at the centre of the screen is it.
 		const centerRow = Math.round(-camY / PITCH);
-		if (isTouch) {
-			const row = Math.min(rows - 1, Math.max(0, centerRow));
-			const col = Math.floor(cols / 2);
-			hovered.current = Math.min(records.length - 1, row * cols + col);
+		// Desktop: whatever's under the pointer. Touch has no hover: the record
+		// at the centre of the screen is it, while the wall is on screen.
+		if (!isTouch) {
+			hovered.current = pointer.current.overSlot ? pick(ndc) : null;
+			document.body.style.cursor = hovered.current == null ? "" : "pointer";
+		} else {
+			const onScreen = centerRow >= 0 && centerRow < rows;
+			hovered.current = onScreen
+				? Math.min(records.length - 1, centerRow * cols + Math.floor(cols / 2))
+				: null;
 		}
 		if (hovered.current !== active.current) {
 			active.current = hovered.current;
 			onActiveChange(active.current);
 		}
 
-		const centerIndex = Math.max(0, centerRow) * cols + Math.floor(cols / 2);
+		const clampedRow = Math.min(rows - 1, Math.max(0, centerRow));
+		const centerIndex = Math.min(
+			records.length - 1,
+			clampedRow * cols + Math.floor(cols / 2),
+		);
 		if (centerIndex !== lastCenter.current) {
 			lastCenter.current = centerIndex;
 			textures.update(centerIndex);
 		}
+		textures.flush(isTouch ? 1 : 2);
 
 		// The spotlight tracks the pointer across the wall (on touch, it rests
 		// on the centred record).
-		const lightX = isTouch ? 0 : (state.pointer.x * viewWidth) / 2;
-		const lightY = isTouch ? camY : camY + (state.pointer.y * viewHeight) / 2;
+		const lightX = isTouch ? 0 : (ndc.x * viewWidth) / 2;
+		const lightY = isTouch ? camY : camY + (ndc.y * viewHeight) / 2;
 		if (spot.current) {
 			const s = spot.current;
 			s.position.x = THREE.MathUtils.damp(s.position.x, lightX, 5, dt);
 			s.position.y = THREE.MathUtils.damp(s.position.y, lightY + 0.6, 5, dt);
-			s.position.z = 3.2;
+			s.position.z = 3.4;
 			s.target.position.set(s.position.x, s.position.y - 0.6, 0);
 			s.target.updateMatrixWorld();
 		}
 		if (dust.current) dust.current.position.y = camY;
 		if (wall.current) wall.current.position.y = camY;
 
-		// Only rows near the viewport are animated (and drawn).
+		// Only rows near the viewport are animated (and drawn, and pickable).
 		const halfRows = Math.ceil(viewHeight / 2 / PITCH) + 2;
+		pickable.current.length = 0;
 		for (let i = 0; i < records.length; i++) {
 			const h = handles.current[i];
 			if (!h) continue;
-			const p = layout[i];
+			const pos = layout[i];
 			const row = Math.floor(i / cols);
 			const visible = Math.abs(row - centerRow) <= halfRows;
 			h.group.visible = visible;
@@ -240,18 +365,24 @@ function Wall({
 				lift.current[i] = 0;
 				continue;
 			}
+			pickable.current.push(h.sleeve);
 			const goal = hovered.current === i ? 1 : 0;
 			const l = THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
 			lift.current[i] = l;
 
-			// A gentle curve: tiles tip back as they pass above or below the
-			// centre of the screen, and turn slightly toward it sideways.
-			const dy = p.y - camY;
-			h.group.position.set(p.x, p.y, p.z + l * LIFT_Z);
-			h.group.rotation.x = -dy * 0.05 + l * -state.pointer.y * 0.18;
-			h.group.rotation.y = -p.x * 0.035 + l * state.pointer.x * 0.25;
-			const s = h.scale * (1 + l * 0.05);
-			h.group.scale.setScalar(s);
+			// The curve: rows recede (and tip back) the further they are from
+			// the middle of the screen, which the depth of field then blurs.
+			const half = viewHeight / 2;
+			const dy = (pos.y - camY) / half;
+			h.group.position.set(
+				pos.x,
+				pos.y,
+				pos.z - CURVE_DEPTH * dy * dy + l * LIFT_Z,
+			);
+			h.group.rotation.x =
+				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -ndc.y * 0.18;
+			h.group.rotation.y = -pos.x * 0.035 + l * ndc.x * 0.25;
+			h.group.scale.setScalar(h.scale * (1 + l * 0.05));
 
 			h.disc.visible = l > 0.01;
 			if (h.disc.visible) {
@@ -264,45 +395,41 @@ function Wall({
 	const register = useCallback((i: number, h: TileHandle | null) => {
 		handles.current[i] = h;
 	}, []);
-	const hover = useCallback((i: number | null) => {
-		hovered.current = i;
-		document.body.style.cursor = i == null ? "" : "pointer";
-	}, []);
-	const open = useCallback(
-		(i: number) => onOpen(records[i]),
-		[onOpen, records],
-	);
 
 	return (
 		<>
-			<color attach="background" args={[background]} />
-			<ambientLight intensity={0.35} />
-			<hemisphereLight args={["#fff6e0", "#20160c", 0.35]} />
+			<color attach="background" args={[theme.background]} />
+			{/* Touch gets more fill light: its spotlight can't follow a pointer, so it
+			    can't sweep light over the rows above and below the middle. */}
+			<ambientLight
+				intensity={(theme.dark ? 0.3 : 0.8) + (isTouch ? 0.35 : 0)}
+			/>
+			<hemisphereLight args={["#fff6e0", "#20160c", theme.dark ? 0.3 : 0.5]} />
 			<spotLight
 				ref={spot}
 				color="#ffe7c2"
-				intensity={60}
-				angle={0.55}
-				penumbra={0.9}
+				intensity={theme.dark ? 26 : 14}
+				angle={isTouch ? 0.9 : 0.6}
+				penumbra={1}
 				distance={12}
 				decay={1.6}
 				castShadow={!isTouch}
 			/>
-			{/* The wall the records hang on — only there to catch shadows. */}
+			{/* The wall the records hang on — there to catch shadows. */}
 			<mesh ref={wall} position={[0, 0, WALL_Z]} receiveShadow>
 				<planeGeometry args={[viewWidth * 3, viewHeight * 3]} />
-				<meshStandardMaterial color={background} roughness={1} />
+				<meshStandardMaterial color={theme.background} roughness={1} />
 			</mesh>
 			<group ref={dust}>
 				<Sparkles
-					count={isTouch ? 90 : 220}
+					count={isTouch ? 60 : 140}
 					scale={[viewWidth, viewHeight, 3]}
 					position={[0, 0, 1]}
-					size={2.2}
+					size={1.4}
 					speed={0.18}
-					opacity={0.45}
+					opacity={theme.dark ? 0.35 : 0.25}
 					noise={0.6}
-					color="#fff1d0"
+					color={theme.dark ? "#fff1d0" : "#8a7a5a"}
 				/>
 			</group>
 			{records.map((record, i) => (
@@ -311,60 +438,55 @@ function Wall({
 					index={i}
 					record={record}
 					shared={shared}
+					placeholder={theme.placeholder}
 					register={register}
-					onHover={isTouch ? undefined : hover}
-					onOpen={open}
 				/>
 			))}
 		</>
 	);
 }
 
-function Tile({
+const Tile = memo(function Tile({
 	index,
 	record,
 	shared,
+	placeholder,
 	register,
-	onHover,
-	onOpen,
 }: {
 	index: number;
 	record: PublicRecord;
-	shared: {
-		sleeveGeometry: THREE.BoxGeometry;
-		discGeometry: THREE.CylinderGeometry;
-		edge: THREE.MeshStandardMaterial;
-		grooves: THREE.Texture;
-	};
+	shared: Shared;
+	placeholder: string;
 	register: (index: number, handle: TileHandle | null) => void;
-	onHover?: (index: number | null) => void;
-	onOpen: (index: number) => void;
 }) {
 	const group = useRef<THREE.Group>(null);
+	const sleeve = useRef<THREE.Mesh>(null);
 	const disc = useRef<THREE.Mesh>(null);
 	const scale = SIZE_SCALE[record.size ?? ""] ?? 1;
-	const cover = useMemo(
-		() =>
-			new THREE.MeshStandardMaterial({
-				color: displayCoverKey(record) ? "#ffffff" : "#2a2a2a",
-				roughness: 0.6,
-			}),
-		[record],
-	);
-	const discMaterial = useMemo(
-		() =>
-			new THREE.MeshStandardMaterial({
-				color: record.colorTextureImageKey ? "#ffffff" : "#181818",
-				roughness: 0.3,
-				metalness: 0.45,
-				bumpMap: shared.grooves,
-				bumpScale: 0.6,
-				roughnessMap: shared.grooves,
-				transparent: !!record.colorTranslucent,
-				opacity: record.colorTranslucent ? 0.72 : 1,
-			}),
-		[record, shared],
-	);
+	// Created once per record; theme changes are applied by `Wall`.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation
+	const cover = useMemo(() => {
+		const m = new THREE.MeshStandardMaterial({
+			color: placeholder,
+			roughness: 0.6,
+		});
+		m.userData.placeholder = placeholder;
+		return m;
+	}, [record]);
+	const discMaterial = useMemo(() => {
+		const m = new THREE.MeshStandardMaterial({
+			color: "#181818",
+			roughness: 0.3,
+			metalness: 0.45,
+			bumpMap: shared.grooves,
+			bumpScale: 0.6,
+			roughnessMap: shared.grooves,
+			transparent: !!record.colorTranslucent,
+			opacity: record.colorTranslucent ? 0.72 : 1,
+		});
+		m.userData.placeholder = "#181818";
+		return m;
+	}, [record, shared]);
 	// BoxGeometry faces: +x, -x, +y, -y, +z (the cover), -z.
 	const materials = useMemo(
 		() => [
@@ -378,20 +500,29 @@ function Tile({
 		[shared, cover],
 	);
 
+	// Materials live as long as the record does — disposed on unmount only,
+	// not when a re-filter merely moves this record to a new index.
+	useEffect(
+		() => () => {
+			cover.dispose();
+			discMaterial.dispose();
+		},
+		[cover, discMaterial],
+	);
+
 	useEffect(() => {
-		if (!group.current || !disc.current) return;
+		if (!group.current || !sleeve.current || !disc.current) return;
+		// The picker reads the index straight off the hit mesh.
+		sleeve.current.userData.index = index;
 		register(index, {
 			group: group.current,
+			sleeve: sleeve.current,
 			disc: disc.current,
 			cover,
 			discMaterial,
 			scale,
 		});
-		return () => {
-			register(index, null);
-			cover.dispose();
-			discMaterial.dispose();
-		};
+		return () => register(index, null);
 	}, [index, register, cover, discMaterial, scale]);
 
 	return (
@@ -404,25 +535,12 @@ function Tile({
 				visible={false}
 				castShadow
 			/>
-			{/* biome-ignore lint/a11y/noStaticElementInteractions: a three.js mesh, not DOM — the page overlay names the active record */}
 			<mesh
+				ref={sleeve}
 				geometry={shared.sleeveGeometry}
 				material={materials}
 				castShadow
-				onPointerOver={
-					onHover
-						? (e: ThreeEvent<PointerEvent>) => {
-								e.stopPropagation();
-								onHover(index);
-							}
-						: undefined
-				}
-				onPointerOut={onHover ? () => onHover(null) : undefined}
-				onClick={(e: ThreeEvent<MouseEvent>) => {
-					e.stopPropagation();
-					onOpen(index);
-				}}
 			/>
 		</group>
 	);
-}
+});

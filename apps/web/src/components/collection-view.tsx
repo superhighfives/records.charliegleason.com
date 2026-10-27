@@ -12,6 +12,7 @@ import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import { WallGrid } from "#/components/wall/wall-grid";
 import {
 	type CollectionFilters,
 	hasAnyFilter,
@@ -82,6 +83,27 @@ function useFontsReady(): boolean {
 }
 
 /**
+ * Prototype switch for the 3D record wall (`WallGrid`) in place of the DOM
+ * grid: `?wall` turns it on and `?wall=0` off, remembered in localStorage so
+ * it survives opening records and reloads. Read in an effect, so SSR and the
+ * first client render (the DOM grid) match.
+ */
+function useWallMode(): boolean {
+	const [on, setOn] = useState(false);
+	useEffect(() => {
+		const param = new URLSearchParams(window.location.search).get("wall");
+		try {
+			if (param === "0") localStorage.removeItem("wall");
+			else if (param != null) localStorage.setItem("wall", "1");
+			setOn(localStorage.getItem("wall") === "1");
+		} catch {
+			setOn(param != null && param !== "0");
+		}
+	}, []);
+	return on;
+}
+
+/**
  * The public collection: a grid of records with a record drawer overlaid on top.
  * The open record is driven by `selectedId`, which comes from the route — `null`
  * on `/`, the path id on `/records/<id>-<slug>`. Both routes render this one
@@ -97,6 +119,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const navigate = useNavigate();
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 	const fontsReady = useFontsReady();
+	const wallMode = useWallMode();
 
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
@@ -239,16 +262,23 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				<ThemeToggle className="size-8 rounded-full border-0" />
 			</div>
 
-			{!search.trim() && <CollectionHero count={data.length} />}
+			{/* `data-parallax` (wall mode only): see `WallGrid`. */}
+			{!search.trim() && (
+				<div data-parallax={wallMode ? 0.35 : undefined}>
+					<CollectionHero count={data.length} />
+				</div>
+			)}
 
 			<div className="rise-in" style={{ animationDelay: `${revealMs}ms` }}>
-				<FilterStrip
-					records={data}
-					countRecords={searched}
-					filters={filters}
-					settings={filterSettings}
-					onChange={setFilters}
-				/>
+				<div data-parallax={wallMode ? 0.12 : undefined}>
+					<FilterStrip
+						records={data}
+						countRecords={searched}
+						filters={filters}
+						settings={filterSettings}
+						onChange={setFilters}
+					/>
+				</div>
 			</div>
 
 			<div
@@ -276,6 +306,8 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 							? `No records match “${search}”.`
 							: "No records match those filters."}
 					</p>
+				) : wallMode ? (
+					<WallGrid records={filtered} onOpen={openRecord} />
 				) : (
 					<CollectionGrid
 						records={filtered}
@@ -314,8 +346,13 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			</Sheet>
 
 			<footer className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground">
-				<CollectionStatsSentence records={data} />
-				<div className="mt-24 flex flex-wrap items-end justify-between gap-4">
+				<div data-parallax={wallMode ? 0.25 : undefined}>
+					<CollectionStatsSentence records={data} />
+				</div>
+				<div
+					className="mt-24 flex flex-wrap items-end justify-between gap-4"
+					data-parallax={wallMode ? 0.08 : undefined}
+				>
 					<div>
 						<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
 						<a
