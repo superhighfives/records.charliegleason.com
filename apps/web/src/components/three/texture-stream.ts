@@ -12,8 +12,8 @@ export type StreamTarget = {
 };
 
 type StreamOptions = {
-	/** Cover texture width requested from `/api/photos`. */
-	coverPx: number;
+	/** Cover texture width requested from `/api/photos`, or per record. */
+	coverPx: number | ((index: number) => number);
 	/** Records either side of the centre to load covers for. */
 	window: number;
 	/** Records either side of the centre to load vinyl swatches for. */
@@ -47,6 +47,10 @@ export function useTextureStream(
 	const { coverPx, window, discWindow, cacheMax } = options;
 	const recordsRef = useRef(records);
 	recordsRef.current = records;
+	// Read through a ref: a per-record function is usually a fresh closure
+	// each render, and must not rebuild the stream (and drop its cache).
+	const coverPxRef = useRef(coverPx);
+	coverPxRef.current = coverPx;
 	const stream = useMemo(() => {
 		const loader = new THREE.ImageBitmapLoader();
 		loader.setOptions({ imageOrientation: "flipY" });
@@ -125,7 +129,11 @@ export function useTextureStream(
 					const target = getTarget(i);
 					if (!record || !target) continue;
 					const key = displayCoverKey(record);
-					if (key) load(photoUrl(key, coverPx), target.cover);
+					if (key) {
+						const size = coverPxRef.current;
+						const px = typeof size === "number" ? size : size(i);
+						load(photoUrl(key, px), target.cover);
+					}
 					if (record.colorTextureImageKey && r <= discWindow) {
 						load(
 							photoUrl(record.colorTextureImageKey, 256),
@@ -161,7 +169,7 @@ export function useTextureStream(
 		};
 
 		return { update, flush, disposeAll };
-	}, [getTarget, anisotropy, coverPx, window, discWindow, cacheMax]);
+	}, [getTarget, anisotropy, window, discWindow, cacheMax]);
 
 	useEffect(() => () => stream.disposeAll(), [stream]);
 	return stream;

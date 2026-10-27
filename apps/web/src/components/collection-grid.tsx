@@ -44,7 +44,7 @@ const MIN_SPAN_GAP = 3;
  * way still show their notes — normally, in the detail panel — this only
  * affects the grid tile's size.
  */
-function computeSpanningIds(records: PublicRecord[]): Set<number> {
+export function computeSpanningIds(records: PublicRecord[]): Set<number> {
 	const spanning = new Set<number>();
 	let sinceLastSpan = MIN_SPAN_GAP;
 	for (const record of records) {

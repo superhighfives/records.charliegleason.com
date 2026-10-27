@@ -137,6 +137,7 @@ function useParallax() {
 			last: string;
 		};
 		let entries: Entry[] = [];
+		let maxScroll = 0;
 		const measure = () => {
 			entries = [
 				...document.querySelectorAll<HTMLElement>("[data-parallax]"),
@@ -154,27 +155,35 @@ function useParallax() {
 					last: "",
 				};
 			});
+			maxScroll = Math.max(
+				0,
+				document.documentElement.scrollHeight - window.innerHeight,
+			);
 			apply();
 		};
 		const apply = () => {
 			const vh = window.innerHeight;
-			const viewCentre = window.scrollY + vh / 2;
+			const scrollY = window.scrollY;
 			for (const e of entries) {
-				const offset = -(e.top + e.height / 2 - viewCentre) * e.factor;
+				// Each element's resting scroll position: where it's centred on
+				// screen, clamped to what the page can actually scroll to. At rest
+				// it sits exactly where layout put it, fully visible — so the hero
+				// is untouched at the top of the page and the footer at the bottom,
+				// however far from the screen's centre either one sits there.
+				const rest = Math.min(
+					maxScroll,
+					Math.max(0, e.top + e.height / 2 - vh / 2),
+				);
+				// > 0 once scrolled past its rest, < 0 while still arriving.
+				const past = scrollY - rest;
+				const offset = past * e.factor;
 				let visible = 1;
 				if (e.fade) {
-					// On screen, after the parallax offset.
-					const top = e.top + offset - window.scrollY;
-					const bottom = top + e.height;
-					visible =
-						top > vh / 2
-							? // Arriving from below: fully in once its top is 35% up.
-								Math.min(1, Math.max(0, (vh - top) / (vh * 0.35)))
-							: // Leaving the top: gone once its bottom reaches the top edge.
-								Math.min(1, Math.max(0, bottom / (vh * 0.5)));
+					const t = Math.min(1, Math.abs(past) / (vh * 0.55));
 					// Ease, and quantise so a slow scroll doesn't rewrite the
 					// filter every frame for invisible changes.
-					visible = Math.round(visible * visible * (3 - 2 * visible) * 40) / 40;
+					const v = 1 - t * t * (3 - 2 * t);
+					visible = Math.round(v * 40) / 40;
 				}
 				const blur = (1 - visible) * 10;
 				const style = `${offset.toFixed(1)}|${visible}`;

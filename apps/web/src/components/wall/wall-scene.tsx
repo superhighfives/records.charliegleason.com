@@ -9,8 +9,10 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import {
+	computeSpanningIds,
 	GRID_SCROLL_DURATION_MS,
 	smoothScrollTo,
+	TILE_MIN_PX,
 } from "#/components/collection-grid";
 import {
 	makeGrooveTexture,
@@ -19,6 +21,7 @@ import {
 } from "#/components/three/texture-stream";
 import type { PublicRecord } from "#/lib/records";
 import { Dust } from "./dust";
+import { packDense } from "./pack";
 
 /**
  * Prototype: the collection grid as records hung on a dark, gently curved
@@ -135,10 +138,19 @@ function Effects({ isTouch, dark }: { isTouch: boolean; dark: boolean }) {
 	);
 }
 
-function columnsFor(width: number) {
-	if (width < 640) return 3;
-	if (width < 1100) return 5;
-	return 7;
+/** The DOM grid's 1.25rem gap, for matching its column count. */
+const DOM_GAP_PX = 20;
+
+/**
+ * Same column count the DOM grid's `repeat(auto-fill, minmax(180px, 1fr))`
+ * gives for this width — never fewer than three, so a phone still reads as a
+ * wall rather than a list.
+ */
+function columnsFor(slotWidth: number) {
+	return Math.max(
+		3,
+		Math.floor((slotWidth + DOM_GAP_PX) / (TILE_MIN_PX + DOM_GAP_PX)),
+	);
 }
 
 type TileHandle = StreamTarget & {
@@ -167,14 +179,28 @@ function Wall({
 }: WallSceneProps) {
 	const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
 	const size = useThree((s) => s.size);
-	const cols = columnsFor(size.width);
-	const rows = Math.ceil(records.length / cols);
+	// The wall spans the slot's full width (the page's content column, same
+	// as the filter strip above it). `size` changing re-renders this, which
+	// re-reads the slot after any resize.
+	const slotWidth = slot.clientWidth || size.width;
+	const cols = columnsFor(slotWidth);
 
-	// Fit the grid's width (plus a margin) to the viewport.
+	// Dense-packed exactly like the DOM grid: the same records (some of those
+	// with notes) take a 2×2 slot, and later 1×1s backfill around them.
+	const packed = useMemo(() => {
+		const spanning = computeSpanningIds(records);
+		return packDense(
+			records.map((r) => (spanning.has(r.id) ? 2 : 1)),
+			cols,
+		);
+	}, [records, cols]);
+	const rows = packed.rows;
+
 	const gridWidth = cols * PITCH - GAP;
 	const tanHalf = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
 	const aspect = size.width / size.height;
-	const distance = (gridWidth * 1.2) / 2 / (tanHalf * aspect);
+	const viewWidthFit = (gridWidth * size.width) / slotWidth;
+	const distance = viewWidthFit / 2 / (tanHalf * aspect);
 	const viewHeight = 2 * distance * tanHalf;
 	const viewWidth = viewHeight * aspect;
 	const unitsPerPx = viewHeight / size.height;
@@ -184,20 +210,41 @@ function Wall({
 		onContentHeight(wallHeight / unitsPerPx);
 	}, [wallHeight, unitsPerPx, onContentHeight]);
 
-	// Grid slot plus a little depth jitter, so the parallax has layers.
+	// Each record's centre (a 2×2 sits over its four cells) plus a little
+	// depth jitter, so the parallax has layers to work with.
 	const layout = useMemo(
 		() =>
 			records.map((record, i) => {
-				const col = i % cols;
-				const row = Math.floor(i / cols);
+				const { col, row, span } = packed.placements[i];
 				const jitter = Math.sin(record.id * 12.9898) * 43758.5453;
 				return {
-					x: (col - (cols - 1) / 2) * PITCH,
-					y: -row * PITCH,
+					x: (col + (span - 1) / 2 - (cols - 1) / 2) * PITCH,
+					y: -(row + (span - 1) / 2) * PITCH,
 					z: (jitter - Math.floor(jitter) - 0.5) * 0.14,
+					row,
+					span,
+					/** World size relative to a 1×1 — a 2×2 also covers the gap. */
+					spanScale: (span * PITCH - GAP) / TILE,
 				};
 			}),
-		[records, cols],
+		[records, cols, packed],
+	);
+	const layoutRef = useRef(layout);
+	layoutRef.current = layout;
+	/** The record covering a cell, or the nearest one along its row. */
+	const recordAt = useCallback(
+		(row: number, col: number) => {
+			const r = Math.min(rows - 1, Math.max(0, row));
+			for (let d = 0; d < cols; d++) {
+				for (const c of [col - d, col + d]) {
+					if (c < 0 || c >= cols) continue;
+					const i = packed.cells[r * cols + c];
+					if (i >= 0) return i;
+				}
+			}
+			return 0;
+		},
+		[packed, rows, cols],
 	);
 
 	const shared = useMemo<Shared>(() => {
@@ -248,9 +295,10 @@ function Wall({
 	const firstFocus = useRef(true);
 	useEffect(() => {
 		if (focusedIndex < 0) return;
-		const row = Math.floor(focusedIndex / cols);
+		const { row, span } = layout[focusedIndex];
 		const slotDocTop = slot.getBoundingClientRect().top + window.scrollY;
-		const fromSlotTop = (TOP_PAD + TILE / 2 + row * PITCH) / unitsPerPx;
+		const fromSlotTop =
+			(TOP_PAD + row * PITCH + (span * PITCH - GAP) / 2) / unitsPerPx;
 		const target = slotDocTop + fromSlotTop - window.innerHeight / 2;
 		const reduced = window.matchMedia(
 			"(prefers-reduced-motion: reduce)",
@@ -258,7 +306,7 @@ function Wall({
 		if (firstFocus.current || reduced) window.scrollTo(0, target);
 		else smoothScrollTo(target, GRID_SCROLL_DURATION_MS);
 		firstFocus.current = false;
-	}, [focusedIndex, cols, unitsPerPx, slot]);
+	}, [focusedIndex, layout, unitsPerPx, slot]);
 
 	// The shadow-catching wall bows back exactly like the records do (see the
 	// curve in the frame loop), so a record never passes through it.
@@ -319,8 +367,16 @@ function Wall({
 
 	const getTarget = useCallback((i: number) => handles.current[i], []);
 	const textures = useTextureStream(records, getTarget, {
-		// Phone tiles are ~120 CSS px wide; 256px covers are plenty there.
-		coverPx: isTouch ? 256 : 512,
+		// Phone tiles are ~120 CSS px wide, so 256px covers are plenty there;
+		// a 2×2 gets the DOM grid's larger spanning size.
+		coverPx: (i) =>
+			layoutRef.current[i]?.span > 1
+				? isTouch
+					? 512
+					: 900
+				: isTouch
+					? 256
+					: 512,
 		window: cols * 4,
 		discWindow: cols,
 		cacheMax: cols * 12,
@@ -405,7 +461,7 @@ function Wall({
 		} else {
 			const onScreen = centerRow >= 0 && centerRow < rows;
 			hovered.current = onScreen
-				? Math.min(records.length - 1, centerRow * cols + Math.floor(cols / 2))
+				? recordAt(centerRow, Math.floor(cols / 2))
 				: null;
 		}
 		if (hovered.current !== active.current) {
@@ -413,11 +469,7 @@ function Wall({
 			onActiveChange(active.current);
 		}
 
-		const clampedRow = Math.min(rows - 1, Math.max(0, centerRow));
-		const centerIndex = Math.min(
-			records.length - 1,
-			clampedRow * cols + Math.floor(cols / 2),
-		);
+		const centerIndex = recordAt(centerRow, Math.floor(cols / 2));
 		if (centerIndex !== lastCenter.current) {
 			lastCenter.current = centerIndex;
 			textures.update(centerIndex);
@@ -432,6 +484,12 @@ function Wall({
 			lightX = layout[focused].x;
 			lightY = layout[focused].y;
 		}
+		// Keep the torch on the wall: never above the first row's centre or
+		// below the last's, so it doesn't light up empty wall behind the
+		// header or footer. Off the wall entirely it also dims.
+		lightY = Math.min(0, Math.max(-(rows - 1) * PITCH, lightY));
+		const onWall =
+			isTouch || focused >= 0 || pointer.current.overSlot ? 1 : 0.35;
 		if (spot.current) {
 			const s = spot.current;
 			s.position.x = THREE.MathUtils.damp(s.position.x, lightX, 5, dt);
@@ -439,6 +497,12 @@ function Wall({
 			s.position.z = 3.4;
 			s.target.position.set(s.position.x, s.position.y - 0.6, 0);
 			s.target.updateMatrixWorld();
+			s.intensity = THREE.MathUtils.damp(
+				s.intensity,
+				(theme.dark ? 26 : 14) * onWall,
+				4,
+				dt,
+			);
 		}
 		if (wall.current) wall.current.position.y = camY;
 
@@ -449,8 +513,9 @@ function Wall({
 			const h = handles.current[i];
 			if (!h) continue;
 			const pos = layout[i];
-			const row = Math.floor(i / cols);
-			const visible = Math.abs(row - centerRow) <= halfRows;
+			const visible =
+				pos.row <= centerRow + halfRows &&
+				pos.row + pos.span - 1 >= centerRow - halfRows;
 			h.group.visible = visible;
 			if (!visible) {
 				lift.current[i] = 0;
@@ -473,7 +538,7 @@ function Wall({
 			h.group.rotation.x =
 				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -ndc.y * 0.18;
 			h.group.rotation.y = -pos.x * 0.035 + l * ndc.x * 0.25;
-			h.group.scale.setScalar(h.scale * (1 + l * 0.05));
+			h.group.scale.setScalar(h.scale * pos.spanScale * (1 + l * 0.05));
 
 			h.disc.visible = l > 0.01;
 			if (h.disc.visible) {
