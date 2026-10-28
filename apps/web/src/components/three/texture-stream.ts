@@ -202,7 +202,10 @@ function setMap(
 	);
 	// Materials marked `animateIn` restart their reveal whenever a cover
 	// arrives; the scene animates `reveal` from 0 to 1 however it likes.
-	if (material.userData.animateIn) material.userData.reveal = 0;
+	if (material.userData.animateIn) {
+		material.userData.reveal = 0;
+		material.userData.started = false;
+	}
 	material.needsUpdate = true;
 }
 

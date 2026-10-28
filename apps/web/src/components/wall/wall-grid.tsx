@@ -1,9 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { computeSpanningIds } from "#/components/collection-grid";
+import { displayCoverKey, photoUrl } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { cn } from "#/lib/utils";
-import type { WallTheme } from "./wall-scene";
+import { REVEAL_STYLES } from "./cover-reveal";
+import type { RevealConfig, WallTheme } from "./wall-scene";
 
 const WallScene = lazy(() => import("./wall-scene"));
 
@@ -51,6 +54,8 @@ export function WallGrid({
 		});
 	}, []);
 	useParallax();
+	const [reveal, setReveal] = useRevealConfig();
+	useCoverPrefetch(records, env?.isTouch ?? false);
 	// Lets CSS adjust page chrome for the wall — see `[data-wall]` in
 	// styles.css (the record panel's backdrop).
 	useEffect(() => {
@@ -85,6 +90,7 @@ export function WallGrid({
 								focusedRecordId={focusedRecordId}
 								onContentHeight={onContentHeight}
 								theme={theme}
+								reveal={reveal}
 								isTouch={env.isTouch}
 								showStats={env.showStats}
 								dof={env.dof}
@@ -93,6 +99,7 @@ export function WallGrid({
 					</div>,
 					document.body,
 				)}
+			<RevealPanel config={reveal} onChange={setReveal} />
 			<div
 				className={cn(
 					"pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 transition-opacity duration-300",
@@ -242,4 +249,140 @@ function useParallax() {
 			}
 		};
 	}, []);
+}
+
+const REVEAL_KEY = "wall-reveal";
+
+/** The reveal panel's choices, remembered across reloads. */
+function useRevealConfig() {
+	const [config, setConfig] = useState<RevealConfig>({
+		style: "wax",
+		trigger: "enter",
+		replay: 0,
+	});
+	useEffect(() => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(REVEAL_KEY) ?? "null");
+			if (saved && REVEAL_STYLES.includes(saved.style)) {
+				setConfig((c) => ({
+					...c,
+					style: saved.style,
+					trigger: saved.trigger === "scroll" ? "scroll" : "enter",
+				}));
+			}
+		} catch {}
+	}, []);
+	const update = useCallback((next: RevealConfig) => {
+		setConfig(next);
+		try {
+			localStorage.setItem(
+				REVEAL_KEY,
+				JSON.stringify({ style: next.style, trigger: next.trigger }),
+			);
+		} catch {}
+	}, []);
+	return [config, update] as const;
+}
+
+/**
+ * Prototype switcher for how records appear: the transition style, whether
+ * it plays on entering view or follows the scroll, and a replay.
+ */
+function RevealPanel({
+	config,
+	onChange,
+}: {
+	config: RevealConfig;
+	onChange: (next: RevealConfig) => void;
+}) {
+	const chip = (active: boolean) =>
+		cn(
+			"rounded-full border px-2 py-0.5 font-mono text-[11px] transition-colors",
+			active
+				? "border-foreground bg-foreground text-background"
+				: "border-border text-muted-foreground hover:text-foreground",
+		);
+	return (
+		<div className="fixed bottom-4 left-4 z-40 hidden max-w-[17rem] flex-col gap-1.5 rounded-lg border bg-popover/90 p-2 text-popover-foreground shadow-lg backdrop-blur-sm sm:flex">
+			<p className="font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
+				Reveal
+			</p>
+			<div className="flex flex-wrap gap-1">
+				{REVEAL_STYLES.map((style) => (
+					<button
+						key={style}
+						type="button"
+						className={chip(config.style === style)}
+						onClick={() =>
+							onChange({ ...config, style, replay: config.replay + 1 })
+						}
+					>
+						{style}
+					</button>
+				))}
+			</div>
+			<div className="flex flex-wrap items-center gap-1">
+				{(["enter", "scroll"] as const).map((trigger) => (
+					<button
+						key={trigger}
+						type="button"
+						className={chip(config.trigger === trigger)}
+						onClick={() =>
+							onChange({ ...config, trigger, replay: config.replay + 1 })
+						}
+					>
+						{trigger === "enter" ? "on enter" : "scroll"}
+					</button>
+				))}
+				<button
+					type="button"
+					className={cn(chip(false), "ml-auto")}
+					onClick={() => onChange({ ...config, replay: config.replay + 1 })}
+				>
+					replay ↻
+				</button>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * Warms the browser's HTTP cache with every cover the wall will want, top of
+ * the collection first, a few at a time, once the page has settled — so by
+ * the time a record scrolls into view its image is usually already local and
+ * its reveal can start straight away. The texture stream still decides what
+ * goes to the GPU; this only saves the network wait. Same sizes the wall
+ * requests (a 2×2 gets the larger cover).
+ */
+function useCoverPrefetch(records: PublicRecord[], isTouch: boolean) {
+	useEffect(() => {
+		const spanning = computeSpanningIds(records);
+		const urls: string[] = [];
+		for (const record of records) {
+			const key = displayCoverKey(record);
+			if (!key) continue;
+			const big = spanning.has(record.id);
+			urls.push(
+				photoUrl(key, big ? (isTouch ? 512 : 900) : isTouch ? 256 : 512),
+			);
+		}
+		let cancelled = false;
+		let next = 0;
+		const worker = async () => {
+			while (!cancelled && next < urls.length) {
+				const url = urls[next++];
+				try {
+					await fetch(url, { priority: "low" } as RequestInit);
+				} catch {}
+			}
+		};
+		// Let the first screenful (requested by the scene itself) go first.
+		const start = window.setTimeout(() => {
+			for (let i = 0; i < 4; i++) void worker();
+		}, 1500);
+		return () => {
+			cancelled = true;
+			window.clearTimeout(start);
+		};
+	}, [records, isTouch]);
 }

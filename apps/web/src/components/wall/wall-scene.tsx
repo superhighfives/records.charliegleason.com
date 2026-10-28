@@ -34,8 +34,10 @@ import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import {
 	makeCoverMaterial,
+	type RevealStyle,
 	setCoverReveal,
 	setCoverSelfLight,
+	setCoverStyle,
 	setCoverTheme,
 } from "./cover-reveal";
 import { Dust } from "./dust";
@@ -160,6 +162,18 @@ export type WallTheme = {
 	placeholder: string;
 };
 
+/** Prototype controls for how records appear (see the reveal panel). */
+export type RevealConfig = {
+	style: RevealStyle;
+	/**
+	 * `enter`: each record plays its reveal once, in full, as it comes into
+	 * view. `scroll`: the reveal follows its position on screen, reversibly.
+	 */
+	trigger: "enter" | "scroll";
+	/** Bumped to replay every record's reveal. */
+	replay: number;
+};
+
 export type WallSceneProps = {
 	records: PublicRecord[];
 	/** The in-page element that reserves the wall's space. */
@@ -175,6 +189,7 @@ export type WallSceneProps = {
 	/** The slot height the wall needs, in CSS px. */
 	onContentHeight: (px: number) => void;
 	theme: WallTheme;
+	reveal: RevealConfig;
 	isTouch: boolean;
 	showStats?: boolean;
 	dof?: boolean;
@@ -315,6 +330,7 @@ function Wall({
 	focusedRecordId,
 	onContentHeight,
 	theme,
+	reveal,
 	isTouch,
 }: WallSceneProps & { focusTarget: THREE.Vector3 }) {
 	const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
@@ -625,9 +641,9 @@ function Wall({
 				: isTouch
 					? 256
 					: 512,
-		window: cols * 4,
+		window: cols * 5,
 		discWindow: cols,
-		cacheMax: cols * 12,
+		cacheMax: cols * 14,
 	});
 
 	// A re-filter changes what's at the centre — force a texture pass.
@@ -636,6 +652,16 @@ function Wall({
 		lastCenter.current = -1;
 		hovered.current = null;
 	}, [records]);
+
+	// Replay: every record plays its reveal again.
+	useEffect(() => {
+		if (reveal.replay === 0) return;
+		for (const h of handles.current) {
+			if (!h) continue;
+			h.cover.userData.reveal = 0;
+			h.cover.userData.started = false;
+		}
+	}, [reveal.replay]);
 
 	// Theme: sleeve edges and not-yet-loaded covers follow light/dark.
 	useEffect(() => {
@@ -870,15 +896,20 @@ function Wall({
 			// competing with the reveal.
 			const revealed = h.cover.map ? (h.cover.userData.shown ?? 1) : 1;
 			const settled = THREE.MathUtils.smoothstep(revealed, 0.7, 1);
-			const flush = (1 - settled) * (z - WALL_Z - 0.03);
+			const rotY = -anim.x * 0.035 + l * tilt.x * 0.25;
+			const tipX = l * -tilt.y * 0.18;
+			// Turned, a record's edges swing back toward the wall; keep them
+			// clear of it, or the wall shows through a half-revealed cover.
+			const halfW = (TILE / 2) * h.scale * anim.spanScale;
+			const gap = 0.03 + (Math.abs(rotY) + Math.abs(tipX)) * halfW;
+			const flush = Math.max(0, (1 - settled) * (z - WALL_Z - gap));
 			h.group.position.set(
 				anim.x,
 				anim.y,
 				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5 - flush,
 			);
-			h.group.rotation.x =
-				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -tilt.y * 0.18;
-			h.group.rotation.y = -anim.x * 0.035 + l * tilt.x * 0.25;
+			h.group.rotation.x = -Math.atan((2 * CURVE_DEPTH * dy) / half) + tipX;
+			h.group.rotation.y = rotY;
 			h.group.scale.setScalar(
 				Math.max(0.001, h.scale * anim.spanScale * (1 + l * 0.05) * grow),
 			);
@@ -897,11 +928,11 @@ function Wall({
 			// otherwise sit whole behind a half-drawn cover).
 			const discOut = l * THREE.MathUtils.smoothstep(poured, 0.85, 1);
 			h.disc.visible = discOut > 0.01;
-			h.disc.castShadow = poured > 0.9;
-			if (h.disc.visible) {
-				h.disc.position.x = (discOut * DISC_SLIDE) / h.scale;
-				h.disc.rotation.z -= dt * 1.2 * l;
-			}
+			// A hidden vinyl is parked fully home and casts no shadow, so a
+			// half-revealed (see-through) cover never shows a stray disc.
+			h.disc.castShadow = h.disc.visible && poured > 0.9;
+			h.disc.position.x = (discOut * DISC_SLIDE) / h.scale;
+			if (h.disc.visible) h.disc.rotation.z -= dt * 1.2 * l;
 			if (h.slip) {
 				// Roughly the same size on a 2×2 as on a 1×1 — it's a note, not
 				// part of the sleeve, so it shouldn't scale up with it.
@@ -957,23 +988,39 @@ function Wall({
 				(theme.dark ? SELF_LIGHT_DARK : SELF_LIGHT_LIGHT) *
 					(focused === i ? 1 : roomDim),
 			);
-			if (cover.map && cover.userData.reveal < 1) {
-				cover.userData.reveal = reducedMotion
-					? 1
-					: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
-			}
-			// Scroll is the timeline: a record ripples in as it rises from the
-			// bottom of the screen (fully shown about a quarter of the way up)
-			// and back out as it leaves through the top — reversibly, in step
-			// with the scroll. It can't show more than its image has loaded in,
-			// and the selected record is always fully shown.
+			setCoverStyle(cover, reveal.style);
+			// Where the record sits on screen: -1 at the bottom edge, 1 at the top.
 			const dyView = (anim.y - camY) / (viewHeight / 2);
-			const scrolled =
-				reducedMotion || focused === i
+			let shown: number;
+			if (reveal.trigger === "enter") {
+				// Plays once, in full, from when the record (with its image
+				// ready) first comes into view — never frozen half-done.
+				if (cover.map && !cover.userData.started && dyView > -0.85) {
+					cover.userData.started = true;
+				}
+				if (cover.userData.started && cover.userData.reveal < 1) {
+					cover.userData.reveal = reducedMotion
+						? 1
+						: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
+				}
+				shown = cover.map ? cover.userData.reveal : 0;
+			} else {
+				// Scroll is the timeline: in as it rises from the bottom, out as
+				// it leaves through the top, reversibly — but never more than
+				// its image has loaded in.
+				if (cover.map && cover.userData.reveal < 1) {
+					cover.userData.reveal = reducedMotion
+						? 1
+						: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
+				}
+				const scrolled = reducedMotion
 					? 1
 					: THREE.MathUtils.smoothstep(dyView, -1.25, -0.5) *
 						(1 - THREE.MathUtils.smoothstep(dyView, 0.6, 1.35));
-			const shown = Math.min(cover.userData.reveal ?? 1, scrolled);
+				shown = Math.min(cover.userData.reveal ?? 1, scrolled);
+			}
+			// The selected record is always fully shown.
+			if (focused === i && cover.map) shown = 1;
 			if (shown !== cover.userData.shown) {
 				cover.userData.shown = shown;
 				setCoverReveal(cover, shown);
