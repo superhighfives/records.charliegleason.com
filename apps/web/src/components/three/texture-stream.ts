@@ -26,6 +26,12 @@ type StreamOptions = {
 	discWindow: number;
 	/** Most textures held at once; the least recently used are evicted. */
 	cacheMax: number;
+	/**
+	 * When set, every record's cover is also preloaded at this tiny size and
+	 * kept for good: a record has its low-res cover to show (and reveal)
+	 * the moment it comes into view, and the full one replaces it once loaded.
+	 */
+	lowPx?: number;
 };
 
 /**
@@ -43,6 +49,10 @@ type StreamOptions = {
  * `n` to their materials. Each one costs a GPU upload the first time it's
  * drawn, and a fast scroll otherwise lands a dozen uploads in one frame (the
  * single biggest cost in a profiled throttled-phone scroll).
+ *
+ * With `lowPx`, a tiny copy of every cover loads up front too (see there):
+ * the materials keep it as `userData.lowMap`, the fallback whenever their
+ * full cover isn't loaded.
  */
 export function useTextureStream(
 	records: PublicRecord[],
@@ -51,7 +61,7 @@ export function useTextureStream(
 ) {
 	const anisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
 	// `window` renamed: as a local it would shadow the global.
-	const { coverPx, window: span, discWindow, cacheMax } = options;
+	const { coverPx, window: span, discWindow, cacheMax, lowPx } = options;
 	const recordsRef = useRef(records);
 	recordsRef.current = records;
 	// Read through a ref: a per-record function is usually a fresh closure
@@ -72,6 +82,17 @@ export function useTextureStream(
 		// Which materials each cached texture is applied to, for eviction.
 		const users = new Map<THREE.Texture, Set<THREE.MeshStandardMaterial>>();
 
+		/** Tiny covers by record id, never evicted. */
+		const low = new Map<number, THREE.Texture>();
+		const giveLow = (
+			material: THREE.MeshStandardMaterial,
+			t: THREE.Texture,
+		) => {
+			if (material.userData.lowMap === t) return;
+			material.userData.lowMap = t;
+			if (!material.map) setMap(material, t);
+		};
+
 		const apply = (material: THREE.MeshStandardMaterial, t: THREE.Texture) => {
 			setMap(material, t);
 			let set = users.get(t);
@@ -90,7 +111,7 @@ export function useTextureStream(
 				];
 				cache.delete(url);
 				for (const m of users.get(old) ?? []) {
-					if (m.map === old) setMap(m, null);
+					if (m.map === old) setMap(m, m.userData.lowMap ?? null);
 				}
 				users.delete(old);
 				old.dispose();
@@ -144,6 +165,8 @@ export function useTextureStream(
 					const target = getTarget(i);
 					if (!record || !target) continue;
 					if (target.id != null && target.id !== record.id) continue;
+					const lo = low.get(record.id);
+					if (lo) giveLow(target.cover, lo);
 					const key = displayCoverKey(record);
 					if (key) {
 						const size = coverPxRef.current;
@@ -174,7 +197,55 @@ export function useTextureStream(
 			return "";
 		};
 
+		let preloading = false;
+		let stopped = false;
+		/** Loads every record's tiny cover, a few at a time, top first. */
+		const preloadLow = (px: number) => {
+			if (preloading) return;
+			preloading = true;
+			const queue = recordsRef.current.slice();
+			const worker = async () => {
+				while (!stopped && queue.length > 0) {
+					const record = queue.shift();
+					const key = record && displayCoverKey(record);
+					if (!record || !key || low.has(record.id)) continue;
+					try {
+						// The smallest size the photo route serves; shrunk here, so
+						// the GPU holds a few KB per record rather than a full cover.
+						const blob = await (await fetch(photoUrl(key, 350))).blob();
+						const bitmap = await createImageBitmap(blob, {
+							resizeWidth: px,
+							resizeHeight: px,
+							resizeQuality: "medium",
+							imageOrientation: "flipY",
+						});
+						if (stopped) {
+							bitmap.close();
+							return;
+						}
+						const texture = new THREE.Texture(bitmap);
+						texture.flipY = false;
+						texture.colorSpace = THREE.SRGBColorSpace;
+						texture.needsUpdate = true;
+						low.set(record.id, texture);
+						const i = recordsRef.current.findIndex((r) => r.id === record.id);
+						const target = i >= 0 ? getTarget(i) : null;
+						if (target && (target.id == null || target.id === record.id)) {
+							giveLow(target.cover, texture);
+						}
+					} catch {}
+				}
+			};
+			for (let n = 0; n < 6; n++) void worker();
+		};
+
 		const disposeAll = () => {
+			stopped = true;
+			for (const t of low.values()) {
+				t.dispose();
+				(t.image as ImageBitmap | undefined)?.close?.();
+			}
+			low.clear();
 			for (const t of cache.values()) {
 				t.dispose();
 				(t.image as ImageBitmap | undefined)?.close?.();
@@ -184,10 +255,13 @@ export function useTextureStream(
 			ready.length = 0;
 		};
 
-		return { update, flush, disposeAll };
+		return { update, flush, preloadLow, disposeAll };
 	}, [getTarget, anisotropy, span, discWindow, cacheMax]);
 
 	useEffect(() => () => stream.disposeAll(), [stream]);
+	useEffect(() => {
+		if (lowPx) stream.preloadLow(lowPx);
+	}, [stream, lowPx]);
 	return stream;
 }
 
@@ -196,13 +270,15 @@ function setMap(
 	map: THREE.Texture | null,
 ) {
 	if (material.map === map) return;
+	const first = !material.map;
 	material.map = map;
 	material.color.set(
 		map ? "#ffffff" : (material.userData.placeholder ?? "#2a2a2a"),
 	);
 	// Materials marked `animateIn` restart their reveal whenever a cover
-	// arrives; the scene animates `reveal` from 0 to 1 however it likes.
-	if (material.userData.animateIn) {
+	// arrives where there was none (not when the full cover replaces its
+	// low-res stand-in); the scene animates `reveal` from 0 to 1.
+	if (material.userData.animateIn && first) {
 		material.userData.reveal = 0;
 		material.userData.started = false;
 	}

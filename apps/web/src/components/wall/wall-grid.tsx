@@ -1,8 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { computeSpanningIds } from "#/components/collection-grid";
-import { displayCoverKey, photoUrl } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import { cn } from "#/lib/utils";
 import { REVEAL_STYLES } from "./cover-reveal";
@@ -55,7 +53,6 @@ export function WallGrid({
 	}, []);
 	useParallax();
 	const [reveal, setReveal] = useRevealConfig();
-	useCoverPrefetch(records, env?.isTouch ?? false);
 	// Lets CSS adjust page chrome for the wall — see `[data-wall]` in
 	// styles.css (the record panel's backdrop).
 	useEffect(() => {
@@ -344,45 +341,4 @@ function RevealPanel({
 			</div>
 		</div>
 	);
-}
-
-/**
- * Warms the browser's HTTP cache with every cover the wall will want, top of
- * the collection first, a few at a time, once the page has settled — so by
- * the time a record scrolls into view its image is usually already local and
- * its reveal can start straight away. The texture stream still decides what
- * goes to the GPU; this only saves the network wait. Same sizes the wall
- * requests (a 2×2 gets the larger cover).
- */
-function useCoverPrefetch(records: PublicRecord[], isTouch: boolean) {
-	useEffect(() => {
-		const spanning = computeSpanningIds(records);
-		const urls: string[] = [];
-		for (const record of records) {
-			const key = displayCoverKey(record);
-			if (!key) continue;
-			const big = spanning.has(record.id);
-			urls.push(
-				photoUrl(key, big ? (isTouch ? 512 : 900) : isTouch ? 256 : 512),
-			);
-		}
-		let cancelled = false;
-		let next = 0;
-		const worker = async () => {
-			while (!cancelled && next < urls.length) {
-				const url = urls[next++];
-				try {
-					await fetch(url, { priority: "low" } as RequestInit);
-				} catch {}
-			}
-		};
-		// Let the first screenful (requested by the scene itself) go first.
-		const start = window.setTimeout(() => {
-			for (let i = 0; i < 4; i++) void worker();
-		}, 1500);
-		return () => {
-			cancelled = true;
-			window.clearTimeout(start);
-		};
-	}, [records, isTouch]);
 }

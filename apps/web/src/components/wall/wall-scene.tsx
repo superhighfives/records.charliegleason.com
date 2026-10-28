@@ -146,7 +146,8 @@ const SLIP_H = 0.3;
 const SLIP_PEEK = 0.09;
 const SLIP_PULL = 0.07;
 /** Clearance kept between the selected record and the record panel's edge. */
-const PANEL_MARGIN = 0.35;
+/** Most the camera closes in on a selected record (a share of its distance). */
+const FOCUS_ZOOM = 0.38;
 
 const SIZE_SCALE: Record<string, number> = {
 	'12"': 1,
@@ -498,6 +499,9 @@ function Wall({
 	const getTravel = useCallback(() => travel.current, []);
 	/** Rightward camera pan that keeps the selected record clear of the panel. */
 	const panelShift = useRef(0);
+	/** Camera moves toward the selected record: down the wall, and in. */
+	const focusRise = useRef(0);
+	const zoom = useRef(0);
 
 	const focusedIndex = useMemo(
 		() =>
@@ -644,6 +648,7 @@ function Wall({
 		window: cols * 5,
 		discWindow: cols,
 		cacheMax: cols * 14,
+		lowPx: isTouch ? 64 : 128,
 	});
 
 	// A re-filter changes what's at the centre — force a texture pass.
@@ -707,41 +712,65 @@ function Wall({
 		// Where the slot's top edge is on screen → where row 0 sits in the
 		// view. Row 0's top edge (y = TILE / 2) lines up with the slot's top.
 		const slotTop = slot.getBoundingClientRect().top;
-		const camY = TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
-		travel.current = -camY;
-		pickCamY.current = camY;
+		const scrollY =
+			TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
 		const focused = focusedRef.current;
 
-		// With the record panel open, pan just enough that the selected record
-		// sits clear of the panel's left edge — or, for a record in the first
-		// column, of the screen's left edge (desktop; on phones the panel covers
-		// everything anyway).
+		// A selected record pulls the camera in: closer (as far as it still
+		// fits on screen with room to spare), centred on it vertically, and
+		// across into the middle of what the record panel leaves uncovered
+		// (desktop; on phones the panel covers everything anyway).
+		let zoomGoal = 0;
 		let shiftGoal = 0;
-		if (focused >= 0 && !isTouch) {
-			const panel = document.querySelector('[data-slot="sheet-content"]');
-			const left = panel?.getBoundingClientRect().left ?? size.width;
-			if (left > size.width * 0.3) {
-				const visibleRight = ((left / size.width) * 2 - 1) * (viewWidth / 2);
-				const visibleLeft = -viewWidth / 2;
-				// A lifted record also looks bigger (it's closer to the camera),
-				// so leave room for that on both sides.
-				const reach = (layout[focused].spanScale * TILE * 1.15) / 2;
-				const x = layout[focused].x;
-				if (x + reach + PANEL_MARGIN > visibleRight) {
-					shiftGoal = x + reach + PANEL_MARGIN - visibleRight;
-				} else if (x - reach - PANEL_MARGIN < visibleLeft) {
-					shiftGoal = x - reach - PANEL_MARGIN - visibleLeft;
-				}
+		let riseGoal = 0;
+		if (focused >= 0) {
+			const pos = layout[focused];
+			// A lifted record also looks bigger (it's closer to the camera).
+			const extent = pos.spanScale * TILE * 1.15;
+			zoomGoal = Math.min(
+				FOCUS_ZOOM,
+				Math.max(0, 1 - extent / (viewHeight * 0.62)),
+			);
+			let centreNdc = 0;
+			if (!isTouch) {
+				const panel = document.querySelector('[data-slot="sheet-content"]');
+				const left = panel?.getBoundingClientRect().left ?? size.width;
+				// Halfway between the screen's left edge (-1) and the panel's.
+				if (left > size.width * 0.3) centreNdc = left / size.width - 1;
 			}
+			const halfWidth = (viewWidth / 2) * (1 - zoomGoal);
+			shiftGoal = pos.x - centreNdc * halfWidth;
+			riseGoal = pos.y - scrollY;
 		}
+		zoom.current = smoothDamp(
+			zoom.current,
+			zoomGoal,
+			springs.current,
+			"zoom",
+			0.55,
+			dt,
+		);
 		panelShift.current = smoothDamp(
 			panelShift.current,
 			shiftGoal,
 			springs.current,
 			"shift",
-			0.45,
+			0.55,
 			dt,
 		);
+		focusRise.current = smoothDamp(
+			focusRise.current,
+			riseGoal,
+			springs.current,
+			"rise",
+			0.55,
+			dt,
+		);
+		// Everything below works from where the camera is looking, so the
+		// wall's curve follows the camera to the selected record.
+		const camY = scrollY + focusRise.current;
+		travel.current = -scrollY;
+		pickCamY.current = camY;
 
 		// Parallax: the camera drifts toward the pointer (a slow idle sway on
 		// touch, where there's no pointer to follow).
@@ -757,7 +786,11 @@ function Wall({
 		const p = parallax.current;
 		p.x = THREE.MathUtils.damp(p.x, goalX, 3, dt);
 		p.y = THREE.MathUtils.damp(p.y, goalY, 3, dt);
-		camera.position.set(p.x + panelShift.current, camY + p.y, distance);
+		camera.position.set(
+			p.x + panelShift.current,
+			camY + p.y,
+			distance * (1 - zoom.current),
+		);
 		lookAt.set(panelShift.current, camY, 0);
 		camera.lookAt(lookAt);
 		// Focus just in front of the wall: between the records on it and one

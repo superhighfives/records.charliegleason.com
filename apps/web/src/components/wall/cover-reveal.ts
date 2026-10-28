@@ -17,6 +17,21 @@ import * as THREE from "three";
  *   blocks shrinking to nothing.
  * - **blinds** — horizontal slats, each opening downward, staggered.
  * - **focus** — fades in from blurred, with colour fringing, to sharp.
+ * - **unfold** — opens like a sleeve folded in four, panel by panel from the
+ *   top, each one foreshortened and shaded until it lies flat.
+ * - **bloom** — a blown-out, glowing flash from the middle that cools down to
+ *   the photo, like a light coming up through it.
+ * - **polaroid** — instant film: a murky grey-green plate in a white frame;
+ *   the shadows come up first, then colour from a cold cast to warm, and the
+ *   frame shrinks away.
+ * - **smoke** — the picture gathers out of curling smoke, soft edged and
+ *   swirled, the swirl settling as it thickens.
+ * - **dust** — settles out of fine specks, bottom up like sand, each one
+ *   glinting as it lands, then closes up solid.
+ * - **ink** — blooms from a few drops, like ink in water, the edges feathered
+ *   and the colour bleeding in.
+ * - **glitch** — tears in on a bad signal: slipping bands, split channels and
+ *   blocky dropouts that lock into place.
  *
  * It's the standard lit material (lighting, shadows, the matte finish) with
  * its `map` step patched via `onBeforeCompile`; every cover shares one
@@ -31,6 +46,13 @@ export const REVEAL_STYLES = [
 	"pixels",
 	"blinds",
 	"focus",
+	"unfold",
+	"bloom",
+	"polaroid",
+	"smoke",
+	"dust",
+	"ink",
+	"glitch",
 ] as const;
 export type RevealStyle = (typeof REVEAL_STYLES)[number];
 
@@ -76,6 +98,26 @@ const HEADER_GLSL = /* glsl */ `
 		c += revealSample(tex, uv + vec2(r, -r)) * 0.15;
 		c += revealSample(tex, uv + vec2(-r, -r)) * 0.15;
 		return c;
+	}
+	float revealNoise2(vec2 p) {
+		vec2 i = floor(p);
+		vec2 f = fract(p);
+		vec2 u = f * f * (3.0 - 2.0 * f);
+		return mix(
+			mix(revealHash(i), revealHash(i + vec2(1.0, 0.0)), u.x),
+			mix(revealHash(i + vec2(0.0, 1.0)), revealHash(i + vec2(1.0, 1.0)), u.x),
+			u.y
+		);
+	}
+	float revealFbm(vec2 p) {
+		float v = 0.0;
+		float a = 0.5;
+		for (int i = 0; i < 4; i++) {
+			v += revealNoise2(p) * a;
+			p = p * 2.03 + 17.0;
+			a *= 0.5;
+		}
+		return v;
 	}
 `;
 
@@ -153,7 +195,7 @@ const MAP_GLSL = /* glsl */ `
 			vec2 s = uv;
 			s.y += (1.0 - open) * (1.0 / slats) * 0.6;
 			img = revealSample(map, s) * mix(0.7, 1.0, open);
-		} else {
+		} else if (uMode < 5.5) {
 			// focus
 			float k = smoothstep(0.0, 1.0, t);
 			float r = 0.035 * (1.0 - k);
@@ -164,6 +206,137 @@ const MAP_GLSL = /* glsl */ `
 				revealBlur(map, uv - split, r).b
 			);
 			alpha = smoothstep(0.0, 0.5, t);
+		} else if (uMode < 6.5) {
+			// unfold: four panels, folded accordion-style, opening top down.
+			float down = 1.0 - uv.y;
+			float top = 0.0;
+			float found = -1.0;
+			float local = 0.0;
+			float open = 0.0;
+			for (int k = 0; k < 4; k++) {
+				float fk = float(k);
+				float o = smoothstep(0.0, 1.0, clamp(t * 1.9 - fk * 0.3, 0.0, 1.0));
+				// Foreshortened: a panel at angle a shows cos(a) of its height.
+				float h = 0.25 * sin(o * 1.5708);
+				if (found < 0.0 && down >= top && down < top + h) {
+					found = fk;
+					local = (down - top) / max(h, 0.0001);
+					open = o;
+				}
+				top += h;
+			}
+			if (found < 0.0) discard;
+			vec2 s = vec2(uv.x, 1.0 - (found + local) * 0.25);
+			// Alternate panels face toward and away from the light as they turn.
+			float lit = mod(found, 2.0) < 0.5
+				? mix(1.25, 1.0, open)
+				: mix(0.45, 1.0, open);
+			// A soft crease shadow at each fold.
+			float crease = 1.0 - (1.0 - smoothstep(0.0, 0.08, local)) * 0.3 * (1.0 - open);
+			img = revealSample(map, s) * lit * crease;
+		} else if (uMode < 7.5) {
+			// bloom
+			float k = smoothstep(0.0, 1.0, t);
+			float d = length(uv - 0.5);
+			float glow = (1.0 - k) * (1.0 - k);
+			float core = 1.0 - smoothstep(0.0, mix(0.2, 1.2, k), d);
+			vec3 soft = revealBlur(map, uv, 0.03 * glow);
+			img = soft + glow * (soft * 2.2 + vec3(0.35, 0.3, 0.25)) * core;
+			alpha = smoothstep(0.0, 0.3, t) * smoothstep(-0.05, 0.25, core + k - 0.2);
+		} else if (uMode < 8.5) {
+			// polaroid
+			float k = smoothstep(0.0, 1.0, t);
+			// The white frame, its wide bottom lip, shrinking off the edges.
+			float side = 0.07 * (1.0 - smoothstep(0.55, 1.0, t));
+			float bottom = side * 3.2;
+			vec2 inner = vec2(
+				(uv.x - side) / (1.0 - 2.0 * side),
+				(uv.y - bottom) / (1.0 - side - bottom)
+			);
+			if (inner.x < 0.0 || inner.x > 1.0 || inner.y < 0.0 || inner.y > 1.0) {
+				img = vec3(0.93, 0.92, 0.88);
+			} else {
+				vec3 photo = revealSample(map, inner);
+				float lum = dot(photo, vec3(0.299, 0.587, 0.114));
+				vec3 plate = vec3(0.16, 0.19, 0.18);
+				// Shadows first: contrast arrives before colour.
+				vec3 tone = mix(plate, plate + (vec3(lum) - 0.25) * 0.9, smoothstep(0.0, 0.45, k));
+				vec3 cold = photo * vec3(0.8, 0.95, 1.1) * 0.9;
+				vec3 c = mix(tone, cold, smoothstep(0.3, 0.75, k));
+				img = mix(c, photo, smoothstep(0.65, 1.0, k));
+			}
+			alpha = smoothstep(0.0, 0.15, t);
+		} else if (uMode < 9.5) {
+			// smoke
+			float settle2 = 1.0 - smoothstep(0.4, 1.0, t);
+			vec2 p = uv * 3.0 + uSeed;
+			vec2 warp = vec2(
+				revealFbm(p + vec2(0.0, t * 1.5)),
+				revealFbm(p + vec2(5.2, -t * 1.3))
+			) - 0.5;
+			vec2 s = uv + warp * 0.18 * settle2;
+			float n = revealFbm(s * 4.0 + uSeed + t * 0.8);
+			float density = smoothstep(n - 0.25, n + 0.25, t * 1.5 - 0.25);
+			if (density <= 0.01) discard;
+			vec3 photo = revealBlur(map, s, 0.02 * settle2);
+			vec3 smoke = vec3(dot(photo, vec3(0.33))) * 0.6 + 0.15;
+			img = mix(smoke, photo, smoothstep(0.25, 0.9, t));
+			alpha = density;
+		} else if (uMode < 10.5) {
+			// dust
+			float grains = 110.0;
+			vec2 cell = floor(uv * grains);
+			vec2 within = fract(uv * grains) - 0.5;
+			// Bottom rows land first, with scatter.
+			float land = uv.y * 0.55 + revealHash(cell + uSeed) * 0.35;
+			float since = t * 1.25 - land;
+			if (since < 0.0) discard;
+			float r = mix(0.22, 0.75, smoothstep(0.0, 0.25, since));
+			float fill = smoothstep(0.82, 1.0, t);
+			if (length(within) > r && fill < 0.5) discard;
+			vec3 photo = revealSample(map, (cell + 0.5) / grains);
+			photo = mix(photo, revealSample(map, uv), fill);
+			float glint = 1.0 - smoothstep(0.0, 0.12, since);
+			img = photo + glint * 0.6;
+		} else if (uMode < 11.5) {
+			// ink
+			float spread = 0.0;
+			for (int k = 0; k < 4; k++) {
+				float fk = float(k);
+				vec2 drop = vec2(
+					revealHash(vec2(uSeed, fk)),
+					revealHash(vec2(fk, uSeed + 3.0))
+				) * 0.7 + 0.15;
+				float start = fk * 0.12;
+				float grow = clamp((t - start) / (1.0 - start), 0.0, 1.0);
+				spread = max(spread, grow * 1.05 - length(uv - drop));
+			}
+			float edge = revealFbm(uv * 9.0 + uSeed) * 0.18;
+			float wet = spread - edge;
+			if (wet < 0.0) discard;
+			float bleed = 1.0 - smoothstep(0.0, 0.12, wet);
+			vec3 photo = revealBlur(map, uv, 0.012 * bleed);
+			// The edge carries the most pigment, and soaks in toward the middle.
+			img = photo * (1.0 - bleed * 0.45);
+			alpha = smoothstep(0.0, 0.04, wet);
+		} else {
+			// glitch
+			float k = smoothstep(0.0, 1.0, t);
+			float noisy = 1.0 - smoothstep(0.6, 1.0, t);
+			float tick = floor(t * 24.0);
+			float band = floor(uv.y * 18.0);
+			float slip = (revealHash(vec2(band, tick + uSeed)) - 0.5)
+				* step(0.55, revealHash(vec2(tick, band + 7.0))) * 0.25 * noisy;
+			vec2 s = vec2(uv.x + slip, uv.y);
+			vec2 split = vec2(0.02 * noisy, 0.0);
+			img = vec3(
+				revealSample(map, s + split).r,
+				revealSample(map, s).g,
+				revealSample(map, s - split).b
+			);
+			vec2 block = floor(uv * vec2(8.0, 14.0));
+			if (revealHash(block + tick + uSeed) > k * 1.25) discard;
+			img *= 0.85 + 0.15 * step(0.5, fract(uv.y * 120.0)) * noisy + 0.15 * (1.0 - noisy);
 		}
 
 		diffuseColor.rgb *= img;
