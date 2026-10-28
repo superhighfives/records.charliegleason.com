@@ -3,7 +3,8 @@ import * as THREE from "three";
 /**
  * The cover material, with a shader transition for when its image arrives:
  * nothing is drawn until the image is ready, then the cover emerges from its
- * centre outward like a picture rising up through water — a soft, wobbling
+ * centre outward (as a rounded square) like a picture rising up through
+ * water — a softly wobbling
  * edge with rings of refraction (and a touch of colour separation) rippling
  * through the image behind it, settling out to crisp.
  *
@@ -19,12 +20,20 @@ type RevealUniforms = {
 	uPlaceholder: { value: THREE.Color };
 	/** Per record, so no two covers ripple in the same way. */
 	uSeed: { value: number };
+	/**
+	 * How much of the cover lights itself (its own image as glow). Lit only
+	 * by a dim room, covers came out dark, contrasty and muddy next to the
+	 * same photos on the plain grid; a share of self-light keeps them close
+	 * to their true colours, with the room's lighting as shading on top.
+	 */
+	uSelfLight: { value: number };
 };
 
 const NOISE_GLSL = /* glsl */ `
 	uniform float uReveal;
 	uniform vec3 uPlaceholder;
 	uniform float uSeed;
+	uniform float uSelfLight;
 	float meltHash(float x) {
 		return fract(sin(x * 127.1) * 43758.5453);
 	}
@@ -37,19 +46,23 @@ const NOISE_GLSL = /* glsl */ `
 `;
 
 const MAP_GLSL = /* glsl */ `
+	vec3 coverSelf = vec3(0.0);
 	#ifdef USE_MAP
 		float t = uReveal;
 		vec2 fromCentre = vMapUv - 0.5;
-		// 0 at the centre, ~1 at the corners.
-		float dist = length(fromCentre) * 1.4142;
+		// A rounded square, not a circle: a circle left the corners hidden
+		// longest, and on a big record those dark, curved corners read as
+		// vinyls sliding away. 1 at the middle of each edge, ~1.19 at corners.
+		vec2 q = abs(fromCentre) * 2.0;
+		float dist = pow(pow(q.x, 4.0) + pow(q.y, 4.0), 0.25);
 		float angle = atan(fromCentre.y, fromCentre.x);
 
 		// The image emerges from the centre outward, finished by t ≈ 0.75.
 		// Its edge is a soft circle that wobbles a little, like a meniscus.
 		float settle = 1.0 - smoothstep(0.55, 1.0, t);
-		float wobble = (sin(angle * 5.0 + uSeed) * 0.5 + 0.5) * 0.06
-			+ meltNoise(angle * 3.0 + uSeed) * 0.04;
-		float radius = smoothstep(0.0, 0.75, t) * 1.15 - wobble * settle;
+		float wobble = (sin(angle * 5.0 + uSeed) * 0.5 + 0.5) * 0.03
+			+ meltNoise(angle * 3.0 + uSeed) * 0.02;
+		float radius = smoothstep(0.0, 0.75, t) * 1.3 - wobble * settle;
 		if (dist > radius) discard;
 
 		// Behind the edge, rings of refraction ripple through the picture —
@@ -69,6 +82,7 @@ const MAP_GLSL = /* glsl */ `
 			1.0
 		);
 		diffuseColor.rgb *= sampledDiffuseColor.rgb;
+		coverSelf = sampledDiffuseColor.rgb;
 	#endif
 `;
 
@@ -89,13 +103,18 @@ export function makeCoverMaterial(
 		uReveal: { value: 0 },
 		uPlaceholder: { value: new THREE.Color(placeholder) },
 		uSeed: { value: (seed * 12.9898) % 100 },
+		uSelfLight: { value: 0 },
 	};
 	material.userData.revealUniforms = uniforms;
 	material.onBeforeCompile = (shader) => {
 		Object.assign(shader.uniforms, uniforms);
 		shader.fragmentShader = shader.fragmentShader
 			.replace("#include <common>", `#include <common>\n${NOISE_GLSL}`)
-			.replace("#include <map_fragment>", MAP_GLSL);
+			.replace("#include <map_fragment>", MAP_GLSL)
+			.replace(
+				"#include <emissivemap_fragment>",
+				"#include <emissivemap_fragment>\ntotalEmissiveRadiance += coverSelf * uSelfLight;",
+			);
 	};
 	material.customProgramCacheKey = () => "cover-ripple";
 	return material;
@@ -123,4 +142,13 @@ export function setCoverTheme(
 	if (!material.map) material.color.set(placeholder);
 	const u = uniformsOf(material);
 	if (u) u.uPlaceholder.value.set(placeholder);
+}
+
+/** How much of the cover lights itself — see `uSelfLight`. */
+export function setCoverSelfLight(
+	material: THREE.MeshStandardMaterial,
+	amount: number,
+) {
+	const u = uniformsOf(material);
+	if (u) u.uSelfLight.value = amount;
 }

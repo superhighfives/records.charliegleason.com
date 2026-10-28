@@ -35,6 +35,7 @@ import type { PublicRecord } from "#/lib/records";
 import {
 	makeCoverMaterial,
 	setCoverReveal,
+	setCoverSelfLight,
 	setCoverTheme,
 } from "./cover-reveal";
 import { Dust } from "./dust";
@@ -87,6 +88,9 @@ const WALL_Z = -0.32;
  */
 const SPOT_DARK = 17;
 const ZERO2 = new THREE.Vector2();
+/** How much each cover lights itself, per theme — see `uSelfLight`. */
+const SELF_LIGHT_DARK = 0.55;
+const SELF_LIGHT_LIGHT = 0.3;
 /** How long a record takes to emerge once its cover image arrives. */
 const REVEAL_S = 1.4;
 
@@ -667,6 +671,9 @@ function Wall({
 	}, [viewWidth, viewHeight]);
 
 	useFrame((state, delta) => {
+		// How dim the room is (1 = normal): set by the lights-down step below,
+		// read by the covers' self-light.
+		let roomDim = 1;
 		const dt = Math.min(delta, 0.05);
 		const t = state.clock.elapsedTime;
 		const ndc = pointer.current.ndc;
@@ -783,6 +790,7 @@ function Wall({
 		// wall would read as broken), and the spotlight tightens to the
 		// selected record's size and brightens.
 		const dim = 1 - down * (theme.dark ? 0.8 : 0.5);
+		roomDim = dim;
 		if (ambient.current) ambient.current.intensity = ambientBase * dim;
 		if (hemi.current) hemi.current.intensity = hemiBase * dim;
 		const focusSpan = focused >= 0 ? layout[focused].spanScale : 1;
@@ -942,6 +950,13 @@ function Wall({
 			}
 			pickable.current.push(i);
 			const cover = h.cover;
+			// Self-light keeps covers true to their photos; while a record is
+			// selected, the others dim with the room and it keeps its own.
+			setCoverSelfLight(
+				cover,
+				(theme.dark ? SELF_LIGHT_DARK : SELF_LIGHT_LIGHT) *
+					(focused === i ? 1 : roomDim),
+			);
 			if (cover.map && cover.userData.reveal < 1) {
 				cover.userData.reveal = reducedMotion
 					? 1
