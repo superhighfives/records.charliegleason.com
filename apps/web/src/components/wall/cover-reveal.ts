@@ -2,10 +2,10 @@ import * as THREE from "three";
 
 /**
  * The cover material, with a shader transition for when its image arrives:
- * the cover melts down the sleeve from the top like thick paint — drips
- * running ahead in uneven columns, the image dragged and stretched just
- * behind the front, and a liquid wobble across the whole picture that
- * settles out to crisp as the pour finishes.
+ * nothing is drawn until the image is ready, then the cover emerges from its
+ * centre outward like a picture rising up through water — a soft, wobbling
+ * edge with rings of refraction (and a touch of colour separation) rippling
+ * through the image behind it, settling out to crisp.
  *
  * It's the standard lit material (lighting, shadows, the matte finish) with
  * its `map` step patched via `onBeforeCompile`. Every cover shares one
@@ -17,7 +17,7 @@ import * as THREE from "three";
 type RevealUniforms = {
 	uReveal: { value: number };
 	uPlaceholder: { value: THREE.Color };
-	/** Per record, so no two covers drip the same way. */
+	/** Per record, so no two covers ripple in the same way. */
 	uSeed: { value: number };
 };
 
@@ -39,38 +39,36 @@ const NOISE_GLSL = /* glsl */ `
 const MAP_GLSL = /* glsl */ `
 	#ifdef USE_MAP
 		float t = uReveal;
-		// 0 at the sleeve's top edge, 1 at its bottom.
-		float down = 1.0 - vMapUv.y;
+		vec2 fromCentre = vMapUv - 0.5;
+		// 0 at the centre, ~1 at the corners.
+		float dist = length(fromCentre) * 1.4142;
+		float angle = atan(fromCentre.y, fromCentre.x);
 
-		// Uneven drip columns: some run ahead of the pour, some lag behind.
-		// Mixed sines (not value noise, which peaks at every lattice point
-		// and reads as a jagged mountain range) give round, liquid tongues.
-		float x = vMapUv.x;
-		float drip = (sin(x * 11.0 + uSeed) * 0.5 + 0.5) * 0.14
-			+ (sin(x * 23.0 + uSeed * 1.7) * 0.5 + 0.5) * 0.09
-			+ (sin(x * 41.0 + uSeed * 2.3) * 0.5 + 0.5) * 0.05
-			+ meltNoise(x * 17.0 + uSeed) * 0.05;
-		float front = t * 1.55 - drip;
-		float behind = front - down; // > 0 where the paint has reached
-		float shown = smoothstep(0.0, 0.02, behind);
-
-		// Just behind the front the image is dragged down (sampled from
-		// higher up), stretching it into the drip; the drag eases off with
-		// distance from the front and with the pour's progress.
+		// The image emerges from the centre outward, finished by t ≈ 0.75.
+		// Its edge is a soft circle that wobbles a little, like a meniscus.
 		float settle = 1.0 - smoothstep(0.55, 1.0, t);
-		float drag = (1.0 - smoothstep(0.0, 0.35, behind)) * 0.22 * settle;
-		// A liquid wobble across the whole picture, also settling out.
-		vec2 sampleUv = vMapUv;
-		sampleUv.y += drag;
-		sampleUv.x += sin(vMapUv.y * 17.0 + t * 9.0) * 0.012 * settle;
-		sampleUv.y += sin(vMapUv.x * 13.0 + t * 7.0) * 0.008 * settle;
-		vec4 sampledDiffuseColor = texture2D(map, clamp(sampleUv, 0.0, 1.0));
+		float wobble = (sin(angle * 5.0 + uSeed) * 0.5 + 0.5) * 0.06
+			+ meltNoise(angle * 3.0 + uSeed) * 0.04;
+		float radius = smoothstep(0.0, 0.75, t) * 1.15 - wobble * settle;
+		if (dist > radius) discard;
 
-		// A slightly darker, wet lip right at the front.
-		float lip = 1.0 - smoothstep(0.0, 0.05, behind);
-		vec3 paint = diffuseColor.rgb * sampledDiffuseColor.rgb * (1.0 - lip * 0.35 * settle);
-
-		diffuseColor.rgb = mix(uPlaceholder, paint, shown);
+		// Behind the edge, rings of refraction ripple through the picture —
+		// strongest right at the edge, settling everywhere as t → 1.
+		float behindEdge = radius - dist;
+		float ring = sin(behindEdge * 38.0 - t * 14.0)
+			* (1.0 - smoothstep(0.0, 0.45, behindEdge));
+		vec2 dir = dist > 0.0001 ? fromCentre / length(fromCentre) : vec2(0.0);
+		vec2 refract = dir * ring * 0.022 * settle;
+		// A touch of colour separation where the refraction is strongest.
+		vec2 split = dir * 0.006 * settle * (1.0 - smoothstep(0.0, 0.3, behindEdge));
+		vec2 uv = clamp(vMapUv + refract, 0.0, 1.0);
+		vec4 sampledDiffuseColor = vec4(
+			texture2D(map, clamp(uv + split, 0.0, 1.0)).r,
+			texture2D(map, uv).g,
+			texture2D(map, clamp(uv - split, 0.0, 1.0)).b,
+			1.0
+		);
+		diffuseColor.rgb *= sampledDiffuseColor.rgb;
 	#endif
 `;
 
@@ -99,7 +97,7 @@ export function makeCoverMaterial(
 			.replace("#include <common>", `#include <common>\n${NOISE_GLSL}`)
 			.replace("#include <map_fragment>", MAP_GLSL);
 	};
-	material.customProgramCacheKey = () => "cover-melt";
+	material.customProgramCacheKey = () => "cover-ripple";
 	return material;
 }
 
@@ -116,7 +114,7 @@ export function setCoverReveal(
 	if (u) u.uReveal.value = t;
 }
 
-/** Theme changes: the placeholder the cover melts down over. */
+/** Theme changes: the placeholder colour (records with no photo). */
 export function setCoverTheme(
 	material: THREE.MeshStandardMaterial,
 	placeholder: string,

@@ -30,6 +30,7 @@ import {
 	type StreamTarget,
 	useTextureStream,
 } from "#/components/three/texture-stream";
+import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import {
 	makeCoverMaterial,
@@ -86,8 +87,8 @@ const WALL_Z = -0.32;
  */
 const SPOT_DARK = 17;
 const ZERO2 = new THREE.Vector2();
-/** How long a cover takes to melt in once its image arrives. */
-const REVEAL_S = 1.3;
+/** How long a record takes to emerge once its cover image arrives. */
+const REVEAL_S = 1.4;
 
 /**
  * A critically damped spring toward `target` (Unity's SmoothDamp): unlike
@@ -855,10 +856,17 @@ function Wall({
 		) => {
 			const dy = (anim.y - camY) / half;
 			const grow = presence * presence * (3 - 2 * presence);
+			// A record emerges flat against the wall — its shadow hidden right
+			// beneath it — and only lifts off to its resting depth once the
+			// image is whole, so the shadow grows out from under it rather than
+			// competing with the reveal.
+			const revealed = h.cover.map ? (h.cover.userData.reveal ?? 1) : 1;
+			const settled = THREE.MathUtils.smoothstep(revealed, 0.7, 1);
+			const flush = (1 - settled) * (z - WALL_Z - 0.03);
 			h.group.position.set(
 				anim.x,
 				anim.y,
-				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5,
+				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5 - flush,
 			);
 			h.group.rotation.x =
 				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -tilt.y * 0.18;
@@ -866,9 +874,24 @@ function Wall({
 			h.group.scale.setScalar(
 				Math.max(0.001, h.scale * anim.spanScale * (1 + l * 0.05) * grow),
 			);
-			h.disc.visible = l > 0.01;
+			// While the cover emerges the sleeve has no thickness (so its edges
+			// don't outline the square before the image gets there), and casts
+			// no shadow until the image is whole (a shadow is the full square).
+			const poured = revealed;
+			h.group.scale.z *= Math.max(
+				0.001,
+				THREE.MathUtils.smoothstep(poured, 0.55, 1),
+			);
+			h.sleeve.castShadow = poured > 0.75;
+			if (h.slip) h.slip.visible = poured > 0.45;
+			// The vinyl waits for the cover: it only slides out once the record
+			// has fully emerged (it isn't part of the reveal, so it would
+			// otherwise sit whole behind a half-drawn cover).
+			const discOut = l * THREE.MathUtils.smoothstep(poured, 0.85, 1);
+			h.disc.visible = discOut > 0.01;
+			h.disc.castShadow = poured > 0.9;
 			if (h.disc.visible) {
-				h.disc.position.x = (l * DISC_SLIDE) / h.scale;
+				h.disc.position.x = (discOut * DISC_SLIDE) / h.scale;
 				h.disc.rotation.z -= dt * 1.2 * l;
 			}
 			if (h.slip) {
@@ -906,7 +929,12 @@ function Wall({
 			// Drawn while its slot — or where it's still gliding from — is near
 			// the view.
 			const travelRow = Math.round(-anim.y / PITCH);
-			const visible = inView(pos.row, pos.span) || inView(travelRow, pos.span);
+			// A record stays off the wall until its cover image is ready, then
+			// pours on (see cover-reveal.ts). Records with no photo at all show
+			// their plain sleeve straight away.
+			const ready = !!h.cover.map || !!h.cover.userData.noCover;
+			const visible =
+				ready && (inView(pos.row, pos.span) || inView(travelRow, pos.span));
 			h.group.visible = visible;
 			if (!visible) {
 				lift.current[i] = 0;
@@ -914,7 +942,9 @@ function Wall({
 			}
 			pickable.current.push(i);
 			const cover = h.cover;
-			if (cover.map && cover.userData.reveal < 1) {
+			if (pin != null && cover.map)
+				setCoverReveal(cover, pin); // DEBUG
+			else if (cover.map && cover.userData.reveal < 1) {
 				cover.userData.reveal = reducedMotion
 					? 1
 					: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
@@ -974,13 +1004,14 @@ function Wall({
 				ref={hemi}
 				args={
 					theme.dark
-						? ["#fff6e0", "#20160c", hemiBase]
+						? ["#f4f3f1", "#141414", hemiBase]
 						: ["#fbfaf7", "#d9d5cd", hemiBase]
 				}
 			/>
 			<spotLight
 				ref={spot}
-				color="#ffe7c2"
+				// Nearly neutral: a warmer beam tinted every cover amber.
+				color={theme.dark ? "#fff7ee" : "#ffffff"}
 				intensity={theme.dark ? SPOT_DARK : SPOT_LIGHT}
 				angle={isTouch ? 0.9 : 0.6}
 				penumbra={1}
@@ -1109,10 +1140,11 @@ const Tile = memo(function Tile({
 	const scale = SIZE_SCALE[record.size ?? ""] ?? 1;
 	// Created once per record; theme changes are applied by `Wall`.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation
-	const cover = useMemo(
-		() => makeCoverMaterial(placeholder, record.id),
-		[record],
-	);
+	const cover = useMemo(() => {
+		const m = makeCoverMaterial(placeholder, record.id);
+		m.userData.noCover = !displayCoverKey(record);
+		return m;
+	}, [record]);
 	const discMaterial = useMemo(() => {
 		const m = new THREE.MeshStandardMaterial({
 			color: "#181818",
