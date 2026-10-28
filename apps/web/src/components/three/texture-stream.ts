@@ -197,10 +197,31 @@ function setMap(
 ) {
 	if (material.map === map) return;
 	material.map = map;
-	material.color.set(
-		map ? "#ffffff" : (material.userData.placeholder ?? "#2a2a2a"),
-	);
+	if (material.userData.fadeIn) {
+		// The scene eases `fade` from 0 to 1 (see `applyCoverFade`).
+		material.userData.fade = 0;
+		applyCoverFade(material, 0);
+	} else {
+		material.color.set(
+			map ? "#ffffff" : (material.userData.placeholder ?? "#2a2a2a"),
+		);
+	}
 	material.needsUpdate = true;
+}
+
+/**
+ * For materials marked `userData.fadeIn`: crossfades the flat placeholder
+ * (drawn as the material's own glow, so it reads the same lit or not) into
+ * the lit cover texture as `t` goes 0 → 1, instead of the cover popping in.
+ */
+export function applyCoverFade(
+	material: THREE.MeshStandardMaterial,
+	t: number,
+) {
+	const shown = material.map ? t : 0;
+	material.color.setScalar(shown);
+	material.emissive.set(material.userData.placeholder ?? "#2a2a2a");
+	material.emissiveIntensity = 1 - shown;
 }
 
 /**

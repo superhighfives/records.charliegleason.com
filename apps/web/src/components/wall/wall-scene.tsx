@@ -26,6 +26,7 @@ import {
 	TILE_MIN_PX,
 } from "#/components/collection-grid";
 import {
+	applyCoverFade,
 	makeGrooveTexture,
 	type StreamTarget,
 	useTextureStream,
@@ -81,6 +82,8 @@ const WALL_Z = -0.32;
  */
 const SPOT_DARK = 17;
 const ZERO2 = new THREE.Vector2();
+/** How long a cover takes to fade in once its image arrives. */
+const COVER_FADE_S = 0.6;
 
 /**
  * A critically damped spring toward `target` (Unity's SmoothDamp): unlike
@@ -110,7 +113,15 @@ function smoothDamp(
 function easeInOutCubic(t: number): number {
 	return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 }
-const SPOT_LIGHT = 10;
+const SPOT_LIGHT = 4;
+/**
+ * Light mode is a daylit gallery rather than a dark room: warm off-white
+ * paper, soft daylight from the upper left so every record casts a gentle
+ * shadow, and only a faint highlight following the cursor (a torch makes no
+ * sense in a lit room).
+ */
+const GALLERY_WALL = "#f1ece2";
+const DAYLIGHT = 1.2;
 /** Space above the first row / below the last, in world units. */
 const TOP_PAD = 0.1;
 const BOTTOM_PAD = 0.45;
@@ -448,8 +459,10 @@ function Wall({
 	const hemi = useRef<THREE.HemisphereLight>(null);
 	// Touch gets more fill light: its spotlight can't follow a pointer, so it
 	// can't sweep light over the rows above and below the middle.
-	const ambientBase = (theme.dark ? 0.4 : 1.15) + (isTouch ? 0.35 : 0);
-	const hemiBase = theme.dark ? 0.3 : 0.6;
+	const ambientBase = (theme.dark ? 0.4 : 1) + (isTouch ? 0.35 : 0);
+	const hemiBase = theme.dark ? 0.3 : 0.45;
+	const wallColor = theme.dark ? theme.background : GALLERY_WALL;
+	const sun = useRef<THREE.DirectionalLight>(null);
 	/** Velocities for the `smoothDamp` springs (spotlight, panel pan). */
 	const springs = useRef<Record<string, number>>({});
 	/** 0 → 1 as a record is selected: house lights down, spotlight on it. */
@@ -621,7 +634,7 @@ function Wall({
 		for (const h of handles.current) {
 			if (!h) continue;
 			h.cover.userData.placeholder = theme.placeholder;
-			if (!h.cover.map) h.cover.color.set(theme.placeholder);
+			applyCoverFade(h.cover, h.cover.userData.fade ?? 0);
 		}
 	}, [theme, shared]);
 
@@ -631,6 +644,23 @@ function Wall({
 			spot.current.shadow.bias = -0.0004;
 		}
 	}, []);
+	// The daylight's shadow camera covers the view (plus margin for the
+	// curve and the panel pan), re-fitted when the view size changes.
+	useEffect(() => {
+		const d = sun.current;
+		if (!d) return;
+		const cam = d.shadow.camera;
+		cam.left = -viewWidth * 0.75;
+		cam.right = viewWidth * 0.75;
+		cam.top = viewHeight * 0.75;
+		cam.bottom = -viewHeight * 0.75;
+		cam.near = 1;
+		cam.far = 30;
+		cam.updateProjectionMatrix();
+		d.shadow.mapSize.set(2048, 2048);
+		d.shadow.bias = -0.0006;
+		d.shadow.radius = 4;
+	}, [viewWidth, viewHeight]);
 
 	useFrame((state, delta) => {
 		const dt = Math.min(delta, 0.05);
@@ -783,9 +813,25 @@ function Wall({
 				4,
 				dt,
 			);
-			s.angle = THREE.MathUtils.lerp(isTouch ? 0.9 : 0.6, focusAngle, down);
+			// Sprung, so moving between a 1×1 and a 2×2 widens the beam smoothly
+			// instead of snapping it to the new size.
+			s.angle = smoothDamp(
+				s.angle,
+				THREE.MathUtils.lerp(isTouch ? 0.9 : 0.6, focusAngle, down),
+				springs.current,
+				"angle",
+				0.35,
+				dt,
+			);
 		}
 		if (wall.current) wall.current.position.y = camY;
+		if (sun.current && !theme.dark) {
+			const d = sun.current;
+			d.position.set(panelShift.current - 2.5, camY + 4, 9);
+			d.target.position.set(panelShift.current, camY, 0);
+			d.target.updateMatrixWorld();
+			d.intensity = DAYLIGHT * (1 - down * 0.45);
+		}
 
 		// Only rows near the viewport are animated (and drawn, and pickable).
 		const halfRows = Math.ceil(viewHeight / 2 / PITCH) + 2;
@@ -864,6 +910,14 @@ function Wall({
 				continue;
 			}
 			pickable.current.push(i);
+			const cover = h.cover;
+			if (cover.map && cover.userData.fade < 1) {
+				cover.userData.fade = reducedMotion
+					? 1
+					: Math.min(1, cover.userData.fade + dt / COVER_FADE_S);
+				const f = cover.userData.fade;
+				applyCoverFade(cover, f * f * (3 - 2 * f));
+			}
 			const goal = hovered.current === i ? 1 : 0;
 			const l = THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
 			lift.current[i] = l;
@@ -901,7 +955,16 @@ function Wall({
 
 	return (
 		<>
-			<color attach="background" args={[theme.background]} />
+			<color attach="background" args={[wallColor]} />
+			{/* Daylight (light mode only): from the upper left, so records cast
+			    soft shadows down and to the right onto the wall. It follows the
+			    camera; see the frame loop. */}
+			<directionalLight
+				ref={sun}
+				color="#fff8ec"
+				intensity={theme.dark ? 0 : DAYLIGHT}
+				castShadow={!theme.dark && !isTouch}
+			/>
 			{/* Touch gets more fill light: its spotlight can't follow a pointer, so it
 			    can't sweep light over the rows above and below the middle. */}
 			<ambientLight ref={ambient} intensity={ambientBase} />
@@ -927,9 +990,9 @@ function Wall({
 				    it stays near the page's white instead of reading as lit grey
 				    plaster; the spotlight's shadows still darken it. */}
 				<meshStandardMaterial
-					color={theme.background}
-					emissive={theme.background}
-					emissiveIntensity={theme.dark ? 0 : 0.55}
+					color={wallColor}
+					emissive={wallColor}
+					emissiveIntensity={theme.dark ? 0 : 0.35}
 					roughness={1}
 				/>
 			</mesh>
@@ -944,8 +1007,10 @@ function Wall({
 				z={0.1}
 				parallax={0.75}
 				size={1.6}
-				opacity={theme.dark ? 0.35 : 0.22}
-				color={theme.dark ? "#fff1d0" : "#8a7a5a"}
+				opacity={theme.dark ? 0.35 : 0.5}
+				// On a pale wall, pale dust vanishes: light mode gets darker
+				// specks instead, like dust caught in daylight against paper.
+				color={theme.dark ? "#fff1d0" : "#5c4a2a"}
 				getScroll={getTravel}
 			/>
 			<Dust
@@ -956,8 +1021,8 @@ function Wall({
 				z={2.4}
 				parallax={1.45}
 				size={2.6}
-				opacity={theme.dark ? 0.3 : 0.18}
-				color={theme.dark ? "#fff1d0" : "#8a7a5a"}
+				opacity={theme.dark ? 0.3 : 0.35}
+				color={theme.dark ? "#fff1d0" : "#5c4a2a"}
 				getScroll={getTravel}
 			/>
 			{/* One keyed list for live and leaving records, so a record that gets
@@ -1037,12 +1102,15 @@ const Tile = memo(function Tile({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation
 	const cover = useMemo(() => {
 		const m = new THREE.MeshStandardMaterial({
-			color: placeholder,
 			// Matte, like printed card — a glossier cover caught a hot glare
 			// from the spotlight once lifted toward it.
 			roughness: 0.85,
 		});
 		m.userData.placeholder = placeholder;
+		// Crossfade the cover in when it loads (see `applyCoverFade`).
+		m.userData.fadeIn = true;
+		m.userData.fade = 0;
+		applyCoverFade(m, 0);
 		return m;
 	}, [record]);
 	const discMaterial = useMemo(() => {
