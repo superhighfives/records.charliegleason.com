@@ -185,7 +185,15 @@ function useParallax() {
 				const offset = past * e.factor;
 				let visible = 1;
 				if (e.fade) {
-					const t = Math.min(1, Math.abs(past) / (vh * 0.55));
+					// Arriving: fades up over the last stretch before its rest.
+					// Leaving: only once its bottom edge nears the top of the
+					// screen — so an element whose rest sits a little above the
+					// page's end (the footer) is still crisp at the very bottom.
+					const bottom = e.top + e.height + offset - scrollY;
+					const t =
+						past < 0
+							? Math.min(1, -past / (vh * 0.55))
+							: Math.min(1, Math.max(0, 1 - bottom / (vh * 0.35)));
 					// Ease, and quantise so a slow scroll doesn't rewrite the
 					// filter every frame for invisible changes.
 					const v = 1 - t * t * (3 - 2 * t);

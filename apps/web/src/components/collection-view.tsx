@@ -217,7 +217,16 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const revealMs = heroDurationMs(data.length);
 
 	return (
-		<div className="w-full px-4 py-10 sm:px-6">
+		<div
+			className="w-full px-4 py-10 sm:px-6"
+			// Wall mode's parallax translates the footer down while it's still
+			// arriving, past the end of the page. `body` is a scroll container
+			// (it has `overflow-x: hidden`), so that overflow gave it a second
+			// scrollbar. Clipping here hides only what's below the page's end,
+			// which can't be scrolled to anyway; `clip` (unlike `hidden`) doesn't
+			// make this a scroll container itself.
+			style={wallMode ? { overflowY: "clip" } : undefined}
+		>
 			{/* Staged reveal on first paint: hero copy, then the grid, then the
 			    header chrome — see the `rise-in`/`fade-in` utilities in styles.css.
 			    Each is a CSS `animation ... both`, so it only ever plays once per
