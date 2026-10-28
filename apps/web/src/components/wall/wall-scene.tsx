@@ -868,7 +868,7 @@ function Wall({
 			// beneath it — and only lifts off to its resting depth once the
 			// image is whole, so the shadow grows out from under it rather than
 			// competing with the reveal.
-			const revealed = h.cover.map ? (h.cover.userData.reveal ?? 1) : 1;
+			const revealed = h.cover.map ? (h.cover.userData.shown ?? 1) : 1;
 			const settled = THREE.MathUtils.smoothstep(revealed, 0.7, 1);
 			const flush = (1 - settled) * (z - WALL_Z - 0.03);
 			h.group.position.set(
@@ -961,7 +961,22 @@ function Wall({
 				cover.userData.reveal = reducedMotion
 					? 1
 					: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
-				setCoverReveal(cover, cover.userData.reveal);
+			}
+			// Scroll is the timeline: a record ripples in as it rises from the
+			// bottom of the screen (fully shown about a quarter of the way up)
+			// and back out as it leaves through the top — reversibly, in step
+			// with the scroll. It can't show more than its image has loaded in,
+			// and the selected record is always fully shown.
+			const dyView = (anim.y - camY) / (viewHeight / 2);
+			const scrolled =
+				reducedMotion || focused === i
+					? 1
+					: THREE.MathUtils.smoothstep(dyView, -1.25, -0.5) *
+						(1 - THREE.MathUtils.smoothstep(dyView, 0.6, 1.35));
+			const shown = Math.min(cover.userData.reveal ?? 1, scrolled);
+			if (shown !== cover.userData.shown) {
+				cover.userData.shown = shown;
+				setCoverReveal(cover, shown);
 			}
 			const goal = hovered.current === i ? 1 : 0;
 			const l = THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
