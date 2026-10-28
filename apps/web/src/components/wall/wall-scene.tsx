@@ -942,9 +942,7 @@ function Wall({
 			}
 			pickable.current.push(i);
 			const cover = h.cover;
-			if (pin != null && cover.map)
-				setCoverReveal(cover, pin); // DEBUG
-			else if (cover.map && cover.userData.reveal < 1) {
+			if (cover.map && cover.userData.reveal < 1) {
 				cover.userData.reveal = reducedMotion
 					? 1
 					: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
