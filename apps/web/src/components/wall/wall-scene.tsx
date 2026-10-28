@@ -79,6 +79,7 @@ const WALL_Z = -0.32;
  * it's hit harder than the wall around it, and a hotter spot washed covers out.
  */
 const SPOT_DARK = 17;
+const ZERO2 = new THREE.Vector2();
 const SPOT_LIGHT = 10;
 /** Space above the first row / below the last, in world units. */
 const TOP_PAD = 0.1;
@@ -404,6 +405,14 @@ function Wall({
 	const lastCenter = useRef(-1);
 	const parallax = useRef(new THREE.Vector2());
 	const spot = useRef<THREE.SpotLight>(null);
+	const ambient = useRef<THREE.AmbientLight>(null);
+	const hemi = useRef<THREE.HemisphereLight>(null);
+	// Touch gets more fill light: its spotlight can't follow a pointer, so it
+	// can't sweep light over the rows above and below the middle.
+	const ambientBase = (theme.dark ? 0.4 : 0.85) + (isTouch ? 0.35 : 0);
+	const hemiBase = theme.dark ? 0.3 : 0.5;
+	/** 0 → 1 as a record is selected: house lights down, spotlight on it. */
+	const lightsDown = useRef(0);
 	const wall = useRef<THREE.Mesh>(null);
 	/** Camera travel down the wall, in world units (drives the dust). */
 	const travel = useRef(0);
@@ -572,8 +581,15 @@ function Wall({
 
 		// Parallax: the camera drifts toward the pointer (a slow idle sway on
 		// touch, where there's no pointer to follow).
-		const goalX = isTouch ? Math.sin(t * 0.3) * 0.12 : ndc.x * 0.18;
-		const goalY = isTouch ? Math.cos(t * 0.23) * 0.08 : ndc.y * 0.14;
+		// While a record is selected the pointer is on the panel, not the wall:
+		// it no longer drifts the camera or tilts the record.
+		const pointerGain = focused >= 0 ? 0 : 1;
+		const goalX = isTouch
+			? Math.sin(t * 0.3) * 0.12
+			: ndc.x * 0.18 * pointerGain;
+		const goalY = isTouch
+			? Math.cos(t * 0.23) * 0.08
+			: ndc.y * 0.14 * pointerGain;
 		const p = parallax.current;
 		p.x = THREE.MathUtils.damp(p.x, goalX, 3, dt);
 		p.y = THREE.MathUtils.damp(p.y, goalY, 3, dt);
@@ -625,6 +641,21 @@ function Wall({
 		lightY = Math.min(0, Math.max(-(rows - 1) * PITCH, lightY));
 		const onWall =
 			isTouch || focused >= 0 || pointer.current.overSlot ? 1 : 0.35;
+		lightsDown.current = THREE.MathUtils.damp(
+			lightsDown.current,
+			focused >= 0 ? 1 : 0,
+			3,
+			dt,
+		);
+		const down = lightsDown.current;
+		// Lights down: the room dims (less so in light mode, where a near-black
+		// wall would read as broken), and the spotlight tightens to the
+		// selected record's size and brightens.
+		const dim = 1 - down * (theme.dark ? 0.8 : 0.5);
+		if (ambient.current) ambient.current.intensity = ambientBase * dim;
+		if (hemi.current) hemi.current.intensity = hemiBase * dim;
+		const focusSpan = focused >= 0 ? layout[focused].spanScale : 1;
+		const focusAngle = Math.atan((0.85 * focusSpan) / 3.4);
 		if (spot.current) {
 			const s = spot.current;
 			s.position.x = THREE.MathUtils.damp(s.position.x, lightX, 5, dt);
@@ -634,10 +665,11 @@ function Wall({
 			s.target.updateMatrixWorld();
 			s.intensity = THREE.MathUtils.damp(
 				s.intensity,
-				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall,
+				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall * (1 + 0.6 * down),
 				4,
 				dt,
 			);
+			s.angle = THREE.MathUtils.lerp(isTouch ? 0.9 : 0.6, focusAngle, down);
 		}
 		if (wall.current) wall.current.position.y = camY;
 
@@ -647,6 +679,7 @@ function Wall({
 		const inView = (row: number, span: number) =>
 			row <= centerRow + halfRows && row + span - 1 >= centerRow - halfRows;
 
+		const tilt = focused >= 0 ? ZERO2 : ndc;
 		// Places one record: the curve (rows recede and tip back the further
 		// they are from the middle of the screen, which the depth of field then
 		// blurs), the hover lift, and presence (0 = sunk into the wall).
@@ -665,8 +698,8 @@ function Wall({
 				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5,
 			);
 			h.group.rotation.x =
-				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -ndc.y * 0.18;
-			h.group.rotation.y = -anim.x * 0.035 + l * ndc.x * 0.25;
+				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -tilt.y * 0.18;
+			h.group.rotation.y = -anim.x * 0.035 + l * tilt.x * 0.25;
 			h.group.scale.setScalar(
 				Math.max(0.001, h.scale * anim.spanScale * (1 + l * 0.05) * grow),
 			);
@@ -757,10 +790,8 @@ function Wall({
 			<color attach="background" args={[theme.background]} />
 			{/* Touch gets more fill light: its spotlight can't follow a pointer, so it
 			    can't sweep light over the rows above and below the middle. */}
-			<ambientLight
-				intensity={(theme.dark ? 0.4 : 0.85) + (isTouch ? 0.35 : 0)}
-			/>
-			<hemisphereLight args={["#fff6e0", "#20160c", theme.dark ? 0.3 : 0.5]} />
+			<ambientLight ref={ambient} intensity={ambientBase} />
+			<hemisphereLight ref={hemi} args={["#fff6e0", "#20160c", hemiBase]} />
 			<spotLight
 				ref={spot}
 				color="#ffe7c2"

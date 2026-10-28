@@ -51,6 +51,14 @@ export function WallGrid({
 		});
 	}, []);
 	useParallax();
+	// Lets CSS adjust page chrome for the wall — see `[data-wall]` in
+	// styles.css (the record panel's backdrop).
+	useEffect(() => {
+		document.documentElement.dataset.wall = "";
+		return () => {
+			delete document.documentElement.dataset.wall;
+		};
+	}, []);
 
 	const onContentHeight = useCallback((px: number) => setHeight(px), []);
 	const record = active == null ? null : records[active];
