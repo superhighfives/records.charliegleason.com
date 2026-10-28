@@ -35,6 +35,7 @@ import type { PublicRecord } from "#/lib/records";
 import {
 	makeCoverMaterial,
 	type RevealStyle,
+	setCoverDirection,
 	setCoverReveal,
 	setCoverSelfLight,
 	setCoverStyle,
@@ -501,6 +502,9 @@ function Wall({
 	const panelShift = useRef(0);
 	/** Camera moves toward the selected record: down the wall, and in. */
 	const focusRise = useRef(0);
+	/** The last way the page scrolled: 1 down, -1 up (for the reveals). */
+	const scrollDir = useRef(1);
+	const lastScrollY = useRef<number | null>(null);
 	const zoom = useRef(0);
 
 	const focusedIndex = useMemo(
@@ -715,6 +719,12 @@ function Wall({
 		const scrollY =
 			TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
 		const focused = focusedRef.current;
+		if (lastScrollY.current != null) {
+			const moved = scrollY - lastScrollY.current;
+			// The camera's y falls as the page scrolls down.
+			if (Math.abs(moved) > 1e-4) scrollDir.current = moved < 0 ? 1 : -1;
+		}
+		lastScrollY.current = scrollY;
 
 		// A selected record pulls the camera in: closer (as far as it still
 		// fits on screen with room to spare), centred on it vertically, and
@@ -1030,6 +1040,9 @@ function Wall({
 				// ready) first comes into view — never frozen half-done.
 				if (cover.map && !cover.userData.started && dyView > -0.85) {
 					cover.userData.started = true;
+					// Fixed for the whole reveal, from the way the page was
+					// scrolling as it started (down on first load).
+					setCoverDirection(cover, scrollDir.current);
 				}
 				if (cover.userData.started && cover.userData.reveal < 1) {
 					cover.userData.reveal = reducedMotion
@@ -1051,6 +1064,10 @@ function Wall({
 					: THREE.MathUtils.smoothstep(dyView, -1.25, -0.5) *
 						(1 - THREE.MathUtils.smoothstep(dyView, 0.6, 1.35));
 				shown = Math.min(cover.userData.reveal ?? 1, scrolled);
+				// Rising in from below, it reveals top edge first; coming down
+				// from above, bottom edge first. (Mid-screen it's fully shown,
+				// so the switch is never seen.)
+				setCoverDirection(cover, dyView < 0 ? 1 : -1);
 			}
 			// The selected record is always fully shown.
 			if (focused === i && cover.map) shown = 1;

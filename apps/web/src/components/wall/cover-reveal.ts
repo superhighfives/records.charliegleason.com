@@ -32,6 +32,14 @@ import * as THREE from "three";
  *   and the colour bleeding in.
  * - **glitch** — tears in on a bad signal: slipping bands, split channels and
  *   blocky dropouts that lock into place.
+ * - **streak** — a motion blur along the scroll: the picture smears in from
+ *   its leading edge, streaked the way it's travelling, and comes to rest
+ *   sharp.
+ *
+ * Every style follows the scroll (`uDir`): written for scrolling down — a
+ * record rising into view, its top edge first — and flipped top to bottom
+ * when scrolling up, so a reveal always starts from the edge that arrived
+ * first. (Polaroid keeps its frame the right way up.)
  *
  * It's the standard lit material (lighting, shadows, the matte finish) with
  * its `map` step patched via `onBeforeCompile`; every cover shares one
@@ -53,12 +61,15 @@ export const REVEAL_STYLES = [
 	"dust",
 	"ink",
 	"glitch",
+	"streak",
 ] as const;
 export type RevealStyle = (typeof REVEAL_STYLES)[number];
 
 type RevealUniforms = {
 	uReveal: { value: number };
 	uMode: { value: number };
+	/** 1 scrolling down (top edge first), -1 scrolling up (bottom first). */
+	uDir: { value: number };
 	uPlaceholder: { value: THREE.Color };
 	/** Per record, so no two covers reveal the same way. */
 	uSeed: { value: number };
@@ -74,6 +85,10 @@ type RevealUniforms = {
 const HEADER_GLSL = /* glsl */ `
 	uniform float uReveal;
 	uniform float uMode;
+	uniform float uDir;
+	// Shapes are worked out in a space flipped with the scroll direction;
+	// sampling flips back, so the picture itself is never upside down.
+	float revealFlip;
 	uniform vec3 uPlaceholder;
 	uniform float uSeed;
 	uniform float uSelfLight;
@@ -88,7 +103,9 @@ const HEADER_GLSL = /* glsl */ `
 		return mix(a, b, f * f * (3.0 - 2.0 * f));
 	}
 	vec3 revealSample(sampler2D tex, vec2 uv) {
-		return texture2D(tex, clamp(uv, 0.0, 1.0)).rgb;
+		vec2 s = clamp(uv, 0.0, 1.0);
+		if (revealFlip > 0.5) s.y = 1.0 - s.y;
+		return texture2D(tex, s).rgb;
 	}
 	// A cheap soft blur: the centre plus four diagonal taps.
 	vec3 revealBlur(sampler2D tex, vec2 uv, float r) {
@@ -126,6 +143,8 @@ const MAP_GLSL = /* glsl */ `
 	#ifdef USE_MAP
 		float t = uReveal;
 		vec2 uv = vMapUv;
+		revealFlip = uDir < 0.0 && (uMode < 7.5 || uMode > 8.5) ? 1.0 : 0.0;
+		if (revealFlip > 0.5) uv.y = 1.0 - uv.y;
 		vec3 img;
 		float alpha = 1.0;
 		float settle = 1.0 - smoothstep(0.55, 1.0, t);
@@ -287,8 +306,8 @@ const MAP_GLSL = /* glsl */ `
 			float grains = 110.0;
 			vec2 cell = floor(uv * grains);
 			vec2 within = fract(uv * grains) - 0.5;
-			// Bottom rows land first, with scatter.
-			float land = uv.y * 0.55 + revealHash(cell + uSeed) * 0.35;
+			// The leading edge settles first, with scatter.
+			float land = (1.0 - uv.y) * 0.55 + revealHash(cell + uSeed) * 0.35;
 			float since = t * 1.25 - land;
 			if (since < 0.0) discard;
 			float r = mix(0.22, 0.75, smoothstep(0.0, 0.25, since));
@@ -319,7 +338,7 @@ const MAP_GLSL = /* glsl */ `
 			// The edge carries the most pigment, and soaks in toward the middle.
 			img = photo * (1.0 - bleed * 0.45);
 			alpha = smoothstep(0.0, 0.04, wet);
-		} else {
+		} else if (uMode < 12.5) {
 			// glitch
 			float k = smoothstep(0.0, 1.0, t);
 			float noisy = 1.0 - smoothstep(0.6, 1.0, t);
@@ -337,6 +356,25 @@ const MAP_GLSL = /* glsl */ `
 			vec2 block = floor(uv * vec2(8.0, 14.0));
 			if (revealHash(block + tick + uSeed) > k * 1.25) discard;
 			img *= 0.85 + 0.15 * step(0.5, fract(uv.y * 120.0)) * noisy + 0.15 * (1.0 - noisy);
+		} else {
+			// streak: smeared back along the direction of travel (up the
+			// cover, for a record rising into view), easing to sharp.
+			float k = smoothstep(0.0, 1.0, t);
+			float len = 0.45 * (1.0 - k) * (1.0 - k);
+			vec3 acc = vec3(0.0);
+			float wsum = 0.0;
+			for (int i = 0; i < 12; i++) {
+				float f = float(i) / 11.0;
+				float w = 1.0 - f * 0.7;
+				acc += revealSample(map, uv + vec2(0.0, f * len)) * w;
+				wsum += w;
+			}
+			img = acc / wsum;
+			// In from the leading edge, its own edge feathered by the smear.
+			float down = 1.0 - uv.y;
+			float front = t * 1.5 - down;
+			alpha = smoothstep(0.0, 0.08 + len, front) * smoothstep(0.0, 0.2, t);
+			if (alpha <= 0.0) discard;
 		}
 
 		diffuseColor.rgb *= img;
@@ -364,6 +402,7 @@ export function makeCoverMaterial(
 	const uniforms: RevealUniforms = {
 		uReveal: { value: 0 },
 		uMode: { value: 0 },
+		uDir: { value: 1 },
 		uPlaceholder: { value: new THREE.Color(placeholder) },
 		uSeed: { value: (seed * 12.9898) % 100 },
 		uSelfLight: { value: 0 },
@@ -394,6 +433,15 @@ export function setCoverReveal(
 ) {
 	const u = uniformsOf(material);
 	if (u) u.uReveal.value = t;
+}
+
+/** Which way the reveal runs: 1 scrolling down, -1 scrolling up. */
+export function setCoverDirection(
+	material: THREE.MeshStandardMaterial,
+	dir: number,
+) {
+	const u = uniformsOf(material);
+	if (u) u.uDir.value = dir;
 }
 
 /** Picks the transition style. */
