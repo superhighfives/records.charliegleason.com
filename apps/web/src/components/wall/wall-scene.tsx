@@ -31,6 +31,11 @@ import {
 	useTextureStream,
 } from "#/components/three/texture-stream";
 import type { PublicRecord } from "#/lib/records";
+import {
+	makeCoverMaterial,
+	setCoverReveal,
+	setCoverTheme,
+} from "./cover-reveal";
 import { Dust } from "./dust";
 import { loadNoteFont, makeNoteTexture, noteExcerpt } from "./note-texture";
 import { packDense } from "./pack";
@@ -81,15 +86,8 @@ const WALL_Z = -0.32;
  */
 const SPOT_DARK = 17;
 const ZERO2 = new THREE.Vector2();
-/** How long a record takes to flip round once its cover image arrives. */
-const FLIP_S = 0.8;
-
-/** Ease out with a little overshoot — the flip settles like a real sleeve. */
-function easeOutBack(t: number): number {
-	const c1 = 1.25;
-	const c3 = c1 + 1;
-	return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2;
-}
+/** How long a cover takes to melt in once its image arrives. */
+const REVEAL_S = 1.3;
 
 /**
  * A critically damped spring toward `target` (Unity's SmoothDamp): unlike
@@ -636,13 +634,10 @@ function Wall({
 
 	// Theme: sleeve edges and not-yet-loaded covers follow light/dark.
 	useEffect(() => {
-		// Also the back of each sleeve — what shows until its cover flips in —
-		// so it's a soft card tone from the wall's own family.
 		shared.edge.color.set(theme.dark ? "#2e2b28" : "#e4dfd6");
 		for (const h of handles.current) {
 			if (!h) continue;
-			h.cover.userData.placeholder = theme.placeholder;
-			if (!h.cover.map) h.cover.color.set(theme.placeholder);
+			setCoverTheme(h.cover, theme.placeholder);
 		}
 	}, [theme, shared]);
 
@@ -860,21 +855,14 @@ function Wall({
 		) => {
 			const dy = (anim.y - camY) / half;
 			const grow = presence * presence * (3 - 2 * presence);
-			// The reveal: a record waits turned round (its plain back to the
-			// room) until its cover loads, then flips over — lifting off the
-			// wall mid-turn so it clears its neighbours — and settles with a
-			// little overshoot.
-			const reveal = h.cover.map ? (h.cover.userData.reveal ?? 1) : 0;
-			const flip = Math.PI * (1 - easeOutBack(reveal));
-			const flipLift = Math.sin(Math.PI * Math.min(1, reveal)) * 0.35;
 			h.group.position.set(
 				anim.x,
 				anim.y,
-				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5 + flipLift,
+				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5,
 			);
 			h.group.rotation.x =
 				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -tilt.y * 0.18;
-			h.group.rotation.y = -anim.x * 0.035 + l * tilt.x * 0.25 + flip;
+			h.group.rotation.y = -anim.x * 0.035 + l * tilt.x * 0.25;
 			h.group.scale.setScalar(
 				Math.max(0.001, h.scale * anim.spanScale * (1 + l * 0.05) * grow),
 			);
@@ -929,7 +917,8 @@ function Wall({
 			if (cover.map && cover.userData.reveal < 1) {
 				cover.userData.reveal = reducedMotion
 					? 1
-					: Math.min(1, cover.userData.reveal + dt / FLIP_S);
+					: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
+				setCoverReveal(cover, cover.userData.reveal);
 			}
 			const goal = hovered.current === i ? 1 : 0;
 			const l = THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
@@ -1120,20 +1109,10 @@ const Tile = memo(function Tile({
 	const scale = SIZE_SCALE[record.size ?? ""] ?? 1;
 	// Created once per record; theme changes are applied by `Wall`.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation
-	const cover = useMemo(() => {
-		const m = new THREE.MeshStandardMaterial({
-			// Matte, like printed card — a glossier cover caught a hot glare
-			// from the spotlight once lifted toward it.
-			roughness: 0.85,
-		});
-		m.color.set(placeholder);
-		m.userData.placeholder = placeholder;
-		// Flipped round until its cover loads, then turned over to face the
-		// room (see `reveal` in the frame loop).
-		m.userData.animateIn = true;
-		m.userData.reveal = 0;
-		return m;
-	}, [record]);
+	const cover = useMemo(
+		() => makeCoverMaterial(placeholder, record.id),
+		[record],
+	);
 	const discMaterial = useMemo(() => {
 		const m = new THREE.MeshStandardMaterial({
 			color: "#181818",
