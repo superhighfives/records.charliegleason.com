@@ -467,7 +467,11 @@ function smoothScrollCenterTo(el: HTMLElement, duration: number): void {
  * The tween behind `smoothScrollCenterTo`, for callers that know the target
  * scroll position but have no element to centre (the 3D wall prototype).
  */
-export function smoothScrollTo(targetY: number, duration: number): void {
+export function smoothScrollTo(
+	targetY: number,
+	duration: number,
+	easing: (t: number) => number = easeInOutExpo,
+): void {
 	const startY = window.scrollY;
 	const delta = targetY - startY;
 	if (Math.abs(delta) < 1) return;
@@ -481,7 +485,7 @@ export function smoothScrollTo(targetY: number, duration: number): void {
 		// backwards — so an unclamped `t` here jerks the scroll away from the
 		// target for one frame before snapping back toward it.
 		const t = Math.min(1, Math.max(0, (now - startTime) / duration));
-		window.scrollTo(0, startY + delta * easeInOutExpo(t));
+		window.scrollTo(0, startY + delta * easing(t));
 		if (t < 1) requestAnimationFrame(step);
 	}
 	requestAnimationFrame(step);

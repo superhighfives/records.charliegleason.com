@@ -3,9 +3,10 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
 	DepthOfField,
 	EffectComposer,
+	ToneMapping,
 	Vignette,
 } from "@react-three/postprocessing";
-import type { DepthOfFieldEffect } from "postprocessing";
+import { type DepthOfFieldEffect, ToneMappingMode } from "postprocessing";
 import {
 	memo,
 	useCallback,
@@ -80,6 +81,35 @@ const WALL_Z = -0.32;
  */
 const SPOT_DARK = 17;
 const ZERO2 = new THREE.Vector2();
+
+/**
+ * A critically damped spring toward `target` (Unity's SmoothDamp): unlike
+ * plain exponential easing it accelerates in as well as settling out, so a
+ * jump in target reads as a glide rather than a lurch. `velocities[key]`
+ * carries the spring's speed between frames.
+ */
+function smoothDamp(
+	current: number,
+	target: number,
+	velocities: Record<string, number>,
+	key: string,
+	smoothTime: number,
+	dt: number,
+): number {
+	const omega = 2 / smoothTime;
+	const x = omega * dt;
+	const decay = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+	const change = current - target;
+	const velocity = velocities[key] ?? 0;
+	const temp = (velocity + omega * change) * dt;
+	velocities[key] = (velocity - omega * temp) * decay;
+	return target + (change + temp) * decay;
+}
+
+/** Gentler than the grid's expo curve — paging the wall glides, not snaps. */
+function easeInOutCubic(t: number): number {
+	return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+}
 const SPOT_LIGHT = 10;
 /** Space above the first row / below the last, in world units. */
 const TOP_PAD = 0.1;
@@ -146,6 +176,9 @@ export default memo(function WallScene(props: WallSceneProps) {
 			shadows={props.isTouch ? false : "percentage"}
 			camera={{ fov: FOV, near: 0.1, far: 60, position: [0, 0, 10] }}
 			gl={{ antialias: false, alpha: false }}
+			// Tone mapping happens once, at the end of the effect chain (see
+			// `Effects`), not in the renderer.
+			flat
 		>
 			<Wall {...props} focusTarget={focusTarget} />
 			<Effects
@@ -178,12 +211,18 @@ function Effects({
 	useFrame(() => {
 		dofRef.current?.target?.copy(focusTarget);
 	});
-	const vignette = <Vignette offset={0.25} darkness={dark ? 0.75 : 0.35} />;
+	// Neutral (Khronos) tone mapping keeps colours faithful and whites white —
+	// the ACES default greyed and desaturated covers, and turned the light
+	// theme's white wall to mud.
+	const finish = (
+		<>
+			<Vignette offset={0.25} darkness={dark ? 0.75 : 0.12} />
+			<ToneMapping mode={ToneMappingMode.NEUTRAL} />
+		</>
+	);
 	if (!dof) {
 		return (
-			<EffectComposer multisampling={isTouch ? 0 : 4}>
-				{vignette}
-			</EffectComposer>
+			<EffectComposer multisampling={isTouch ? 0 : 4}>{finish}</EffectComposer>
 		);
 	}
 	return (
@@ -197,7 +236,7 @@ function Effects({
 				bokehScale={isTouch ? 2 : 3}
 				resolutionScale={isTouch ? 0.35 : 0.5}
 			/>
-			{vignette}
+			{finish}
 		</EffectComposer>
 	);
 }
@@ -409,8 +448,10 @@ function Wall({
 	const hemi = useRef<THREE.HemisphereLight>(null);
 	// Touch gets more fill light: its spotlight can't follow a pointer, so it
 	// can't sweep light over the rows above and below the middle.
-	const ambientBase = (theme.dark ? 0.4 : 0.85) + (isTouch ? 0.35 : 0);
-	const hemiBase = theme.dark ? 0.3 : 0.5;
+	const ambientBase = (theme.dark ? 0.4 : 1.15) + (isTouch ? 0.35 : 0);
+	const hemiBase = theme.dark ? 0.3 : 0.6;
+	/** Velocities for the `smoothDamp` springs (spotlight, panel pan). */
+	const springs = useRef<Record<string, number>>({});
 	/** 0 → 1 as a record is selected: house lights down, spotlight on it. */
 	const lightsDown = useRef(0);
 	const wall = useRef<THREE.Mesh>(null);
@@ -437,17 +478,36 @@ function Wall({
 	useEffect(() => {
 		if (focusedIndex < 0) return;
 		const { row, span } = layout[focusedIndex];
-		const slotDocTop = slot.getBoundingClientRect().top + window.scrollY;
-		const fromSlotTop =
-			(TOP_PAD + row * PITCH + (span * PITCH - GAP) / 2) / unitsPerPx;
-		const target = slotDocTop + fromSlotTop - window.innerHeight / 2;
+		const targetY = () => {
+			const slotDocTop = slot.getBoundingClientRect().top + window.scrollY;
+			const fromSlotTop =
+				(TOP_PAD + row * PITCH + (span * PITCH - GAP) / 2) / unitsPerPx;
+			return slotDocTop + fromSlotTop - window.innerHeight / 2;
+		};
 		const reduced = window.matchMedia(
 			"(prefers-reduced-motion: reduce)",
 		).matches;
-		if (firstFocus.current || reduced) window.scrollTo(0, target);
-		else smoothScrollTo(target, GRID_SCROLL_DURATION_MS);
+		if (!firstFocus.current && !reduced) {
+			smoothScrollTo(targetY(), GRID_SCROLL_DURATION_MS, easeInOutCubic);
+			return;
+		}
 		firstFocus.current = false;
-	}, [focusedIndex, layout, unitsPerPx, slot]);
+		// A direct link lands before the slot has grown to the wall's height —
+		// scrolling then gets clamped to the still-short page (it ended up at
+		// the footer). Wait, a few frames at most, for the full height.
+		const fullHeight = wallHeight / unitsPerPx;
+		let raf = 0;
+		let tries = 0;
+		const jump = () => {
+			if (slot.offsetHeight + 1 < fullHeight && tries++ < 60) {
+				raf = requestAnimationFrame(jump);
+				return;
+			}
+			window.scrollTo(0, targetY());
+		};
+		jump();
+		return () => cancelAnimationFrame(raf);
+	}, [focusedIndex, layout, unitsPerPx, slot, wallHeight]);
 
 	// The shadow-catching wall bows back exactly like the records do (see the
 	// curve in the frame loop), so a record never passes through it.
@@ -467,17 +527,42 @@ function Wall({
 	const raycaster = useMemo(() => new THREE.Raycaster(), []);
 	/** Pointer in NDC (-1…1), and whether it's over the slot right now. */
 	const pointer = useRef({ ndc: new THREE.Vector2(), overSlot: false });
-	/** Sleeves drawn last frame — the only things worth raycasting. */
-	const pickable = useRef<THREE.Mesh[]>([]);
+	/** Records drawn last frame — the only ones worth testing. */
+	const pickable = useRef<number[]>([]);
+	/** The camera height the last frame used, for picking between frames. */
+	const pickCamY = useRef(0);
 
+	// Hit-tests each record's *resting* place on the wall — its full grid cell,
+	// on the curve, before any hover lift or tilt — rather than its animated
+	// mesh. A hovered record lifts and turns toward the cursor, which moved its
+	// edge out from under the cursor, un-hovered it, dropped it back, and
+	// hovered it again: a flicker loop. Cells also tile the wall with no gaps,
+	// so crossing between two records doesn't drop the hover for a frame.
 	const pick = useCallback(
 		(ndc: THREE.Vector2): number | null => {
 			raycaster.setFromCamera(ndc, camera);
-			const hit = raycaster.intersectObjects(pickable.current, false)[0];
-			const index = hit?.object.userData.index;
-			return typeof index === "number" ? index : null;
+			const { origin: o, direction: d } = raycaster.ray;
+			const half = viewHeight / 2;
+			const recs = recordsRef.current;
+			const lay = layoutRef.current;
+			for (const i of pickable.current) {
+				const pos = lay[i];
+				if (!pos) continue;
+				const rec = recs[i];
+				const anim = (rec && anims.current.get(rec.id)) || pos;
+				const dy = (anim.y - pickCamY.current) / half;
+				const z = pos.z - CURVE_DEPTH * dy * dy;
+				const t = (z - o.z) / d.z;
+				const x = o.x + d.x * t;
+				const y = o.y + d.y * t;
+				const reach = (pos.span * PITCH) / 2;
+				if (Math.abs(x - anim.x) <= reach && Math.abs(y - anim.y) <= reach) {
+					return i;
+				}
+			}
+			return null;
 		},
-		[raycaster, camera],
+		[raycaster, camera, viewHeight],
 	);
 
 	// Pointer + click, from `window` (the page covers the canvas).
@@ -557,25 +642,37 @@ function Wall({
 		const slotTop = slot.getBoundingClientRect().top;
 		const camY = TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
 		travel.current = -camY;
+		pickCamY.current = camY;
 		const focused = focusedRef.current;
 
-		// With the record panel open, pan right just enough that the selected
-		// record sits clear of the panel's left edge (desktop — on phones the
-		// panel covers everything anyway).
+		// With the record panel open, pan just enough that the selected record
+		// sits clear of the panel's left edge — or, for a record in the first
+		// column, of the screen's left edge (desktop; on phones the panel covers
+		// everything anyway).
 		let shiftGoal = 0;
 		if (focused >= 0 && !isTouch) {
 			const panel = document.querySelector('[data-slot="sheet-content"]');
 			const left = panel?.getBoundingClientRect().left ?? size.width;
 			if (left > size.width * 0.3) {
 				const visibleRight = ((left / size.width) * 2 - 1) * (viewWidth / 2);
-				const tileRight = layout[focused].x + TILE / 2 + PANEL_MARGIN;
-				shiftGoal = Math.max(0, tileRight - visibleRight);
+				const visibleLeft = -viewWidth / 2;
+				// A lifted record also looks bigger (it's closer to the camera),
+				// so leave room for that on both sides.
+				const reach = (layout[focused].spanScale * TILE * 1.15) / 2;
+				const x = layout[focused].x;
+				if (x + reach + PANEL_MARGIN > visibleRight) {
+					shiftGoal = x + reach + PANEL_MARGIN - visibleRight;
+				} else if (x - reach - PANEL_MARGIN < visibleLeft) {
+					shiftGoal = x - reach - PANEL_MARGIN - visibleLeft;
+				}
 			}
 		}
-		panelShift.current = THREE.MathUtils.damp(
+		panelShift.current = smoothDamp(
 			panelShift.current,
 			shiftGoal,
-			4,
+			springs.current,
+			"shift",
+			0.45,
 			dt,
 		);
 
@@ -658,8 +755,25 @@ function Wall({
 		const focusAngle = Math.atan((0.85 * focusSpan) / 3.4);
 		if (spot.current) {
 			const s = spot.current;
-			s.position.x = THREE.MathUtils.damp(s.position.x, lightX, 5, dt);
-			s.position.y = THREE.MathUtils.damp(s.position.y, lightY + 0.6, 5, dt);
+			// Springs, not plain exponential easing: they ease *in* as well as
+			// out, so the light glides between records instead of lurching
+			// off toward each new one.
+			s.position.x = smoothDamp(
+				s.position.x,
+				lightX,
+				springs.current,
+				"lightX",
+				0.28,
+				dt,
+			);
+			s.position.y = smoothDamp(
+				s.position.y,
+				lightY + 0.6,
+				springs.current,
+				"lightY",
+				0.28,
+				dt,
+			);
 			s.position.z = 3.4;
 			s.target.position.set(s.position.x, s.position.y - 0.6, 0);
 			s.target.updateMatrixWorld();
@@ -749,7 +863,7 @@ function Wall({
 				lift.current[i] = 0;
 				continue;
 			}
-			pickable.current.push(h.sleeve);
+			pickable.current.push(i);
 			const goal = hovered.current === i ? 1 : 0;
 			const l = THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
 			lift.current[i] = l;
@@ -809,7 +923,15 @@ function Wall({
 				position={[0, 0, WALL_Z]}
 				receiveShadow
 			>
-				<meshStandardMaterial color={theme.background} roughness={1} />
+				{/* In light mode the wall also glows faintly in its own colour, so
+				    it stays near the page's white instead of reading as lit grey
+				    plaster; the spotlight's shadows still darken it. */}
+				<meshStandardMaterial
+					color={theme.background}
+					emissive={theme.background}
+					emissiveIntensity={theme.dark ? 0 : 0.55}
+					roughness={1}
+				/>
 			</mesh>
 			{/* Dust in two layers: a fine one just off the wall that drifts slower
 			    than the scroll, and a sparse, larger one near the camera that
