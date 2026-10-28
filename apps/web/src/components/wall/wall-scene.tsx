@@ -26,7 +26,6 @@ import {
 	TILE_MIN_PX,
 } from "#/components/collection-grid";
 import {
-	applyCoverFade,
 	makeGrooveTexture,
 	type StreamTarget,
 	useTextureStream,
@@ -82,8 +81,15 @@ const WALL_Z = -0.32;
  */
 const SPOT_DARK = 17;
 const ZERO2 = new THREE.Vector2();
-/** How long a cover takes to fade in once its image arrives. */
-const COVER_FADE_S = 0.6;
+/** How long a record takes to flip round once its cover image arrives. */
+const FLIP_S = 0.8;
+
+/** Ease out with a little overshoot — the flip settles like a real sleeve. */
+function easeOutBack(t: number): number {
+	const c1 = 1.25;
+	const c3 = c1 + 1;
+	return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2;
+}
 
 /**
  * A critically damped spring toward `target` (Unity's SmoothDamp): unlike
@@ -120,7 +126,7 @@ const SPOT_LIGHT = 4;
  * shadow, and only a faint highlight following the cursor (a torch makes no
  * sense in a lit room).
  */
-const GALLERY_WALL = "#f1ece2";
+const GALLERY_WALL = "#f3f1ec";
 const DAYLIGHT = 1.2;
 /** Space above the first row / below the last, in world units. */
 const TOP_PAD = 0.1;
@@ -630,11 +636,13 @@ function Wall({
 
 	// Theme: sleeve edges and not-yet-loaded covers follow light/dark.
 	useEffect(() => {
-		shared.edge.color.set(theme.dark ? "#3a3632" : "#d6d0c4");
+		// Also the back of each sleeve — what shows until its cover flips in —
+		// so it's a soft card tone from the wall's own family.
+		shared.edge.color.set(theme.dark ? "#2e2b28" : "#e4dfd6");
 		for (const h of handles.current) {
 			if (!h) continue;
 			h.cover.userData.placeholder = theme.placeholder;
-			applyCoverFade(h.cover, h.cover.userData.fade ?? 0);
+			if (!h.cover.map) h.cover.color.set(theme.placeholder);
 		}
 	}, [theme, shared]);
 
@@ -852,14 +860,21 @@ function Wall({
 		) => {
 			const dy = (anim.y - camY) / half;
 			const grow = presence * presence * (3 - 2 * presence);
+			// The reveal: a record waits turned round (its plain back to the
+			// room) until its cover loads, then flips over — lifting off the
+			// wall mid-turn so it clears its neighbours — and settles with a
+			// little overshoot.
+			const reveal = h.cover.map ? (h.cover.userData.reveal ?? 1) : 0;
+			const flip = Math.PI * (1 - easeOutBack(reveal));
+			const flipLift = Math.sin(Math.PI * Math.min(1, reveal)) * 0.35;
 			h.group.position.set(
 				anim.x,
 				anim.y,
-				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5,
+				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5 + flipLift,
 			);
 			h.group.rotation.x =
 				-Math.atan((2 * CURVE_DEPTH * dy) / half) + l * -tilt.y * 0.18;
-			h.group.rotation.y = -anim.x * 0.035 + l * tilt.x * 0.25;
+			h.group.rotation.y = -anim.x * 0.035 + l * tilt.x * 0.25 + flip;
 			h.group.scale.setScalar(
 				Math.max(0.001, h.scale * anim.spanScale * (1 + l * 0.05) * grow),
 			);
@@ -911,12 +926,10 @@ function Wall({
 			}
 			pickable.current.push(i);
 			const cover = h.cover;
-			if (cover.map && cover.userData.fade < 1) {
-				cover.userData.fade = reducedMotion
+			if (cover.map && cover.userData.reveal < 1) {
+				cover.userData.reveal = reducedMotion
 					? 1
-					: Math.min(1, cover.userData.fade + dt / COVER_FADE_S);
-				const f = cover.userData.fade;
-				applyCoverFade(cover, f * f * (3 - 2 * f));
+					: Math.min(1, cover.userData.reveal + dt / FLIP_S);
 			}
 			const goal = hovered.current === i ? 1 : 0;
 			const l = THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
@@ -961,14 +974,21 @@ function Wall({
 			    camera; see the frame loop. */}
 			<directionalLight
 				ref={sun}
-				color="#fff8ec"
+				color="#fffdf9"
 				intensity={theme.dark ? 0 : DAYLIGHT}
 				castShadow={!theme.dark && !isTouch}
 			/>
 			{/* Touch gets more fill light: its spotlight can't follow a pointer, so it
 			    can't sweep light over the rows above and below the middle. */}
 			<ambientLight ref={ambient} intensity={ambientBase} />
-			<hemisphereLight ref={hemi} args={["#fff6e0", "#20160c", hemiBase]} />
+			<hemisphereLight
+				ref={hemi}
+				args={
+					theme.dark
+						? ["#fff6e0", "#20160c", hemiBase]
+						: ["#fbfaf7", "#d9d5cd", hemiBase]
+				}
+			/>
 			<spotLight
 				ref={spot}
 				color="#ffe7c2"
@@ -1106,11 +1126,12 @@ const Tile = memo(function Tile({
 			// from the spotlight once lifted toward it.
 			roughness: 0.85,
 		});
+		m.color.set(placeholder);
 		m.userData.placeholder = placeholder;
-		// Crossfade the cover in when it loads (see `applyCoverFade`).
-		m.userData.fadeIn = true;
-		m.userData.fade = 0;
-		applyCoverFade(m, 0);
+		// Flipped round until its cover loads, then turned over to face the
+		// room (see `reveal` in the frame loop).
+		m.userData.animateIn = true;
+		m.userData.reveal = 0;
 		return m;
 	}, [record]);
 	const discMaterial = useMemo(() => {

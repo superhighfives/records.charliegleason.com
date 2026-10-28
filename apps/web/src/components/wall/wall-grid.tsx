@@ -123,7 +123,7 @@ function useWallTheme(): WallTheme | null {
 			setTheme({
 				dark,
 				background: getComputedStyle(document.body).backgroundColor,
-				placeholder: dark ? "#262626" : "#e7e5e4",
+				placeholder: dark ? "#262626" : "#e4dfd6",
 			});
 		};
 		read();
