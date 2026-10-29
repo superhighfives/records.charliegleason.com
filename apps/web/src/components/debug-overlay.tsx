@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
+import { sceneStats } from "#/components/three/scene-stats";
+
 /**
  * App-wide perf/debug HUD. Off by default; turn it on with `?debug` (or the
- * older `?perf`) in the URL, or Shift+Option+D anywhere. The on/off choice is
+ * older `?perf`) in the URL, or Shift+D anywhere (outside a text field). The on/off choice is
  * remembered in localStorage so it survives navigation and reloads on a real
  * device; `?debug=0` turns it back off.
  *
@@ -17,6 +19,8 @@ import { useEffect, useRef, useState } from "react";
  *   10s, with the worst one's top script attribution — that's what names the
  *   function behind a hitch
  * - CLS, DOM node count, mounted `<img>`s, and JS heap where exposed
+ * - on a 3D view (the `?wall`), the WebGL frame: draw calls, triangles,
+ *   geometries, textures, shader programs and drawing-buffer size
  *
  * Read numbers off a production build (`vite build` + `vite preview`, or the
  * live site) — dev React's `jsxDEV` and friends inflated render cost several
@@ -76,7 +80,15 @@ export function DebugOverlay() {
 		}
 
 		const onKey = (e: KeyboardEvent) => {
-			if (e.code !== "KeyD" || !e.shiftKey || !e.altKey) return;
+			if (e.code !== "KeyD" || !e.shiftKey || e.metaKey || e.ctrlKey) return;
+			// Not while typing — that's just a capital D.
+			const target = e.target as HTMLElement | null;
+			if (
+				target?.isContentEditable ||
+				target?.closest("input, textarea, select")
+			) {
+				return;
+			}
 			e.preventDefault();
 			on = !on;
 			try {
@@ -98,6 +110,7 @@ export function DebugOverlay() {
 function DebugPanel() {
 	const statsRef = useRef<HTMLSpanElement>(null);
 	const longRef = useRef<HTMLDivElement>(null);
+	const glRef = useRef<HTMLDivElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const longFramesRef = useRef<LongFrame[]>([]);
 	const [collapsed, setCollapsed] = useState(false);
@@ -235,6 +248,9 @@ function DebugPanel() {
 						clsRef.current,
 					);
 				}
+				if (glRef.current) {
+					glRef.current.textContent = formatScene(now);
+				}
 				if (longRef.current) {
 					longRef.current.textContent = formatLongFrames(
 						longFramesRef.current,
@@ -285,6 +301,10 @@ function DebugPanel() {
 					</div>
 				)}
 				<canvas ref={canvasRef} className="mt-1.5 block h-10 w-full" />
+				<div
+					ref={glRef}
+					className="mt-1.5 whitespace-pre-wrap text-sky-300 empty:hidden"
+				/>
 				<div ref={longRef} className="mt-1.5 whitespace-pre-wrap break-all" />
 				<div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1">
 					{FLAGS.map(({ key, label }) => (
@@ -320,6 +340,17 @@ function formatStats(fps: number, worst: number, slow: number, cls: number) {
 	return (
 		`${fps} fps · worst ${Math.round(worst)}ms · >34ms ×${slow}\n` +
 		`dom ${nodes} · img ${imgs} · cls ${cls.toFixed(3)}${heap}`
+	);
+}
+
+function formatScene(now: number) {
+	const s = sceneStats.current;
+	if (!s || now - s.at > 2000) return "";
+	const tris =
+		s.triangles >= 1000 ? `${Math.round(s.triangles / 1000)}k` : s.triangles;
+	return (
+		`gl ${s.calls} calls · ${tris} tris · ${s.programs} programs\n` +
+		`${s.geometries} geometries · ${s.textures} textures · ${s.width}×${s.height} @${s.dpr}x`
 	);
 }
 

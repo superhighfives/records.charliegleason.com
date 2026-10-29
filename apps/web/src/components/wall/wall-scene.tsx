@@ -17,7 +17,6 @@ import {
 	useState,
 } from "react";
 import * as THREE from "three";
-
 import {
 	computeSpanningIds,
 	GRID_SCROLL_DURATION_MS,
@@ -25,6 +24,7 @@ import {
 	smoothScrollTo,
 	TILE_MIN_PX,
 } from "#/components/collection-grid";
+import { SceneStatsProbe } from "#/components/three/scene-stats-probe";
 import {
 	makeGrooveTexture,
 	type StreamTarget,
@@ -225,6 +225,7 @@ export default memo(function WallScene(props: WallSceneProps) {
 				dof={props.dof ?? true}
 			/>
 			{props.showStats && <Stats />}
+			<SceneStatsProbe />
 		</Canvas>
 	);
 });

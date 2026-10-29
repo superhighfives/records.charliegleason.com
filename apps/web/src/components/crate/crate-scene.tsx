@@ -8,6 +8,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
+import { SceneStatsProbe } from "#/components/three/scene-stats-probe";
+
 import {
 	makeGrooveTexture,
 	useTextureStream,
@@ -95,6 +97,7 @@ export default function CrateScene(props: CrateSceneProps) {
 			</Environment>
 			<Crate {...props} />
 			{props.showStats && <Stats />}
+			<SceneStatsProbe />
 		</Canvas>
 	);
 }
