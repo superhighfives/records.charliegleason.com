@@ -149,7 +149,11 @@ const MAP_GLSL = /* glsl */ `
 		float alpha = 1.0;
 		float settle = 1.0 - smoothstep(0.55, 1.0, t);
 
-		if (uMode < 0.5) {
+		if (t >= 0.999) {
+			// Done: just the photo. (Most covers, most of the time — and the
+			// styles below can cost a dozen texture reads a pixel.)
+			img = revealSample(map, uv);
+		} else if (uMode < 0.5) {
 			// wax
 			float down = 1.0 - uv.y;
 			float x = uv.x;

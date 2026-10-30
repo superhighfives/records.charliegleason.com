@@ -207,9 +207,10 @@ export default memo(function WallScene(props: WallSceneProps) {
 	// initial z, before the loop placed it, and left the whole wall out of
 	// focus.
 	const [focusTarget] = useState(() => new THREE.Vector3());
+	const dpr = useBudgetDpr();
 	return (
 		<Canvas
-			dpr={[1, 2]}
+			dpr={dpr}
 			shadows={props.isTouch ? false : "percentage"}
 			camera={{ fov: FOV, near: 0.1, far: 60, position: [0, 0, 10] }}
 			gl={{ antialias: false, alpha: false }}
@@ -219,6 +220,10 @@ export default memo(function WallScene(props: WallSceneProps) {
 		>
 			<Wall {...props} focusTarget={focusTarget} />
 			<Effects
+				// Past ~1.5x the pixels are fine enough that multisampling
+				// (four samples a pixel, on the biggest buffer in the frame)
+				// costs far more than it shows.
+				multisample={!props.isTouch && dpr < 1.5}
 				isTouch={props.isTouch}
 				dark={props.theme.dark}
 				focusTarget={focusTarget}
@@ -231,11 +236,13 @@ export default memo(function WallScene(props: WallSceneProps) {
 });
 
 function Effects({
+	multisample,
 	isTouch,
 	dark,
 	focusTarget,
 	dof,
 }: {
+	multisample: boolean;
 	isTouch: boolean;
 	dark: boolean;
 	focusTarget: THREE.Vector3;
@@ -260,11 +267,13 @@ function Effects({
 	);
 	if (!dof) {
 		return (
-			<EffectComposer multisampling={isTouch ? 0 : 4}>{finish}</EffectComposer>
+			<EffectComposer multisampling={multisample ? 4 : 0}>
+				{finish}
+			</EffectComposer>
 		);
 	}
 	return (
-		<EffectComposer multisampling={isTouch ? 0 : 4}>
+		<EffectComposer multisampling={multisample ? 4 : 0}>
 			<DepthOfField
 				ref={dofRef}
 				target={focusTarget}
@@ -277,6 +286,31 @@ function Effects({
 			{finish}
 		</EffectComposer>
 	);
+}
+
+/**
+ * Most device pixels the canvas draws. Every full-screen pass (depth of
+ * field, vignette, tone mapping) pays per pixel, and a large retina display
+ * at 2x is 12M+ of them: a 2305×1363 window measured 25fps at 2x, GPU-bound.
+ * Capping the total instead of the ratio keeps small screens at full
+ * sharpness and scales big ones back.
+ */
+const PIXEL_BUDGET = 4.2e6;
+
+function useBudgetDpr() {
+	const [dpr, setDpr] = useState(1);
+	useEffect(() => {
+		const update = () => {
+			const area = window.innerWidth * window.innerHeight;
+			const fit = Math.sqrt(PIXEL_BUDGET / Math.max(1, area));
+			const next = Math.min(window.devicePixelRatio || 1, 2, fit);
+			setDpr(Math.max(0.75, Math.round(next * 20) / 20));
+		};
+		update();
+		window.addEventListener("resize", update);
+		return () => window.removeEventListener("resize", update);
+	}, []);
+	return dpr;
 }
 
 /** The DOM grid's 1.25rem gap, for matching its column count. */
