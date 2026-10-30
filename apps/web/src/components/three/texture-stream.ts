@@ -112,11 +112,11 @@ export function useTextureStream(
 
 		const evict = () => {
 			while (cache.size > sizesRef.current.cacheMax) {
-				const [url, old] = cache.entries().next().value as [
-					string,
-					THREE.Texture,
-				];
+				const oldest = cache.entries().next();
+				if (oldest.done) break;
+				const [url, old] = oldest.value;
 				cache.delete(url);
+				old.userData.evicted = true;
 				for (const m of users.get(old) ?? []) {
 					if (m.map === old) setMap(m, m.userData.lowMap ?? null);
 				}
@@ -195,14 +195,10 @@ export function useTextureStream(
 			for (let n = 0; n < max && ready.length > 0; n++) {
 				const next = ready.shift();
 				// Skip anything evicted while it waited.
-				if (next && cache.has(urlOf(next.texture))) {
+				if (next && !next.texture.userData.evicted) {
 					apply(next.material, next.texture);
 				}
 			}
-		};
-		const urlOf = (t: THREE.Texture) => {
-			for (const [url, cached] of cache) if (cached === t) return url;
-			return "";
 		};
 
 		let preloading = false;
@@ -217,31 +213,42 @@ export function useTextureStream(
 					const record = queue.shift();
 					const key = record && displayCoverKey(record);
 					if (!record || !key || low.has(record.id)) continue;
+					let bitmap: ImageBitmap;
 					try {
 						// The smallest size the photo route serves; shrunk here, so
 						// the GPU holds a few KB per record rather than a full cover.
-						const blob = await (await fetch(photoUrl(key, 350))).blob();
-						const bitmap = await createImageBitmap(blob, {
+						const res = await fetch(photoUrl(key, 350));
+						if (!res.ok) throw new Error(`HTTP ${res.status}`);
+						bitmap = await createImageBitmap(await res.blob(), {
 							resizeWidth: px,
 							resizeHeight: px,
 							resizeQuality: "medium",
 							imageOrientation: "flipY",
 						});
-						if (stopped) {
-							bitmap.close();
-							return;
-						}
-						const texture = new THREE.Texture(bitmap);
-						texture.flipY = false;
-						texture.colorSpace = THREE.SRGBColorSpace;
-						texture.needsUpdate = true;
-						low.set(record.id, texture);
-						const i = recordsRef.current.findIndex((r) => r.id === record.id);
-						const target = i >= 0 ? getTarget(i) : null;
-						if (target && (target.id == null || target.id === record.id)) {
-							giveLow(target.cover, texture);
-						}
-					} catch {}
+					} catch (error) {
+						// The low-res cover is only a stand-in: without it the record
+						// still gets its full cover from the stream, just later. So
+						// skip it and carry on, but say so.
+						console.warn(
+							`[texture-stream] low-res cover for record ${record.id} failed`,
+							error,
+						);
+						continue;
+					}
+					if (stopped) {
+						bitmap.close();
+						return;
+					}
+					const texture = new THREE.Texture(bitmap);
+					texture.flipY = false;
+					texture.colorSpace = THREE.SRGBColorSpace;
+					texture.needsUpdate = true;
+					low.set(record.id, texture);
+					const i = recordsRef.current.findIndex((r) => r.id === record.id);
+					const target = i >= 0 ? getTarget(i) : null;
+					if (target && (target.id == null || target.id === record.id)) {
+						giveLow(target.cover, texture);
+					}
 				}
 			};
 			for (let n = 0; n < 6; n++) void worker();

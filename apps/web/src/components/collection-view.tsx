@@ -1,6 +1,14 @@
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	lazy,
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 import { CollectionGrid } from "#/components/collection-grid";
 import { CollectionHero, heroDurationMs } from "#/components/collection-hero";
@@ -12,7 +20,6 @@ import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
-import { WallGrid } from "#/components/wall/wall-grid";
 import {
 	type CollectionFilters,
 	hasAnyFilter,
@@ -83,6 +90,14 @@ function useFontsReady(): boolean {
 }
 
 /**
+ * The 3D record wall, split out so three.js and friends only download for
+ * `?wall` visitors rather than landing in every collection page load.
+ */
+const WallGrid = lazy(() =>
+	import("#/components/wall/wall-grid").then((m) => ({ default: m.WallGrid })),
+);
+
+/**
  * Prototype switch for the 3D record wall (`WallGrid`) in place of the DOM
  * grid: `?wall` turns it on and `?wall=0` off, remembered in localStorage so
  * it survives opening records and reloads. Read in an effect, so SSR and the
@@ -97,6 +112,7 @@ function useWallMode(): boolean {
 			else if (param != null) localStorage.setItem("wall", "1");
 			setOn(localStorage.getItem("wall") === "1");
 		} catch {
+			// No storage (private mode): go by the URL alone, unremembered.
 			setOn(param != null && param !== "0");
 		}
 	}, []);
@@ -319,11 +335,13 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 							: "No records match those filters."}
 					</p>
 				) : wallMode ? (
-					<WallGrid
-						records={filtered}
-						onOpen={openRecord}
-						focusedRecordId={selected?.id ?? null}
-					/>
+					<Suspense fallback={<div className="min-h-[70vh]" />}>
+						<WallGrid
+							records={filtered}
+							onOpen={openRecord}
+							focusedRecordId={selected?.id ?? null}
+						/>
+					</Suspense>
 				) : (
 					<CollectionGrid
 						records={filtered}

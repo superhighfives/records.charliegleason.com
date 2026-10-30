@@ -259,13 +259,19 @@ function useRevealConfig() {
 			if (saved && REVEAL_STYLES.includes(saved.style)) {
 				setConfig({ style: saved.style });
 			}
-		} catch {}
+		} catch {
+			// No storage (private mode) or a corrupt saved value: keep the
+			// default style.
+		}
 	}, []);
 	const update = useCallback((next: RevealConfig) => {
 		setConfig(next);
 		try {
 			localStorage.setItem(REVEAL_KEY, JSON.stringify({ style: next.style }));
-		} catch {}
+		} catch {
+			// No storage (private mode, quota): the choice still applies, it
+			// just isn't remembered.
+		}
 	}, []);
 	return [config, update] as const;
 }
