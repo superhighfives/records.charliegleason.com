@@ -254,7 +254,23 @@ function Effects({
 	// copied in every frame (after `Wall`'s loop has placed it).
 	const dofRef = useRef<DepthOfFieldEffect>(null);
 	useFrame(() => {
-		dofRef.current?.target?.copy(focusTarget);
+		const effect = dofRef.current;
+		if (!effect) return;
+		effect.target?.copy(focusTarget);
+		// postprocessing measures focus as straight-line distance from the
+		// camera, so on a wide screen the outer columns of the flat wall —
+		// a few units further away on the diagonal — fell out of focus. A
+		// real lens focuses on a plane: measure depth along the view instead,
+		// so only rows curving back from the wall soften.
+		const coc = effect.cocMaterial;
+		if (!coc.userData.planar) {
+			coc.fragmentShader = coc.fragmentShader.replace(
+				"length(viewPosition)",
+				"-viewPosition.z",
+			);
+			coc.userData.planar = true;
+			coc.needsUpdate = true;
+		}
 	});
 	// Neutral (Khronos) tone mapping keeps colours faithful and whites white —
 	// the ACES default greyed and desaturated covers, and turned the light

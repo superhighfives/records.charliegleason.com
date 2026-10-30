@@ -61,7 +61,12 @@ export function useTextureStream(
 ) {
 	const anisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
 	// `window` renamed: as a local it would shadow the global.
-	const { coverPx, window: span, discWindow, cacheMax, lowPx } = options;
+	const { coverPx, lowPx } = options;
+	// Read through a ref too: these follow the column count, which settles
+	// after the first layout — rebuilding the stream for it would throw away
+	// (and free) every texture the records are showing.
+	const sizesRef = useRef(options);
+	sizesRef.current = options;
 	const recordsRef = useRef(records);
 	recordsRef.current = records;
 	// Read through a ref: a per-record function is usually a fresh closure
@@ -84,12 +89,14 @@ export function useTextureStream(
 
 		/** Tiny covers by record id, never evicted. */
 		const low = new Map<number, THREE.Texture>();
+		const lowUsers = new Set<THREE.MeshStandardMaterial>();
 		const giveLow = (
 			material: THREE.MeshStandardMaterial,
 			t: THREE.Texture,
 		) => {
 			if (material.userData.lowMap === t) return;
 			material.userData.lowMap = t;
+			lowUsers.add(material);
 			if (!material.map) setMap(material, t);
 		};
 
@@ -104,7 +111,7 @@ export function useTextureStream(
 		};
 
 		const evict = () => {
-			while (cache.size > cacheMax) {
+			while (cache.size > sizesRef.current.cacheMax) {
 				const [url, old] = cache.entries().next().value as [
 					string,
 					THREE.Texture,
@@ -158,6 +165,7 @@ export function useTextureStream(
 
 		const update = (center: number) => {
 			const records = recordsRef.current;
+			const { window: span, discWindow } = sizesRef.current;
 			// Nearest first, so what you're looking at loads before its neighbours.
 			for (let r = 0; r <= span; r++) {
 				for (const i of r === 0 ? [center] : [center + r, center - r]) {
@@ -241,6 +249,17 @@ export function useTextureStream(
 
 		const disposeAll = () => {
 			stopped = true;
+			// Take every texture off the materials before freeing it: a
+			// material left pointing at a freed texture re-uploads it from a
+			// closed bitmap (WebGL errors, and a blank cover).
+			for (const [t, materials] of users) {
+				for (const m of materials) if (m.map === t) setMap(m, null);
+			}
+			for (const m of lowUsers) {
+				m.userData.lowMap = undefined;
+				if (m.map && !users.has(m.map)) setMap(m, null);
+			}
+			lowUsers.clear();
 			for (const t of low.values()) {
 				t.dispose();
 				(t.image as ImageBitmap | undefined)?.close?.();
@@ -256,7 +275,7 @@ export function useTextureStream(
 		};
 
 		return { update, flush, preloadLow, disposeAll };
-	}, [getTarget, anisotropy, span, discWindow, cacheMax]);
+	}, [getTarget, anisotropy]);
 
 	useEffect(() => () => stream.disposeAll(), [stream]);
 	useEffect(() => {
