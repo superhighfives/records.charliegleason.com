@@ -294,13 +294,10 @@ function setMap(
 	material.color.set(
 		map ? "#ffffff" : (material.userData.placeholder ?? "#2a2a2a"),
 	);
-	// Materials marked `animateIn` restart their reveal whenever a cover
-	// arrives where there was none (not when the full cover replaces its
-	// low-res stand-in); the scene animates `reveal` from 0 to 1.
-	if (material.userData.animateIn && first) {
-		material.userData.reveal = 0;
-		material.userData.started = false;
-	}
+	// Materials marked `animateIn` fade in again whenever a cover arrives
+	// where there was none (not when the full cover replaces its low-res
+	// stand-in); the scene animates `fade` from 0 to 1.
+	if (material.userData.animateIn && first) material.userData.fade = 0;
 	material.needsUpdate = true;
 }
 

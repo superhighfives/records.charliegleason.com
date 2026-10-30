@@ -70,6 +70,8 @@ type RevealUniforms = {
 	uMode: { value: number };
 	/** 1 scrolling down (top edge first), -1 scrolling up (bottom first). */
 	uDir: { value: number };
+	/** Plain opacity, apart from the reveal: the quick fade as a cover loads. */
+	uFade: { value: number };
 	uPlaceholder: { value: THREE.Color };
 	/** Per record, so no two covers reveal the same way. */
 	uSeed: { value: number };
@@ -86,6 +88,7 @@ const HEADER_GLSL = /* glsl */ `
 	uniform float uReveal;
 	uniform float uMode;
 	uniform float uDir;
+	uniform float uFade;
 	// Shapes are worked out in a space flipped with the scroll direction;
 	// sampling flips back, so the picture itself is never upside down.
 	float revealFlip;
@@ -382,8 +385,8 @@ const MAP_GLSL = /* glsl */ `
 		}
 
 		diffuseColor.rgb *= img;
-		diffuseColor.a *= alpha;
-		coverSelf = img * alpha;
+		diffuseColor.a *= alpha * uFade;
+		coverSelf = img * alpha * uFade;
 	#endif
 `;
 
@@ -407,6 +410,7 @@ export function makeCoverMaterial(
 		uReveal: { value: 0 },
 		uMode: { value: 0 },
 		uDir: { value: 1 },
+		uFade: { value: 1 },
 		uPlaceholder: { value: new THREE.Color(placeholder) },
 		uSeed: { value: (seed * 12.9898) % 100 },
 		uSelfLight: { value: 0 },
@@ -437,6 +441,12 @@ export function setCoverReveal(
 ) {
 	const u = uniformsOf(material);
 	if (u) u.uReveal.value = t;
+}
+
+/** Plain opacity (0–1), apart from the reveal. */
+export function setCoverFade(material: THREE.MeshStandardMaterial, t: number) {
+	const u = uniformsOf(material);
+	if (u) u.uFade.value = t;
 }
 
 /** Which way the reveal runs: 1 scrolling down, -1 scrolling up. */

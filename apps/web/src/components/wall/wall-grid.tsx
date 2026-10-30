@@ -252,38 +252,27 @@ const REVEAL_KEY = "wall-reveal";
 
 /** The reveal panel's choices, remembered across reloads. */
 function useRevealConfig() {
-	const [config, setConfig] = useState<RevealConfig>({
-		style: "wax",
-		trigger: "enter",
-		replay: 0,
-	});
+	const [config, setConfig] = useState<RevealConfig>({ style: "wax" });
 	useEffect(() => {
 		try {
 			const saved = JSON.parse(localStorage.getItem(REVEAL_KEY) ?? "null");
 			if (saved && REVEAL_STYLES.includes(saved.style)) {
-				setConfig((c) => ({
-					...c,
-					style: saved.style,
-					trigger: saved.trigger === "scroll" ? "scroll" : "enter",
-				}));
+				setConfig({ style: saved.style });
 			}
 		} catch {}
 	}, []);
 	const update = useCallback((next: RevealConfig) => {
 		setConfig(next);
 		try {
-			localStorage.setItem(
-				REVEAL_KEY,
-				JSON.stringify({ style: next.style, trigger: next.trigger }),
-			);
+			localStorage.setItem(REVEAL_KEY, JSON.stringify({ style: next.style }));
 		} catch {}
 	}, []);
 	return [config, update] as const;
 }
 
 /**
- * Prototype switcher for how records appear: the transition style, whether
- * it plays on entering view or follows the scroll, and a replay.
+ * Prototype switcher for the transition records make as scrolling brings
+ * them in.
  */
 function RevealPanel({
 	config,
@@ -310,34 +299,11 @@ function RevealPanel({
 						key={style}
 						type="button"
 						className={chip(config.style === style)}
-						onClick={() =>
-							onChange({ ...config, style, replay: config.replay + 1 })
-						}
+						onClick={() => onChange({ style })}
 					>
 						{style}
 					</button>
 				))}
-			</div>
-			<div className="flex flex-wrap items-center gap-1">
-				{(["enter", "scroll"] as const).map((trigger) => (
-					<button
-						key={trigger}
-						type="button"
-						className={chip(config.trigger === trigger)}
-						onClick={() =>
-							onChange({ ...config, trigger, replay: config.replay + 1 })
-						}
-					>
-						{trigger === "enter" ? "on enter" : "scroll"}
-					</button>
-				))}
-				<button
-					type="button"
-					className={cn(chip(false), "ml-auto")}
-					onClick={() => onChange({ ...config, replay: config.replay + 1 })}
-				>
-					replay ↻
-				</button>
 			</div>
 		</div>
 	);

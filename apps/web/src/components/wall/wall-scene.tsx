@@ -36,6 +36,7 @@ import {
 	makeCoverMaterial,
 	type RevealStyle,
 	setCoverDirection,
+	setCoverFade,
 	setCoverReveal,
 	setCoverSelfLight,
 	setCoverStyle,
@@ -95,7 +96,8 @@ const ZERO2 = new THREE.Vector2();
 const SELF_LIGHT_DARK = 0.55;
 const SELF_LIGHT_LIGHT = 0.3;
 /** How long a record takes to emerge once its cover image arrives. */
-const REVEAL_S = 1.4;
+/** The plain fade as a cover's image arrives. */
+const FADE_S = 0.3;
 
 /**
  * A critically damped spring toward `target` (Unity's SmoothDamp): unlike
@@ -167,13 +169,6 @@ export type WallTheme = {
 /** Prototype controls for how records appear (see the reveal panel). */
 export type RevealConfig = {
 	style: RevealStyle;
-	/**
-	 * `enter`: each record plays its reveal once, in full, as it comes into
-	 * view. `scroll`: the reveal follows its position on screen, reversibly.
-	 */
-	trigger: "enter" | "scroll";
-	/** Bumped to replay every record's reveal. */
-	replay: number;
 };
 
 export type WallSceneProps = {
@@ -553,9 +548,6 @@ function Wall({
 	const panelShift = useRef(0);
 	/** Camera moves toward the selected record: down the wall, and in. */
 	const focusRise = useRef(0);
-	/** The last way the page scrolled: 1 down, -1 up (for the reveals). */
-	const scrollDir = useRef(1);
-	const lastScrollY = useRef<number | null>(null);
 	const zoom = useRef(0);
 
 	const focusedIndex = useMemo(
@@ -713,16 +705,6 @@ function Wall({
 		hovered.current = null;
 	}, [records]);
 
-	// Replay: every record plays its reveal again.
-	useEffect(() => {
-		if (reveal.replay === 0) return;
-		for (const h of handles.current) {
-			if (!h) continue;
-			h.cover.userData.reveal = 0;
-			h.cover.userData.started = false;
-		}
-	}, [reveal.replay]);
-
 	// Theme: sleeve edges and not-yet-loaded covers follow light/dark.
 	useEffect(() => {
 		shared.edge.color.set(theme.dark ? "#2e2b28" : "#e4dfd6");
@@ -770,12 +752,6 @@ function Wall({
 		const scrollY =
 			TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
 		const focused = focusedRef.current;
-		if (lastScrollY.current != null) {
-			const moved = scrollY - lastScrollY.current;
-			// The camera's y falls as the page scrolls down.
-			if (Math.abs(moved) > 1e-4) scrollDir.current = moved < 0 ? 1 : -1;
-		}
-		lastScrollY.current = scrollY;
 
 		// A selected record pulls the camera in: closer (as far as it still
 		// fits on screen with room to spare), centred on it vertically, and
@@ -1007,10 +983,13 @@ function Wall({
 			h.group.scale.setScalar(
 				Math.max(0.001, h.scale * anim.spanScale * (1 + l * 0.05) * grow),
 			);
-			// While the cover emerges the sleeve has no thickness (so its edges
-			// don't outline the square before the image gets there), and casts
-			// no shadow until the image is whole (a shadow is the full square).
-			const poured = revealed;
+			// While the cover emerges (or fades up) the sleeve has no thickness
+			// (so its edges don't outline the square before the image gets
+			// there), and casts no shadow until the image is whole (a shadow is
+			// the full square).
+			const poured = h.cover.map
+				? Math.min(revealed, h.cover.userData.fade ?? 1)
+				: 1;
 			h.group.scale.z *= Math.max(
 				0.001,
 				THREE.MathUtils.smoothstep(poured, 0.55, 1),
@@ -1083,41 +1062,34 @@ function Wall({
 					(focused === i ? 1 : roomDim),
 			);
 			setCoverStyle(cover, reveal.style);
-			// Where the record sits on screen: -1 at the bottom edge, 1 at the top.
+			// Where the record sits on screen: -1 at the bottom edge, 1 at the
+			// top; `reach` is its half-height on the same scale.
 			const dyView = (anim.y - camY) / (viewHeight / 2);
-			let shown: number;
-			if (reveal.trigger === "enter") {
-				// Plays once, in full, from when the record (with its image
-				// ready) first comes into view — never frozen half-done.
-				if (cover.map && !cover.userData.started && dyView > -0.85) {
-					cover.userData.started = true;
-					// Fixed for the whole reveal, from the way the page was
-					// scrolling as it started (down on first load).
-					setCoverDirection(cover, scrollDir.current);
-				}
-				if (cover.userData.started && cover.userData.reveal < 1) {
-					cover.userData.reveal = reducedMotion
-						? 1
-						: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
-				}
-				shown = cover.map ? cover.userData.reveal : 0;
-			} else {
-				// Scroll is the timeline: in as it rises from the bottom, out as
-				// it leaves through the top, reversibly — but never more than
-				// its image has loaded in.
-				if (cover.map && cover.userData.reveal < 1) {
-					cover.userData.reveal = reducedMotion
-						? 1
-						: Math.min(1, cover.userData.reveal + dt / REVEAL_S);
-				}
-				const scrolled = reducedMotion
-					? 1
-					: THREE.MathUtils.smoothstep(dyView, -1.25, -0.5) *
-						(1 - THREE.MathUtils.smoothstep(dyView, 0.6, 1.35));
-				shown = Math.min(cover.userData.reveal ?? 1, scrolled);
-				// Rising in from below, it reveals top edge first; coming down
-				// from above, bottom edge first. (Mid-screen it's fully shown,
-				// so the switch is never seen.)
+			const reach = (pos.spanScale * TILE) / viewHeight;
+			// A cover fades up quickly as its image arrives — no transition.
+			const fade = cover.map
+				? Math.min(1, (cover.userData.fade ?? 0) + dt / FADE_S)
+				: 0;
+			if (fade !== cover.userData.fade) {
+				cover.userData.fade = fade;
+				setCoverFade(cover, reducedMotion && cover.map ? 1 : fade);
+			}
+			// Scroll is the timeline. Records on screen when the page loads
+			// just appear; once a record has been off screen, it reveals as
+			// scrolling brings it in — from the bottom edge as the page scrolls
+			// down, the top as it scrolls up — and un-reveals as it leaves,
+			// reversibly.
+			if (dyView + reach < -1 || dyView - reach > 1) {
+				cover.userData.scrollDriven = true;
+			}
+			let shown = 1;
+			if (cover.userData.scrollDriven && !reducedMotion) {
+				shown =
+					THREE.MathUtils.smoothstep(dyView, -1 - reach, -0.55) *
+					(1 - THREE.MathUtils.smoothstep(dyView, 0.55, 1 + reach));
+				// From below it reveals top edge first; from above, bottom edge
+				// first. (Mid-screen it's fully shown, so the switch is never
+				// seen.)
 				setCoverDirection(cover, dyView < 0 ? 1 : -1);
 			}
 			// The selected record is always fully shown.
