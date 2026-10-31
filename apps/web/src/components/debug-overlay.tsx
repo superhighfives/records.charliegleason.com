@@ -19,7 +19,7 @@ import { sceneStats } from "#/components/three/scene-stats";
  *   10s, with the worst one's top script attribution — that's what names the
  *   function behind a hitch
  * - CLS, DOM node count, mounted `<img>`s, and JS heap where exposed
- * - on a 3D view (the `?wall`), the WebGL frame: draw calls, triangles,
+ * - on the 3D wall, the WebGL frame: draw calls, triangles,
  *   geometries, textures, shader programs and drawing-buffer size
  *
  * Read numbers off a production build (`vite build` + `vite preview`, or the
@@ -103,6 +103,13 @@ export function DebugOverlay() {
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, []);
+
+	// `data-debug` on <html> lets page-level dev tools (the wall's reveal
+	// panel) show only while the HUD is on.
+	useEffect(() => {
+		if (enabled) document.documentElement.dataset.debug = "";
+		else delete document.documentElement.dataset.debug;
+	}, [enabled]);
 
 	return enabled ? <DebugPanel /> : null;
 }

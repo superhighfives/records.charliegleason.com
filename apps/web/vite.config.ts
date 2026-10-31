@@ -46,7 +46,7 @@ export default defineConfig(({ mode }) => {
 				// hot reload shifts its line number.
 				injectSource: {
 					enabled: true,
-					ignore: { files: [/components\/(wall|crate|three)\//] },
+					ignore: { files: [/components\/(wall|three)\//] },
 				},
 			}),
 			// remoteBindings: dev connects to the real D1/R2 (bindings marked

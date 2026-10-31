@@ -90,43 +90,28 @@ function useFontsReady(): boolean {
 }
 
 /**
- * The 3D record wall, split out so three.js and friends only download for
- * `?wall` visitors rather than landing in every collection page load.
+ * The 3D record wall, split out so three.js and friends are their own chunk:
+ * loaded after the page, and never by the plain grid at `/grid`.
  */
 const WallGrid = lazy(() =>
 	import("#/components/wall/wall-grid").then((m) => ({ default: m.WallGrid })),
 );
 
 /**
- * Prototype switch for the 3D record wall (`WallGrid`) in place of the DOM
- * grid: `?wall` turns it on and `?wall=0` off, remembered in localStorage so
- * it survives opening records and reloads. Read in an effect, so SSR and the
- * first client render (the DOM grid) match.
+ * The public collection — the 3D record wall (`layout: "wall"`, at `/`) or the
+ * plain grid (`"grid"`, at `/grid`) — with a record drawer overlaid on top.
+ * The open record is driven by `selectedId`, which comes from the route —
+ * `null` on the collection, the path id on `…/records/<id>-<slug>`. Every
+ * route renders this one component so the collection (and the text filter,
+ * held in context) survive opening and closing a record.
  */
-function useWallMode(): boolean {
-	const [on, setOn] = useState(false);
-	useEffect(() => {
-		const param = new URLSearchParams(window.location.search).get("wall");
-		try {
-			if (param === "0") localStorage.removeItem("wall");
-			else if (param != null) localStorage.setItem("wall", "1");
-			setOn(localStorage.getItem("wall") === "1");
-		} catch {
-			// No storage (private mode): go by the URL alone, unremembered.
-			setOn(param != null && param !== "0");
-		}
-	}, []);
-	return on;
-}
-
-/**
- * The public collection: a grid of records with a record drawer overlaid on top.
- * The open record is driven by `selectedId`, which comes from the route — `null`
- * on `/`, the path id on `/records/<id>-<slug>`. Both routes render this one
- * component so the grid (and the text filter, held in context) survive opening
- * and closing a record.
- */
-export function CollectionView({ selectedId }: { selectedId: number | null }) {
+export function CollectionView({
+	selectedId,
+	layout,
+}: {
+	selectedId: number | null;
+	layout: "wall" | "grid";
+}) {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
 	// Prefetched by the layout's loader; the defaults only cover a failed fetch.
 	const { data: filterSettings = DEFAULT_FILTER_SETTINGS } = useQuery(
@@ -135,7 +120,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const navigate = useNavigate();
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 	const fontsReady = useFontsReady();
-	const wallMode = useWallMode();
+	const wallMode = layout === "wall";
 
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
@@ -148,16 +133,18 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			{ replace = false }: { replace?: boolean } = {},
 		) => {
 			animateOpenRef.current = r != null;
+			// Records open and close within the layout they were opened from.
+			const grid = layout === "grid";
 			return r
 				? navigate({
-						to: "/records/$id",
+						to: grid ? "/grid/records/$id" : "/records/$id",
 						params: { id: recordIdParam(r) },
 						replace,
 						resetScroll: false,
 					})
-				: navigate({ to: "/", replace, resetScroll: false });
+				: navigate({ to: grid ? "/grid" : "/", replace, resetScroll: false });
 		},
-		[navigate, animateOpenRef],
+		[navigate, animateOpenRef, layout],
 	);
 
 	const [filters, setFilters] = useState<CollectionFilters>(NO_FILTERS);

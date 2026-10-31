@@ -277,8 +277,8 @@ function useRevealConfig() {
 }
 
 /**
- * Prototype switcher for the transition records make as scrolling brings
- * them in.
+ * Dev switcher for the transition records make as scrolling brings them in.
+ * Shown only with the debug HUD on (Shift+D, which sets `data-debug`).
  */
 function RevealPanel({
 	config,
@@ -295,7 +295,7 @@ function RevealPanel({
 				: "border-border text-muted-foreground hover:text-foreground",
 		);
 	return (
-		<div className="fixed bottom-4 left-4 z-40 hidden max-w-[17rem] flex-col gap-1.5 rounded-lg border bg-popover/90 p-2 text-popover-foreground shadow-lg backdrop-blur-sm sm:flex">
+		<div className="fixed bottom-4 left-4 z-40 hidden max-w-[17rem] flex-col gap-1.5 rounded-lg border bg-popover/90 p-2 text-popover-foreground shadow-lg backdrop-blur-sm sm:[[data-debug]_&]:flex">
 			<p className="font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
 				Reveal
 			</p>
