@@ -1274,7 +1274,11 @@ const Tile = memo(function Tile({
 		let cancelled = false;
 		loadNoteFont().then(() => {
 			if (cancelled || !record.notes) return;
-			texture = makeNoteTexture(noteExcerpt(record.notes), record.id);
+			texture = makeNoteTexture(
+				noteExcerpt(record.notes, 16),
+				record.id,
+				(SLIP_PEEK + SLIP_PULL) / SLIP_H,
+			);
 			slipMaterial.map = texture;
 			slipMaterial.color.set("#ffffff");
 			slipMaterial.needsUpdate = true;

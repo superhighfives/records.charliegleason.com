@@ -2,15 +2,20 @@ import * as THREE from "three";
 
 /**
  * The handwriting on a record's note slip: the opening words of its notes in
- * a hand font, on yellow paper. Only the top of the slip pokes out of the
- * sleeve (about a third at rest, half when it slides up on hover), so the
- * writing starts right at the top edge — the first line reads at rest, the
- * second appears as the note is pulled.
+ * a felt-tip hand, on yellow paper. Only the top of the slip pokes out of
+ * the sleeve (about a third at rest, half when it slides up on hover), so
+ * the writing starts right at the top edge — the first line reads at rest,
+ * the rest appears as the note is pulled — and stops, with an ellipsis, at
+ * the last line that shows in full when pulled, rather than running on
+ * behind the sleeve and getting cut through the middle.
  */
 
-const FONT = "Caveat";
+const FONT = "Nanum Pen Script";
 const FONT_CSS =
-	"https://fonts.googleapis.com/css2?family=Caveat:wght@600&display=swap";
+	"https://fonts.googleapis.com/css2?family=Nanum+Pen+Script&display=swap";
+const FONT_SIZE = 46;
+const LINE_HEIGHT = 38;
+const TOP = 6;
 const WIDTH = 256;
 const HEIGHT = 192;
 
@@ -30,7 +35,7 @@ export function loadNoteFont(): Promise<void> {
 			link.onload = () => resolve();
 			link.onerror = () => resolve();
 		})
-			.then(() => document.fonts.load(`600 40px ${FONT}`))
+			.then(() => document.fonts.load(`${FONT_SIZE}px "${FONT}"`))
 			.then(
 				() => undefined,
 				() => undefined,
@@ -59,7 +64,15 @@ function rand(seed: number) {
 	};
 }
 
-export function makeNoteTexture(text: string, seed: number): THREE.Texture {
+/**
+ * `visible`: the share of the slip's height that shows when it's pulled
+ * up; writing stops at the last line that fits there.
+ */
+export function makeNoteTexture(
+	text: string,
+	seed: number,
+	visible: number,
+): THREE.Texture {
 	const canvas = document.createElement("canvas");
 	canvas.width = WIDTH;
 	canvas.height = HEIGHT;
@@ -77,7 +90,7 @@ export function makeNoteTexture(text: string, seed: number): THREE.Texture {
 		// Pencil-ish ink, a touch uneven line to line.
 		ctx.fillStyle = "rgba(48, 32, 10, 0.88)";
 		ctx.textBaseline = "top";
-		ctx.font = `600 34px ${FONT}, cursive`;
+		ctx.font = `${FONT_SIZE}px "${FONT}", cursive`;
 		const maxWidth = WIDTH - 28;
 		const lines: string[] = [];
 		let line = "";
@@ -91,9 +104,26 @@ export function makeNoteTexture(text: string, seed: number): THREE.Texture {
 			}
 		}
 		if (line) lines.push(line);
-		lines.slice(0, 4).forEach((l, i) => {
+		// Only whole lines that show when the slip is pulled; if that cuts
+		// the note short, the last one ends in an ellipsis.
+		const fits = Math.max(
+			1,
+			Math.floor((visible * HEIGHT - TOP - 4) / LINE_HEIGHT),
+		);
+		if (lines.length > fits) {
+			lines.length = fits;
+			let last = lines[fits - 1].replace(/[\s.,;:!?…-]+$/, "");
+			while (
+				ctx.measureText(`${last}…`).width > maxWidth &&
+				last.includes(" ")
+			) {
+				last = last.slice(0, last.lastIndexOf(" "));
+			}
+			lines[fits - 1] = `${last}…`;
+		}
+		lines.forEach((l, i) => {
 			ctx.save();
-			ctx.translate(14 + r() * 6, 10 + i * 36 + r() * 3);
+			ctx.translate(14 + r() * 6, TOP + i * LINE_HEIGHT + r() * 3);
 			ctx.rotate((r() - 0.5) * 0.04);
 			ctx.fillText(l, 0, 0);
 			ctx.restore();
