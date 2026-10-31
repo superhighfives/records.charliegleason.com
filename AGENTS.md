@@ -48,7 +48,7 @@ changes (TanStack AI, DB, Start, Router all ship skills) instead of guessing pat
 | Tables / filters   | TanStack Table                                                   |
 | Forms              | TanStack Form                                                    |
 | State              | TanStack Store                                                   |
-| AI                 | TanStack AI (`@tanstack/ai*`) → Cloudflare Workers AI / AI Gateway |
+| AI                 | Claude via Cloudflare Workers AI partner models + AI Gateway (`runClaude` in `apps/web/src/lib/ai.ts`); vinyl colour swatches via Replicate |
 | Auth               | Clerk (`@clerk/clerk-react`), admin gated at `/admin`           |
 | Error monitoring   | Sentry — Worker via `@sentry/cloudflare` `withSentry` (`apps/web/src/server.ts`), browser via `init` in `apps/web/src/client.tsx`, source maps via `sentryTanstackStart` Vite plugin |
 | Database           | Drizzle ORM → Cloudflare **D1** (SQLite)                         |
