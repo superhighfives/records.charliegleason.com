@@ -1,3 +1,24 @@
+import TurndownService from "turndown";
+
+const turndown = new TurndownService();
+// A reply is written as notes markdown — `> ` for a quoted lyric, `- ` for a
+// list — so leave those as typed. By default Turndown escapes them (`\>`),
+// and the quotes showed up as literal "> text".
+turndown.escape = (text) => text;
+
+/**
+ * An email reply's body as notes markdown. Prefers the HTML part: most
+ * clients (Gmail included) render a link as plain `text <url>` in their
+ * plain-text part, which can't be recovered as markdown — the HTML still has
+ * a real `<a href>`, so it round-trips through Turndown as `[text](url)`.
+ * Either way, the result is tidied by `cleanEmailReply`.
+ */
+export function replyToNotes(strippedHtml: string, strippedText: string) {
+	return cleanEmailReply(
+		strippedHtml ? turndown.turndown(strippedHtml) : strippedText,
+	);
+}
+
 /**
  * Tidies an email reply into notes markdown: drops the quoted chain below
  * it, undoes the client's hard wrapping, and squeezes out the blank space
@@ -13,20 +34,27 @@ export function cleanEmailReply(text: string): string {
 }
 
 /**
- * The attribution line a client writes above the message being replied to —
- * "On Fri, 30 Oct 2026 at 06:00, Records Daily <…> wrote:", sometimes
- * wrapped onto a second line.
+ * A candidate for the attribution line a client writes above the message
+ * being replied to — "On Fri, 30 Oct 2026 at 06:00, Records Daily <…>
+ * wrote:", sometimes wrapped onto a second line.
  */
-const ATTRIBUTION = /^On\s[^\n]*(?:\n[^\n]*)?\swrote:\s*$/m;
+const ATTRIBUTION = /^On\s[^\n]*(?:\n[^\n]*)?\swrote:\s*$/gm;
 
 /**
  * Mailgun's `stripped-*` fields are meant to leave out the quoted chain, but
  * Gmail's sometimes survives in `stripped-html`; everything from the
- * attribution line down is the old email, not the reply.
+ * attribution line down is the old email, not the reply. Everything after it
+ * is dropped, so it has to really be one: it names a date and an email
+ * address (every client's does), so a reply that just says "On Friday I
+ * wrote:" keeps the rest of its notes.
  */
 function stripQuotedChain(text: string): string {
-	const match = ATTRIBUTION.exec(text);
-	return match ? text.slice(0, match.index) : text;
+	for (const match of text.matchAll(ATTRIBUTION)) {
+		if (/\d/.test(match[0]) && match[0].includes("@")) {
+			return text.slice(0, match.index);
+		}
+	}
+	return text;
 }
 
 /**

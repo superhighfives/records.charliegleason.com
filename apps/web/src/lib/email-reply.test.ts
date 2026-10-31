@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { cleanEmailReply, unwrapEmailText } from "#/lib/email-reply";
+import {
+	cleanEmailReply,
+	replyToNotes,
+	unwrapEmailText,
+} from "#/lib/email-reply";
 
 describe("unwrapEmailText", () => {
 	it("rejoins a paragraph a mail client hard-wrapped", () => {
@@ -103,5 +107,33 @@ describe("cleanEmailReply", () => {
 	it("leaves a sentence that merely mentions writing alone", () => {
 		const text = "I wrote about this one before.\nOn reflection, still great.";
 		expect(cleanEmailReply(text)).toBe(text);
+	});
+
+	it("keeps a line that only looks like an attribution, and what follows", () => {
+		const text =
+			"On Friday I wrote:\n\n> A love-struck Romeo\n> Sings the streets a serenade";
+		expect(cleanEmailReply(text)).toBe(text);
+	});
+});
+
+describe("replyToNotes", () => {
+	it("keeps typed quotes and list items as markdown, not escaped", () => {
+		const html =
+			'<div dir="ltr">&gt; Threw up on the ferry ride<br>&gt; As pale as the white cliffs<br><br>- one<br>- two</div>';
+		expect(replyToNotes(html, "")).toBe(
+			"> Threw up on the ferry ride\n> As pale as the white cliffs\n\n- one\n- two",
+		);
+	});
+
+	it("turns HTML links and bold into markdown", () => {
+		const html =
+			'<div>Calais to <a href="https://example.com">Dover</a> is <b>so</b> good.</div>';
+		expect(replyToNotes(html, "")).toBe(
+			"Calais to [Dover](https://example.com) is **so** good.",
+		);
+	});
+
+	it("falls back to the plain-text part", () => {
+		expect(replyToNotes("", "So good.\r\n")).toBe("So good.");
 	});
 });
