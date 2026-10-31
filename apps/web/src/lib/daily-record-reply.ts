@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
-import TurndownService from "turndown";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
+import { replyToNotes } from "#/lib/email-reply";
 
 /**
  * Inbound half of the daily-record-email flow (see src/lib/daily-record.ts):
@@ -18,8 +18,6 @@ import { records } from "#/db/schema";
 
 const OWNER_EMAIL = "hi@charliegleason.com";
 const RECORD_ADDRESS = /^record-(\d+)@/i;
-
-const turndown = new TurndownService();
 
 async function verifyMailgunSignature(
 	timestamp: string,
@@ -113,13 +111,10 @@ export async function handleDailyRecordReply(
 	if (!match) return { ok: false, reason: "unknown record address" };
 	const recordId = Number(match[1]);
 
-	// Prefer HTML: most clients (Gmail included) render a link as plain
-	// `text <url>` in their plain-text part, which Turndown can't recover as
-	// markdown — the HTML part still has a real <a href>, so it round-trips
-	// through Turndown as proper `[text](url)`.
-	const strippedHtml = field(formData, "stripped-html");
-	const strippedText = field(formData, "stripped-text");
-	const notes = strippedHtml ? turndown.turndown(strippedHtml) : strippedText;
+	const notes = replyToNotes(
+		field(formData, "stripped-html"),
+		field(formData, "stripped-text"),
+	);
 	if (!notes) return { ok: false, reason: "empty reply body" };
 
 	const db = getDb(env.DB);
