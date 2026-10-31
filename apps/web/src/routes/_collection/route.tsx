@@ -1,4 +1,9 @@
-import { createFileRoute, Outlet, useParams } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Outlet,
+	useLocation,
+	useParams,
+} from "@tanstack/react-router";
 
 import { CollectionSkeleton } from "#/components/collection-skeleton";
 import { CollectionView } from "#/components/collection-view";
@@ -7,7 +12,9 @@ import { publicRecordsQueryOptions } from "#/lib/records-queries";
 import { filterSettingsQueryOptions } from "#/lib/settings-queries";
 
 /**
- * Pathless layout shared by `/` and `/records/$id`. It renders the one
+ * Pathless layout shared by the collection's routes: the 3D wall at `/` and
+ * `/records/$id`, and the plain grid at `/grid` and `/grid/records/$id`. It
+ * renders the one
  * `CollectionView` instance, so navigating between the grid and an open record
  * only changes this layout's `selectedId` — it does **not** unmount/remount the
  * grid. The old sibling-routes setup remounted the whole view (and every
@@ -38,10 +45,16 @@ function CollectionLayout() {
 	const params = useParams({ strict: false });
 	const raw = params.id;
 	const selectedId = typeof raw === "string" ? parseRecordIdParam(raw) : null;
+	const layout = useLocation({
+		select: (l) =>
+			l.pathname === "/grid" || l.pathname.startsWith("/grid/")
+				? "grid"
+				: "wall",
+	});
 
 	return (
 		<>
-			<CollectionView selectedId={selectedId} />
+			<CollectionView selectedId={selectedId} layout={layout} />
 			<Outlet />
 		</>
 	);

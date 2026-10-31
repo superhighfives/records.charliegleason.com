@@ -1319,3 +1319,20 @@ a {
   letter-spacing: 0.02em;
   pointer-events: none;
 }
+
+/* 3D wall prototype (wall-grid.tsx): the scene does its own "lights down,
+ * spotlight on the selected record" while the record panel is open, so the
+ * panel's dimming backdrop would only hide that. It stays (transparent) to
+ * catch the click that closes the panel. */
+:root[data-wall] [data-slot="sheet-overlay"] {
+  background-color: transparent;
+}
+
+/* The wall is pure black / white, so the page around it is too (overscroll,
+   the edges while the canvas catches up). */
+:root[data-wall] body {
+  background-color: #fff;
+}
+:root.dark[data-wall] body {
+  background-color: #000;
+}
