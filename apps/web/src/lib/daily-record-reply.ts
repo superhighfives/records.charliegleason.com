@@ -3,6 +3,7 @@ import TurndownService from "turndown";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
+import { unwrapEmailText } from "#/lib/email-unwrap";
 
 /**
  * Inbound half of the daily-record-email flow (see src/lib/daily-record.ts):
@@ -119,7 +120,10 @@ export async function handleDailyRecordReply(
 	// through Turndown as proper `[text](url)`.
 	const strippedHtml = field(formData, "stripped-html");
 	const strippedText = field(formData, "stripped-text");
-	const notes = strippedHtml ? turndown.turndown(strippedHtml) : strippedText;
+	// Either way, undo the mail client's hard wrapping (see `unwrapEmailText`).
+	const notes = unwrapEmailText(
+		strippedHtml ? turndown.turndown(strippedHtml) : strippedText,
+	);
 	if (!notes) return { ok: false, reason: "empty reply body" };
 
 	const db = getDb(env.DB);
