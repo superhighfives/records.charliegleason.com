@@ -215,9 +215,12 @@ export function useTextureStream(
 					if (!record || !key || low.has(record.id)) continue;
 					let bitmap: ImageBitmap;
 					try {
-						// The smallest size the photo route serves; shrunk here, so
-						// the GPU holds a few KB per record rather than a full cover.
-						const res = await fetch(photoUrl(key, 350));
+						// 500: the photo route keeps a ready-made copy at that size
+						// (anything else is resized on the fly, ~0.5s+ a cover), and
+						// it's the same URL the full 1×1 cover loads, so the two share
+						// one download. Shrunk here, so the GPU holds a few KB per
+						// record rather than a full cover.
+						const res = await fetch(photoUrl(key, 500));
 						if (!res.ok) throw new Error(`HTTP ${res.status}`);
 						bitmap = await createImageBitmap(await res.blob(), {
 							resizeWidth: px,

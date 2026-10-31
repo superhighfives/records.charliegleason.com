@@ -1327,3 +1327,12 @@ a {
 :root[data-wall] [data-slot="sheet-overlay"] {
   background-color: transparent;
 }
+
+/* The wall is pure black / white, so the page around it is too (overscroll,
+   the edges while the canvas catches up). */
+:root[data-wall] body {
+  background-color: #fff;
+}
+:root.dark[data-wall] body {
+  background-color: #000;
+}

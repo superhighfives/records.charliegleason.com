@@ -45,6 +45,7 @@ import {
 import { Dust } from "./dust";
 import { loadNoteFont, makeNoteTexture, noteExcerpt } from "./note-texture";
 import { packDense } from "./pack";
+import { WhitePointEffect } from "./white-point";
 
 /**
  * Prototype: the collection grid as records hung on a dark, gently curved
@@ -129,12 +130,11 @@ function easeInOutCubic(t: number): number {
 }
 const SPOT_LIGHT = 4;
 /**
- * Light mode is a daylit gallery rather than a dark room: warm off-white
- * paper, soft daylight from the upper left so every record casts a gentle
- * shadow, and only a faint highlight following the cursor (a torch makes no
- * sense in a lit room).
+ * Light mode is a daylit gallery rather than a dark room: a white wall, soft
+ * daylight from the upper left so every record casts a gentle shadow, and
+ * only a faint highlight following the cursor (a torch makes no sense in a
+ * lit room).
  */
-const GALLERY_WALL = "#f3f1ec";
 const DAYLIGHT = 1.2;
 /** Space above the first row / below the last, in world units. */
 const TOP_PAD = 0.1;
@@ -267,13 +267,17 @@ function Effects({
 			coc.needsUpdate = true;
 		}
 	});
-	// Neutral (Khronos) tone mapping keeps colours faithful and whites white —
-	// the ACES default greyed and desaturated covers, and turned the light
-	// theme's white wall to mud.
+	// Neutral (Khronos) tone mapping keeps colours faithful — the ACES default
+	// greyed and desaturated covers, and turned the light theme's white wall
+	// to mud — and the white point puts its whites back at true white.
+	const whitePoint = useMemo(() => new WhitePointEffect(), []);
+	useEffect(() => () => whitePoint.dispose(), [whitePoint]);
 	const finish = (
 		<>
-			<Vignette offset={0.25} darkness={dark ? 0.75 : 0.12} />
+			{/* Only in the dark: on white it greyed the corners. */}
+			<Vignette offset={0.25} darkness={dark ? 0.75 : 0} />
 			<ToneMapping mode={ToneMappingMode.NEUTRAL} />
+			<primitive object={whitePoint} />
 		</>
 	);
 	if (!dof) {
@@ -534,7 +538,8 @@ function Wall({
 	// can't sweep light over the rows above and below the middle.
 	const ambientBase = (theme.dark ? 0.4 : 1) + (isTouch ? 0.35 : 0);
 	const hemiBase = theme.dark ? 0.3 : 0.45;
-	const wallColor = theme.dark ? theme.background : GALLERY_WALL;
+	// Pure black / white: the wall is the page's background here.
+	const wallColor = theme.dark ? "#000000" : "#ffffff";
 	const sun = useRef<THREE.DirectionalLight>(null);
 	/** Velocities for the `smoothDamp` springs (spotlight, panel pan). */
 	const springs = useRef<Record<string, number>>({});
@@ -682,16 +687,10 @@ function Wall({
 
 	const getTarget = useCallback((i: number) => handles.current[i], []);
 	const textures = useTextureStream(records, getTarget, {
-		// Phone tiles are ~120 CSS px wide, so 256px covers are plenty there;
-		// a 2×2 gets the DOM grid's larger spanning size.
-		coverPx: (i) =>
-			layoutRef.current[i]?.span > 1
-				? isTouch
-					? 512
-					: 900
-				: isTouch
-					? 256
-					: 512,
+		// The sizes the photo route keeps ready-made copies of (500, 800);
+		// any other width is resized on the fly, and was most of a slow
+		// first load. A 2×2 gets the larger one, except on phones.
+		coverPx: (i) => (layoutRef.current[i]?.span > 1 && !isTouch ? 800 : 500),
 		window: cols * 5,
 		discWindow: cols,
 		cacheMax: cols * 14,
@@ -995,7 +994,10 @@ function Wall({
 				THREE.MathUtils.smoothstep(poured, 0.55, 1),
 			);
 			h.sleeve.castShadow = poured > 0.75;
-			if (h.slip) h.slip.visible = poured > 0.45;
+			// The slip sits inside the sleeve: shown before the sleeve has its
+			// depth back, it shared the flattened cover's plane and z-fought
+			// (flickering as scrolling moved the camera).
+			if (h.slip) h.slip.visible = poured > 0.9;
 			// The vinyl waits for the cover: it only slides out once the record
 			// has fully emerged (it isn't part of the reveal, so it would
 			// otherwise sit whole behind a half-drawn cover).
@@ -1011,8 +1013,10 @@ function Wall({
 				// part of the sleeve, so it shouldn't scale up with it.
 				const k = 1 / Math.sqrt(anim.spanScale);
 				h.slip.scale.setScalar(k);
+				// It slides up out of the sleeve as the reveal finishes.
+				const tuck = THREE.MathUtils.smoothstep(poured, 0.9, 1);
 				h.slip.position.y =
-					TILE / 2 + (SLIP_PEEK - SLIP_H / 2 + l * SLIP_PULL) * k;
+					TILE / 2 + ((SLIP_PEEK + l * SLIP_PULL) * tuck - SLIP_H / 2) * k;
 			}
 		};
 
@@ -1174,15 +1178,10 @@ function Wall({
 				position={[0, 0, WALL_Z]}
 				receiveShadow
 			>
-				{/* In light mode the wall also glows faintly in its own colour, so
-				    it stays near the page's white instead of reading as lit grey
-				    plaster; the spotlight's shadows still darken it. */}
-				<meshStandardMaterial
-					color={wallColor}
-					emissive={wallColor}
-					emissiveIntensity={theme.dark ? 0 : 0.35}
-					roughness={1}
-				/>
+				{/* Shadows only, over the plain background: lit as a surface, the
+				    wall came out grey (light) or lifted (dark) instead of the
+				    page's pure white / black. */}
+				<shadowMaterial opacity={theme.dark ? 0.6 : 0.16} />
 			</mesh>
 			{/* Dust in two layers: a fine one just off the wall that drifts slower
 			    than the scroll, and a sparse, larger one near the camera that
