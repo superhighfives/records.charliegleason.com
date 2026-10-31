@@ -3,7 +3,7 @@ import TurndownService from "turndown";
 
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
-import { unwrapEmailText } from "#/lib/email-unwrap";
+import { cleanEmailReply } from "#/lib/email-reply";
 
 /**
  * Inbound half of the daily-record-email flow (see src/lib/daily-record.ts):
@@ -21,6 +21,10 @@ const OWNER_EMAIL = "hi@charliegleason.com";
 const RECORD_ADDRESS = /^record-(\d+)@/i;
 
 const turndown = new TurndownService();
+// A reply is written as notes markdown — `> ` for a quoted lyric, `- ` for a
+// list — so leave those as typed. By default Turndown escapes them (`\>`),
+// and the quotes showed up as literal "> text".
+turndown.escape = (text) => text;
 
 async function verifyMailgunSignature(
 	timestamp: string,
@@ -120,8 +124,8 @@ export async function handleDailyRecordReply(
 	// through Turndown as proper `[text](url)`.
 	const strippedHtml = field(formData, "stripped-html");
 	const strippedText = field(formData, "stripped-text");
-	// Either way, undo the mail client's hard wrapping (see `unwrapEmailText`).
-	const notes = unwrapEmailText(
+	// Either way, tidy it up (see `cleanEmailReply`).
+	const notes = cleanEmailReply(
 		strippedHtml ? turndown.turndown(strippedHtml) : strippedText,
 	);
 	if (!notes) return { ok: false, reason: "empty reply body" };

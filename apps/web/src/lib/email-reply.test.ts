@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { unwrapEmailText } from "#/lib/email-unwrap";
+import { cleanEmailReply, unwrapEmailText } from "#/lib/email-reply";
 
 describe("unwrapEmailText", () => {
 	it("rejoins a paragraph a mail client hard-wrapped", () => {
@@ -70,5 +70,38 @@ describe("unwrapEmailText", () => {
 		expect(unwrapEmailText(text)).toBe(
 			"I grew up listening to Romeo and Juliet but I don't think I understood the cultural significance.",
 		);
+	});
+});
+
+describe("cleanEmailReply", () => {
+	it("drops the quoted email below the attribution line", () => {
+		const text = [
+			"Calais to Dover is so good.",
+			"",
+			"On Fri, 30 Oct 2026 at 06:00, Records Daily <[digest@charliegleason.com](mailto:digest@charliegleason.com)> wrote:",
+			"",
+			"> Bright Eyes — Down In The Weeds, Where The World Once Was",
+			"> Reply to this email to add it as this record's notes.",
+		].join("\n");
+		expect(cleanEmailReply(text)).toBe("Calais to Dover is so good.");
+	});
+
+	it("drops an attribution a client wrapped onto two lines", () => {
+		const text =
+			"So good.\n\nOn Fri, 30 Oct 2026 at 06:00, Records Daily <digest@charliegleason.com>\nwrote:\n\n> Old email";
+		expect(cleanEmailReply(text)).toBe("So good.");
+	});
+
+	it("squeezes blank space and whitespace-only lines", () => {
+		const text =
+			"> Wake up, wake up, it's Monday morning\n\n  \n\nI love the juxtapositions.\n\n  \n";
+		expect(cleanEmailReply(text)).toBe(
+			"> Wake up, wake up, it's Monday morning\n\nI love the juxtapositions.",
+		);
+	});
+
+	it("leaves a sentence that merely mentions writing alone", () => {
+		const text = "I wrote about this one before.\nOn reflection, still great.";
+		expect(cleanEmailReply(text)).toBe(text);
 	});
 });
