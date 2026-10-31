@@ -9,11 +9,15 @@
  * A line is treated as wrapped, and joined to the next, when it's long
  * enough to have hit a wrap column. Short lines are deliberate breaks and
  * stay: lyrics, sign-offs, a list of names. Blank lines (paragraphs), list
- * items and quotes are never joined into.
+ * items and quotes are never joined — quotes here are nearly always lyrics,
+ * where a long line is still a deliberate one.
  */
 
-/** Shorter than any client's wrap column, longer than most deliberate lines. */
-const WRAPPED_LINE_MIN = 60;
+/**
+ * Just under the narrowest wrap column clients use (72); a deliberate line
+ * in the existing notes ran to 61, so this leaves a margin both ways.
+ */
+const WRAPPED_LINE_MIN = 70;
 
 const BLOCK_START = /^\s*([-*+]\s|\d+[.)]\s|>)/;
 const QUOTE = /^\s*>\s?/;
@@ -33,10 +37,7 @@ export function unwrapEmailText(text: string): string {
 			lastLength >= WRAPPED_LINE_MIN &&
 			continues(prev, line)
 		) {
-			const rest = QUOTE.test(prev)
-				? line.replace(QUOTE, "")
-				: line.trimStart();
-			out[out.length - 1] = `${prev} ${rest}`;
+			out[out.length - 1] = `${prev} ${line.trimStart()}`;
 		} else {
 			out.push(line);
 		}
@@ -47,8 +48,7 @@ export function unwrapEmailText(text: string): string {
 
 function continues(prev: string, line: string): boolean {
 	if (line.trim() === "" || prev.trim() === "") return false;
-	// A wrapped quote carries on as another quoted line; anything else that
-	// starts a block (a list item, a quote after prose) is its own line.
-	if (QUOTE.test(prev)) return QUOTE.test(line);
-	return !BLOCK_START.test(line);
+	// Quotes (lyrics) keep their lines, and nothing joins onto a line that
+	// starts a block of its own (a list item, a quote after prose).
+	return !QUOTE.test(prev) && !BLOCK_START.test(line);
 }

@@ -49,14 +49,19 @@ describe("unwrapEmailText", () => {
 		expect(unwrapEmailText(text)).toBe(text);
 	});
 
-	it("rejoins a wrapped quote without repeating its marker", () => {
+	it("keeps quoted lyrics line by line, even long lines", () => {
 		const text = [
-			"> A love-struck Romeo sings the streets a serenade, laying everybody low",
-			"> with a love song that he made.",
+			"> Garden shed, garden shed, garden shed",
+			"> Garden shed for the garçons, them feelings that I was guardin' and more",
+			"> Heavy on my mind, all my friends lost",
 		].join("\n");
-		expect(unwrapEmailText(text)).toBe(
-			"> A love-struck Romeo sings the streets a serenade, laying everybody low with a love song that he made.",
-		);
+		expect(unwrapEmailText(text)).toBe(text);
+	});
+
+	it("keeps a deliberate break after a line shorter than a wrap column", () => {
+		const text =
+			"Garden shed for the garçons, them feelings that I was guardin'\nHeavy on my mind";
+		expect(unwrapEmailText(text)).toBe(text);
 	});
 
 	it("normalises CRLF line endings", () => {
