@@ -2,7 +2,7 @@ import * as THREE from "three";
 
 /**
  * The handwriting on a record's note slip: the opening words of its notes in
- * a felt-tip hand, on yellow paper. Only the top of the slip pokes out of
+ * a small, neat hand (Kalam), on yellow paper. Only the top of the slip pokes out of
  * the sleeve (about a third at rest, half when it slides up on hover), so
  * the writing starts right at the top edge — the first line reads at rest,
  * the rest appears as the note is pulled — and stops, with an ellipsis, at
@@ -10,14 +10,18 @@ import * as THREE from "three";
  * behind the sleeve and getting cut through the middle.
  */
 
-const FONT = "Nanum Pen Script";
-const FONT_CSS =
-	"https://fonts.googleapis.com/css2?family=Nanum+Pen+Script&display=swap";
-const FONT_SIZE = 46;
-const LINE_HEIGHT = 38;
-const TOP = 6;
+const FONT = "Kalam";
+const FONT_CSS = "https://fonts.googleapis.com/css2?family=Kalam&display=swap";
+// Small, to get a few lines in: two read at rest, three when pulled. The
+// spacing puts the third line's top just below the slip's resting edge (a
+// 0.09 / 0.3 peek is ~58 of 192), so it doesn't show half-cut at rest.
+const FONT_SIZE = 23;
+const LINE_HEIGHT = 30;
+const TOP = 2;
+/** Layout units; the canvas is `RESOLUTION`× this, so small writing stays crisp. */
 const WIDTH = 256;
 const HEIGHT = 192;
+const RESOLUTION = 2;
 
 let fontReady: Promise<void> | null = null;
 
@@ -74,11 +78,12 @@ export function makeNoteTexture(
 	visible: number,
 ): THREE.Texture {
 	const canvas = document.createElement("canvas");
-	canvas.width = WIDTH;
-	canvas.height = HEIGHT;
+	canvas.width = WIDTH * RESOLUTION;
+	canvas.height = HEIGHT * RESOLUTION;
 	const ctx = canvas.getContext("2d");
 	const r = rand(seed);
 	if (ctx) {
+		ctx.scale(RESOLUTION, RESOLUTION);
 		// Paper: the brand yellow, with a faint speckle so it reads as stock.
 		ctx.fillStyle = "#eab308";
 		ctx.fillRect(0, 0, WIDTH, HEIGHT);

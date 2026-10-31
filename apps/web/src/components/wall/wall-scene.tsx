@@ -1275,7 +1275,7 @@ const Tile = memo(function Tile({
 		loadNoteFont().then(() => {
 			if (cancelled || !record.notes) return;
 			texture = makeNoteTexture(
-				noteExcerpt(record.notes, 16),
+				noteExcerpt(record.notes, 30),
 				record.id,
 				(SLIP_PEEK + SLIP_PULL) / SLIP_H,
 			);
