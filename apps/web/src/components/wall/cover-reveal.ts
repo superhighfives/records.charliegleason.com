@@ -6,9 +6,9 @@ import * as THREE from "three";
  * Nothing is drawn until the record's image is ready; then, as `uReveal`
  * goes from 0 to 1, one of:
  *
- * - **wax** — melts down the sleeve from the top like warm wax: rounded drips
- *   running ahead, the image dragged into them, a darker wet lip, a wobble
- *   that settles out.
+ * - **wax** — melts down the sleeve from the top like warm wax, inside the
+ *   square: rounded drips running ahead, the colour at their front streaked
+ *   on down to the bottom, a darker wet lip, a wobble that settles out.
  * - **ripple** — emerges from the centre outward (a rounded square) like a
  *   picture rising through water, rings of refraction behind its edge.
  * - **develop** — fades up from a dim, washed-out, soft image to full colour
@@ -164,15 +164,21 @@ const MAP_GLSL = /* glsl */ `
 				+ (sin(x * 23.0 + uSeed * 1.7) * 0.5 + 0.5) * 0.09
 				+ (sin(x * 41.0 + uSeed * 2.3) * 0.5 + 0.5) * 0.05
 				+ revealNoise1(x * 17.0 + uSeed) * 0.05;
-			float behind = t * 1.55 - drip - down;
-			if (behind < 0.0) discard;
-			float drag = (1.0 - smoothstep(0.0, 0.35, behind)) * 0.22 * settle;
-			vec2 s = uv;
+			// How far down each column the wax has run. The square is always
+			// whole: ahead of the wax, the colour at its front streaks on down to
+			// the bottom, so the picture melts down inside the sleeve's edges
+			// rather than behind a ragged one.
+			float front = t * 1.55 - drip;
+			float behind = front - down;
+			float reached = min(down, max(front, 0.0));
+			float drag = (1.0 - smoothstep(0.0, 0.35, max(behind, 0.0))) * 0.22 * settle;
+			vec2 s = vec2(uv.x, 1.0 - reached);
 			s.y += drag;
 			s.x += sin(uv.y * 17.0 + t * 9.0) * 0.012 * settle;
 			s.y += sin(uv.x * 13.0 + t * 7.0) * 0.008 * settle;
 			float lip = 1.0 - smoothstep(0.0, 0.05, behind);
-			img = revealSample(map, s) * (1.0 - lip * 0.35 * settle);
+			img = revealSample(map, s) * (1.0 - lip * 0.25 * settle);
+			alpha = smoothstep(0.0, 0.12, t);
 		} else if (uMode < 1.5) {
 			// ripple
 			vec2 c = uv - 0.5;

@@ -16,12 +16,12 @@ const FONT_CSS =
 // Small, to get a few lines in — bold, which holds up far better than the
 // regular weight at the few pixels a slip gets on screen. Two lines read at
 // rest and three when pulled; the third starts just below the slip's resting
-// edge (a 0.105 / 0.3 peek is ~67 of 192), so it never shows half-cut.
+// edge (a 0.115 / 0.3 peek is ~74 of 192), so it never shows half-cut.
 const FONT_WEIGHT = 700;
 const FONT_SIZE = 23;
 const LINE_HEIGHT = 28;
 /** Paper margins around the writing. */
-const TOP = 12;
+const TOP = 18;
 const SIDE = 18;
 /** Layout units; the canvas is `RESOLUTION`× this, so small writing stays crisp. */
 const WIDTH = 256;

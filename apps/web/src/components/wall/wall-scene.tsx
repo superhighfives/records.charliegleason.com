@@ -146,7 +146,7 @@ const BOTTOM_PAD = 0.45;
 const SLIP_W = 0.4;
 const SLIP_H = 0.3;
 /** How far the slip pokes above the sleeve at rest, and extra on hover. */
-const SLIP_PEEK = 0.105;
+const SLIP_PEEK = 0.115;
 const SLIP_PULL = 0.07;
 /** Clearance kept between the selected record and the record panel's edge. */
 /** Most the camera closes in on a selected record (a share of its distance). */
@@ -570,7 +570,16 @@ function Wall({
 	 * them) drew it as an S.
 	 */
 	const cam = useRef({ x: 0, y: Number.NaN, zoom: 0 });
-	const camTween = useRef({ x: 0, y: 0, zoom: 0, t: 1, key: -1 });
+	const camTween = useRef({
+		x: 0,
+		y: 0,
+		zoom: 0,
+		t: 1,
+		key: -1,
+		/** Where the spotlight was when the move began: it travels with it. */
+		lightX: 0,
+		lightY: 0,
+	});
 	/** Dragged offset while zoomed in on a record, in world units. */
 	const pan = useRef({ x: 0, y: 0 });
 	/** A record picked by letting go of a drag, until the route catches up. */
@@ -698,6 +707,49 @@ function Wall({
 			target === slot ||
 			(target instanceof Element &&
 				target.closest('[data-slot="sheet-overlay"]') != null);
+		// Moves the zoomed-in view by a screen-pixel distance, kept over the wall.
+		const panBy = (dxPx: number, dyPx: number) => {
+			// One screen pixel's worth of wall, at the current zoom.
+			const k = unitsPerPx * (1 - zoom.current);
+			const lay = layoutRef.current;
+			const p = pan.current;
+			const c = cam.current;
+			p.x += dxPx * k;
+			p.y -= dyPx * k;
+			const minY = Math.min(0, ...lay.map((l) => l.y));
+			p.x = THREE.MathUtils.clamp(
+				p.x,
+				-viewWidth / 2 - c.x,
+				viewWidth / 2 - c.x,
+			);
+			p.y = THREE.MathUtils.clamp(p.y, minY - c.y, -c.y);
+		};
+		// After a drag or a wheel pan: fold it into the camera, then frame the
+		// record nearest the middle of the view from there.
+		const settle = () => {
+			const c = cam.current;
+			const p = pan.current;
+			c.x += p.x;
+			c.y += p.y;
+			p.x = 0;
+			p.y = 0;
+			const cx = c.x + frameOffset.current;
+			let nearest = -1;
+			let best = Number.POSITIVE_INFINITY;
+			layoutRef.current.forEach((l, i) => {
+				const d = Math.hypot(l.x - cx, l.y - c.y);
+				if (d < best) {
+					best = d;
+					nearest = i;
+				}
+			});
+			if (nearest < 0) return;
+			camTween.current.key = -2; // restart the move, even to the same record
+			pendingFocus.current = nearest;
+			if (nearest !== focusedRef.current) {
+				onOpen(recordsRef.current[nearest]);
+			}
+		};
 		let press: { x: number; y: number; moved: boolean } | null = null;
 		const onDown = (e: PointerEvent) => {
 			if (e.button !== 0 || !onWall(e.target)) return;
@@ -715,21 +767,8 @@ function Wall({
 			}
 			press.moved = true;
 			document.documentElement.dataset.wallDragging = "";
-			// One screen pixel's worth of wall, at the current zoom.
-			const k = unitsPerPx * (1 - zoom.current);
-			const lay = layoutRef.current;
-			const p = pan.current;
-			const c = cam.current;
-			p.x -= e.movementX * k;
-			p.y += e.movementY * k;
-			// Stay over the wall.
-			const minY = Math.min(0, ...lay.map((l) => l.y));
-			p.x = THREE.MathUtils.clamp(
-				p.x,
-				-viewWidth / 2 - c.x,
-				viewWidth / 2 - c.x,
-			);
-			p.y = THREE.MathUtils.clamp(p.y, minY - c.y, -c.y);
+			// Grab the wall: it follows the pointer, so the view goes the other way.
+			panBy(-e.movementX, -e.movementY);
 		};
 		const onUp = (e: PointerEvent) => {
 			if (!press) return;
@@ -737,31 +776,7 @@ function Wall({
 			press = null;
 			delete document.documentElement.dataset.wallDragging;
 			if (moved) {
-				// Fold the drag into the camera, then frame the record nearest
-				// the middle of the view from there.
-				const c = cam.current;
-				const p = pan.current;
-				const tw = camTween.current;
-				c.x += p.x;
-				c.y += p.y;
-				p.x = 0;
-				p.y = 0;
-				const cx = c.x + frameOffset.current;
-				let nearest = -1;
-				let best = Number.POSITIVE_INFINITY;
-				layoutRef.current.forEach((l, i) => {
-					const d = Math.hypot(l.x - cx, l.y - c.y);
-					if (d < best) {
-						best = d;
-						nearest = i;
-					}
-				});
-				if (nearest < 0) return;
-				tw.key = -2; // restart the move, even back to the same record
-				pendingFocus.current = nearest;
-				if (nearest !== focusedRef.current) {
-					onOpen(recordsRef.current[nearest]);
-				}
+				settle();
 				return;
 			}
 			if (!onWall(e.target)) return;
@@ -769,10 +784,31 @@ function Wall({
 			if (index != null) onOpen(recordsRef.current[index]);
 			else if (focusedRef.current >= 0) onClose();
 		};
+		// With a record open, scrolling beside the panel moves around the
+		// zoomed-in wall instead of the page underneath it, then settles on
+		// the nearest record. (The panel's own content still scrolls itself.)
+		let wheelSettle = 0;
+		const onWheel = (e: WheelEvent) => {
+			if (focusedRef.current < 0) return;
+			if (
+				e.target instanceof Element &&
+				e.target.closest('[data-slot="sheet-content"]')
+			) {
+				return;
+			}
+			e.preventDefault();
+			const line = e.deltaMode === 1 ? 16 : 1;
+			panBy(e.deltaX * line, e.deltaY * line);
+			window.clearTimeout(wheelSettle);
+			wheelSettle = window.setTimeout(settle, 250);
+		};
 		window.addEventListener("pointerdown", onDown);
 		window.addEventListener("pointermove", onMove, { passive: true });
 		window.addEventListener("pointerup", onUp);
+		window.addEventListener("wheel", onWheel, { passive: false });
 		return () => {
+			window.clearTimeout(wheelSettle);
+			window.removeEventListener("wheel", onWheel);
 			window.removeEventListener("pointerdown", onDown);
 			window.removeEventListener("pointermove", onMove);
 			window.removeEventListener("pointerup", onUp);
@@ -889,6 +925,10 @@ function Wall({
 			tw.zoom = c.zoom;
 			tw.t = 0;
 			tw.key = focused;
+			if (spot.current) {
+				tw.lightX = spot.current.position.x;
+				tw.lightY = spot.current.position.y - 0.6;
+			}
 		}
 		tw.t = reducedMotion ? 1 : Math.min(1, tw.t + dt / CAMERA_MOVE_S);
 		const camEase = easeInOutCubic(tw.t);
@@ -962,9 +1002,19 @@ function Wall({
 		// on the centred record; with the panel open, on the selected one).
 		let lightX = isTouch ? 0 : (ndc.x * viewWidth) / 2 + panelShift.current;
 		let lightY = isTouch ? camY : camY + (ndc.y * viewHeight) / 2;
-		if (focused >= 0) {
-			lightX = layout[focused].x;
-			lightY = layout[focused].y;
+		if (focused >= 0 && layout[focused]) {
+			// On the selected record — moved along with any drag or wheel pan,
+			// so it stays on the middle of the view.
+			lightX = layout[focused].x + pan.current.x;
+			lightY = layout[focused].y + pan.current.y;
+		}
+		// While the camera is moving to (or away from) a record, the light
+		// moves with it on the same ease, rather than chasing on its own
+		// spring and arriving out of step.
+		const withCamera = focused >= 0 || tw.t < 1;
+		if (withCamera) {
+			lightX = tw.lightX + (lightX - tw.lightX) * camEase;
+			lightY = tw.lightY + (lightY - tw.lightY) * camEase;
 		}
 		// Keep the torch on the wall: never above the first row's centre or
 		// below the last's, so it doesn't light up empty wall behind the
@@ -993,22 +1043,29 @@ function Wall({
 			// Springs, not plain exponential easing: they ease *in* as well as
 			// out, so the light glides between records instead of lurching
 			// off toward each new one.
-			s.position.x = smoothDamp(
-				s.position.x,
-				lightX,
-				springs.current,
-				"lightX",
-				0.28,
-				dt,
-			);
-			s.position.y = smoothDamp(
-				s.position.y,
-				lightY + 0.6,
-				springs.current,
-				"lightY",
-				0.28,
-				dt,
-			);
+			if (withCamera) {
+				s.position.x = lightX;
+				s.position.y = lightY + 0.6;
+				springs.current.lightX = 0;
+				springs.current.lightY = 0;
+			} else {
+				s.position.x = smoothDamp(
+					s.position.x,
+					lightX,
+					springs.current,
+					"lightX",
+					0.28,
+					dt,
+				);
+				s.position.y = smoothDamp(
+					s.position.y,
+					lightY + 0.6,
+					springs.current,
+					"lightY",
+					0.28,
+					dt,
+				);
+			}
 			s.position.z = 3.4;
 			s.target.position.set(s.position.x, s.position.y - 0.6, 0);
 			s.target.updateMatrixWorld();
