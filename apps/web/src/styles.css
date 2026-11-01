@@ -178,6 +178,25 @@ body,
    Scoped below `sm` (640px, Tailwind's default and `SheetContent`'s own
    `sm:max-w-md` breakpoint) — above that the panel is a right-hand drawer
    and Radix's own lock (untouched here) already covers it. */
+/* Wider screens, where the panel is a drawer beside the page. The page
+   scrolls on `<html>` (its `overflow-x: hidden` makes it the scroller), so
+   Radix's lock on `<body>` left `<html>`'s scrollbar showing beside the
+   panel's own — two scrollbars side by side. Lock `<html>` too, keeping the
+   scrollbar's gutter so nothing shifts sideways as it goes, which also
+   makes Radix's own width compensation (a right margin on `<body>`) a
+   second gap to drop. */
+@media (min-width: 640px) {
+  html {
+    scrollbar-gutter: stable;
+  }
+  html:has(body[data-scroll-locked]) {
+    overflow: hidden;
+  }
+  html body[data-scroll-locked] {
+    margin-right: 0 !important;
+  }
+}
+
 @media (max-width: 639px) {
   html body[data-scroll-locked] {
     overflow: visible !important;
