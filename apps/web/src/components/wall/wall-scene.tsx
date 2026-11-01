@@ -1233,10 +1233,22 @@ function Wall({
 			const cover = h.cover;
 			// Self-light keeps covers true to their photos; while a record is
 			// selected, the others dim with the room and it keeps its own.
+			// Eased per record: moving the selection from one record to the
+			// next switched them instantly, so one flashed bright as the other
+			// dropped dark — now they cross-fade over the camera's move.
+			const glowGoal = focused === i ? 1 : roomDim;
+			const glow = smoothDamp(
+				cover.userData.glow ?? glowGoal,
+				glowGoal,
+				springs.current,
+				`glow${i}`,
+				0.3,
+				dt,
+			);
+			cover.userData.glow = glow;
 			setCoverSelfLight(
 				cover,
-				(theme.dark ? SELF_LIGHT_DARK : SELF_LIGHT_LIGHT) *
-					(focused === i ? 1 : roomDim),
+				(theme.dark ? SELF_LIGHT_DARK : SELF_LIGHT_LIGHT) * glow,
 			);
 			setCoverStyle(cover, reveal.style);
 			// Where the record sits on screen: -1 at the bottom edge, 1 at the
