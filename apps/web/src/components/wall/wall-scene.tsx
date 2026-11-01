@@ -219,7 +219,12 @@ export default memo(function WallScene(props: WallSceneProps) {
 			dpr={dpr}
 			shadows={props.isTouch ? false : "percentage"}
 			camera={{ fov: FOV, near: 0.1, far: 60, position: [0, 0, 10] }}
-			gl={{ antialias: false, alpha: false }}
+			// Transparent: the wall draws above the page (see `WallGrid`), so
+			// the page's own black / white is its background.
+			gl={{ antialias: false, alpha: true }}
+			// R3F's wrapper sets its own pointer-events inline; the wall never
+			// takes a click itself (see `WallGrid`).
+			style={{ pointerEvents: "none" }}
 			// Tone mapping happens once, at the end of the effect chain (see
 			// `Effects`), not in the renderer.
 			flat
@@ -508,8 +513,6 @@ function Wall({
 	// rather than only reading where the torch lands.
 	const ambientBase = (theme.dark ? 0.6 : 1) + (isTouch ? 0.35 : 0);
 	const hemiBase = theme.dark ? 0.4 : 0.45;
-	// Pure black / white: the wall is the page's background here.
-	const wallColor = theme.dark ? "#000000" : "#ffffff";
 	const sun = useRef<THREE.DirectionalLight>(null);
 	/** Velocities for the `smoothDamp` springs (spotlight, panel pan). */
 	const springs = useRef<Record<string, number>>({});
@@ -1305,7 +1308,6 @@ function Wall({
 
 	return (
 		<>
-			<color attach="background" args={[wallColor]} />
 			{/* Daylight (light mode only): from the upper left, so records cast
 			    soft shadows down and to the right onto the wall. It follows the
 			    camera; see the frame loop. */}

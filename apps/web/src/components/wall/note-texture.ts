@@ -1,24 +1,23 @@
 import * as THREE from "three";
 
 /**
- * The handwriting on a record's note slip: the opening words of its notes in
- * a small, neat hand (Kalam), on yellow paper. Only the top of the slip pokes out of
- * the sleeve (about a third at rest, half when it slides up on hover), so
- * the writing starts right at the top edge — the first line reads at rest,
- * the rest appears as the note is pulled — and stops, with an ellipsis, at
- * the last line that shows in full when pulled, rather than running on
- * behind the sleeve and getting cut through the middle.
+ * The writing on a record's note slip: the opening words of its notes, set
+ * in the same sans as the notes in the record panel (DM Sans), on yellow
+ * paper. Only the top of the slip pokes out of the sleeve (about a third at
+ * rest, half when it slides up on hover), so the writing starts right at the
+ * top edge — the first lines read at rest, the rest appears as the note is
+ * pulled — and stops, with an ellipsis, at the last line that shows in full
+ * when pulled, rather than running on behind the sleeve and getting cut
+ * through the middle.
  */
 
-const FONT = "Kalam";
-const FONT_CSS =
-	"https://fonts.googleapis.com/css2?family=Kalam:wght@700&display=swap";
-// Small, to get a few lines in — bold, which holds up far better than the
-// regular weight at the few pixels a slip gets on screen. Two lines read at
-// rest and three when pulled; the third starts just below the slip's resting
-// edge (a 0.115 / 0.3 peek is ~74 of 192), so it never shows half-cut.
-const FONT_WEIGHT = 700;
-const FONT_SIZE = 23;
+const FONT = "DM Sans";
+// Medium weight holds up at the few pixels a slip gets on screen. Two lines
+// read at rest and three when pulled; the third starts just below the slip's
+// resting edge (a 0.115 / 0.3 peek is ~74 of 192), so it never shows
+// half-cut.
+const FONT_WEIGHT = 500;
+const FONT_SIZE = 19;
 const LINE_HEIGHT = 28;
 /** Paper margins around the writing. */
 const TOP = 18;
@@ -31,27 +30,17 @@ const RESOLUTION = 2;
 let fontReady: Promise<void> | null = null;
 
 /**
- * Loads the hand font once, on demand — only the 3D wall uses it, so it
- * stays out of the page's own font request.
+ * Waits (once) for the notes font — the page already links it (see
+ * `__root.tsx`), so this only makes sure it's loaded before a slip is drawn
+ * onto a canvas, which can't fall back gracefully mid-render.
  */
 export function loadNoteFont(): Promise<void> {
-	if (!fontReady) {
-		const link = document.createElement("link");
-		link.rel = "stylesheet";
-		link.href = FONT_CSS;
-		document.head.appendChild(link);
-		fontReady = new Promise<void>((resolve) => {
-			link.onload = () => resolve();
-			link.onerror = () => resolve();
-		})
-			.then(() =>
-				document.fonts.load(`${FONT_WEIGHT} ${FONT_SIZE}px "${FONT}"`),
-			)
-			.then(
-				() => undefined,
-				() => undefined,
-			);
-	}
+	fontReady ??= document.fonts
+		.load(`${FONT_WEIGHT} ${FONT_SIZE}px "${FONT}"`)
+		.then(
+			() => undefined,
+			() => undefined,
+		);
 	return fontReady;
 }
 
@@ -99,10 +88,10 @@ export function makeNoteTexture(
 			ctx.fillRect(r() * WIDTH, r() * HEIGHT, 1.5, 1.5);
 		}
 
-		// Pencil-ish ink, a touch uneven line to line.
+		// Dark ink, set straight.
 		ctx.fillStyle = "rgba(40, 26, 6, 0.94)";
 		ctx.textBaseline = "top";
-		ctx.font = `${FONT_WEIGHT} ${FONT_SIZE}px "${FONT}", cursive`;
+		ctx.font = `${FONT_WEIGHT} ${FONT_SIZE}px "${FONT}", system-ui, sans-serif`;
 		const maxWidth = WIDTH - SIDE * 2 - 6;
 		const lines: string[] = [];
 		let line = "";
@@ -134,11 +123,7 @@ export function makeNoteTexture(
 			lines[fits - 1] = `${last}…`;
 		}
 		lines.forEach((l, i) => {
-			ctx.save();
-			ctx.translate(SIDE + r() * 6, TOP + i * LINE_HEIGHT + r() * 3);
-			ctx.rotate((r() - 0.5) * 0.04);
-			ctx.fillText(l, 0, 0);
-			ctx.restore();
+			ctx.fillText(l, SIDE, TOP + i * LINE_HEIGHT);
 		});
 	}
 	const texture = new THREE.CanvasTexture(canvas);

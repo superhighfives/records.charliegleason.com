@@ -206,6 +206,16 @@ export function CollectionView({
 	// unlike gating on `open` alone, this stays correct even though the flag
 	// keeps getting set to `true` by paging in between.
 	const open = selected != null;
+	// Zoomed in on a record on the wall, the page's own text (hero, filters,
+	// footer) fades away — see `[data-wall-focus]` in styles.css.
+	useEffect(() => {
+		const root = document.documentElement;
+		if (wallMode && open) root.dataset.wallFocus = "";
+		else delete root.dataset.wallFocus;
+		return () => {
+			delete root.dataset.wallFocus;
+		};
+	}, [wallMode, open]);
 	const wasOpenRef = useRef(false);
 	const enterAnimation = open && !wasOpenRef.current && animateOpenRef.current;
 	useEffect(() => {
@@ -281,16 +291,18 @@ export function CollectionView({
 
 			{/* `data-parallax` (wall mode only): see `WallGrid`. */}
 			{!search.trim() && (
-				<div
-					data-parallax={wallMode ? -0.3 : undefined}
-					data-parallax-fade={wallMode ? "" : undefined}
-				>
-					<CollectionHero count={data.length} />
+				<div data-wall-chrome>
+					<div
+						data-parallax={wallMode ? -0.3 : undefined}
+						data-parallax-fade={wallMode ? "" : undefined}
+					>
+						<CollectionHero count={data.length} />
+					</div>
 				</div>
 			)}
 
 			<div className="rise-in" style={{ animationDelay: `${revealMs}ms` }}>
-				<div>
+				<div data-wall-chrome>
 					<FilterStrip
 						records={data}
 						countRecords={searched}
@@ -381,7 +393,10 @@ export function CollectionView({
 				</SheetContent>
 			</Sheet>
 
-			<footer className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground">
+			<footer
+				data-wall-chrome
+				className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground"
+			>
 				<div
 					data-parallax={wallMode ? -0.2 : undefined}
 					data-parallax-fade={wallMode ? "" : undefined}

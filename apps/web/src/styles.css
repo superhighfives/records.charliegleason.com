@@ -1357,6 +1357,15 @@ a {
 :root[data-wall] body {
   background-color: #fff;
 }
+
+/* Zoomed in on a record, the page's own text fades out of the way. */
+[data-wall-chrome] {
+  transition: opacity 600ms ease;
+}
+:root[data-wall-focus] [data-wall-chrome] {
+  opacity: 0;
+  pointer-events: none;
+}
 :root.dark[data-wall] body {
   background-color: #000;
 }

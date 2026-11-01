@@ -78,7 +78,11 @@ export function WallGrid({
 				env &&
 				theme &&
 				createPortal(
-					<div className="fixed inset-0 -z-10">
+					// Above the page's own content (so records and their note
+					// slips sit over the hero and filter strip), below its
+					// floating controls and the record panel; it never takes a
+					// click — the page underneath handles those.
+					<div className="pointer-events-none fixed inset-0 z-10">
 						<Suspense fallback={null}>
 							<WallScene
 								records={records}
