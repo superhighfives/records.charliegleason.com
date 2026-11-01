@@ -42,8 +42,11 @@ import * as THREE from "three";
  * first. (Polaroid keeps its frame the right way up.)
  *
  * It's the standard lit material (lighting, shadows, the matte finish) with
- * its `map` step patched via `onBeforeCompile`; every cover shares one
- * program and picks its style with the `uMode` uniform. Covers also carry a
+ * its `map` step patched via `onBeforeCompile`. Only the style in use is
+ * compiled in (the `REVEAL_MODE` define): one program holding all fourteen,
+ * picked between per pixel, cost every cover on screen — even fully
+ * revealed ones — and took a long frame to compile. Switching styles (the
+ * dev panel) recompiles. Covers also carry a
  * share of self-light (`uSelfLight`) so they stay true to their photos.
  */
 
@@ -67,7 +70,6 @@ export type RevealStyle = (typeof REVEAL_STYLES)[number];
 
 type RevealUniforms = {
 	uReveal: { value: number };
-	uMode: { value: number };
 	/** 1 scrolling down (top edge first), -1 scrolling up (bottom first). */
 	uDir: { value: number };
 	/** Plain opacity, apart from the reveal: the quick fade as a cover loads. */
@@ -86,7 +88,6 @@ type RevealUniforms = {
 
 const HEADER_GLSL = /* glsl */ `
 	uniform float uReveal;
-	uniform float uMode;
 	uniform float uDir;
 	uniform float uFade;
 	// Shapes are worked out in a space flipped with the scroll direction;
@@ -146,7 +147,7 @@ const MAP_GLSL = /* glsl */ `
 	#ifdef USE_MAP
 		float t = uReveal;
 		vec2 uv = vMapUv;
-		revealFlip = uDir < 0.0 && (uMode < 7.5 || uMode > 8.5) ? 1.0 : 0.0;
+		revealFlip = uDir < 0.0 && REVEAL_MODE != 8 ? 1.0 : 0.0;
 		if (revealFlip > 0.5) uv.y = 1.0 - uv.y;
 		vec3 img;
 		float alpha = 1.0;
@@ -156,7 +157,8 @@ const MAP_GLSL = /* glsl */ `
 			// Done: just the photo. (Most covers, most of the time — and the
 			// styles below can cost a dozen texture reads a pixel.)
 			img = revealSample(map, uv);
-		} else if (uMode < 0.5) {
+		} else {
+#if REVEAL_MODE == 0
 			// wax
 			float down = 1.0 - uv.y;
 			float x = uv.x;
@@ -179,7 +181,7 @@ const MAP_GLSL = /* glsl */ `
 			float lip = 1.0 - smoothstep(0.0, 0.05, behind);
 			img = revealSample(map, s) * (1.0 - lip * 0.25 * settle);
 			alpha = smoothstep(0.0, 0.12, t);
-		} else if (uMode < 1.5) {
+#elif REVEAL_MODE == 1
 			// ripple
 			vec2 c = uv - 0.5;
 			vec2 q = abs(c) * 2.0;
@@ -200,7 +202,7 @@ const MAP_GLSL = /* glsl */ `
 				revealSample(map, s).g,
 				revealSample(map, s - split).b
 			);
-		} else if (uMode < 2.5) {
+#elif REVEAL_MODE == 2
 			// develop
 			float k = smoothstep(0.0, 1.0, t);
 			vec3 soft = revealBlur(map, uv, 0.02 * (1.0 - k));
@@ -208,7 +210,7 @@ const MAP_GLSL = /* glsl */ `
 			vec3 washed = mix(vec3(lum), soft, 0.35) * 0.55 + 0.08;
 			img = mix(washed, soft, smoothstep(0.25, 1.0, t));
 			alpha = smoothstep(0.0, 0.35, t);
-		} else if (uMode < 3.5) {
+#elif REVEAL_MODE == 3
 			// pixels
 			float blocks = mix(6.0, 220.0, t * t);
 			vec2 cell = floor(uv * blocks);
@@ -216,7 +218,7 @@ const MAP_GLSL = /* glsl */ `
 			if (appear > t * 1.4) discard;
 			vec2 s = mix((cell + 0.5) / blocks, uv, smoothstep(0.75, 1.0, t));
 			img = revealSample(map, s);
-		} else if (uMode < 4.5) {
+#elif REVEAL_MODE == 4
 			// blinds
 			float slats = 9.0;
 			float slat = floor((1.0 - uv.y) * slats);
@@ -227,7 +229,7 @@ const MAP_GLSL = /* glsl */ `
 			vec2 s = uv;
 			s.y += (1.0 - open) * (1.0 / slats) * 0.6;
 			img = revealSample(map, s) * mix(0.7, 1.0, open);
-		} else if (uMode < 5.5) {
+#elif REVEAL_MODE == 5
 			// focus
 			float k = smoothstep(0.0, 1.0, t);
 			float r = 0.035 * (1.0 - k);
@@ -238,7 +240,7 @@ const MAP_GLSL = /* glsl */ `
 				revealBlur(map, uv - split, r).b
 			);
 			alpha = smoothstep(0.0, 0.5, t);
-		} else if (uMode < 6.5) {
+#elif REVEAL_MODE == 6
 			// unfold: four panels, folded accordion-style, opening top down.
 			float down = 1.0 - uv.y;
 			float top = 0.0;
@@ -266,7 +268,7 @@ const MAP_GLSL = /* glsl */ `
 			// A soft crease shadow at each fold.
 			float crease = 1.0 - (1.0 - smoothstep(0.0, 0.08, local)) * 0.3 * (1.0 - open);
 			img = revealSample(map, s) * lit * crease;
-		} else if (uMode < 7.5) {
+#elif REVEAL_MODE == 7
 			// bloom
 			float k = smoothstep(0.0, 1.0, t);
 			float d = length(uv - 0.5);
@@ -275,7 +277,7 @@ const MAP_GLSL = /* glsl */ `
 			vec3 soft = revealBlur(map, uv, 0.03 * glow);
 			img = soft + glow * (soft * 2.2 + vec3(0.35, 0.3, 0.25)) * core;
 			alpha = smoothstep(0.0, 0.3, t) * smoothstep(-0.05, 0.25, core + k - 0.2);
-		} else if (uMode < 8.5) {
+#elif REVEAL_MODE == 8
 			// polaroid
 			float k = smoothstep(0.0, 1.0, t);
 			// The white frame, its wide bottom lip, shrinking off the edges.
@@ -298,7 +300,7 @@ const MAP_GLSL = /* glsl */ `
 				img = mix(c, photo, smoothstep(0.65, 1.0, k));
 			}
 			alpha = smoothstep(0.0, 0.15, t);
-		} else if (uMode < 9.5) {
+#elif REVEAL_MODE == 9
 			// smoke
 			float settle2 = 1.0 - smoothstep(0.4, 1.0, t);
 			vec2 p = uv * 3.0 + uSeed;
@@ -314,7 +316,7 @@ const MAP_GLSL = /* glsl */ `
 			vec3 smoke = vec3(dot(photo, vec3(0.33))) * 0.6 + 0.15;
 			img = mix(smoke, photo, smoothstep(0.25, 0.9, t));
 			alpha = density;
-		} else if (uMode < 10.5) {
+#elif REVEAL_MODE == 10
 			// dust
 			float grains = 110.0;
 			vec2 cell = floor(uv * grains);
@@ -330,7 +332,7 @@ const MAP_GLSL = /* glsl */ `
 			photo = mix(photo, revealSample(map, uv), fill);
 			float glint = 1.0 - smoothstep(0.0, 0.12, since);
 			img = photo + glint * 0.6;
-		} else if (uMode < 11.5) {
+#elif REVEAL_MODE == 11
 			// ink
 			float spread = 0.0;
 			for (int k = 0; k < 4; k++) {
@@ -351,7 +353,7 @@ const MAP_GLSL = /* glsl */ `
 			// The edge carries the most pigment, and soaks in toward the middle.
 			img = photo * (1.0 - bleed * 0.45);
 			alpha = smoothstep(0.0, 0.04, wet);
-		} else if (uMode < 12.5) {
+#elif REVEAL_MODE == 12
 			// glitch
 			float k = smoothstep(0.0, 1.0, t);
 			float noisy = 1.0 - smoothstep(0.6, 1.0, t);
@@ -369,7 +371,7 @@ const MAP_GLSL = /* glsl */ `
 			vec2 block = floor(uv * vec2(8.0, 14.0));
 			if (revealHash(block + tick + uSeed) > k * 1.25) discard;
 			img *= 0.85 + 0.15 * step(0.5, fract(uv.y * 120.0)) * noisy + 0.15 * (1.0 - noisy);
-		} else {
+#else
 			// streak: smeared back along the direction of travel (up the
 			// cover, for a record rising into view), easing to sharp.
 			float k = smoothstep(0.0, 1.0, t);
@@ -388,6 +390,7 @@ const MAP_GLSL = /* glsl */ `
 			float front = t * 1.5 - down;
 			alpha = smoothstep(0.0, 0.08 + len, front) * smoothstep(0.0, 0.2, t);
 			if (alpha <= 0.0) discard;
+#endif
 		}
 
 		diffuseColor.rgb *= img;
@@ -414,7 +417,6 @@ export function makeCoverMaterial(
 	material.userData.reveal = 0;
 	const uniforms: RevealUniforms = {
 		uReveal: { value: 0 },
-		uMode: { value: 0 },
 		uDir: { value: 1 },
 		uFade: { value: 1 },
 		uPlaceholder: { value: new THREE.Color(placeholder) },
@@ -432,7 +434,9 @@ export function makeCoverMaterial(
 				"#include <emissivemap_fragment>\ntotalEmissiveRadiance += coverSelf * uSelfLight;",
 			);
 	};
-	material.customProgramCacheKey = () => "cover-reveal-styles";
+	material.defines = { REVEAL_MODE: 0 };
+	material.customProgramCacheKey = () =>
+		`cover-reveal-${material.defines?.REVEAL_MODE}`;
 	return material;
 }
 
@@ -469,8 +473,11 @@ export function setCoverStyle(
 	material: THREE.MeshStandardMaterial,
 	style: RevealStyle,
 ) {
-	const u = uniformsOf(material);
-	if (u) u.uMode.value = REVEAL_STYLES.indexOf(style);
+	const mode = REVEAL_STYLES.indexOf(style);
+	material.defines ??= {};
+	if (material.defines.REVEAL_MODE === mode) return;
+	material.defines.REVEAL_MODE = mode;
+	material.needsUpdate = true;
 }
 
 /** Theme changes: the placeholder colour (records with no photo). */

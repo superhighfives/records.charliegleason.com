@@ -1,12 +1,12 @@
 import { Stats } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
-	DepthOfField,
 	EffectComposer,
+	TiltShift,
 	ToneMapping,
 	Vignette,
 } from "@react-three/postprocessing";
-import { type DepthOfFieldEffect, ToneMappingMode } from "postprocessing";
+import { KernelSize, ToneMappingMode } from "postprocessing";
 import {
 	memo,
 	useCallback,
@@ -214,11 +214,6 @@ export type WallSceneProps = {
  * now-showing bar), and that must not re-render 300 tiles with it.
  */
 export default memo(function WallScene(props: WallSceneProps) {
-	// The point depth of field keeps sharp. The frame loop moves it with the
-	// camera; reading the camera's position at render instead caught it at its
-	// initial z, before the loop placed it, and left the whole wall out of
-	// focus.
-	const [focusTarget] = useState(() => new THREE.Vector3());
 	const dpr = useBudgetDpr();
 	return (
 		<Canvas
@@ -230,7 +225,7 @@ export default memo(function WallScene(props: WallSceneProps) {
 			// `Effects`), not in the renderer.
 			flat
 		>
-			<Wall {...props} focusTarget={focusTarget} />
+			<Wall {...props} />
 			<Effects
 				// Past ~1.5x the pixels are fine enough that multisampling
 				// (four samples a pixel, on the biggest buffer in the frame)
@@ -238,7 +233,6 @@ export default memo(function WallScene(props: WallSceneProps) {
 				multisample={!props.isTouch && dpr < 1.5}
 				isTouch={props.isTouch}
 				dark={props.theme.dark}
-				focusTarget={focusTarget}
 				dof={props.dof ?? true}
 			/>
 			{props.showStats && <Stats />}
@@ -251,39 +245,14 @@ function Effects({
 	multisample,
 	isTouch,
 	dark,
-	focusTarget,
 	dof,
 }: {
 	multisample: boolean;
 	isTouch: boolean;
 	dark: boolean;
-	focusTarget: THREE.Vector3;
-	/** `?nodof` turns depth of field off, for comparing. */
+	/** `?nodof` turns the focus blur off, for comparing. */
 	dof: boolean;
 }) {
-	// R3F copies a vector prop into the effect's own target once, at render,
-	// rather than keeping a reference — so the moving focus point has to be
-	// copied in every frame (after `Wall`'s loop has placed it).
-	const dofRef = useRef<DepthOfFieldEffect>(null);
-	useFrame(() => {
-		const effect = dofRef.current;
-		if (!effect) return;
-		effect.target?.copy(focusTarget);
-		// postprocessing measures focus as straight-line distance from the
-		// camera, so on a wide screen the outer columns of the flat wall —
-		// a few units further away on the diagonal — fell out of focus. A
-		// real lens focuses on a plane: measure depth along the view instead,
-		// so only rows curving back from the wall soften.
-		const coc = effect.cocMaterial;
-		if (!coc.userData.planar) {
-			coc.fragmentShader = coc.fragmentShader.replace(
-				"length(viewPosition)",
-				"-viewPosition.z",
-			);
-			coc.userData.planar = true;
-			coc.needsUpdate = true;
-		}
-	});
 	// Neutral (Khronos) tone mapping keeps colours faithful — the ACES default
 	// greyed and desaturated covers, and turned the light theme's white wall
 	// to mud — and the white point puts its whites back at true white.
@@ -304,15 +273,19 @@ function Effects({
 			</EffectComposer>
 		);
 	}
+	// The rows curving away at the top and bottom of the view soften, the
+	// middle stays sharp. That's a depth of field in effect, but a real one
+	// (postprocessing's DepthOfField: a circle-of-confusion pass, a blur of
+	// it, a mask and near/far bokeh passes) was the single biggest cost on
+	// the wall — more than halving the frame rate. On this wall the blur
+	// follows screen height anyway, so a tilt-shift (one blur, mixed in by a
+	// focus band) looks near the same at a fraction of the cost.
 	return (
 		<EffectComposer multisampling={multisample ? 4 : 0}>
-			<DepthOfField
-				ref={dofRef}
-				target={focusTarget}
-				// Wide enough that the middle of the screen — and a record lifted
-				// off it — stays sharp; only rows curving away soften.
-				focusRange={1.6}
-				bokehScale={isTouch ? 2 : 3}
+			<TiltShift
+				focusArea={0.5}
+				feather={0.3}
+				kernelSize={isTouch ? KernelSize.MEDIUM : KernelSize.LARGE}
 				resolutionScale={isTouch ? 0.35 : 0.5}
 			/>
 			{finish}
@@ -391,7 +364,6 @@ type Shared = {
 };
 
 function Wall({
-	focusTarget,
 	records,
 	slot,
 	onActiveChange,
@@ -402,7 +374,7 @@ function Wall({
 	theme,
 	reveal,
 	isTouch,
-}: WallSceneProps & { focusTarget: THREE.Vector3 }) {
+}: WallSceneProps) {
 	const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
 	const size = useThree((s) => s.size);
 	// The wall spans the slot's full width (the page's content column, same
@@ -979,9 +951,6 @@ function Wall({
 		);
 		lookAt.set(panelShift.current, camY, 0);
 		camera.lookAt(lookAt);
-		// Focus just in front of the wall: between the records on it and one
-		// lifted off it, so both stay sharp.
-		focusTarget.set(lookAt.x, camY, LIFT_Z / 2);
 		camera.updateMatrixWorld();
 
 		const centerRow = Math.round(-camY / PITCH);
