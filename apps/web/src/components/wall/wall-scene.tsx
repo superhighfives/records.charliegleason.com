@@ -579,6 +579,8 @@ function Wall({
 		/** Where the spotlight was when the move began: it travels with it. */
 		lightX: 0,
 		lightY: 0,
+		/** How far the lights were down when the move began. */
+		down: 0,
 	});
 	/** Dragged offset while zoomed in on a record, in world units. */
 	const pan = useRef({ x: 0, y: 0 });
@@ -929,6 +931,7 @@ function Wall({
 				tw.lightX = spot.current.position.x;
 				tw.lightY = spot.current.position.y - 0.6;
 			}
+			tw.down = lightsDown.current;
 		}
 		tw.t = reducedMotion ? 1 : Math.min(1, tw.t + dt / CAMERA_MOVE_S);
 		const camEase = easeInOutCubic(tw.t);
@@ -1022,15 +1025,10 @@ function Wall({
 		lightY = Math.min(0, Math.max(-(rows - 1) * PITCH, lightY));
 		const onWall =
 			isTouch || focused >= 0 || pointer.current.overSlot ? 1 : 0.35;
-		// Sprung (eases in as well as out), and paced with the camera's move.
-		lightsDown.current = smoothDamp(
-			lightsDown.current,
-			focused >= 0 ? 1 : 0,
-			springs.current,
-			"lightsDown",
-			0.4,
-			dt,
-		);
+		// On the camera's own ease: the room dims (and the spotlight
+		// brightens) exactly as the camera moves in, finishing as it arrives,
+		// rather than snapping bright ahead of it.
+		lightsDown.current = tw.down + ((focused >= 0 ? 1 : 0) - tw.down) * camEase;
 		const down = lightsDown.current;
 		// Lights down: the room dims (less so in light mode, where a near-black
 		// wall would read as broken), and the spotlight tightens to the
@@ -1074,10 +1072,12 @@ function Wall({
 			s.target.updateMatrixWorld();
 			s.intensity = smoothDamp(
 				s.intensity,
-				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall * (1 + 0.6 * down),
+				// A modest lift on the selected record — a big one read as it
+				// flaring up the moment it was clicked.
+				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall * (1 + 0.35 * down),
 				springs.current,
 				"intensity",
-				0.3,
+				0.15,
 				dt,
 			);
 			// Sprung, so moving between a 1×1 and a 2×2 widens the beam smoothly
