@@ -2,11 +2,10 @@ import { Stats } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
 	EffectComposer,
-	TiltShift,
 	ToneMapping,
 	Vignette,
 } from "@react-three/postprocessing";
-import { KernelSize, ToneMappingMode } from "postprocessing";
+import { ToneMappingMode } from "postprocessing";
 import {
 	memo,
 	useCallback,
@@ -93,7 +92,7 @@ const WALL_Z = -0.32;
  * out — and with the torch following the pointer, each record it crossed
  * flared from dim to bright.
  */
-const SPOT_DARK = 11;
+const SPOT_DARK = 7;
 /**
  * The torch's cone. Its soft edge (penumbra 1) fades across the whole cone,
  * so a wider one spreads the fade: records brighten gradually as the torch
@@ -206,7 +205,6 @@ export type WallSceneProps = {
 	reveal: RevealConfig;
 	isTouch: boolean;
 	showStats?: boolean;
-	dof?: boolean;
 };
 
 /**
@@ -231,9 +229,7 @@ export default memo(function WallScene(props: WallSceneProps) {
 				// (four samples a pixel, on the biggest buffer in the frame)
 				// costs far more than it shows.
 				multisample={!props.isTouch && dpr < 1.5}
-				isTouch={props.isTouch}
 				dark={props.theme.dark}
-				dof={props.dof ?? true}
 			/>
 			{props.showStats && <Stats />}
 			<SceneStatsProbe />
@@ -243,15 +239,10 @@ export default memo(function WallScene(props: WallSceneProps) {
 
 function Effects({
 	multisample,
-	isTouch,
 	dark,
-	dof,
 }: {
 	multisample: boolean;
-	isTouch: boolean;
 	dark: boolean;
-	/** `?nodof` turns the focus blur off, for comparing. */
-	dof: boolean;
 }) {
 	// Neutral (Khronos) tone mapping keeps colours faithful — the ACES default
 	// greyed and desaturated covers, and turned the light theme's white wall
@@ -266,36 +257,20 @@ function Effects({
 			<primitive object={whitePoint} />
 		</>
 	);
-	if (!dof) {
-		return (
-			<EffectComposer multisampling={multisample ? 4 : 0}>
-				{finish}
-			</EffectComposer>
-		);
-	}
-	// The rows curving away at the top and bottom of the view soften, the
-	// middle stays sharp. That's a depth of field in effect, but a real one
-	// (postprocessing's DepthOfField: a circle-of-confusion pass, a blur of
-	// it, a mask and near/far bokeh passes) was the single biggest cost on
-	// the wall — more than halving the frame rate. On this wall the blur
-	// follows screen height anyway, so a tilt-shift (one blur, mixed in by a
-	// focus band) looks near the same at a fraction of the cost.
+	// No focus blur. Depth of field (and then a cheaper tilt-shift) softened
+	// the rows curving away, but blurring bright covers on the dark wall bled
+	// them into glowing halos and hazed a large selected record — and it was
+	// the single biggest cost on the wall.
 	return (
 		<EffectComposer multisampling={multisample ? 4 : 0}>
-			<TiltShift
-				focusArea={0.5}
-				feather={0.3}
-				kernelSize={isTouch ? KernelSize.MEDIUM : KernelSize.LARGE}
-				resolutionScale={isTouch ? 0.35 : 0.5}
-			/>
 			{finish}
 		</EffectComposer>
 	);
 }
 
 /**
- * Most device pixels the canvas draws. Every full-screen pass (depth of
- * field, vignette, tone mapping) pays per pixel, and a large retina display
+ * Most device pixels the canvas draws. Every full-screen pass (vignette,
+ * tone mapping) pays per pixel, and a large retina display
  * at 2x is 12M+ of them: a 2305×1363 window measured 25fps at 2x, GPU-bound.
  * Capping the total instead of the ratio keeps small screens at full
  * sharpness and scales big ones back.
@@ -526,8 +501,10 @@ function Wall({
 	const hemi = useRef<THREE.HemisphereLight>(null);
 	// Touch gets more fill light: its spotlight can't follow a pointer, so it
 	// can't sweep light over the rows above and below the middle.
-	const ambientBase = (theme.dark ? 0.4 : 1) + (isTouch ? 0.35 : 0);
-	const hemiBase = theme.dark ? 0.3 : 0.45;
+	// A soft, even fill over the whole wall, so covers keep their detail
+	// rather than only reading where the torch lands.
+	const ambientBase = (theme.dark ? 0.6 : 1) + (isTouch ? 0.35 : 0);
+	const hemiBase = theme.dark ? 0.4 : 0.45;
 	// Pure black / white: the wall is the page's background here.
 	const wallColor = theme.dark ? "#000000" : "#ffffff";
 	const sun = useRef<THREE.DirectionalLight>(null);
@@ -1011,7 +988,7 @@ function Wall({
 		// Lights down: the room dims (less so in light mode, where a near-black
 		// wall would read as broken), and the spotlight tightens to the
 		// selected record's size and brightens.
-		const dim = 1 - down * (theme.dark ? 0.8 : 0.5);
+		const dim = 1 - down * (theme.dark ? 0.55 : 0.4);
 		roomDim = dim;
 		if (ambient.current) ambient.current.intensity = ambientBase * dim;
 		if (hemi.current) hemi.current.intensity = hemiBase * dim;
@@ -1052,7 +1029,7 @@ function Wall({
 				s.intensity,
 				// A modest lift on the selected record — a big one read as it
 				// flaring up the moment it was clicked.
-				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall * (1 + 0.35 * down),
+				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall * (1 + 0.15 * down),
 				springs.current,
 				"intensity",
 				0.15,

@@ -44,14 +44,12 @@ export function WallGrid({
 	const [env, setEnv] = useState<{
 		isTouch: boolean;
 		showStats: boolean;
-		dof: boolean;
 	}>();
 
 	useEffect(() => {
 		setEnv({
 			isTouch: window.matchMedia("(hover: none) and (pointer: coarse)").matches,
 			showStats: new URLSearchParams(window.location.search).has("stats"),
-			dof: !new URLSearchParams(window.location.search).has("nodof"),
 		});
 	}, []);
 	useParallax();
@@ -94,7 +92,6 @@ export function WallGrid({
 								reveal={reveal}
 								isTouch={env.isTouch}
 								showStats={env.showStats}
-								dof={env.dof}
 							/>
 						</Suspense>
 					</div>,
