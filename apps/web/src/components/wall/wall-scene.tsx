@@ -89,9 +89,18 @@ const DISC_SLIDE = 0.4;
 const WALL_Z = -0.32;
 /**
  * Spotlight peak. Kept modest: a lifted record sits closer to the light, so
- * it's hit harder than the wall around it, and a hotter spot washed covers out.
+ * it's hit harder than the wall around it, and a hotter spot washed covers
+ * out — and with the torch following the pointer, each record it crossed
+ * flared from dim to bright.
  */
-const SPOT_DARK = 17;
+const SPOT_DARK = 11;
+/**
+ * The torch's cone. Its soft edge (penumbra 1) fades across the whole cone,
+ * so a wider one spreads the fade: records brighten gradually as the torch
+ * nears rather than snapping lit as it crosses them.
+ */
+const SPOT_ANGLE = 0.85;
+const SPOT_ANGLE_TOUCH = 0.95;
 const ZERO2 = new THREE.Vector2();
 /** How much each cover lights itself, per theme — see `uSelfLight`. */
 const SELF_LIGHT_DARK = 0.55;
@@ -128,7 +137,7 @@ function smoothDamp(
 function easeInOutCubic(t: number): number {
 	return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 }
-const SPOT_LIGHT = 4;
+const SPOT_LIGHT = 3;
 /**
  * Light mode is a daylit gallery rather than a dark room: a white wall, soft
  * daylight from the upper left so every record casts a gentle shadow, and
@@ -1084,7 +1093,11 @@ function Wall({
 			// instead of snapping it to the new size.
 			s.angle = smoothDamp(
 				s.angle,
-				THREE.MathUtils.lerp(isTouch ? 0.9 : 0.6, focusAngle, down),
+				THREE.MathUtils.lerp(
+					isTouch ? SPOT_ANGLE_TOUCH : SPOT_ANGLE,
+					focusAngle,
+					down,
+				),
 				springs.current,
 				"angle",
 				0.35,
@@ -1357,7 +1370,7 @@ function Wall({
 				// Nearly neutral: a warmer beam tinted every cover amber.
 				color={theme.dark ? "#fff7ee" : "#ffffff"}
 				intensity={theme.dark ? SPOT_DARK : SPOT_LIGHT}
-				angle={isTouch ? 0.9 : 0.6}
+				angle={isTouch ? SPOT_ANGLE_TOUCH : SPOT_ANGLE}
 				penumbra={1}
 				distance={12}
 				decay={1.6}
