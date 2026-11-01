@@ -1022,10 +1022,13 @@ function Wall({
 		lightY = Math.min(0, Math.max(-(rows - 1) * PITCH, lightY));
 		const onWall =
 			isTouch || focused >= 0 || pointer.current.overSlot ? 1 : 0.35;
-		lightsDown.current = THREE.MathUtils.damp(
+		// Sprung (eases in as well as out), and paced with the camera's move.
+		lightsDown.current = smoothDamp(
 			lightsDown.current,
 			focused >= 0 ? 1 : 0,
-			3,
+			springs.current,
+			"lightsDown",
+			0.4,
 			dt,
 		);
 		const down = lightsDown.current;
@@ -1069,10 +1072,12 @@ function Wall({
 			s.position.z = 3.4;
 			s.target.position.set(s.position.x, s.position.y - 0.6, 0);
 			s.target.updateMatrixWorld();
-			s.intensity = THREE.MathUtils.damp(
+			s.intensity = smoothDamp(
 				s.intensity,
 				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall * (1 + 0.6 * down),
-				4,
+				springs.current,
+				"intensity",
+				0.3,
 				dt,
 			);
 			// Sprung, so moving between a 1×1 and a 2×2 widens the beam smoothly
@@ -1251,14 +1256,46 @@ function Wall({
 				// seen.)
 				setCoverDirection(cover, dyView < 0 ? 1 : -1);
 			}
-			// The selected record is always fully shown.
-			if (focused === i && cover.map) shown = 1;
+			// The selected record is always fully shown — eased the rest of
+			// the way if it was mid-reveal, not snapped there.
+			if (focused === i && cover.map) {
+				cover.userData.focusShow = smoothDamp(
+					cover.userData.focusShow ?? shown,
+					1,
+					springs.current,
+					`show${i}`,
+					0.3,
+					dt,
+				);
+				shown = Math.max(shown, cover.userData.focusShow);
+			} else {
+				cover.userData.focusShow = undefined;
+				springs.current[`show${i}`] = 0;
+			}
 			if (shown !== cover.userData.shown) {
 				cover.userData.shown = shown;
 				setCoverReveal(cover, shown);
 			}
 			const goal = hovered.current === i ? 1 : 0;
-			const l = THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
+			// A hover answers quickly; the selected record (and the one being
+			// let go of) eases forward and back with the camera's move rather
+			// than jumping at the viewer ahead of it.
+			if (focused === i) cover.userData.liftEasing = true;
+			const easing = cover.userData.liftEasing === true;
+			const l = easing
+				? smoothDamp(
+						lift.current[i],
+						goal,
+						springs.current,
+						`lift${i}`,
+						0.32,
+						dt,
+					)
+				: THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
+			if (easing && focused !== i && Math.abs(l - goal) < 0.001) {
+				cover.userData.liftEasing = false;
+				springs.current[`lift${i}`] = 0;
+			}
 			lift.current[i] = l;
 			place(h, anim, pos.z, l, anim.presence);
 		}
