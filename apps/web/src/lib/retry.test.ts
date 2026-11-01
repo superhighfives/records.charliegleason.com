@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+	isTransientD1Error,
 	isTransientReplicateError,
 	NonRetryableError,
 	withRetry,
@@ -96,5 +97,47 @@ describe("isTransientReplicateError", () => {
 				),
 			),
 		).toBe(false);
+	});
+});
+
+describe("withRetry with shouldRetry", () => {
+	it("retries only the errors shouldRetry accepts", async () => {
+		const op = vi
+			.fn()
+			.mockRejectedValueOnce(
+				new Error("D1_ERROR: internal error; reference = x"),
+			)
+			.mockResolvedValue("ok");
+		await expect(
+			withRetry(op, { ...opts, shouldRetry: isTransientD1Error }),
+		).resolves.toBe("ok");
+		expect(op).toHaveBeenCalledTimes(2);
+	});
+
+	it("rethrows any other error at once", async () => {
+		const op = vi.fn().mockRejectedValue(new Error("no such table: settings"));
+		await expect(
+			withRetry(op, { ...opts, shouldRetry: isTransientD1Error }),
+		).rejects.toThrow("no such table");
+		expect(op).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("isTransientD1Error", () => {
+	it("spots D1's internal error, including wrapped as a cause (as Drizzle does)", () => {
+		const d1 = new Error("D1_ERROR: internal error; reference = 9avbvfbtnd30");
+		const wrapped = new Error('Failed query: select "value" from "settings"', {
+			cause: d1,
+		});
+		expect(isTransientD1Error(d1)).toBe(true);
+		expect(isTransientD1Error(wrapped)).toBe(true);
+	});
+
+	it("leaves real query failures alone", () => {
+		const wrapped = new Error("Failed query: select", {
+			cause: new Error("D1_ERROR: no such table: settings"),
+		});
+		expect(isTransientD1Error(wrapped)).toBe(false);
+		expect(isTransientD1Error("nope")).toBe(false);
 	});
 });
