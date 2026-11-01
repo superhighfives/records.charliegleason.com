@@ -12,6 +12,7 @@ import {
 	filterSettingsSchema,
 	normalizeFilterSettings,
 } from "#/lib/filter-settings";
+import { isTransientD1Error, withRetry } from "#/lib/retry";
 
 /**
  * The public filter strip's config. Public (the collection page reads it)
@@ -22,11 +23,17 @@ export const getFilterSettings = createServerFn({ method: "GET" }).handler(() =>
 	Sentry.startSpan({ name: "getFilterSettings" }, async () => {
 		try {
 			const db = getDb(env.DB);
-			const [row] = await db
-				.select({ value: settings.value })
-				.from(settings)
-				.where(eq(settings.key, FILTER_SETTINGS_KEY))
-				.limit(1);
+			// D1 sometimes fails a read with a transient internal error
+			// (RECORDS-2A); one more try a moment later gets past it.
+			const [row] = await withRetry(
+				() =>
+					db
+						.select({ value: settings.value })
+						.from(settings)
+						.where(eq(settings.key, FILTER_SETTINGS_KEY))
+						.limit(1),
+				{ attempts: 2, baseMs: 150, shouldRetry: isTransientD1Error },
+			);
 			return normalizeFilterSettings(row ? JSON.parse(row.value) : null);
 		} catch (err) {
 			Sentry.captureException(err);
