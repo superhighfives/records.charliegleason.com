@@ -362,10 +362,12 @@ export function makeVinylTexture() {
 	const ctx = canvas.getContext("2d");
 	if (ctx) {
 		const c = size / 2;
-		ctx.fillStyle = "#111";
+		ctx.fillStyle = "#151515";
 		ctx.fillRect(0, 0, size, size);
+		// Bright enough to survive tone mapping and a dim room: at near-black
+		// levels the rings read as a flat black disc.
 		for (let r = c; r > c * 0.36; r -= 1.5) {
-			const shade = 22 + Math.round(Math.sin(r * 0.9) * 6 + (r % 7) * 1.5);
+			const shade = 42 + Math.round(Math.sin(r * 0.9) * 14 + (r % 7) * 3);
 			ctx.strokeStyle = `rgb(${shade},${shade},${shade})`;
 			ctx.lineWidth = 1;
 			ctx.beginPath();
@@ -376,8 +378,8 @@ export function makeVinylTexture() {
 		for (const start of [-Math.PI * 0.62, Math.PI * 0.38]) {
 			const wedge = ctx.createRadialGradient(c, c, c * 0.38, c, c, c);
 			wedge.addColorStop(0, "rgba(255,255,255,0)");
-			wedge.addColorStop(0.5, "rgba(255,255,255,0.09)");
-			wedge.addColorStop(1, "rgba(255,255,255,0.03)");
+			wedge.addColorStop(0.5, "rgba(255,255,255,0.22)");
+			wedge.addColorStop(1, "rgba(255,255,255,0.08)");
 			ctx.fillStyle = wedge;
 			ctx.beginPath();
 			ctx.moveTo(c, c);

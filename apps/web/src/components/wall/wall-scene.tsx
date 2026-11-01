@@ -39,6 +39,7 @@ import {
 	setCoverFade,
 	setCoverReveal,
 	setCoverSelfLight,
+	setCoverSpan,
 	setCoverStyle,
 	setCoverTheme,
 } from "./cover-reveal";
@@ -1203,6 +1204,7 @@ function Wall({
 				(theme.dark ? SELF_LIGHT_DARK : SELF_LIGHT_LIGHT) * glow,
 			);
 			setCoverStyle(cover, reveal.style);
+			setCoverSpan(cover, anim.spanScale);
 			// Where the record sits on screen: -1 at the bottom edge, 1 at the
 			// top; `reach` is its half-height on the same scale.
 			const dyView = (anim.y - camY) / (viewHeight / 2);
@@ -1457,6 +1459,16 @@ const Tile = memo(function Tile({
 		};
 	}, [slipMaterial, record.notes, record.id]);
 	const scale = SIZE_SCALE[record.size ?? ""] ?? 1;
+	// Each slip is tucked in somewhere of its own along the sleeve's top
+	// edge, at a slight lean of its own — seeded by the record, so it's the
+	// same every visit — rather than every note in the same spot.
+	const [slipX, slipTilt] = useMemo(() => {
+		const a = Math.sin(record.id * 12.9898) * 43758.5453;
+		const b = Math.sin(record.id * 78.233) * 12345.678;
+		const u = a - Math.floor(a);
+		const v = b - Math.floor(b);
+		return [(u - 0.5) * 0.52, (v - 0.5) * 0.16];
+	}, [record.id]);
 	// Created once per record; theme changes are applied by `Wall`.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation
 	const cover = useMemo(() => {
@@ -1477,7 +1489,7 @@ const Tile = memo(function Tile({
 			roughnessMap: shared.grooves,
 			emissive: "#ffffff",
 			emissiveMap: shared.vinyl,
-			emissiveIntensity: 0.5,
+			emissiveIntensity: 0.8,
 			transparent: !!record.colorTranslucent,
 			opacity: record.colorTranslucent ? 0.72 : 1,
 		});
@@ -1550,8 +1562,8 @@ const Tile = memo(function Tile({
 					ref={slip}
 					geometry={shared.slipGeometry}
 					material={slipMaterial ?? shared.slip}
-					position={[0.16, TILE / 2 + SLIP_PEEK - SLIP_H / 2, 0]}
-					rotation={[0, 0, -0.07]}
+					position={[slipX, TILE / 2 + SLIP_PEEK - SLIP_H / 2, 0]}
+					rotation={[0, 0, slipTilt]}
 					castShadow
 				/>
 			)}

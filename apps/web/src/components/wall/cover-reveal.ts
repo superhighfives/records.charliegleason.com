@@ -84,6 +84,11 @@ type RevealUniforms = {
 	 * to their true colours, with the room's lighting as shading on top.
 	 */
 	uSelfLight: { value: number };
+	/**
+	 * How many tiles across the record spans (2 for a 2×2), so effects with a
+	 * grain (dust) keep it the same size on screen at any record size.
+	 */
+	uSpan: { value: number };
 };
 
 const HEADER_GLSL = /* glsl */ `
@@ -96,6 +101,7 @@ const HEADER_GLSL = /* glsl */ `
 	uniform vec3 uPlaceholder;
 	uniform float uSeed;
 	uniform float uSelfLight;
+	uniform float uSpan;
 	float revealHash(vec2 p) {
 		return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 	}
@@ -318,7 +324,8 @@ const MAP_GLSL = /* glsl */ `
 			alpha = density;
 #elif REVEAL_MODE == 10
 			// dust
-			float grains = 110.0;
+			// Grains a constant size on screen, however big the record.
+			float grains = 110.0 * uSpan;
 			vec2 cell = floor(uv * grains);
 			vec2 within = fract(uv * grains) - 0.5;
 			// The leading edge settles first, with scatter.
@@ -328,8 +335,9 @@ const MAP_GLSL = /* glsl */ `
 			float r = mix(0.22, 0.75, smoothstep(0.0, 0.25, since));
 			float fill = smoothstep(0.82, 1.0, t);
 			if (length(within) > r && fill < 0.5) discard;
-			vec3 photo = revealSample(map, (cell + 0.5) / grains);
-			photo = mix(photo, revealSample(map, uv), fill);
+			// Each grain shows the picture beneath it, not one flat colour: a
+			// flat colour per grain read as a coarse mosaic on a big record.
+			vec3 photo = revealSample(map, uv);
 			float glint = 1.0 - smoothstep(0.0, 0.12, since);
 			img = photo + glint * 0.6;
 #elif REVEAL_MODE == 11
@@ -422,6 +430,7 @@ export function makeCoverMaterial(
 		uPlaceholder: { value: new THREE.Color(placeholder) },
 		uSeed: { value: (seed * 12.9898) % 100 },
 		uSelfLight: { value: 0 },
+		uSpan: { value: 1 },
 	};
 	material.userData.revealUniforms = uniforms;
 	material.onBeforeCompile = (shader) => {
@@ -466,6 +475,15 @@ export function setCoverDirection(
 ) {
 	const u = uniformsOf(material);
 	if (u) u.uDir.value = dir;
+}
+
+/** How many tiles across the record spans — see `uSpan`. */
+export function setCoverSpan(
+	material: THREE.MeshStandardMaterial,
+	span: number,
+) {
+	const u = uniformsOf(material);
+	if (u) u.uSpan.value = span;
 }
 
 /** Picks the transition style. */
