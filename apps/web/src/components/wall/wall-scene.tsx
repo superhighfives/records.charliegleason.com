@@ -146,11 +146,17 @@ const BOTTOM_PAD = 0.45;
 const SLIP_W = 0.4;
 const SLIP_H = 0.3;
 /** How far the slip pokes above the sleeve at rest, and extra on hover. */
-const SLIP_PEEK = 0.09;
+const SLIP_PEEK = 0.105;
 const SLIP_PULL = 0.07;
 /** Clearance kept between the selected record and the record panel's edge. */
 /** Most the camera closes in on a selected record (a share of its distance). */
 const FOCUS_ZOOM = 0.38;
+/** The camera's move to (and between, and away from) a selected record. */
+const CAMERA_MOVE_S = 0.9;
+/** The record panel's width (`sm:max-w-md`), for framing beside it. */
+const PANEL_PX = 448;
+/** How far the pointer moves before a press on the wall is a drag. */
+const DRAG_PX = 5;
 
 const SIZE_SCALE: Record<string, number> = {
 	'12"': 1,
@@ -177,6 +183,8 @@ export type WallSceneProps = {
 	slot: HTMLElement;
 	onActiveChange: (index: number | null) => void;
 	onOpen: (record: PublicRecord) => void;
+	/** Closes the record panel (a click on the empty wall while it's open). */
+	onClose: () => void;
 	/**
 	 * The record the panel has open, if any: it stays lifted and lit, the page
 	 * scrolls to keep it in view as the panel pages, and the camera pans right
@@ -379,6 +387,7 @@ function Wall({
 	slot,
 	onActiveChange,
 	onOpen,
+	onClose,
 	focusedRecordId,
 	onContentHeight,
 	theme,
@@ -549,11 +558,25 @@ function Wall({
 	/** Camera travel down the wall, in world units (drives the dust). */
 	const travel = useRef(0);
 	const getTravel = useCallback(() => travel.current, []);
-	/** Rightward camera pan that keeps the selected record clear of the panel. */
+	/** The camera's x across the wall (centred on a selected record). */
 	const panelShift = useRef(0);
-	/** Camera moves toward the selected record: down the wall, and in. */
-	const focusRise = useRef(0);
+	/** How far the camera has moved in on a selected record (0–1 of its distance). */
 	const zoom = useRef(0);
+	/**
+	 * The camera's place — x, y down the wall, zoom — and the one eased move
+	 * between where it was and where it's going: following the scroll, or
+	 * framing a selected record. One tween for all three keeps the move a
+	 * straight, smooth ease; separate springs (and the page scrolling under
+	 * them) drew it as an S.
+	 */
+	const cam = useRef({ x: 0, y: Number.NaN, zoom: 0 });
+	const camTween = useRef({ x: 0, y: 0, zoom: 0, t: 1, key: -1 });
+	/** Dragged offset while zoomed in on a record, in world units. */
+	const pan = useRef({ x: 0, y: 0 });
+	/** A record picked by letting go of a drag, until the route catches up. */
+	const pendingFocus = useRef<number | null>(null);
+	/** Where on the wall a selected record is framed (for picking the nearest). */
+	const frameOffset = useRef(0);
 
 	const focusedIndex = useMemo(
 		() =>
@@ -659,7 +682,11 @@ function Wall({
 		[raycaster, camera, viewHeight],
 	);
 
-	// Pointer + click, from `window` (the page covers the canvas).
+	// Pointer, from `window` (the page covers the canvas; with a record open,
+	// the panel's transparent overlay does). A press that doesn't move is a
+	// click: on a record, open it; on the empty wall with a record open,
+	// close it. Zoomed in on a record, a press that moves drags the camera
+	// around, and letting go selects the record nearest the middle.
 	useEffect(() => {
 		if (isTouch) return;
 		const toNdc = (e: MouseEvent) =>
@@ -667,23 +694,92 @@ function Wall({
 				(e.clientX / window.innerWidth) * 2 - 1,
 				-(e.clientY / window.innerHeight) * 2 + 1,
 			);
+		const onWall = (target: EventTarget | null) =>
+			target === slot ||
+			(target instanceof Element &&
+				target.closest('[data-slot="sheet-overlay"]') != null);
+		let press: { x: number; y: number; moved: boolean } | null = null;
+		const onDown = (e: PointerEvent) => {
+			if (e.button !== 0 || !onWall(e.target)) return;
+			press = { x: e.clientX, y: e.clientY, moved: false };
+		};
 		const onMove = (e: PointerEvent) => {
 			toNdc(e);
 			pointer.current.overSlot = e.target === slot;
+			if (!press || focusedRef.current < 0) return;
+			if (
+				!press.moved &&
+				Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_PX
+			) {
+				return;
+			}
+			press.moved = true;
+			document.documentElement.dataset.wallDragging = "";
+			// One screen pixel's worth of wall, at the current zoom.
+			const k = unitsPerPx * (1 - zoom.current);
+			const lay = layoutRef.current;
+			const p = pan.current;
+			const c = cam.current;
+			p.x -= e.movementX * k;
+			p.y += e.movementY * k;
+			// Stay over the wall.
+			const minY = Math.min(0, ...lay.map((l) => l.y));
+			p.x = THREE.MathUtils.clamp(
+				p.x,
+				-viewWidth / 2 - c.x,
+				viewWidth / 2 - c.x,
+			);
+			p.y = THREE.MathUtils.clamp(p.y, minY - c.y, -c.y);
 		};
-		const onClick = (e: MouseEvent) => {
-			if (e.target !== slot) return;
+		const onUp = (e: PointerEvent) => {
+			if (!press) return;
+			const { moved } = press;
+			press = null;
+			delete document.documentElement.dataset.wallDragging;
+			if (moved) {
+				// Fold the drag into the camera, then frame the record nearest
+				// the middle of the view from there.
+				const c = cam.current;
+				const p = pan.current;
+				const tw = camTween.current;
+				c.x += p.x;
+				c.y += p.y;
+				p.x = 0;
+				p.y = 0;
+				const cx = c.x + frameOffset.current;
+				let nearest = -1;
+				let best = Number.POSITIVE_INFINITY;
+				layoutRef.current.forEach((l, i) => {
+					const d = Math.hypot(l.x - cx, l.y - c.y);
+					if (d < best) {
+						best = d;
+						nearest = i;
+					}
+				});
+				if (nearest < 0) return;
+				tw.key = -2; // restart the move, even back to the same record
+				pendingFocus.current = nearest;
+				if (nearest !== focusedRef.current) {
+					onOpen(recordsRef.current[nearest]);
+				}
+				return;
+			}
+			if (!onWall(e.target)) return;
 			const index = pick(toNdc(e));
 			if (index != null) onOpen(recordsRef.current[index]);
+			else if (focusedRef.current >= 0) onClose();
 		};
+		window.addEventListener("pointerdown", onDown);
 		window.addEventListener("pointermove", onMove, { passive: true });
-		window.addEventListener("click", onClick);
+		window.addEventListener("pointerup", onUp);
 		return () => {
+			window.removeEventListener("pointerdown", onDown);
 			window.removeEventListener("pointermove", onMove);
-			window.removeEventListener("click", onClick);
+			window.removeEventListener("pointerup", onUp);
+			delete document.documentElement.dataset.wallDragging;
 			document.body.style.cursor = "";
 		};
-	}, [isTouch, slot, pick, onOpen]);
+	}, [isTouch, slot, pick, onOpen, onClose, unitsPerPx, viewWidth]);
 
 	const getTarget = useCallback((i: number) => handles.current[i], []);
 	const textures = useTextureStream(records, getTarget, {
@@ -750,62 +846,64 @@ function Wall({
 		const slotTop = slot.getBoundingClientRect().top;
 		const scrollY =
 			TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
-		const focused = focusedRef.current;
+		if (pendingFocus.current === focusedRef.current) {
+			pendingFocus.current = null;
+		}
+		const focused = pendingFocus.current ?? focusedRef.current;
+		travel.current = -scrollY;
 
-		// A selected record pulls the camera in: closer (as far as it still
-		// fits on screen with room to spare), centred on it vertically, and
-		// across into the middle of what the record panel leaves uncovered
-		// (desktop; on phones the panel covers everything anyway).
-		let zoomGoal = 0;
-		let shiftGoal = 0;
-		let riseGoal = 0;
-		if (focused >= 0) {
+		// Where the camera is headed. Following the scroll; or, with a record
+		// selected, framing it: closer (as far as it still fits on screen with
+		// room to spare), centred on it vertically, and across into the middle
+		// of what the record panel leaves uncovered (desktop; on phones the
+		// panel covers everything anyway).
+		let camGoalX = 0;
+		let camGoalY = scrollY;
+		let camGoalZoom = 0;
+		if (focused >= 0 && layout[focused]) {
 			const pos = layout[focused];
 			// A lifted record also looks bigger (it's closer to the camera).
 			const extent = pos.spanScale * TILE * 1.15;
-			zoomGoal = Math.min(
+			camGoalZoom = Math.min(
 				FOCUS_ZOOM,
 				Math.max(0, 1 - extent / (viewHeight * 0.62)),
 			);
-			let centreNdc = 0;
-			if (!isTouch) {
-				const panel = document.querySelector('[data-slot="sheet-content"]');
-				const left = panel?.getBoundingClientRect().left ?? size.width;
-				// Halfway between the screen's left edge (-1) and the panel's.
-				if (left > size.width * 0.3) centreNdc = left / size.width - 1;
-			}
-			const halfWidth = (viewWidth / 2) * (1 - zoomGoal);
-			shiftGoal = pos.x - centreNdc * halfWidth;
-			riseGoal = pos.y - scrollY;
+			// Halfway between the screen's left edge (-1) and the panel's —
+			// from the panel's settled width, not its rect, which slides in.
+			const panelLeft = size.width - Math.min(PANEL_PX, size.width);
+			const centreNdc =
+				!isTouch && panelLeft > size.width * 0.3
+					? panelLeft / size.width - 1
+					: 0;
+			frameOffset.current = centreNdc * (viewWidth / 2) * (1 - camGoalZoom);
+			camGoalX = pos.x - frameOffset.current;
+			camGoalY = pos.y;
 		}
-		zoom.current = smoothDamp(
-			zoom.current,
-			zoomGoal,
-			springs.current,
-			"zoom",
-			0.55,
-			dt,
-		);
-		panelShift.current = smoothDamp(
-			panelShift.current,
-			shiftGoal,
-			springs.current,
-			"shift",
-			0.55,
-			dt,
-		);
-		focusRise.current = smoothDamp(
-			focusRise.current,
-			riseGoal,
-			springs.current,
-			"rise",
-			0.55,
-			dt,
-		);
+		const c = cam.current;
+		if (Number.isNaN(c.y)) c.y = scrollY;
+		const tw = camTween.current;
+		if (focused !== tw.key) {
+			// Set off from wherever the camera is now, mid-move or not.
+			tw.x = c.x;
+			tw.y = c.y;
+			tw.zoom = c.zoom;
+			tw.t = 0;
+			tw.key = focused;
+		}
+		tw.t = reducedMotion ? 1 : Math.min(1, tw.t + dt / CAMERA_MOVE_S);
+		const camEase = easeInOutCubic(tw.t);
+		c.x = tw.x + (camGoalX - tw.x) * camEase;
+		c.y = tw.y + (camGoalY - tw.y) * camEase;
+		c.zoom = tw.zoom + (camGoalZoom - tw.zoom) * camEase;
+		if (focused < 0) {
+			pan.current.x = 0;
+			pan.current.y = 0;
+		}
+		panelShift.current = c.x + pan.current.x;
+		zoom.current = c.zoom;
 		// Everything below works from where the camera is looking, so the
 		// wall's curve follows the camera to the selected record.
-		const camY = scrollY + focusRise.current;
-		travel.current = -scrollY;
+		const camY = c.y + pan.current.y;
 		pickCamY.current = camY;
 
 		// Parallax: the camera drifts toward the pointer (a slow idle sway on

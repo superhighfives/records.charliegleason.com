@@ -11,13 +11,18 @@ import * as THREE from "three";
  */
 
 const FONT = "Kalam";
-const FONT_CSS = "https://fonts.googleapis.com/css2?family=Kalam&display=swap";
-// Small, to get a few lines in: two read at rest, three when pulled. The
-// spacing puts the third line's top just below the slip's resting edge (a
-// 0.09 / 0.3 peek is ~58 of 192), so it doesn't show half-cut at rest.
+const FONT_CSS =
+	"https://fonts.googleapis.com/css2?family=Kalam:wght@700&display=swap";
+// Small, to get a few lines in — bold, which holds up far better than the
+// regular weight at the few pixels a slip gets on screen. Two lines read at
+// rest and three when pulled; the third starts just below the slip's resting
+// edge (a 0.105 / 0.3 peek is ~67 of 192), so it never shows half-cut.
+const FONT_WEIGHT = 700;
 const FONT_SIZE = 23;
-const LINE_HEIGHT = 30;
-const TOP = 2;
+const LINE_HEIGHT = 28;
+/** Paper margins around the writing. */
+const TOP = 12;
+const SIDE = 18;
 /** Layout units; the canvas is `RESOLUTION`× this, so small writing stays crisp. */
 const WIDTH = 256;
 const HEIGHT = 192;
@@ -39,7 +44,9 @@ export function loadNoteFont(): Promise<void> {
 			link.onload = () => resolve();
 			link.onerror = () => resolve();
 		})
-			.then(() => document.fonts.load(`${FONT_SIZE}px "${FONT}"`))
+			.then(() =>
+				document.fonts.load(`${FONT_WEIGHT} ${FONT_SIZE}px "${FONT}"`),
+			)
 			.then(
 				() => undefined,
 				() => undefined,
@@ -93,10 +100,10 @@ export function makeNoteTexture(
 		}
 
 		// Pencil-ish ink, a touch uneven line to line.
-		ctx.fillStyle = "rgba(48, 32, 10, 0.88)";
+		ctx.fillStyle = "rgba(40, 26, 6, 0.94)";
 		ctx.textBaseline = "top";
-		ctx.font = `${FONT_SIZE}px "${FONT}", cursive`;
-		const maxWidth = WIDTH - 28;
+		ctx.font = `${FONT_WEIGHT} ${FONT_SIZE}px "${FONT}", cursive`;
+		const maxWidth = WIDTH - SIDE * 2 - 6;
 		const lines: string[] = [];
 		let line = "";
 		for (const word of text.split(" ")) {
@@ -113,7 +120,7 @@ export function makeNoteTexture(
 		// the note short, the last one ends in an ellipsis.
 		const fits = Math.max(
 			1,
-			Math.floor((visible * HEIGHT - TOP - 4) / LINE_HEIGHT),
+			Math.floor((visible * HEIGHT - TOP - 6) / LINE_HEIGHT),
 		);
 		if (lines.length > fits) {
 			lines.length = fits;
@@ -128,7 +135,7 @@ export function makeNoteTexture(
 		}
 		lines.forEach((l, i) => {
 			ctx.save();
-			ctx.translate(14 + r() * 6, TOP + i * LINE_HEIGHT + r() * 3);
+			ctx.translate(SIDE + r() * 6, TOP + i * LINE_HEIGHT + r() * 3);
 			ctx.rotate((r() - 0.5) * 0.04);
 			ctx.fillText(l, 0, 0);
 			ctx.restore();
@@ -136,6 +143,8 @@ export function makeNoteTexture(
 	}
 	const texture = new THREE.CanvasTexture(canvas);
 	texture.colorSpace = THREE.SRGBColorSpace;
-	texture.anisotropy = 4;
+	// It's usually seen small and at an angle: the sharpest filtering on offer
+	// (three clamps this to what the GPU supports).
+	texture.anisotropy = 16;
 	return texture;
 }

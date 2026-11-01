@@ -147,6 +147,11 @@ export function CollectionView({
 		[navigate, animateOpenRef, layout],
 	);
 
+	const closeRecord = useCallback(
+		() => openRecord(null, { replace: true }),
+		[openRecord],
+	);
+
 	const [filters, setFilters] = useState<CollectionFilters>(NO_FILTERS);
 
 	// Search first, then the filter strip — kept as two steps because the
@@ -326,6 +331,7 @@ export function CollectionView({
 						<WallGrid
 							records={filtered}
 							onOpen={openRecord}
+							onClose={closeRecord}
 							focusedRecordId={selected?.id ?? null}
 						/>
 					</Suspense>
@@ -346,7 +352,16 @@ export function CollectionView({
 					if (!next) openRecord(null, { replace: true });
 				}}
 			>
-				<SheetContent className="p-0" enterAnimation={enterAnimation}>
+				<SheetContent
+					className="p-0"
+					enterAnimation={enterAnimation}
+					// On the wall, a press beside the panel may be a drag (panning
+					// the zoomed-in wall), so the wall decides: a click on the empty
+					// wall still closes it (`onClose`).
+					onPointerDownOutside={
+						wallMode ? (e) => e.preventDefault() : undefined
+					}
+				>
 					{shown && (
 						<RecordPanel
 							key={shown.record.id}

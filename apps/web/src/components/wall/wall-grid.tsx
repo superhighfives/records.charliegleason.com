@@ -27,10 +27,13 @@ const WallScene = lazy(() => import("./wall-scene"));
 export function WallGrid({
 	records,
 	onOpen,
+	onClose,
 	focusedRecordId,
 }: {
 	records: PublicRecord[];
 	onOpen: (record: PublicRecord) => void;
+	/** Closes the record panel — see `WallSceneProps`. */
+	onClose: () => void;
 	/** The record the panel has open — see `WallSceneProps`. */
 	focusedRecordId: number | null;
 }) {
@@ -84,6 +87,7 @@ export function WallGrid({
 								slot={slot}
 								onActiveChange={setActive}
 								onOpen={onOpen}
+								onClose={onClose}
 								focusedRecordId={focusedRecordId}
 								onContentHeight={onContentHeight}
 								theme={theme}

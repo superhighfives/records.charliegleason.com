@@ -1326,6 +1326,11 @@ a {
  * catch the click that closes the panel. */
 :root[data-wall] [data-slot="sheet-overlay"] {
   background-color: transparent;
+  /* Zoomed in on a record, the wall beside the panel drags to pan. */
+  cursor: grab;
+}
+:root[data-wall][data-wall-dragging] [data-slot="sheet-overlay"] {
+  cursor: grabbing;
 }
 
 /* The wall is pure black / white, so the page around it is too (overscroll,
