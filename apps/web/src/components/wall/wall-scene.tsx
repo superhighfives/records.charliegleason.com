@@ -26,6 +26,7 @@ import {
 import { SceneStatsProbe } from "#/components/three/scene-stats-probe";
 import {
 	makeGrooveTexture,
+	makeVinylTexture,
 	type StreamTarget,
 	useTextureStream,
 } from "#/components/three/texture-stream";
@@ -334,6 +335,7 @@ type Shared = {
 	discGeometry: THREE.CylinderGeometry;
 	edge: THREE.MeshStandardMaterial;
 	grooves: THREE.Texture;
+	vinyl: THREE.Texture;
 	slipGeometry: THREE.PlaneGeometry;
 	slip: THREE.MeshStandardMaterial;
 };
@@ -430,6 +432,7 @@ function Wall({
 			discGeometry,
 			edge,
 			grooves: makeGrooveTexture(),
+			vinyl: makeVinylTexture(),
 			slipGeometry: new THREE.PlaneGeometry(SLIP_W, SLIP_H),
 			// The brand yellow the DOM grid's notes dot used, as paper.
 			slip: new THREE.MeshStandardMaterial({
@@ -1460,17 +1463,24 @@ const Tile = memo(function Tile({
 		return m;
 	}, [record]);
 	const discMaterial = useMemo(() => {
+		// The painted vinyl face (grooves, sheen, label) until — and unless —
+		// a photo of the record's coloured vinyl arrives; with a little glow of
+		// its own so it reads in a dim room, not as a black hole.
 		const m = new THREE.MeshStandardMaterial({
-			color: "#181818",
-			roughness: 0.3,
-			metalness: 0.45,
+			map: shared.vinyl,
+			roughness: 0.35,
+			metalness: 0.2,
 			bumpMap: shared.grooves,
 			bumpScale: 0.6,
 			roughnessMap: shared.grooves,
+			emissive: "#ffffff",
+			emissiveMap: shared.vinyl,
+			emissiveIntensity: 0.5,
 			transparent: !!record.colorTranslucent,
 			opacity: record.colorTranslucent ? 0.72 : 1,
 		});
 		m.userData.placeholder = "#181818";
+		m.userData.lowMap = shared.vinyl;
 		return m;
 	}, [record, shared]);
 	// BoxGeometry faces: +x, -x, +y, -y, +z (the cover), -z.

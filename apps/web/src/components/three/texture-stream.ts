@@ -344,3 +344,68 @@ export function makeGrooveTexture() {
 	texture.anisotropy = 4;
 	return texture;
 }
+
+/**
+ * The face of a black vinyl disc: grooves in a few near-blacks, a faint sheen
+ * across them (as if catching a light from above and below), the smooth
+ * run-out, and a cream paper label with its spindle hole. Used as the disc's
+ * colour (and, faintly, its glow) wherever there's no photo of a coloured
+ * vinyl — on its own, a near-black metallic disc only showed what it
+ * reflected, and under a soft, even light that was nothing: a flat black
+ * circle. Same layout as `makeGrooveTexture`, so the bump lines up.
+ */
+export function makeVinylTexture() {
+	const size = 512;
+	const canvas = document.createElement("canvas");
+	canvas.width = size;
+	canvas.height = size;
+	const ctx = canvas.getContext("2d");
+	if (ctx) {
+		const c = size / 2;
+		ctx.fillStyle = "#111";
+		ctx.fillRect(0, 0, size, size);
+		for (let r = c; r > c * 0.36; r -= 1.5) {
+			const shade = 22 + Math.round(Math.sin(r * 0.9) * 6 + (r % 7) * 1.5);
+			ctx.strokeStyle = `rgb(${shade},${shade},${shade})`;
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.arc(c, c, r, 0, Math.PI * 2);
+			ctx.stroke();
+		}
+		// Sheen: two soft opposite wedges, the way grooves catch a light.
+		for (const start of [-Math.PI * 0.62, Math.PI * 0.38]) {
+			const wedge = ctx.createRadialGradient(c, c, c * 0.38, c, c, c);
+			wedge.addColorStop(0, "rgba(255,255,255,0)");
+			wedge.addColorStop(0.5, "rgba(255,255,255,0.09)");
+			wedge.addColorStop(1, "rgba(255,255,255,0.03)");
+			ctx.fillStyle = wedge;
+			ctx.beginPath();
+			ctx.moveTo(c, c);
+			ctx.arc(c, c, c, start, start + Math.PI * 0.24);
+			ctx.closePath();
+			ctx.fill();
+		}
+		// Run-out, then the label.
+		ctx.fillStyle = "#161616";
+		ctx.beginPath();
+		ctx.arc(c, c, c * 0.36, 0, Math.PI * 2);
+		ctx.fill();
+		ctx.fillStyle = "#e6dccb";
+		ctx.beginPath();
+		ctx.arc(c, c, c * 0.3, 0, Math.PI * 2);
+		ctx.fill();
+		ctx.strokeStyle = "rgba(70, 55, 35, 0.35)";
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		ctx.arc(c, c, c * 0.24, 0, Math.PI * 2);
+		ctx.stroke();
+		ctx.fillStyle = "#0b0b0b";
+		ctx.beginPath();
+		ctx.arc(c, c, c * 0.035, 0, Math.PI * 2);
+		ctx.fill();
+	}
+	const texture = new THREE.CanvasTexture(canvas);
+	texture.colorSpace = THREE.SRGBColorSpace;
+	texture.anisotropy = 8;
+	return texture;
+}
