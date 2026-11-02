@@ -367,26 +367,39 @@ export function makeVinylTexture() {
 		// Bright enough to survive tone mapping and a dim room: at near-black
 		// levels the rings read as a flat black disc.
 		for (let r = c; r > c * 0.36; r -= 1.5) {
-			const shade = 42 + Math.round(Math.sin(r * 0.9) * 14 + (r % 7) * 3);
+			// Gentle ring-to-ring variation: strong contrast at this pitch
+			// shimmered into moiré once the disc was drawn small.
+			const shade = 38 + Math.round(Math.sin(r * 0.9) * 7 + (r % 7) * 1.5);
 			ctx.strokeStyle = `rgb(${shade},${shade},${shade})`;
 			ctx.lineWidth = 1;
 			ctx.beginPath();
 			ctx.arc(c, c, r, 0, Math.PI * 2);
 			ctx.stroke();
 		}
-		// Sheen: two soft opposite wedges, the way grooves catch a light.
-		for (const start of [-Math.PI * 0.62, Math.PI * 0.38]) {
-			const wedge = ctx.createRadialGradient(c, c, c * 0.38, c, c, c);
-			wedge.addColorStop(0, "rgba(255,255,255,0)");
-			wedge.addColorStop(0.5, "rgba(255,255,255,0.22)");
-			wedge.addColorStop(1, "rgba(255,255,255,0.08)");
-			ctx.fillStyle = wedge;
-			ctx.beginPath();
-			ctx.moveTo(c, c);
-			ctx.arc(c, c, c, start, start + Math.PI * 0.24);
-			ctx.closePath();
-			ctx.fill();
+		// Sheen: light sliding round the grooves, brightest at two opposite
+		// angles and fading smoothly away from them (a conic gradient — flat
+		// wedges read as hard bands), clipped to the grooved ring.
+		ctx.save();
+		ctx.beginPath();
+		ctx.arc(c, c, c, 0, Math.PI * 2);
+		ctx.arc(c, c, c * 0.36, 0, Math.PI * 2, true);
+		ctx.clip();
+		const sheen = ctx.createConicGradient(-Math.PI * 0.3, c, c);
+		const stops: [number, number][] = [
+			[0, 0],
+			[0.08, 0.16],
+			[0.18, 0],
+			[0.5, 0],
+			[0.58, 0.12],
+			[0.68, 0],
+			[1, 0],
+		];
+		for (const [at, alpha] of stops) {
+			sheen.addColorStop(at, `rgba(255,255,255,${alpha})`);
 		}
+		ctx.fillStyle = sheen;
+		ctx.fillRect(0, 0, size, size);
+		ctx.restore();
 		// Run-out, then the label.
 		ctx.fillStyle = "#161616";
 		ctx.beginPath();
