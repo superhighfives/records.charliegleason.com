@@ -254,11 +254,11 @@ function useParallax() {
 }
 
 // Bumped when the default changes, so an earlier saved pick doesn't hide it.
-const REVEAL_KEY = "wall-reveal-v2";
+const REVEAL_KEY = "wall-reveal-v3";
 
 /** The reveal panel's choices, remembered across reloads. */
 function useRevealConfig() {
-	const [config, setConfig] = useState<RevealConfig>({ style: "dust" });
+	const [config, setConfig] = useState<RevealConfig>({ style: "fade" });
 	useEffect(() => {
 		try {
 			const saved = JSON.parse(localStorage.getItem(REVEAL_KEY) ?? "null");

@@ -35,6 +35,7 @@ import * as THREE from "three";
  * - **streak** — a motion blur along the scroll: the picture smears in from
  *   its leading edge, streaked the way it's travelling, and comes to rest
  *   sharp.
+ * - **fade** — no effect: the picture simply fades up (the default).
  *
  * Every style follows the scroll (`uDir`): written for scrolling down — a
  * record rising into view, its top edge first — and flipped top to bottom
@@ -65,6 +66,7 @@ export const REVEAL_STYLES = [
 	"ink",
 	"glitch",
 	"streak",
+	"fade",
 ] as const;
 export type RevealStyle = (typeof REVEAL_STYLES)[number];
 
@@ -407,7 +409,7 @@ const MAP_GLSL = /* glsl */ `
 			vec2 block = floor(uv * vec2(8.0, 14.0));
 			if (revealHash(block + tick + uSeed) > k * 1.25) discard;
 			img *= 0.85 + 0.15 * step(0.5, fract(uv.y * 120.0)) * noisy + 0.15 * (1.0 - noisy);
-#else
+#elif REVEAL_MODE == 13
 			// streak: smeared back along the direction of travel (up the
 			// cover, for a record rising into view), easing to sharp.
 			float k = smoothstep(0.0, 1.0, t);
@@ -426,6 +428,11 @@ const MAP_GLSL = /* glsl */ `
 			float front = t * 1.5 - down;
 			alpha = smoothstep(0.0, 0.08 + len, front) * smoothstep(0.0, 0.2, t);
 			if (alpha <= 0.0) discard;
+#else
+			// fade: just the picture, fading up — following screen height,
+			// that's a soft fade along the edge records come in from.
+			img = revealSample(map, uv);
+			alpha = smoothstep(0.0, 1.0, t);
 #endif
 		}
 
