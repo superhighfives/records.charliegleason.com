@@ -1435,6 +1435,12 @@ a {
   }
 }
 
+/* The page's footer has nothing to scroll to on the wall: its links sit
+   in the bottom-right corner instead (wall-corners.tsx). */
+:root[data-wall] [data-wall-footer] {
+  display: none;
+}
+
 /* The search top-left. */
 :root[data-wall] .floating-controls {
   left: 1rem;

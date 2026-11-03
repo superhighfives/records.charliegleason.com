@@ -393,6 +393,7 @@ export function CollectionView({
 
 			<footer
 				data-wall-chrome
+				data-wall-footer
 				className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground"
 			>
 				<div>
