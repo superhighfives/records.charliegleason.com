@@ -286,7 +286,7 @@ export function CollectionView({
 				<ThemeToggle className="size-8 rounded-full border-0" />
 			</div>
 
-			{/* On the wall, the hero fades once the wall is first moved. */}
+			{/* On the wall, the hero sits in the middle of it (see styles.css). */}
 			{!search.trim() && (
 				<div data-wall-chrome data-wall-hero>
 					<CollectionHero count={data.length} />
@@ -389,7 +389,7 @@ export function CollectionView({
 				</SheetContent>
 			</Sheet>
 
-			{wallMode && <WallCorners count={data.length} />}
+			{wallMode && <WallCorners />}
 
 			<footer
 				data-wall-chrome

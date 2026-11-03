@@ -146,8 +146,6 @@ const SPOT_LIGHT = 3;
  * lit room).
  */
 const DAYLIGHT = 1.2;
-/** Space above the first row where the wall starts, in world units. */
-const TOP_PAD = 0.1;
 /** The page's side padding (`sm:px-6`), for matching the grid's columns. */
 const PAGE_PAD_PX = 24;
 /**
@@ -190,11 +188,11 @@ export type RevealConfig = {
 export type WallSceneProps = {
 	records: PublicRecord[];
 	/**
-	 * Where the wall's first row starts on screen at load, in CSS px from the
-	 * top (just under the hero and filters) — after that the wall moves only
-	 * by dragging.
+	 * Where the hero sits on screen at load (CSS px), if it's showing: it's
+	 * part of the wall — records leave it a gap, it moves as the wall does,
+	 * and once it's dragged off screen it's gone for good.
 	 */
-	startTop: number;
+	hero: { left: number; top: number; right: number; bottom: number } | null;
 	/** The record under the pointer (or, on touch, at the centre), if any. */
 	onActiveChange: (record: PublicRecord | null) => void;
 	onOpen: (record: PublicRecord) => void;
@@ -260,8 +258,8 @@ function Effects({
 	useEffect(() => () => whitePoint.dispose(), [whitePoint]);
 	const finish = (
 		<>
-			{/* Only in the dark: on white it greyed the corners. */}
-			<Vignette offset={0.25} darkness={dark ? 0.75 : 0} />
+			{/* A subtle one, in the dark only: on white it greyed the corners. */}
+			<Vignette offset={0.3} darkness={dark ? 0.35 : 0} />
 			<ToneMapping mode={ToneMappingMode.NEUTRAL} />
 			<primitive object={whitePoint} />
 		</>
@@ -429,7 +427,7 @@ const INTERACTIVE =
 
 function Wall({
 	records,
-	startTop,
+	hero,
 	onActiveChange,
 	onOpen,
 	onClose,
@@ -624,10 +622,19 @@ function Wall({
 	/** Where on the wall a selected record is framed (for picking the nearest). */
 	const frameOffset = useRef(0);
 	/**
-	 * Until the wall first moves, the rows above its start stay hidden — the
-	 * page opens like a page (hero, filters, the wall below) — then grow in.
+	 * The hero's gap in the wall, in world units, while the hero is still
+	 * around (null once it's gone); and where the camera started, which the
+	 * hero's on-screen offset is measured from.
 	 */
-	const moved = useRef(false);
+	const heroHole = useRef<{
+		x0: number;
+		x1: number;
+		y0: number;
+		y1: number;
+	} | null>(null);
+	const heroGone = useRef(hero == null);
+	const heroStart = useRef({ x: 0, y: 0 });
+	const heroEl = useRef<HTMLElement | null>(null);
 	/** Last frame's camera, for which edges records are coming in from. */
 	const lastCam = useRef<{ x: number; y: number } | null>(null);
 	/** Where textures were last streamed around. */
@@ -648,7 +655,7 @@ function Wall({
 
 	useEffect(() => {
 		return () => {
-			delete document.documentElement.dataset.wallMoved;
+			delete document.documentElement.dataset.wallHeroGone;
 		};
 	}, []);
 
@@ -721,11 +728,6 @@ function Wall({
 			);
 		const onWall = (target: EventTarget | null) =>
 			target instanceof Element && target.closest(INTERACTIVE) == null;
-		const markMoved = () => {
-			if (moved.current) return;
-			moved.current = true;
-			document.documentElement.dataset.wallMoved = "";
-		};
 		// Moves the view by a screen-pixel distance: zoomed in, the pan
 		// offset; otherwise where the camera rests.
 		const panBy = (dxPx: number, dyPx: number) => {
@@ -738,7 +740,6 @@ function Wall({
 				free.current.x += dxPx * k;
 				free.current.y -= dyPx * k;
 			}
-			markMoved();
 		};
 		// After a zoomed-in drag or wheel pan: fold it into the camera, then
 		// frame the record nearest the middle of the view from there.
@@ -930,11 +931,23 @@ function Wall({
 		const ndc = pointer.current.ndc;
 		const insts = instancesRef.current;
 
-		// At rest, the camera starts with the first row's top edge just under
-		// the hero and filters (`startTop`), where the page grid used to begin.
+		// The camera starts at the middle of the tile, the hero (if it's
+		// showing) over a gap in the wall at the middle of the screen.
 		const f = free.current;
 		if (Number.isNaN(f.y)) {
-			f.y = TILE / 2 + TOP_PAD - (size.height / 2 - startTop) * unitsPerPx;
+			f.x = 0;
+			f.y = -tileH / 2;
+			if (hero && !heroGone.current) {
+				const toX = (px: number) => f.x + (px - size.width / 2) * unitsPerPx;
+				const toY = (px: number) => f.y - (px - size.height / 2) * unitsPerPx;
+				heroStart.current = { x: f.x, y: f.y };
+				heroHole.current = {
+					x0: toX(hero.left) - GAP,
+					x1: toX(hero.right) + GAP,
+					y0: toY(hero.bottom) - GAP,
+					y1: toY(hero.top) + GAP,
+				};
+			}
 		}
 		// Momentum: a fling coasts on and slows to a stop.
 		if (!dragging.current && (f.vx !== 0 || f.vy !== 0)) {
@@ -1063,6 +1076,31 @@ function Wall({
 		pickCamY.current = camY;
 		travel.current.x = camX;
 		travel.current.y = -camY;
+
+		// The hero moves with the wall; once it's wholly off screen it's gone
+		// for good, and the records fill its gap (out of sight).
+		if (!heroGone.current && hero) {
+			heroEl.current ??=
+				document.querySelector<HTMLElement>("[data-wall-hero]");
+			const el = heroEl.current;
+			const scale = unitsPerPx * (1 - c.zoom);
+			const dx = -(camX - heroStart.current.x) / scale;
+			const dy = (camY - heroStart.current.y) / scale;
+			const off =
+				!el?.isConnected ||
+				hero.right + dx < 0 ||
+				hero.left + dx > size.width ||
+				hero.bottom + dy < 0 ||
+				hero.top + dy > size.height;
+			if (off) {
+				heroGone.current = true;
+				heroHole.current = null;
+				document.documentElement.dataset.wallHeroGone = "";
+			} else if (el) {
+				el.style.setProperty("--wall-pan-x", `${dx.toFixed(1)}px`);
+				el.style.setProperty("--wall-pan-y", `${dy.toFixed(1)}px`);
+			}
+		}
 
 		// Which edges records are coming in from decides which edge bands
 		// dissolve (see `revealBands`); eased, so turning round mid-reveal
@@ -1301,10 +1339,19 @@ function Wall({
 			if (!h) continue;
 			const pos = layout[i];
 			const key = insts[i].key;
-			// Hidden until the wall first moves: the rows above where it starts
-			// (wrapped round from the bottom of the tile).
-			const startY = wrapNear(pos.y, f.y, tileH);
-			const above = !moved.current && startY > TILE / 2 + 0.05;
+			// Kept out of the hero's gap while the hero's there.
+			const hole = heroHole.current;
+			let above = false;
+			if (hole) {
+				const r = (pos.spanScale * TILE) / 2;
+				const hx = wrapNear(pos.x, (hole.x0 + hole.x1) / 2, tileW);
+				const hy = wrapNear(pos.y, (hole.y0 + hole.y1) / 2, tileH);
+				above =
+					hx + r > hole.x0 &&
+					hx - r < hole.x1 &&
+					hy + r > hole.y0 &&
+					hy - r < hole.y1;
+			}
 			let anim = anims.current.get(key);
 			if (!anim) {
 				anim = {

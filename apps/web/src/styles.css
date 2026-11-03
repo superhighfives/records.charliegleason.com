@@ -1359,9 +1359,8 @@ a {
 }
 
 /* The wall is moved by dragging, not by scrolling the page: the page holds
-   still (no scrollbar), the browser's own touch gestures and text selection
-   stay off the surface it's dragged across, and the hero fades once the
-   wall first moves. */
+   still (no scrollbar), and the browser's own touch gestures and text
+   selection stay off the surface it's dragged across. */
 :root[data-wall] {
   overflow: hidden;
   scrollbar-gutter: auto;
@@ -1376,54 +1375,73 @@ a {
 :root[data-wall][data-wall-dragging] * {
   cursor: grabbing !important;
 }
-[data-wall-hero] {
-  transition: opacity 600ms ease;
-}
-:root[data-wall-moved] [data-wall-hero] {
-  opacity: 0;
+
+/* The hero is part of the wall: it sits in the middle of the screen over a
+   gap the records leave it, and moves as the wall does (the scene writes
+   `--wall-pan-x`/`-y`) until it's dragged off screen — then it's gone. */
+:root[data-wall] [data-wall-hero] {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 20;
+  width: min(90vw, 72rem);
+  transform: translate(
+    calc(-50% + var(--wall-pan-x, 0px)),
+    calc(-50% + var(--wall-pan-y, 0px))
+  );
   pointer-events: none;
 }
-/* Once the wall has moved, the filters float in the bottom-left corner,
-   over the records — so filtering stays to hand anywhere on the wall. (Positioned on the outer, `rise-in` wrapper: that animation
-   holds a transform, which would make it the containing block for a fixed
-   child.) On a phone there's no room beside the search: they fade with the
-   hero. */
-:root[data-wall-moved] [data-wall-filters] > [data-wall-chrome] {
-  opacity: 0;
-  pointer-events: none;
+:root[data-wall] [data-wall-hero] > * {
+  margin: 0;
+  text-align: center;
+}
+:root[data-wall-hero-gone] [data-wall-hero] {
+  display: none;
+}
+
+/* The filters float bottom-left, over the records (across the bottom on a
+   phone). Positioned on the outer, `rise-in` wrapper: that animation holds
+   a transform, which would make it the containing block for a fixed child.
+   The pill is the inner element, which can fade (the outer one's opacity is
+   held by its animation). */
+:root[data-wall] [data-wall-filters] {
+  position: fixed;
+  bottom: 1rem;
+  left: 1rem;
+  right: 1rem;
+  z-index: 30;
+}
+:root[data-wall] [data-wall-filters] > [data-wall-chrome] {
+  overflow-x: auto;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
 }
 @media (min-width: 640px) {
-  :root[data-wall-moved] [data-wall-filters] {
-    position: fixed;
+  :root[data-wall] [data-wall-filters] {
     bottom: 1.5rem;
     left: 1.5rem;
-    z-index: 30;
+    right: auto;
     max-width: calc(100vw - 22rem);
-  }
-  /* The pill itself is the inner element, which fades (the outer one's
-     opacity is held by its animation). */
-  :root[data-wall-moved] [data-wall-filters] > [data-wall-chrome] {
-    overflow-x: auto;
-    padding: 0.375rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 9999px;
-    background: var(--background);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
-    opacity: 1;
-    pointer-events: auto;
-  }
-  /* Zoomed in, it steps aside with the rest of the page's text. */
-  :root[data-wall-moved][data-wall-focus]
-    [data-wall-filters]
-    > [data-wall-chrome] {
-    opacity: 0;
-    pointer-events: none;
   }
 }
 
-/* The wall's corners (wall-corners.tsx): the title top-left — once the
-   wall has moved and the hero has gone — and the footer's links
-   bottom-right, both pills like the search, so they read over the covers. */
+/* The search top-left. */
+:root[data-wall] .floating-controls {
+  left: 1rem;
+  right: auto;
+}
+@media (min-width: 640px) {
+  :root[data-wall] .floating-controls {
+    left: 1.5rem;
+  }
+}
+
+/* The footer's links bottom-right (wall-corners.tsx), a pill like the
+   search, so it reads over the covers. Phones have no room beside the
+   filters. */
 [data-wall-corner] {
   position: fixed;
   z-index: 30;
@@ -1434,26 +1452,16 @@ a {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
   transition: opacity 600ms ease;
 }
-[data-wall-corner="title"] {
-  top: 1rem;
-  left: 1rem;
-  border-radius: 1rem;
-}
 [data-wall-corner="footer"] {
-  bottom: 1rem;
-  right: 1rem;
+  display: none;
 }
 @media (min-width: 640px) {
-  [data-wall-corner="title"] {
-    top: 1.5rem;
-    left: 1.5rem;
-  }
   [data-wall-corner="footer"] {
+    display: flex;
     bottom: 1.5rem;
     right: 1.5rem;
   }
 }
-:root:not([data-wall-moved]) [data-wall-corner="title"],
 :root[data-wall-focus] [data-wall-corner] {
   opacity: 0;
   pointer-events: none;

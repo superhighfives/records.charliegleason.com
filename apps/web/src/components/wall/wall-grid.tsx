@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import type { PublicRecord } from "#/lib/records";
 import { cn } from "#/lib/utils";
 import { REVEAL_STYLES } from "./cover-reveal";
-import type { RevealConfig, WallTheme } from "./wall-scene";
+import type { RevealConfig, WallSceneProps, WallTheme } from "./wall-scene";
 
 const WallScene = lazy(() => import("./wall-scene"));
 
@@ -12,10 +12,10 @@ const WallScene = lazy(() => import("./wall-scene"));
  * The collection as an endless 3D wall (see `wall-scene.tsx`), in place of
  * `CollectionGrid`. The canvas is portalled to `<body>`, fixed full-screen
  * over the page's own content (the grid's wrapper animates opacity, which
- * would trap a fixed child in its own stacking context). This component
- * only marks where the wall starts on screen at load — just under the hero
- * and filters — after which it moves by dragging; the page itself doesn't
- * scroll (see `[data-wall]` in styles.css).
+ * would trap a fixed child in its own stacking context). The page itself
+ * doesn't scroll (see `[data-wall]` in styles.css); the hero sits in the
+ * middle of the screen as part of the wall, measured here once its fonts
+ * are in.
  */
 export function WallGrid({
 	records,
@@ -30,8 +30,7 @@ export function WallGrid({
 	/** The record the panel has open — see `WallSceneProps`. */
 	focusedRecordId: number | null;
 }) {
-	const [marker, setMarker] = useState<HTMLDivElement | null>(null);
-	const [startTop, setStartTop] = useState<number | null>(null);
+	const [hero, setHero] = useState<WallSceneProps["hero"] | undefined>();
 	const [record, setRecord] = useState<PublicRecord | null>(null);
 	const theme = useWallTheme();
 	const [env, setEnv] = useState<{
@@ -46,12 +45,32 @@ export function WallGrid({
 		});
 	}, []);
 	const [reveal, setReveal] = useRevealConfig();
-	// Where the wall starts: measured once, from the top of the page.
+	// Where the hero sits on screen (if it's showing), once its fonts are in
+	// — the wall leaves it a gap that size.
 	useEffect(() => {
-		if (!marker) return;
+		let cancelled = false;
 		window.scrollTo(0, 0);
-		setStartTop(marker.getBoundingClientRect().top);
-	}, [marker]);
+		document.fonts.ready.then(() => {
+			if (cancelled) return;
+			// The text itself, not its box (wider than its lines), so the
+			// records come right up to the words.
+			const el = document.querySelector("[data-wall-hero]");
+			let r: DOMRect | undefined;
+			if (el) {
+				const range = document.createRange();
+				range.selectNodeContents(el);
+				r = range.getBoundingClientRect();
+			}
+			setHero(
+				r
+					? { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+					: null,
+			);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
 	// Lets CSS adjust page chrome for the wall — see `[data-wall]` in
 	// styles.css (the record panel's backdrop).
 	useEffect(() => {
@@ -63,8 +82,7 @@ export function WallGrid({
 
 	return (
 		<>
-			<div ref={setMarker} style={{ height: "70vh" }} aria-hidden />
-			{startTop != null &&
+			{hero !== undefined &&
 				env &&
 				theme &&
 				createPortal(
@@ -76,7 +94,7 @@ export function WallGrid({
 						<Suspense fallback={null}>
 							<WallScene
 								records={records}
-								startTop={startTop}
+								hero={hero}
 								onActiveChange={setRecord}
 								onOpen={onOpen}
 								onClose={onClose}
@@ -93,9 +111,9 @@ export function WallGrid({
 			<RevealPanel config={reveal} onChange={setReveal} />
 			<div
 				className={cn(
-					// Top centre on desktop, between the title and the search (the
-					// filters and links take the bottom corners); bottom on phones.
-					"pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 transition-opacity duration-300 sm:top-6 sm:bottom-auto",
+					// Top centre on desktop (the filters and links take the bottom
+					// corners); on phones, just above the filters.
+					"pointer-events-none fixed inset-x-0 bottom-20 z-40 flex justify-center px-4 transition-opacity duration-300 sm:top-6 sm:bottom-auto",
 					record ? "opacity-100" : "opacity-0",
 				)}
 			>
