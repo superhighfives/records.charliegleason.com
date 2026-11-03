@@ -64,7 +64,8 @@ import { WhitePointEffect } from "./white-point";
  * - The hovered record lifts off the wall and its vinyl slides out. On touch,
  *   the record nearest the middle of the screen is the "hovered" one.
  * - Clicking a record moves the camera in on it beside the record panel;
- *   dragging or scrolling then pans, and settles on the nearest record.
+ *   dragging or scrolling then pans, and settles on the nearest record, and
+ *   clicking it again zooms back out.
  * - Records reveal as they come in from an edge (the edge being the one the
  *   view is moving toward); at load, the page opens like a page, with the
  *   wall below the hero, until it first moves.
@@ -832,6 +833,11 @@ function Wall({
 			if (!onWall(e.target)) return;
 			const index = pick(toNdc(e));
 			const record = index != null ? instancesRef.current[index]?.record : null;
+			// Clicking the record that's open zooms back out.
+			if (index != null && index === focusIndex.current) {
+				onClose();
+				return;
+			}
 			if (index != null && record) {
 				pendingFocus.current = index;
 				focusIndex.current = index;
