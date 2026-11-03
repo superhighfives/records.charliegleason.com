@@ -93,7 +93,9 @@ export function WallGrid({
 			<RevealPanel config={reveal} onChange={setReveal} />
 			<div
 				className={cn(
-					"pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 transition-opacity duration-300",
+					// Top centre on desktop, between the title and the search (the
+					// filters and links take the bottom corners); bottom on phones.
+					"pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 transition-opacity duration-300 sm:top-6 sm:bottom-auto",
 					record ? "opacity-100" : "opacity-0",
 				)}
 			>

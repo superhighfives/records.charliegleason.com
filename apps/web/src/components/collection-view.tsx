@@ -20,6 +20,7 @@ import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import { WallCorners } from "#/components/wall/wall-corners";
 import {
 	type CollectionFilters,
 	hasAnyFilter,
@@ -387,6 +388,8 @@ export function CollectionView({
 					)}
 				</SheetContent>
 			</Sheet>
+
+			{wallMode && <WallCorners count={data.length} />}
 
 			<footer
 				data-wall-chrome
