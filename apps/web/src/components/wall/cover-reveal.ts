@@ -89,6 +89,15 @@ type RevealUniforms = {
 	 * grain (dust) keep it the same size on screen at any record size.
 	 */
 	uSpan: { value: number };
+	/**
+	 * How much the reveal follows screen height (0–1): with it, each pixel
+	 * reveals by how far up the screen it is, so every record dissolves in
+	 * the same band at the bottom (and top) edge whatever its size — a big
+	 * record's own progress, measured at its centre, ran well ahead of the
+	 * small ones beside it.
+	 */
+	uScreen: { value: number };
+	uViewportHeight: { value: number };
 };
 
 const HEADER_GLSL = /* glsl */ `
@@ -102,6 +111,8 @@ const HEADER_GLSL = /* glsl */ `
 	uniform float uSeed;
 	uniform float uSelfLight;
 	uniform float uSpan;
+	uniform float uScreen;
+	uniform float uViewportHeight;
 	float revealHash(vec2 p) {
 		return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 	}
@@ -152,6 +163,11 @@ const MAP_GLSL = /* glsl */ `
 	vec3 coverSelf = vec3(0.0);
 	#ifdef USE_MAP
 		float t = uReveal;
+		{
+			float v = gl_FragCoord.y / uViewportHeight;
+			float onScreen = smoothstep(0.0, 0.25, v) * (1.0 - smoothstep(0.75, 1.0, v));
+			t = mix(t, min(t, onScreen), uScreen);
+		}
 		vec2 uv = vMapUv;
 		revealFlip = uDir < 0.0 && REVEAL_MODE != 8 ? 1.0 : 0.0;
 		if (revealFlip > 0.5) uv.y = 1.0 - uv.y;
@@ -431,6 +447,8 @@ export function makeCoverMaterial(
 		uSeed: { value: (seed * 12.9898) % 100 },
 		uSelfLight: { value: 0 },
 		uSpan: { value: 1 },
+		uScreen: { value: 0 },
+		uViewportHeight: revealViewportHeight,
 	};
 	material.userData.revealUniforms = uniforms;
 	material.onBeforeCompile = (shader) => {
@@ -475,6 +493,21 @@ export function setCoverDirection(
 ) {
 	const u = uniformsOf(material);
 	if (u) u.uDir.value = dir;
+}
+
+/**
+ * The drawing buffer's height, shared by every cover (one object in all their
+ * uniforms) so the scene sets it once a frame.
+ */
+export const revealViewportHeight = { value: 1 };
+
+/** How much the reveal follows screen height — see `uScreen`. */
+export function setCoverScreenReveal(
+	material: THREE.MeshStandardMaterial,
+	weight: number,
+) {
+	const u = uniformsOf(material);
+	if (u) u.uScreen.value = weight;
 }
 
 /** How many tiles across the record spans — see `uSpan`. */

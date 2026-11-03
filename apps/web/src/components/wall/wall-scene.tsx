@@ -35,9 +35,11 @@ import type { PublicRecord } from "#/lib/records";
 import {
 	makeCoverMaterial,
 	type RevealStyle,
+	revealViewportHeight,
 	setCoverDirection,
 	setCoverFade,
 	setCoverReveal,
+	setCoverScreenReveal,
 	setCoverSelfLight,
 	setCoverSpan,
 	setCoverStyle,
@@ -837,6 +839,7 @@ function Wall({
 	}, [viewWidth, viewHeight]);
 
 	useFrame((state, delta) => {
+		revealViewportHeight.value = state.gl.domElement.height;
 		// How dim the room is (1 = normal): set by the lights-down step below,
 		// read by the covers' self-light.
 		let roomDim = 1;
@@ -1225,8 +1228,13 @@ function Wall({
 			if (dyView + reach < -1 || dyView - reach > 1) {
 				cover.userData.scrollDriven = true;
 			}
+			// `shown` is the record as a whole (its sleeve, shadow and slip);
+			// the cover itself reveals pixel by pixel with screen height (see
+			// `uScreen`), so big and small records dissolve in the same band.
 			let shown = 1;
+			let screenReveal = 0;
 			if (cover.userData.scrollDriven && !reducedMotion) {
+				screenReveal = 1;
 				shown =
 					THREE.MathUtils.smoothstep(dyView, -1 - reach, -0.55) *
 					(1 - THREE.MathUtils.smoothstep(dyView, 0.55, 1 + reach));
@@ -1239,7 +1247,7 @@ function Wall({
 			// the way if it was mid-reveal, not snapped there.
 			if (focused === i && cover.map) {
 				cover.userData.focusShow = smoothDamp(
-					cover.userData.focusShow ?? shown,
+					cover.userData.focusShow ?? 0,
 					1,
 					springs.current,
 					`show${i}`,
@@ -1247,14 +1255,19 @@ function Wall({
 					dt,
 				);
 				shown = Math.max(shown, cover.userData.focusShow);
+				screenReveal *= 1 - cover.userData.focusShow;
 			} else {
 				cover.userData.focusShow = undefined;
 				springs.current[`show${i}`] = 0;
 			}
-			if (shown !== cover.userData.shown) {
-				cover.userData.shown = shown;
-				setCoverReveal(cover, shown);
-			}
+			cover.userData.shown = shown;
+			// Covers revealing with screen height take their progress from
+			// that; the rest (eased in when selected) from the record.
+			setCoverReveal(
+				cover,
+				screenReveal > 0 ? Math.max(shown, screenReveal) : shown,
+			);
+			setCoverScreenReveal(cover, screenReveal);
 			const goal = hovered.current === i ? 1 : 0;
 			// A hover answers quickly; the selected record (and the one being
 			// let go of) eases forward and back with the camera's move rather
