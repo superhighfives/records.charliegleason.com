@@ -1,310 +1,46 @@
-Welcome to your new TanStack Start app! 
+# records.charliegleason.com
 
-# Getting Started
+My vinyl collection, online. The public side is a filterable grid of sleeves with notes, Pitchfork scores and Discogs details. The admin side is how records get in: I photograph a sleeve on my phone, and the app crops it, works out what it is, and matches it to Discogs.
 
-To run this application:
+Status: active. Started in 2026.
+Live: https://records.charliegleason.com
+
+## Running it
+
+Dev runs against the real Cloudflare D1 database and R2 bucket (there's no local database), so you need to be logged in to Wrangler first. `SETUP.md` has the full setup, including the Cloudflare resources, accounts and keys involved.
 
 ```bash
 bun install
-bun run dev
+bunx wrangler login
+cp .env.example .env.local
+bun run dev          # http://localhost:3000
 ```
 
-# Building For Production
+The minimum to boot is `VITE_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`. `DISCOGS_TOKEN`, `REPLICATE_API_KEY`, `LASTFM_API_KEY`, `LASTFM_USER`, `SERPAPI_KEY`, `CRON_SECRET` and the `VITE_SENTRY_*` variables switch on their features, and the app degrades without them. `.env.example` explains each one.
 
-To build this application for production:
+Other scripts:
 
 ```bash
-bun run build
+bun run test         # Vitest
+bun run check        # Biome lint and format
+bun run db:generate  # new Drizzle migration after editing apps/web/src/db/schema.ts
+bun run db:migrate   # apply migrations to the remote D1 database
+bun run build:wasm   # rebuild the Rust sleeve detectors in crates/
 ```
 
-## Testing
+## Deploying
 
-This project uses [Vitest](https://vitest.dev/) for testing. You can run the tests with:
+Production deploys run in GitHub Actions (`.github/workflows/deploy.yml`) on every push to `main`. Don't deploy from a laptop: Vite inlines `VITE_CLERK_PUBLISHABLE_KEY` at build time, so a local `bun run deploy` would ship the test Clerk key from `.env.local`. CI builds with the production key from repo secrets.
 
-```bash
-bun run test
-```
+Runtime secrets are set once on the Worker with `bunx wrangler secret put <NAME>` and persist across deploys. Bindings (D1, R2, Workers AI, Images, queues, email) live in `apps/web/wrangler.jsonc`.
 
-## Styling
+Each pull request gets its own preview Worker at `records-pr-<number>.<subdomain>.workers.dev`, posted as a PR comment and torn down when the PR closes. Previews share the production D1 database and R2 bucket, so edits made on a preview are real.
 
-This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
+## How it works
 
-### Removing Tailwind CSS
-
-If you prefer not to use Tailwind CSS:
-
-1. Remove the demo pages in `apps/web/src/routes/demo/`
-2. Replace the Tailwind import in `apps/web/src/styles.css` with your own styles
-3. Remove `tailwindcss()` from the plugins array in `apps/web/vite.config.ts`
-4. Uninstall the packages: `bun install @tailwindcss/vite tailwindcss -D`
-
-## Linting & Formatting
-
-This project uses [Biome](https://biomejs.dev/) for linting and formatting. The following scripts are available:
-
-
-```bash
-bun run lint
-bun run format
-bun run check
-```
-
-
-## Deploy to Cloudflare Workers
-
-This project uses the Cloudflare Vite plugin (configured in `apps/web/vite.config.ts`) and `apps/web/wrangler.jsonc`:
-
-1. Install Wrangler: `bun install -g wrangler`
-2. Authenticate: `wrangler login`
-3. Deploy: `bunx wrangler deploy`
-
-For production env vars, run `wrangler secret put MY_VAR` for each secret listed in `.env.example`. Public (non-secret) vars go in `apps/web/wrangler.jsonc` under `vars`.
-
-KV, D1, R2, and Durable Object bindings are configured in `apps/web/wrangler.jsonc` — see https://developers.cloudflare.com/workers/wrangler/configuration/.
-
-
-## Setting up Clerk
-
-1. Sign up at [clerk.com](https://clerk.com) and create an application
-2. Copy the **Publishable Key** from the Clerk dashboard
-3. Set it in your `.env.local`:
-   ```bash
-   VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
-   ```
-4. Visit the demo route at `/demo/clerk` once `bun run dev` is running
-
-### What's wired up
-
-- **`<ClerkProvider>`** at the app root (`apps/web/src/integrations/clerk/provider.tsx`) handles auth context for the whole tree
-- **`<SignInButton>` / `<UserButton>`** in the header swap based on auth state
-- **`/demo/clerk`** shows Clerk's prebuilt sign-in UI and a signed-in greeting
-
-### Protecting a route
-
-Wrap any component in `<SignedIn>` / `<SignedOut>`:
-
-```tsx
-import { SignedIn, SignedOut, RedirectToSignIn } from '@clerk/clerk-react'
-
-function ProtectedPage() {
-  return (
-    <>
-      <SignedIn>
-        <YourPageContent />
-      </SignedIn>
-      <SignedOut>
-        <RedirectToSignIn />
-      </SignedOut>
-    </>
-  )
-}
-```
-
-For server-side checks (route loaders, server functions), see the Clerk docs on [`auth()`](https://clerk.com/docs/references/backend/auth).
-
-### Production checklist
-
-- Replace the test keys with **production keys** from a dedicated production Clerk instance
-- Configure your production domain under **Domains** in the Clerk dashboard
-- Set up social providers (Google, GitHub, etc.) under **User & Authentication → Social Connections**
-
-
-# TanStack Chat Application
-
-Am example chat application built with TanStack Start, TanStack Store, and Claude AI.
-
-## .env Updates
-
-```env
-ANTHROPIC_API_KEY=your_anthropic_api_key
-```
-
-## ✨ Features
-
-### AI Capabilities
-- 🤖 Powered by Claude 3.5 Sonnet 
-- 📝 Rich markdown formatting with syntax highlighting
-- 🎯 Customizable system prompts for tailored AI behavior
-- 🔄 Real-time message updates and streaming responses (coming soon)
-
-### User Experience
-- 🎨 Modern UI with Tailwind CSS and Lucide icons
-- 🔍 Conversation management and history
-- 🔐 Secure API key management
-- 📋 Markdown rendering with code highlighting
-
-### Technical Features
-- 📦 Centralized state management with TanStack Store
-- 🔌 Extensible architecture for multiple AI providers
-- 🛠️ TypeScript for type safety
-
-## Architecture
-
-### Tech Stack
-- **Frontend Framework**: TanStack Start
-- **Routing**: TanStack Router
-- **State Management**: TanStack Store
-- **Styling**: Tailwind CSS
-- **AI Integration**: Anthropic's Claude API
-
-## Shadcn
-
-Add components using the latest version of [Shadcn](https://ui.shadcn.com/).
-
-```bash
-bunx shadcn@latest add button
-```
-
-
-
-## Routing
-
-This project uses [TanStack Router](https://tanstack.com/router) with file-based routing. Routes are managed as files in `apps/web/src/routes`.
-
-### Adding A Route
-
-To add a new route to your application just add a new file in the `./apps/web/src/routes` directory.
-
-TanStack will automatically generate the content of the route file for you.
-
-Now that you have two routes you can use a `Link` component to navigate between them.
-
-### Adding Links
-
-To use SPA (Single Page Application) navigation you will need to import the `Link` component from `@tanstack/react-router`.
-
-```tsx
-import { Link } from "@tanstack/react-router";
-```
-
-Then anywhere in your JSX you can use it like so:
-
-```tsx
-<Link to="/about">About</Link>
-```
-
-This will create a link that will navigate to the `/about` route.
-
-More information on the `Link` component can be found in the [Link documentation](https://tanstack.com/router/v1/docs/framework/react/api/router/linkComponent).
-
-### Using A Layout
-
-In the File Based Routing setup the layout is located in `apps/web/src/routes/__root.tsx`. Anything you add to the root route will appear in all the routes. The route content will appear in the JSX where you render `{children}` in the `shellComponent`.
-
-Here is an example layout that includes a header:
-
-```tsx
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
-
-export const Route = createRootRoute({
-  head: () => ({
-    meta: [
-      { charSet: 'utf-8' },
-      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'My App' },
-    ],
-  }),
-  shellComponent: ({ children }) => (
-    <html lang="en">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        <header>
-          <nav>
-            <Link to="/">Home</Link>
-            <Link to="/about">About</Link>
-          </nav>
-        </header>
-        {children}
-        <Scripts />
-      </body>
-    </html>
-  ),
-})
-```
-
-More information on layouts can be found in the [Layouts documentation](https://tanstack.com/router/latest/docs/framework/react/guide/routing-concepts#layouts).
-
-## Server Functions
-
-TanStack Start provides server functions that allow you to write server-side code that seamlessly integrates with your client components.
-
-```tsx
-import { createServerFn } from '@tanstack/react-start'
-
-const getServerTime = createServerFn({
-  method: 'GET',
-}).handler(async () => {
-  return new Date().toISOString()
-})
-
-// Use in a component
-function MyComponent() {
-  const [time, setTime] = useState('')
-  
-  useEffect(() => {
-    getServerTime().then(setTime)
-  }, [])
-  
-  return <div>Server time: {time}</div>
-}
-```
-
-## API Routes
-
-You can create API routes by using the `server` property in your route definitions:
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router'
-import { json } from '@tanstack/react-start'
-
-export const Route = createFileRoute('/api/hello')({
-  server: {
-    handlers: {
-      GET: () => json({ message: 'Hello, World!' }),
-    },
-  },
-})
-```
-
-## Data Fetching
-
-There are multiple ways to fetch data in your application. You can use TanStack Query to fetch data from a server. But you can also use the `loader` functionality built into TanStack Router to load the data for a route before it's rendered.
-
-For example:
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router'
-
-export const Route = createFileRoute('/people')({
-  loader: async () => {
-    const response = await fetch('https://swapi.dev/api/people')
-    return response.json()
-  },
-  component: PeopleComponent,
-})
-
-function PeopleComponent() {
-  const data = Route.useLoaderData()
-  return (
-    <ul>
-      {data.results.map((person) => (
-        <li key={person.name}>{person.name}</li>
-      ))}
-    </ul>
-  )
-}
-```
-
-Loaders simplify your data fetching logic dramatically. Check out more information in the [Loader documentation](https://tanstack.com/router/latest/docs/framework/react/guide/data-loading#loader-parameters).
-
-# Demo files
-
-Files prefixed with `demo` can be safely deleted. They are there to provide a starting point for you to play around with the features you've installed.
-
-# Learn More
-
-You can learn more about all of the offerings from TanStack in the [TanStack documentation](https://tanstack.com).
-
-For TanStack Start specific documentation, visit [TanStack Start](https://tanstack.com/start).
+- TanStack Start on Cloudflare Workers, with TanStack Router, Query, DB, Table and Form, Tailwind and shadcn/ui. The Worker entry is `apps/web/src/server.ts`, which adds cron and queue handlers around the TanStack Start fetch handler.
+- Data lives in D1 through Drizzle, and photos live in R2. The read endpoints under `/api` are public. Everything under `/admin` sits behind Clerk.
+- Capture: a photo is uploaded to R2 and processed on a queue. A learned corner detector (Rust compiled to WebAssembly, in `crates/`, trained by the pipeline in `ml/`) finds the sleeve, and the app perspective-corrects and crops it. Claude, through Workers AI and AI Gateway, reads the sleeve, then the app matches it against Discogs and The Fork for Pitchfork scores.
+- Cron jobs send a daily "record of the day" email (replying to it saves the reply as that record's notes), a weekly "records to buy" digest built from my Last.fm listening, and a daily check that Discogs links still resolve.
+- `rec/` is firmware for a Waveshare ESP32-S3 touch screen that shows the collection, and `mac/` is a small macOS app that plays an album in Apple Music when you tap it on the board.
+- `fly/discogs-proxy` is an optional proxy on Fly.io that gives Discogs requests a dedicated IP, because Discogs rate-limits Cloudflare's shared ones.
