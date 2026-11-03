@@ -286,10 +286,12 @@ export function CollectionView({
 				<ThemeToggle className="size-8 rounded-full border-0" />
 			</div>
 
-			{/* On the wall, the hero sits in the middle of it (see styles.css). */}
+			{/* On the wall, the hero — with the footer's stats sentence under it
+			    — sits in the middle of it at load (see styles.css). */}
 			{!search.trim() && (
 				<div data-wall-chrome data-wall-hero>
 					<CollectionHero count={data.length} />
+					{wallMode && <CollectionStatsSentence records={data} />}
 				</div>
 			)}
 

@@ -1395,6 +1395,18 @@ a {
   margin: 0;
   text-align: center;
 }
+/* Both have to fit the screen together, so they size to whichever of its
+   width or height is tighter. */
+:root[data-wall] [data-wall-hero] > :first-child {
+  font-size: min(5.5vw, 9vh);
+  line-height: 1.05;
+}
+:root[data-wall] [data-wall-hero] .stats-sentence {
+  max-width: 56rem;
+  margin: 3vh auto 0;
+  font-size: min(2.4vw, 3.8vh);
+  line-height: 1.2;
+}
 :root[data-wall-hero-gone] [data-wall-hero] {
   display: none;
 }
