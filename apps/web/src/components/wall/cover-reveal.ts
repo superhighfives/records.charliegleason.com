@@ -108,6 +108,10 @@ type RevealUniforms = {
 	 */
 	uBandBottom: { value: number };
 	uBandTop: { value: number };
+	/** The same for the side edges, as the wall pans across. */
+	uBandLeft: { value: number };
+	uBandRight: { value: number };
+	uViewportWidth: { value: number };
 };
 
 const HEADER_GLSL = /* glsl */ `
@@ -125,6 +129,9 @@ const HEADER_GLSL = /* glsl */ `
 	uniform float uViewportHeight;
 	uniform float uBandBottom;
 	uniform float uBandTop;
+	uniform float uBandLeft;
+	uniform float uBandRight;
+	uniform float uViewportWidth;
 	float revealHash(vec2 p) {
 		return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 	}
@@ -180,6 +187,10 @@ const MAP_GLSL = /* glsl */ `
 			float onScreen =
 				mix(1.0, smoothstep(0.0, 0.25, v), uBandBottom) *
 				mix(1.0, 1.0 - smoothstep(0.75, 1.0, v), uBandTop);
+			float u = gl_FragCoord.x / uViewportWidth;
+			onScreen *=
+				mix(1.0, smoothstep(0.0, 0.2, u), uBandLeft) *
+				mix(1.0, 1.0 - smoothstep(0.8, 1.0, u), uBandRight);
 			t = mix(t, min(t, onScreen), uScreen);
 		}
 		vec2 uv = vMapUv;
@@ -470,6 +481,9 @@ export function makeCoverMaterial(
 		uViewportHeight: revealViewportHeight,
 		uBandBottom: revealBands.bottom,
 		uBandTop: revealBands.top,
+		uBandLeft: revealBands.left,
+		uBandRight: revealBands.right,
+		uViewportWidth: revealViewportWidth,
 	};
 	material.userData.revealUniforms = uniforms;
 	material.onBeforeCompile = (shader) => {
@@ -523,7 +537,15 @@ export function setCoverDirection(
 export const revealViewportHeight = { value: 1 };
 
 /** The edge bands' weights, shared like `revealViewportHeight` — see `uBandBottom`. */
-export const revealBands = { bottom: { value: 1 }, top: { value: 0 } };
+export const revealBands = {
+	bottom: { value: 1 },
+	top: { value: 0 },
+	left: { value: 0 },
+	right: { value: 0 },
+};
+
+/** The drawing buffer's width, shared like `revealViewportHeight`. */
+export const revealViewportWidth = { value: 1 };
 
 /** How much the reveal follows screen height — see `uScreen`. */
 export function setCoverScreenReveal(

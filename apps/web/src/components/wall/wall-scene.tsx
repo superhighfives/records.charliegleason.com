@@ -18,9 +18,7 @@ import {
 import * as THREE from "three";
 import {
 	computeSpanningIds,
-	GRID_SCROLL_DURATION_MS,
 	hasNotes,
-	smoothScrollTo,
 	TILE_MIN_PX,
 } from "#/components/collection-grid";
 import { SceneStatsProbe } from "#/components/three/scene-stats-probe";
@@ -37,6 +35,7 @@ import {
 	type RevealStyle,
 	revealBands,
 	revealViewportHeight,
+	revealViewportWidth,
 	setCoverDirection,
 	setCoverFade,
 	setCoverReveal,
@@ -52,27 +51,26 @@ import { packDense } from "./pack";
 import { WhitePointEffect } from "./white-point";
 
 /**
- * Prototype: the collection grid as records hung on a dark, gently curved
- * wall. The canvas sits fixed *behind* the page (see `WallGrid`), which
- * reserves the grid's space with a slot element; the camera tracks that
- * slot's position on screen, so native page scroll moves the wall exactly
- * like it moved the DOM grid — header, filters and footer scroll over it.
+ * The collection as records hung on an endless wall: the collection tiles
+ * in every direction (see `buildTile`), and you move around it by dragging
+ * (with momentum), with the wheel or trackpad, or by touch — the page itself
+ * doesn't scroll. The canvas sits fixed over the page's own content (see
+ * `WallGrid`) and never takes a pointer event; the scene listens on
+ * `window` and treats anywhere that isn't a control as wall.
  *
- * - The wall curves away above and below the middle of the screen, and depth
- *   of field focuses on the middle, so rows blur as they recede.
+ * - The wall curves away above and below the middle of the screen.
  * - The camera drifts with the pointer (parallax against wall and dust), and a
  *   spotlight follows the cursor, throwing each cover's shadow on the wall.
  * - The hovered record lifts off the wall and its vinyl slides out. On touch,
- *   the record at the centre of the screen is the "hovered" one.
+ *   the record nearest the middle of the screen is the "hovered" one.
+ * - Clicking a record moves the camera in on it beside the record panel;
+ *   dragging or scrolling then pans, and settles on the nearest record.
+ * - Records reveal as they come in from an edge (the edge being the one the
+ *   view is moving toward); at load, the page opens like a page, with the
+ *   wall below the hero, until it first moves.
  *
- * Page content covers the canvas, so the canvas never gets pointer events
- * itself. The scene tracks the pointer on `window` and raycasts against the
- * visible records itself (once per frame for hover, once per click) — and
- * only for events whose DOM target is the slot, never through the header,
- * the filters or an open record panel. (R3F's own per-mesh events, driven
- * from `document.body`, intermittently stopped reporting hovers after a
- * re-filter; doing it by hand is also cheaper than R3F tracking every record
- * as interactive.)
+ * Hover and clicks raycast against each record's resting cell by hand (once
+ * per frame, once per click) rather than through R3F's per-mesh events.
  */
 
 const TILE = 1;
@@ -109,7 +107,6 @@ const ZERO2 = new THREE.Vector2();
 /** How much each cover lights itself, per theme — see `uSelfLight`. */
 const SELF_LIGHT_DARK = 0.55;
 const SELF_LIGHT_LIGHT = 0.3;
-/** How long a record takes to emerge once its cover image arrives. */
 /** The plain fade as a cover's image arrives. */
 const FADE_S = 0.3;
 
@@ -149,9 +146,10 @@ const SPOT_LIGHT = 3;
  * lit room).
  */
 const DAYLIGHT = 1.2;
-/** Space above the first row / below the last, in world units. */
+/** Space above the first row where the wall starts, in world units. */
 const TOP_PAD = 0.1;
-const BOTTOM_PAD = 0.45;
+/** The page's side padding (`sm:px-6`), for matching the grid's columns. */
+const PAGE_PAD_PX = 24;
 /**
  * A record with notes has a slip of paper tucked into its sleeve, peeking out
  * of the top — the wall's version of the DOM grid's yellow notes dot.
@@ -161,7 +159,6 @@ const SLIP_H = 0.3;
 /** How far the slip pokes above the sleeve at rest, and extra on hover. */
 const SLIP_PEEK = 0.115;
 const SLIP_PULL = 0.07;
-/** Clearance kept between the selected record and the record panel's edge. */
 /** Most the camera closes in on a selected record (a share of its distance). */
 const FOCUS_ZOOM = 0.38;
 /** The camera's move to (and between, and away from) a selected record. */
@@ -192,20 +189,22 @@ export type RevealConfig = {
 
 export type WallSceneProps = {
 	records: PublicRecord[];
-	/** The in-page element that reserves the wall's space. */
-	slot: HTMLElement;
-	onActiveChange: (index: number | null) => void;
+	/**
+	 * Where the wall's first row starts on screen at load, in CSS px from the
+	 * top (just under the hero and filters) — after that the wall moves only
+	 * by dragging.
+	 */
+	startTop: number;
+	/** The record under the pointer (or, on touch, at the centre), if any. */
+	onActiveChange: (record: PublicRecord | null) => void;
 	onOpen: (record: PublicRecord) => void;
 	/** Closes the record panel (a click on the empty wall while it's open). */
 	onClose: () => void;
 	/**
-	 * The record the panel has open, if any: it stays lifted and lit, the page
-	 * scrolls to keep it in view as the panel pages, and the camera pans right
-	 * just enough to keep it clear of the panel.
+	 * The record the panel has open, if any: the camera moves in on its
+	 * nearest copy, which stays lifted and lit.
 	 */
 	focusedRecordId: number | null;
-	/** The slot height the wall needs, in CSS px. */
-	onContentHeight: (px: number) => void;
 	theme: WallTheme;
 	reveal: RevealConfig;
 	isTouch: boolean;
@@ -332,10 +331,10 @@ type TileAnim = { x: number; y: number; spanScale: number; presence: number };
 
 /** A record filtered out, kept around while it sinks back into the wall. */
 type Exiting = {
+	key: string;
 	record: PublicRecord;
 	anim: TileAnim;
 	z: number;
-	row: number;
 	span: number;
 };
 
@@ -349,87 +348,143 @@ type Shared = {
 	slip: THREE.MeshStandardMaterial;
 };
 
+/** One drawn record: the collection repeats to fill the tile when it's small. */
+type Instance = {
+	record: PublicRecord;
+	/** Stable across re-filters: `<record id>:<copy>`. */
+	key: string;
+	span: number;
+};
+
+/**
+ * The wall's tile: the records packed edge to edge (dense, like the DOM
+ * grid, with notes records 2×2), repeated in every direction. It's kept
+ * wider and taller than the view by a margin, so each record is drawn once,
+ * at whichever copy is nearest the camera, and the hop between copies always
+ * happens off screen. A small collection (a narrow filter) repeats to fill
+ * that size, and the last row is topped up so the tile has no holes to
+ * repeat.
+ */
+function buildTile(records: PublicRecord[], minCols: number, minRows: number) {
+	if (records.length === 0) {
+		return { instances: [] as Instance[], placements: [], cols: 1, rows: 1 };
+	}
+	const spanning = computeSpanningIds(records);
+	const spanOf = (r: PublicRecord) => (spanning.has(r.id) ? 2 : 1);
+	const cellsPerCopy = records.reduce((n, r) => n + spanOf(r) ** 2, 0);
+	const cols = Math.max(minCols, Math.ceil(Math.sqrt(cellsPerCopy * 1.6)));
+	const copies = Math.max(1, Math.ceil((cols * minRows) / cellsPerCopy));
+	const instances: Instance[] = [];
+	for (let c = 0; c < copies; c++) {
+		for (const record of records) {
+			instances.push({
+				record,
+				key: `${record.id}:${c}`,
+				span: spanOf(record),
+			});
+		}
+	}
+	let packed = packDense(
+		instances.map((i) => i.span),
+		cols,
+	);
+	const used = instances.reduce((n, i) => n + i.span ** 2, 0);
+	const holes = packed.rows * cols - used;
+	if (holes > 0) {
+		for (let k = 0; k < holes; k++) {
+			const record = records[k % records.length];
+			instances.push({ record, key: `${record.id}:fill${k}`, span: 1 });
+		}
+		packed = packDense(
+			instances.map((i) => i.span),
+			cols,
+		);
+	}
+	return {
+		instances,
+		placements: packed.placements,
+		cols,
+		rows: packed.rows,
+	};
+}
+
+/** `v` moved by whole tiles of length `size` to its copy nearest `centre`. */
+function wrapNear(v: number, centre: number, size: number) {
+	return v + size * Math.round((centre - v) / size);
+}
+
+/** A stable 0–1 hash of a string (an instance key), for per-copy jitter. */
+function hash01(key: string) {
+	let h = 2166136261;
+	for (let i = 0; i < key.length; i++) {
+		h ^= key.charCodeAt(i);
+		h = Math.imul(h, 16777619);
+	}
+	return (h >>> 0) / 4294967296;
+}
+
+/** Page elements a press on the wall must leave alone. */
+const INTERACTIVE =
+	'button, a, input, textarea, select, label, [role="button"], [data-slot="sheet-content"], .floating-controls, [data-debug-overlay]';
+
 function Wall({
 	records,
-	slot,
+	startTop,
 	onActiveChange,
 	onOpen,
 	onClose,
 	focusedRecordId,
-	onContentHeight,
 	theme,
 	reveal,
 	isTouch,
 }: WallSceneProps) {
 	const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
 	const size = useThree((s) => s.size);
-	// The wall spans the slot's full width (the page's content column, same
-	// as the filter strip above it). `size` changing re-renders this, which
-	// re-reads the slot after any resize.
-	const slotWidth = slot.clientWidth || size.width;
-	const cols = columnsFor(slotWidth);
-
-	// Dense-packed exactly like the DOM grid: the same records (some of those
-	// with notes) take a 2×2 slot, and later 1×1s backfill around them.
-	const packed = useMemo(() => {
-		const spanning = computeSpanningIds(records);
-		return packDense(
-			records.map((r) => (spanning.has(r.id) ? 2 : 1)),
-			cols,
-		);
-	}, [records, cols]);
-	const rows = packed.rows;
-
-	const gridWidth = cols * PITCH - GAP;
+	// As many columns across the screen as the DOM grid shows (less the
+	// page's side padding).
+	const visibleCols = columnsFor(size.width - PAGE_PAD_PX * 2);
+	const gridWidth = visibleCols * PITCH - GAP;
 	const tanHalf = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
 	const aspect = size.width / size.height;
-	const viewWidthFit = (gridWidth * size.width) / slotWidth;
+	const viewWidthFit =
+		(gridWidth * size.width) / (size.width - PAGE_PAD_PX * 2);
 	const distance = viewWidthFit / 2 / (tanHalf * aspect);
 	const viewHeight = 2 * distance * tanHalf;
 	const viewWidth = viewHeight * aspect;
 	const unitsPerPx = viewHeight / size.height;
-	const wallHeight = TOP_PAD + rows * PITCH - GAP + BOTTOM_PAD;
+	const visibleRows = Math.ceil(viewHeight / PITCH);
 
-	useEffect(() => {
-		onContentHeight(wallHeight / unitsPerPx);
-	}, [wallHeight, unitsPerPx, onContentHeight]);
+	const tile = useMemo(
+		() => buildTile(records, visibleCols + 4, visibleRows + 4),
+		[records, visibleCols, visibleRows],
+	);
+	const instances = tile.instances;
+	const tileW = tile.cols * PITCH;
+	const tileH = tile.rows * PITCH;
+	/** Instance records, in instance order (what the texture stream loads). */
+	const drawn = useMemo(() => instances.map((i) => i.record), [instances]);
 
-	// Each record's centre (a 2×2 sits over its four cells) plus a little
-	// depth jitter, so the parallax has layers to work with.
+	// Each instance's centre in the tile (a 2×2 sits over its four cells),
+	// plus a little depth jitter, so the parallax has layers to work with.
 	const layout = useMemo(
 		() =>
-			records.map((record, i) => {
-				const { col, row, span } = packed.placements[i];
-				const jitter = Math.sin(record.id * 12.9898) * 43758.5453;
+			instances.map((inst, i) => {
+				const { col, row, span } = tile.placements[i];
 				return {
-					x: (col + (span - 1) / 2 - (cols - 1) / 2) * PITCH,
+					x: (col + (span - 1) / 2 - (tile.cols - 1) / 2) * PITCH,
 					y: -(row + (span - 1) / 2) * PITCH,
-					z: (jitter - Math.floor(jitter) - 0.5) * 0.14,
-					row,
+					z: (hash01(inst.key) - 0.5) * 0.14,
 					span,
 					/** World size relative to a 1×1 — a 2×2 also covers the gap. */
 					spanScale: (span * PITCH - GAP) / TILE,
 				};
 			}),
-		[records, cols, packed],
+		[instances, tile],
 	);
 	const layoutRef = useRef(layout);
 	layoutRef.current = layout;
-	/** The record covering a cell, or the nearest one along its row. */
-	const recordAt = useCallback(
-		(row: number, col: number) => {
-			const r = Math.min(rows - 1, Math.max(0, row));
-			for (let d = 0; d < cols; d++) {
-				for (const c of [col - d, col + d]) {
-					if (c < 0 || c >= cols) continue;
-					const i = packed.cells[r * cols + c];
-					if (i >= 0) return i;
-				}
-			}
-			return 0;
-		},
-		[packed, rows, cols],
-	);
+	const tileRef = useRef({ w: tileW, h: tileH });
+	tileRef.current = { w: tileW, h: tileH };
 
 	const shared = useMemo<Shared>(() => {
 		const sleeveGeometry = new THREE.BoxGeometry(TILE, TILE, SLEEVE_DEPTH);
@@ -454,51 +509,57 @@ function Wall({
 
 	const handles = useRef<(TileHandle | null)[]>([]);
 	const lift = useRef(new Float32Array(0));
-	if (lift.current.length !== records.length) {
-		lift.current = new Float32Array(records.length);
+	if (lift.current.length !== instances.length) {
+		lift.current = new Float32Array(instances.length);
 	}
-	const recordsRef = useRef(records);
-	recordsRef.current = records;
+	const instancesRef = useRef(instances);
+	instancesRef.current = instances;
 
 	// Filtering animates: records that stay glide to their new slot, new ones
 	// rise out of the wall and grow in, and filtered-out ones sink back into
-	// it (kept in `exiting` until they're gone). Keyed by record id, since a
+	// it (kept in `exiting` until they're gone). Keyed by instance, since a
 	// re-filter moves every index.
-	const anims = useRef(new Map<number, TileAnim>());
+	const anims = useRef(new Map<string, TileAnim>());
 	/** False until the first re-filter — the initial load doesn't animate in. */
 	const animateIn = useRef(false);
 	const [exiting, setExiting] = useState<Exiting[]>([]);
 	const exitingRef = useRef(exiting);
 	exitingRef.current = exiting;
-	const exitHandles = useRef(new Map<number, TileHandle>());
-	const prevRecords = useRef(records);
+	const exitHandles = useRef(new Map<string, TileHandle>());
+	const prevInstances = useRef(instances);
 	const prevLayout = useRef<typeof layout>(layout);
 	useEffect(() => {
-		const before = prevRecords.current;
+		const before = prevInstances.current;
 		const beforeLayout = prevLayout.current;
-		prevRecords.current = records;
+		prevInstances.current = instances;
 		prevLayout.current = layout;
-		if (before === records) return;
+		if (before === instances) return;
 		animateIn.current = true;
-		const kept = new Set(records.map((r) => r.id));
+		const kept = new Set(instances.map((i) => i.key));
 		// A record filtered back in mid-exit picks up from where it was.
 		for (const e of exitingRef.current) {
-			if (kept.has(e.record.id)) anims.current.set(e.record.id, e.anim);
+			if (kept.has(e.key)) anims.current.set(e.key, e.anim);
 		}
 		const leaving: Exiting[] = [];
-		before.forEach((record, i) => {
-			if (kept.has(record.id)) return;
-			const anim = anims.current.get(record.id);
-			anims.current.delete(record.id);
+		before.forEach((inst, i) => {
+			if (kept.has(inst.key)) return;
+			const anim = anims.current.get(inst.key);
+			anims.current.delete(inst.key);
 			const pos = beforeLayout[i];
 			if (!anim || !pos) return;
-			leaving.push({ record, anim, z: pos.z, row: pos.row, span: pos.span });
+			leaving.push({
+				key: inst.key,
+				record: inst.record,
+				anim,
+				z: pos.z,
+				span: pos.span,
+			});
 		});
 		setExiting((current) => [
-			...current.filter((e) => !kept.has(e.record.id)),
+			...current.filter((e) => !kept.has(e.key)),
 			...leaving,
 		]);
-	}, [records, layout]);
+	}, [instances, layout]);
 	const reducedMotion = useMemo(
 		() => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
 		[],
@@ -506,36 +567,42 @@ function Wall({
 
 	const hovered = useRef<number | null>(null);
 	const active = useRef<number | null>(null);
-	const lastCenter = useRef(-1);
 	const parallax = useRef(new THREE.Vector2());
 	const spot = useRef<THREE.SpotLight>(null);
 	const ambient = useRef<THREE.AmbientLight>(null);
 	const hemi = useRef<THREE.HemisphereLight>(null);
-	// Touch gets more fill light: its spotlight can't follow a pointer, so it
-	// can't sweep light over the rows above and below the middle.
 	// A soft, even fill over the whole wall, so covers keep their detail
-	// rather than only reading where the torch lands.
+	// rather than only reading where the torch lands. Touch gets more: its
+	// spotlight can't follow a pointer.
 	const ambientBase = (theme.dark ? 0.6 : 1) + (isTouch ? 0.35 : 0);
 	const hemiBase = theme.dark ? 0.4 : 0.45;
 	const sun = useRef<THREE.DirectionalLight>(null);
-	/** Velocities for the `smoothDamp` springs (spotlight, panel pan). */
+	/** Velocities for the `smoothDamp` springs. */
 	const springs = useRef<Record<string, number>>({});
 	/** 0 → 1 as a record is selected: house lights down, spotlight on it. */
 	const lightsDown = useRef(0);
 	const wall = useRef<THREE.Mesh>(null);
-	/** Camera travel down the wall, in world units (drives the dust). */
-	const travel = useRef(0);
-	const getTravel = useCallback(() => travel.current, []);
-	/** The camera's x across the wall (centred on a selected record). */
+	/** Camera travel across the wall, in world units (drives the dust). */
+	const travel = useRef({ x: 0, y: 0 });
+	const getTravelY = useCallback(() => travel.current.y, []);
+	const getTravelX = useCallback(() => travel.current.x, []);
+	/** The camera's x across the wall. */
 	const panelShift = useRef(0);
 	/** How far the camera has moved in on a selected record (0–1 of its distance). */
 	const zoom = useRef(0);
 	/**
-	 * The camera's place — x, y down the wall, zoom — and the one eased move
-	 * between where it was and where it's going: following the scroll, or
+	 * Where the camera rests when no record is selected: moved by dragging
+	 * (with momentum) and by the wheel / trackpad. `vx`/`vy` carry a fling on
+	 * after the pointer lets go.
+	 */
+	const free = useRef({ x: 0, y: Number.NaN, vx: 0, vy: 0 });
+	/** Mid-drag (unzoomed), so momentum waits until the pointer lets go. */
+	const dragging = useRef(false);
+	/**
+	 * The camera's place — x, y, zoom — and the one eased move between where
+	 * it was and where it's going: resting where the wall was dragged to, or
 	 * framing a selected record. One tween for all three keeps the move a
-	 * straight, smooth ease; separate springs (and the page scrolling under
-	 * them) drew it as an S.
+	 * straight, smooth ease.
 	 */
 	const cam = useRef({ x: 0, y: Number.NaN, zoom: 0 });
 	const camTween = useRef({
@@ -554,59 +621,36 @@ function Wall({
 	const pan = useRef({ x: 0, y: 0 });
 	/** A record picked by letting go of a drag, until the route catches up. */
 	const pendingFocus = useRef<number | null>(null);
-	/** Which way the page last scrolled (down on load), and where it was. */
-	const scrollDown = useRef(true);
-	const lastScrollY = useRef<number | null>(null);
 	/** Where on the wall a selected record is framed (for picking the nearest). */
 	const frameOffset = useRef(0);
+	/**
+	 * Until the wall first moves, the rows above its start stay hidden — the
+	 * page opens like a page (hero, filters, the wall below) — then grow in.
+	 */
+	const moved = useRef(false);
+	/** Last frame's camera, for which edges records are coming in from. */
+	const lastCam = useRef<{ x: number; y: number } | null>(null);
+	/** Where textures were last streamed around. */
+	const streamedAt = useRef<{ x: number; y: number } | null>(null);
 
-	const focusedIndex = useMemo(
-		() =>
-			focusedRecordId == null
-				? -1
-				: records.findIndex((r) => r.id === focusedRecordId),
-		[records, focusedRecordId],
-	);
-	const focusedRef = useRef(focusedIndex);
-	focusedRef.current = focusedIndex;
-
-	// Keep the selected record on screen as the panel pages through records —
-	// the same eased scroll the DOM grid uses. The first run (a direct link to
-	// a record) jumps straight there instead.
-	const firstFocus = useRef(true);
+	// The selected record is one of possibly several drawn copies: the one
+	// nearest the camera when it was chosen.
+	const focusedRecordRef = useRef(focusedRecordId);
+	focusedRecordRef.current = focusedRecordId;
+	const focusSeen = useRef<number | null>(null);
+	const focusIndex = useRef(-1);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a new tile means new indices
 	useEffect(() => {
-		if (focusedIndex < 0) return;
-		const { row, span } = layout[focusedIndex];
-		const targetY = () => {
-			const slotDocTop = slot.getBoundingClientRect().top + window.scrollY;
-			const fromSlotTop =
-				(TOP_PAD + row * PITCH + (span * PITCH - GAP) / 2) / unitsPerPx;
-			return slotDocTop + fromSlotTop - window.innerHeight / 2;
+		focusSeen.current = null;
+		streamedAt.current = null;
+		hovered.current = null;
+	}, [instances]);
+
+	useEffect(() => {
+		return () => {
+			delete document.documentElement.dataset.wallMoved;
 		};
-		const reduced = window.matchMedia(
-			"(prefers-reduced-motion: reduce)",
-		).matches;
-		if (!firstFocus.current && !reduced) {
-			smoothScrollTo(targetY(), GRID_SCROLL_DURATION_MS, easeInOutCubic);
-			return;
-		}
-		firstFocus.current = false;
-		// A direct link lands before the slot has grown to the wall's height —
-		// scrolling then gets clamped to the still-short page (it ended up at
-		// the footer). Wait, a few frames at most, for the full height.
-		const fullHeight = wallHeight / unitsPerPx;
-		let raf = 0;
-		let tries = 0;
-		const jump = () => {
-			if (slot.offsetHeight + 1 < fullHeight && tries++ < 60) {
-				raf = requestAnimationFrame(jump);
-				return;
-			}
-			window.scrollTo(0, targetY());
-		};
-		jump();
-		return () => cancelAnimationFrame(raf);
-	}, [focusedIndex, layout, unitsPerPx, slot, wallHeight]);
+	}, []);
 
 	// The shadow-catching wall bows back exactly like the records do (see the
 	// curve in the frame loop), so a record never passes through it.
@@ -624,38 +668,37 @@ function Wall({
 	useEffect(() => () => wallGeometry.dispose(), [wallGeometry]);
 	const lookAt = useMemo(() => new THREE.Vector3(), []);
 	const raycaster = useMemo(() => new THREE.Raycaster(), []);
-	/** Pointer in NDC (-1…1), and whether it's over the slot right now. */
-	const pointer = useRef({ ndc: new THREE.Vector2(), overSlot: false });
+	/** Pointer in NDC (-1…1), and whether it's over the wall right now. */
+	const pointer = useRef({ ndc: new THREE.Vector2(), overWall: false });
 	/** Records drawn last frame — the only ones worth testing. */
 	const pickable = useRef<number[]>([]);
 	/** The camera height the last frame used, for picking between frames. */
 	const pickCamY = useRef(0);
+	/** Each instance's drawn (wrapped) position, from the last frame. */
+	const drawnAt = useRef(new Map<string, { x: number; y: number }>());
 
 	// Hit-tests each record's *resting* place on the wall — its full grid cell,
 	// on the curve, before any hover lift or tilt — rather than its animated
-	// mesh. A hovered record lifts and turns toward the cursor, which moved its
-	// edge out from under the cursor, un-hovered it, dropped it back, and
-	// hovered it again: a flicker loop. Cells also tile the wall with no gaps,
-	// so crossing between two records doesn't drop the hover for a frame.
+	// mesh, so a hovered record turning toward the cursor can't flicker the
+	// hover. Cells also tile the wall with no gaps.
 	const pick = useCallback(
 		(ndc: THREE.Vector2): number | null => {
 			raycaster.setFromCamera(ndc, camera);
 			const { origin: o, direction: d } = raycaster.ray;
 			const half = viewHeight / 2;
-			const recs = recordsRef.current;
+			const insts = instancesRef.current;
 			const lay = layoutRef.current;
 			for (const i of pickable.current) {
 				const pos = lay[i];
-				if (!pos) continue;
-				const rec = recs[i];
-				const anim = (rec && anims.current.get(rec.id)) || pos;
-				const dy = (anim.y - pickCamY.current) / half;
+				const at = insts[i] && drawnAt.current.get(insts[i].key);
+				if (!pos || !at) continue;
+				const dy = (at.y - pickCamY.current) / half;
 				const z = pos.z - CURVE_DEPTH * dy * dy;
 				const t = (z - o.z) / d.z;
 				const x = o.x + d.x * t;
 				const y = o.y + d.y * t;
 				const reach = (pos.span * PITCH) / 2;
-				if (Math.abs(x - anim.x) <= reach && Math.abs(y - anim.y) <= reach) {
+				if (Math.abs(x - at.x) <= reach && Math.abs(y - at.y) <= reach) {
 					return i;
 				}
 			}
@@ -664,41 +707,41 @@ function Wall({
 		[raycaster, camera, viewHeight],
 	);
 
-	// Pointer, from `window` (the page covers the canvas; with a record open,
-	// the panel's transparent overlay does). A press that doesn't move is a
-	// click: on a record, open it; on the empty wall with a record open,
-	// close it. Zoomed in on a record, a press that moves drags the camera
-	// around, and letting go selects the record nearest the middle.
+	// Pointer, from `window` (the page and, with a record open, the panel's
+	// transparent overlay sit over the canvas). Anywhere that isn't a control
+	// is wall. A press that moves drags the wall (with momentum when let
+	// go); zoomed in on a record it pans, and letting go selects the record
+	// nearest the middle. A press that doesn't move is a click: on a record,
+	// open it; on the empty wall with a record open, close it.
 	useEffect(() => {
-		if (isTouch) return;
 		const toNdc = (e: MouseEvent) =>
 			pointer.current.ndc.set(
 				(e.clientX / window.innerWidth) * 2 - 1,
 				-(e.clientY / window.innerHeight) * 2 + 1,
 			);
 		const onWall = (target: EventTarget | null) =>
-			target === slot ||
-			(target instanceof Element &&
-				target.closest('[data-slot="sheet-overlay"]') != null);
-		// Moves the zoomed-in view by a screen-pixel distance, kept over the wall.
+			target instanceof Element && target.closest(INTERACTIVE) == null;
+		const markMoved = () => {
+			if (moved.current) return;
+			moved.current = true;
+			document.documentElement.dataset.wallMoved = "";
+		};
+		// Moves the view by a screen-pixel distance: zoomed in, the pan
+		// offset; otherwise where the camera rests.
 		const panBy = (dxPx: number, dyPx: number) => {
 			// One screen pixel's worth of wall, at the current zoom.
 			const k = unitsPerPx * (1 - zoom.current);
-			const lay = layoutRef.current;
-			const p = pan.current;
-			const c = cam.current;
-			p.x += dxPx * k;
-			p.y -= dyPx * k;
-			const minY = Math.min(0, ...lay.map((l) => l.y));
-			p.x = THREE.MathUtils.clamp(
-				p.x,
-				-viewWidth / 2 - c.x,
-				viewWidth / 2 - c.x,
-			);
-			p.y = THREE.MathUtils.clamp(p.y, minY - c.y, -c.y);
+			if (focusIndex.current >= 0) {
+				pan.current.x += dxPx * k;
+				pan.current.y -= dyPx * k;
+			} else {
+				free.current.x += dxPx * k;
+				free.current.y -= dyPx * k;
+			}
+			markMoved();
 		};
-		// After a drag or a wheel pan: fold it into the camera, then frame the
-		// record nearest the middle of the view from there.
+		// After a zoomed-in drag or wheel pan: fold it into the camera, then
+		// frame the record nearest the middle of the view from there.
 		const settle = () => {
 			const c = cam.current;
 			const p = pan.current;
@@ -709,8 +752,12 @@ function Wall({
 			const cx = c.x + frameOffset.current;
 			let nearest = -1;
 			let best = Number.POSITIVE_INFINITY;
+			const { w, h } = tileRef.current;
 			layoutRef.current.forEach((l, i) => {
-				const d = Math.hypot(l.x - cx, l.y - c.y);
+				const d = Math.hypot(
+					wrapNear(l.x, cx, w) - cx,
+					wrapNear(l.y, c.y, h) - c.y,
+				);
 				if (d < best) {
 					best = d;
 					nearest = i;
@@ -719,50 +766,82 @@ function Wall({
 			if (nearest < 0) return;
 			camTween.current.key = -2; // restart the move, even to the same record
 			pendingFocus.current = nearest;
-			if (nearest !== focusedRef.current) {
-				onOpen(recordsRef.current[nearest]);
-			}
+			focusIndex.current = nearest;
+			const record = instancesRef.current[nearest]?.record;
+			if (record && record.id !== focusedRecordRef.current) onOpen(record);
 		};
-		let press: { x: number; y: number; moved: boolean } | null = null;
+		let press: {
+			x: number;
+			y: number;
+			moved: boolean;
+			/** Recent moves, for the fling's speed. */
+			trail: { t: number; x: number; y: number }[];
+		} | null = null;
 		const onDown = (e: PointerEvent) => {
 			if (e.button !== 0 || !onWall(e.target)) return;
-			press = { x: e.clientX, y: e.clientY, moved: false };
+			press = { x: e.clientX, y: e.clientY, moved: false, trail: [] };
+			free.current.vx = 0;
+			free.current.vy = 0;
+			if (e.pointerType === "mouse") e.preventDefault();
 		};
 		const onMove = (e: PointerEvent) => {
 			toNdc(e);
-			pointer.current.overSlot = e.target === slot;
-			if (!press || focusedRef.current < 0) return;
+			pointer.current.overWall = onWall(e.target);
+			if (!press) return;
 			if (
 				!press.moved &&
 				Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_PX
 			) {
 				return;
 			}
-			press.moved = true;
-			document.documentElement.dataset.wallDragging = "";
+			if (!press.moved) {
+				press.moved = true;
+				dragging.current = focusIndex.current < 0;
+				document.documentElement.dataset.wallDragging = "";
+			}
 			// Grab the wall: it follows the pointer, so the view goes the other way.
 			panBy(-e.movementX, -e.movementY);
+			press.trail.push({ t: e.timeStamp, x: e.clientX, y: e.clientY });
+			while (press.trail.length > 1 && e.timeStamp - press.trail[0].t > 100) {
+				press.trail.shift();
+			}
 		};
 		const onUp = (e: PointerEvent) => {
 			if (!press) return;
-			const { moved } = press;
+			const { moved: wasDrag, trail } = press;
 			press = null;
+			dragging.current = false;
 			delete document.documentElement.dataset.wallDragging;
-			if (moved) {
-				settle();
+			if (wasDrag) {
+				if (focusIndex.current >= 0) {
+					settle();
+					return;
+				}
+				// Fling: carry on at the speed of the last tenth of a second.
+				const first = trail[0];
+				const last = trail[trail.length - 1];
+				const ms = last && first ? last.t - first.t : 0;
+				if (ms > 8 && e.timeStamp - last.t < 80) {
+					const k = unitsPerPx * (1 - zoom.current);
+					free.current.vx = (-(last.x - first.x) / ms) * 1000 * k;
+					free.current.vy = ((last.y - first.y) / ms) * 1000 * k;
+				}
 				return;
 			}
 			if (!onWall(e.target)) return;
 			const index = pick(toNdc(e));
-			if (index != null) onOpen(recordsRef.current[index]);
-			else if (focusedRef.current >= 0) onClose();
+			const record = index != null ? instancesRef.current[index]?.record : null;
+			if (index != null && record) {
+				pendingFocus.current = index;
+				focusIndex.current = index;
+				onOpen(record);
+			} else if (focusIndex.current >= 0) onClose();
 		};
-		// With a record open, scrolling beside the panel moves around the
-		// zoomed-in wall instead of the page underneath it, then settles on
-		// the nearest record. (The panel's own content still scrolls itself.)
+		// The wheel / trackpad moves around the wall (the page itself no
+		// longer scrolls). Zoomed in, it pans and then settles on the nearest
+		// record. The panel's own content still scrolls itself.
 		let wheelSettle = 0;
 		const onWheel = (e: WheelEvent) => {
-			if (focusedRef.current < 0) return;
 			if (
 				e.target instanceof Element &&
 				e.target.closest('[data-slot="sheet-content"]')
@@ -771,13 +850,18 @@ function Wall({
 			}
 			e.preventDefault();
 			const line = e.deltaMode === 1 ? 16 : 1;
+			free.current.vx = 0;
+			free.current.vy = 0;
 			panBy(e.deltaX * line, e.deltaY * line);
-			window.clearTimeout(wheelSettle);
-			wheelSettle = window.setTimeout(settle, 250);
+			if (focusIndex.current >= 0) {
+				window.clearTimeout(wheelSettle);
+				wheelSettle = window.setTimeout(settle, 250);
+			}
 		};
 		window.addEventListener("pointerdown", onDown);
 		window.addEventListener("pointermove", onMove, { passive: true });
 		window.addEventListener("pointerup", onUp);
+		window.addEventListener("pointercancel", onUp);
 		window.addEventListener("wheel", onWheel, { passive: false });
 		return () => {
 			window.clearTimeout(wheelSettle);
@@ -785,29 +869,22 @@ function Wall({
 			window.removeEventListener("pointerdown", onDown);
 			window.removeEventListener("pointermove", onMove);
 			window.removeEventListener("pointerup", onUp);
+			window.removeEventListener("pointercancel", onUp);
 			delete document.documentElement.dataset.wallDragging;
 			document.body.style.cursor = "";
 		};
-	}, [isTouch, slot, pick, onOpen, onClose, unitsPerPx, viewWidth]);
+	}, [pick, onOpen, onClose, unitsPerPx]);
 
 	const getTarget = useCallback((i: number) => handles.current[i], []);
-	const textures = useTextureStream(records, getTarget, {
+	const textures = useTextureStream(drawn, getTarget, {
 		// The sizes the photo route keeps ready-made copies of (500, 800);
-		// any other width is resized on the fly, and was most of a slow
-		// first load. A 2×2 gets the larger one, except on phones.
+		// any other width is resized on the fly. A 2×2 gets the larger one,
+		// except on phones.
 		coverPx: (i) => (layoutRef.current[i]?.span > 1 && !isTouch ? 800 : 500),
-		window: cols * 5,
-		discWindow: cols,
-		cacheMax: cols * 14,
+		discWindow: visibleCols * 2,
+		cacheMax: visibleCols * visibleRows * 3,
 		lowPx: isTouch ? 64 : 128,
 	});
-
-	// A re-filter changes what's at the centre — force a texture pass.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: see above
-	useEffect(() => {
-		lastCenter.current = -1;
-		hovered.current = null;
-	}, [records]);
 
 	// Theme: sleeve edges and not-yet-loaded covers follow light/dark.
 	useEffect(() => {
@@ -844,48 +921,84 @@ function Wall({
 
 	useFrame((state, delta) => {
 		revealViewportHeight.value = state.gl.domElement.height;
+		revealViewportWidth.value = state.gl.domElement.width;
 		// How dim the room is (1 = normal): set by the lights-down step below,
 		// read by the covers' self-light.
 		let roomDim = 1;
 		const dt = Math.min(delta, 0.05);
 		const t = state.clock.elapsedTime;
 		const ndc = pointer.current.ndc;
+		const insts = instancesRef.current;
 
-		// Where the slot's top edge is on screen → where row 0 sits in the
-		// view. Row 0's top edge (y = TILE / 2) lines up with the slot's top.
-		const slotTop = slot.getBoundingClientRect().top;
-		const scrollY =
-			TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
-		// Which way the page is scrolling decides which edge band dissolves
-		// (see `revealBands`); eased, so turning round mid-reveal doesn't pop.
-		if (lastScrollY.current != null) {
-			const moved = scrollY - lastScrollY.current;
-			// The camera's y falls as the page scrolls down.
-			if (Math.abs(moved) > 1e-4) scrollDown.current = moved < 0;
+		// At rest, the camera starts with the first row's top edge just under
+		// the hero and filters (`startTop`), where the page grid used to begin.
+		const f = free.current;
+		if (Number.isNaN(f.y)) {
+			f.y = TILE / 2 + TOP_PAD - (size.height / 2 - startTop) * unitsPerPx;
 		}
-		lastScrollY.current = scrollY;
-		revealBands.bottom.value = smoothDamp(
-			revealBands.bottom.value,
-			scrollDown.current ? 1 : 0,
-			springs.current,
-			"bandBottom",
-			0.25,
-			dt,
-		);
-		revealBands.top.value = 1 - revealBands.bottom.value;
-		if (pendingFocus.current === focusedRef.current) {
-			pendingFocus.current = null;
+		// Momentum: a fling coasts on and slows to a stop.
+		if (!dragging.current && (f.vx !== 0 || f.vy !== 0)) {
+			f.x += f.vx * dt;
+			f.y += f.vy * dt;
+			const friction = Math.exp(-4 * dt);
+			f.vx *= friction;
+			f.vy *= friction;
+			if (Math.hypot(f.vx, f.vy) < 0.01) {
+				f.vx = 0;
+				f.vy = 0;
+			}
 		}
-		const focused = pendingFocus.current ?? focusedRef.current;
-		travel.current = -scrollY;
 
-		// Where the camera is headed. Following the scroll; or, with a record
-		// selected, framing it: closer (as far as it still fits on screen with
-		// room to spare), centred on it vertically, and across into the middle
-		// of what the record panel leaves uncovered (desktop; on phones the
-		// panel covers everything anyway).
-		let camGoalX = 0;
-		let camGoalY = scrollY;
+		// The selected record: the copy picked by a click or a drag, or — for
+		// a record chosen another way (the panel's arrows, a link) — the copy
+		// nearest the camera.
+		if (pendingFocus.current != null) {
+			const pending = insts[pendingFocus.current];
+			if (pending && pending.record.id === focusedRecordRef.current) {
+				focusSeen.current = focusedRecordRef.current;
+				focusIndex.current = pendingFocus.current;
+				pendingFocus.current = null;
+			}
+		}
+		if (
+			pendingFocus.current == null &&
+			focusSeen.current !== focusedRecordRef.current
+		) {
+			focusSeen.current = focusedRecordRef.current;
+			focusIndex.current = -1;
+			const id = focusedRecordRef.current;
+			if (id != null) {
+				const c0 = cam.current;
+				const cx = Number.isNaN(c0.y) ? f.x : c0.x;
+				const cy = Number.isNaN(c0.y) ? f.y : c0.y;
+				let best = Number.POSITIVE_INFINITY;
+				layout.forEach((l, i) => {
+					if (insts[i]?.record.id !== id) return;
+					const d = Math.hypot(
+						wrapNear(l.x, cx, tileW) - cx,
+						wrapNear(l.y, cy, tileH) - cy,
+					);
+					if (d < best) {
+						best = d;
+						focusIndex.current = i;
+					}
+				});
+			}
+		}
+		const focused = pendingFocus.current ?? focusIndex.current;
+
+		// Where the camera is headed: where the wall was dragged to; or, with
+		// a record selected, framing it — closer (as far as it still fits on
+		// screen with room to spare), centred on it vertically, and across
+		// into the middle of what the record panel leaves uncovered (desktop;
+		// on phones the panel covers everything anyway).
+		const c = cam.current;
+		if (Number.isNaN(c.y)) {
+			c.x = f.x;
+			c.y = f.y;
+		}
+		let camGoalX = f.x;
+		let camGoalY = f.y;
 		let camGoalZoom = 0;
 		if (focused >= 0 && layout[focused]) {
 			const pos = layout[focused];
@@ -903,13 +1016,23 @@ function Wall({
 					? panelLeft / size.width - 1
 					: 0;
 			frameOffset.current = centreNdc * (viewWidth / 2) * (1 - camGoalZoom);
-			camGoalX = pos.x - frameOffset.current;
-			camGoalY = pos.y;
+			camGoalX = wrapNear(pos.x, c.x, tileW) - frameOffset.current;
+			camGoalY = wrapNear(pos.y, c.y, tileH);
 		}
-		const c = cam.current;
-		if (Number.isNaN(c.y)) c.y = scrollY;
 		const tw = camTween.current;
 		if (focused !== tw.key) {
+			// Letting go of a record: rest where the camera is now (only the
+			// zoom eases back out), not where the wall was before it.
+			if (focused < 0 && tw.key >= 0) {
+				f.x = c.x + pan.current.x + frameOffset.current;
+				f.y = c.y + pan.current.y;
+				camGoalX = f.x;
+				camGoalY = f.y;
+				c.x += pan.current.x;
+				c.y += pan.current.y;
+				pan.current.x = 0;
+				pan.current.y = 0;
+			}
 			// Set off from wherever the camera is now, mid-move or not.
 			tw.x = c.x;
 			tw.y = c.y;
@@ -934,14 +1057,46 @@ function Wall({
 		panelShift.current = c.x + pan.current.x;
 		zoom.current = c.zoom;
 		// Everything below works from where the camera is looking, so the
-		// wall's curve follows the camera to the selected record.
+		// wall's curve follows the camera.
+		const camX = panelShift.current;
 		const camY = c.y + pan.current.y;
 		pickCamY.current = camY;
+		travel.current.x = camX;
+		travel.current.y = -camY;
+
+		// Which edges records are coming in from decides which edge bands
+		// dissolve (see `revealBands`); eased, so turning round mid-reveal
+		// doesn't pop. At rest it keeps the last direction (down on load).
+		if (lastCam.current) {
+			const mx = camX - lastCam.current.x;
+			const my = camY - lastCam.current.y;
+			const speed = Math.hypot(mx, my);
+			if (speed > 1e-4) {
+				const goal = (key: string, on: number) => {
+					springs.current[`${key}Goal`] = on;
+				};
+				goal("bottom", my < 0 ? -my / speed : 0);
+				goal("top", my > 0 ? my / speed : 0);
+				goal("right", mx > 0 ? mx / speed : 0);
+				goal("left", mx < 0 ? -mx / speed : 0);
+			}
+		}
+		lastCam.current = { x: camX, y: camY };
+		for (const key of ["bottom", "top", "left", "right"] as const) {
+			const goal = springs.current[`${key}Goal`] ?? (key === "bottom" ? 1 : 0);
+			revealBands[key].value = smoothDamp(
+				revealBands[key].value,
+				goal,
+				springs.current,
+				`band${key}`,
+				0.25,
+				dt,
+			);
+		}
 
 		// Parallax: the camera drifts toward the pointer (a slow idle sway on
-		// touch, where there's no pointer to follow).
-		// While a record is selected the pointer is on the panel, not the wall:
-		// it no longer drifts the camera or tilts the record.
+		// touch). While a record is selected the pointer is on the panel, not
+		// the wall: it no longer drifts the camera or tilts the record.
 		const pointerGain = focused >= 0 ? 0 : 1;
 		const goalX = isTouch
 			? Math.sin(t * 0.3) * 0.12
@@ -952,73 +1107,54 @@ function Wall({
 		const p = parallax.current;
 		p.x = THREE.MathUtils.damp(p.x, goalX, 3, dt);
 		p.y = THREE.MathUtils.damp(p.y, goalY, 3, dt);
-		camera.position.set(
-			p.x + panelShift.current,
-			camY + p.y,
-			distance * (1 - zoom.current),
-		);
-		lookAt.set(panelShift.current, camY, 0);
+		camera.position.set(p.x + camX, camY + p.y, distance * (1 - zoom.current));
+		lookAt.set(camX, camY, 0);
 		camera.lookAt(lookAt);
 		camera.updateMatrixWorld();
 
-		const centerRow = Math.round(-camY / PITCH);
-		// Desktop: whatever's under the pointer. Touch has no hover: the record
-		// at the centre of the screen is it, while the wall is on screen.
-		if (focused >= 0) {
-			hovered.current = focused;
-		} else if (!isTouch) {
-			hovered.current = pointer.current.overSlot ? pick(ndc) : null;
-			document.body.style.cursor = hovered.current == null ? "" : "pointer";
-		} else {
-			const onScreen = centerRow >= 0 && centerRow < rows;
-			hovered.current = onScreen
-				? recordAt(centerRow, Math.floor(cols / 2))
-				: null;
-		}
-		if (hovered.current !== active.current) {
-			active.current = hovered.current;
-			onActiveChange(active.current);
-		}
-
-		const centerIndex = recordAt(centerRow, Math.floor(cols / 2));
-		if (centerIndex !== lastCenter.current) {
-			lastCenter.current = centerIndex;
-			textures.update(centerIndex);
+		// Textures: the records nearest the view, nearest first — re-streamed
+		// once the camera has moved a little way.
+		const sa = streamedAt.current;
+		if (!sa || Math.hypot(camX - sa.x, camY - sa.y) > PITCH * 0.6) {
+			streamedAt.current = { x: camX, y: camY };
+			const order = layout
+				.map((l, i) => ({
+					i,
+					d: Math.hypot(
+						wrapNear(l.x, camX, tileW) - camX,
+						wrapNear(l.y, camY, tileH) - camY,
+					),
+				}))
+				.sort((a, b) => a.d - b.d)
+				.slice(0, visibleCols * visibleRows * 2)
+				.map((e) => e.i);
+			textures.update(order);
 		}
 		textures.flush(isTouch ? 1 : 2);
 
-		// The spotlight tracks the pointer across the wall (on touch, it rests
-		// on the centred record; with the panel open, on the selected one).
-		let lightX = isTouch ? 0 : (ndc.x * viewWidth) / 2 + panelShift.current;
+		// Lights. The spotlight tracks the pointer across the wall (on touch,
+		// it rests on the middle; with the panel open, on the selected record).
+		let lightX = isTouch ? camX : (ndc.x * viewWidth) / 2 + camX;
 		let lightY = isTouch ? camY : camY + (ndc.y * viewHeight) / 2;
 		if (focused >= 0 && layout[focused]) {
 			// On the selected record — moved along with any drag or wheel pan,
 			// so it stays on the middle of the view.
-			lightX = layout[focused].x + pan.current.x;
-			lightY = layout[focused].y + pan.current.y;
+			lightX = wrapNear(layout[focused].x, c.x, tileW) + pan.current.x;
+			lightY = wrapNear(layout[focused].y, c.y, tileH) + pan.current.y;
 		}
 		// While the camera is moving to (or away from) a record, the light
-		// moves with it on the same ease, rather than chasing on its own
-		// spring and arriving out of step.
+		// moves with it on the same ease.
 		const withCamera = focused >= 0 || tw.t < 1;
 		if (withCamera) {
 			lightX = tw.lightX + (lightX - tw.lightX) * camEase;
 			lightY = tw.lightY + (lightY - tw.lightY) * camEase;
 		}
-		// Keep the torch on the wall: never above the first row's centre or
-		// below the last's, so it doesn't light up empty wall behind the
-		// header or footer. Off the wall entirely it also dims.
-		lightY = Math.min(0, Math.max(-(rows - 1) * PITCH, lightY));
 		const onWall =
-			isTouch || focused >= 0 || pointer.current.overSlot ? 1 : 0.35;
+			isTouch || focused >= 0 || pointer.current.overWall ? 1 : 0.35;
 		// On the camera's own ease: the room dims (and the spotlight
-		// brightens) exactly as the camera moves in, finishing as it arrives,
-		// rather than snapping bright ahead of it.
+		// brightens) exactly as the camera moves in.
 		lightsDown.current = tw.down + ((focused >= 0 ? 1 : 0) - tw.down) * camEase;
 		const down = lightsDown.current;
-		// Lights down: the room dims (less so in light mode, where a near-black
-		// wall would read as broken), and the spotlight tightens to the
-		// selected record's size and brightens.
 		const dim = 1 - down * (theme.dark ? 0.55 : 0.4);
 		roomDim = dim;
 		if (ambient.current) ambient.current.intensity = ambientBase * dim;
@@ -1027,9 +1163,6 @@ function Wall({
 		const focusAngle = Math.atan((0.85 * focusSpan) / 3.4);
 		if (spot.current) {
 			const s = spot.current;
-			// Springs, not plain exponential easing: they ease *in* as well as
-			// out, so the light glides between records instead of lurching
-			// off toward each new one.
 			if (withCamera) {
 				s.position.x = lightX;
 				s.position.y = lightY + 0.6;
@@ -1058,16 +1191,12 @@ function Wall({
 			s.target.updateMatrixWorld();
 			s.intensity = smoothDamp(
 				s.intensity,
-				// A modest lift on the selected record — a big one read as it
-				// flaring up the moment it was clicked.
 				(theme.dark ? SPOT_DARK : SPOT_LIGHT) * onWall * (1 + 0.15 * down),
 				springs.current,
 				"intensity",
 				0.15,
 				dt,
 			);
-			// Sprung, so moving between a 1×1 and a 2×2 widens the beam smoothly
-			// instead of snapping it to the new size.
 			s.angle = smoothDamp(
 				s.angle,
 				THREE.MathUtils.lerp(
@@ -1081,61 +1210,56 @@ function Wall({
 				dt,
 			);
 		}
-		if (wall.current) wall.current.position.y = camY;
+		if (wall.current) wall.current.position.set(camX, camY, WALL_Z);
 		if (sun.current && !theme.dark) {
 			const d = sun.current;
-			d.position.set(panelShift.current - 2.5, camY + 4, 9);
-			d.target.position.set(panelShift.current, camY, 0);
+			d.position.set(camX - 2.5, camY + 4, 9);
+			d.target.position.set(camX, camY, 0);
 			d.target.updateMatrixWorld();
 			d.intensity = DAYLIGHT * (1 - down * 0.45);
 		}
 
-		// Only rows near the viewport are animated (and drawn, and pickable).
-		const halfRows = Math.ceil(viewHeight / 2 / PITCH) + 2;
 		const half = viewHeight / 2;
-		const inView = (row: number, span: number) =>
-			row <= centerRow + halfRows && row + span - 1 >= centerRow - halfRows;
-
+		const halfW = viewWidth / 2;
 		const tilt = focused >= 0 ? ZERO2 : ndc;
-		// Places one record: the curve (rows recede and tip back the further
-		// they are from the middle of the screen, which the depth of field then
-		// blurs), the hover lift, and presence (0 = sunk into the wall).
+		// Places one record at (x, y): the curve (rows recede and tip back the
+		// further they are from the middle of the screen), the hover lift, and
+		// presence (0 = sunk into the wall).
 		const place = (
 			h: TileHandle,
-			anim: TileAnim,
+			x: number,
+			y: number,
+			spanScale: number,
 			z: number,
 			l: number,
 			presence: number,
 		) => {
-			const dy = (anim.y - camY) / half;
+			const dy = (y - camY) / half;
 			const grow = presence * presence * (3 - 2 * presence);
 			// A record emerges flat against the wall — its shadow hidden right
 			// beneath it — and only lifts off to its resting depth once the
-			// image is whole, so the shadow grows out from under it rather than
-			// competing with the reveal.
+			// image is whole.
 			const revealed = h.cover.map ? (h.cover.userData.shown ?? 1) : 1;
 			const settled = THREE.MathUtils.smoothstep(revealed, 0.7, 1);
-			const rotY = -anim.x * 0.035 + l * tilt.x * 0.25;
+			const rotY = -(x - camX) * 0.035 + l * tilt.x * 0.25;
 			const tipX = l * -tilt.y * 0.18;
 			// Turned, a record's edges swing back toward the wall; keep them
 			// clear of it, or the wall shows through a half-revealed cover.
-			const halfW = (TILE / 2) * h.scale * anim.spanScale;
-			const gap = 0.03 + (Math.abs(rotY) + Math.abs(tipX)) * halfW;
+			const halfSize = (TILE / 2) * h.scale * spanScale;
+			const gap = 0.03 + (Math.abs(rotY) + Math.abs(tipX)) * halfSize;
 			const flush = Math.max(0, (1 - settled) * (z - WALL_Z - gap));
 			h.group.position.set(
-				anim.x,
-				anim.y,
+				x,
+				y,
 				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5 - flush,
 			);
 			h.group.rotation.x = -Math.atan((2 * CURVE_DEPTH * dy) / half) + tipX;
 			h.group.rotation.y = rotY;
 			h.group.scale.setScalar(
-				Math.max(0.001, h.scale * anim.spanScale * (1 + l * 0.05) * grow),
+				Math.max(0.001, h.scale * spanScale * (1 + l * 0.05) * grow),
 			);
-			// While the cover emerges (or fades up) the sleeve has no thickness
-			// (so its edges don't outline the square before the image gets
-			// there), and casts no shadow until the image is whole (a shadow is
-			// the full square).
+			// While the cover emerges (or fades up) the sleeve has no thickness,
+			// and casts no shadow until the image is whole.
 			const poured = h.cover.map
 				? Math.min(revealed, h.cover.userData.fade ?? 1)
 				: 1;
@@ -1145,23 +1269,18 @@ function Wall({
 			);
 			h.sleeve.castShadow = poured > 0.75;
 			// The slip sits inside the sleeve: shown before the sleeve has its
-			// depth back, it shared the flattened cover's plane and z-fought
-			// (flickering as scrolling moved the camera).
+			// depth back, it would share the flattened cover's plane and z-fight.
 			if (h.slip) h.slip.visible = poured > 0.9;
-			// The vinyl waits for the cover: it only slides out once the record
-			// has fully emerged (it isn't part of the reveal, so it would
-			// otherwise sit whole behind a half-drawn cover).
+			// The vinyl waits for the cover to be whole before sliding out.
 			const discOut = l * THREE.MathUtils.smoothstep(poured, 0.85, 1);
 			h.disc.visible = discOut > 0.01;
-			// A hidden vinyl is parked fully home and casts no shadow, so a
-			// half-revealed (see-through) cover never shows a stray disc.
 			h.disc.castShadow = h.disc.visible && poured > 0.9;
 			h.disc.position.x = (discOut * DISC_SLIDE) / h.scale;
 			if (h.disc.visible) h.disc.rotation.z -= dt * 1.2 * l;
 			if (h.slip) {
 				// Roughly the same size on a 2×2 as on a 1×1 — it's a note, not
-				// part of the sleeve, so it shouldn't scale up with it.
-				const k = 1 / Math.sqrt(anim.spanScale);
+				// part of the sleeve.
+				const k = 1 / Math.sqrt(spanScale);
 				h.slip.scale.setScalar(k);
 				// It slides up out of the sleeve as the reveal finishes.
 				const tuck = THREE.MathUtils.smoothstep(poured, 0.9, 1);
@@ -1170,55 +1289,70 @@ function Wall({
 			}
 		};
 
+		// Hover: whatever's under the pointer (desktop); on touch, the record
+		// nearest the middle of the screen.
+		let nearestMiddle = -1;
+		let nearestMiddleD = Number.POSITIVE_INFINITY;
+
 		pickable.current.length = 0;
 		const ease = reducedMotion ? 1 : 1 - Math.exp(-6 * dt);
-		for (let i = 0; i < records.length; i++) {
+		for (let i = 0; i < insts.length; i++) {
 			const h = handles.current[i];
 			if (!h) continue;
 			const pos = layout[i];
-			const id = records[i].id;
-			let anim = anims.current.get(id);
+			const key = insts[i].key;
+			// Hidden until the wall first moves: the rows above where it starts
+			// (wrapped round from the bottom of the tile).
+			const startY = wrapNear(pos.y, f.y, tileH);
+			const above = !moved.current && startY > TILE / 2 + 0.05;
+			let anim = anims.current.get(key);
 			if (!anim) {
 				anim = {
 					x: pos.x,
 					y: pos.y,
 					spanScale: pos.spanScale,
-					presence: animateIn.current && !reducedMotion ? 0 : 1,
+					presence: (animateIn.current && !reducedMotion) || above ? 0 : 1,
 				};
-				anims.current.set(id, anim);
+				anims.current.set(key, anim);
 			}
 			anim.x += (pos.x - anim.x) * ease;
 			anim.y += (pos.y - anim.y) * ease;
 			anim.spanScale += (pos.spanScale - anim.spanScale) * ease;
-			anim.presence += (1 - anim.presence) * ease;
+			anim.presence += ((above ? 0 : 1) - anim.presence) * ease;
 
-			// Drawn while its slot — or where it's still gliding from — is near
-			// the view.
-			const travelRow = Math.round(-anim.y / PITCH);
+			// Drawn at its copy nearest the camera.
+			const x = wrapNear(anim.x, camX, tileW);
+			const y = wrapNear(anim.y, camY, tileH);
+			drawnAt.current.set(key, { x, y });
+			const reach = (pos.spanScale * TILE) / 2 + 0.3;
+			const inView =
+				Math.abs(x - camX) < halfW + reach && Math.abs(y - camY) < half + reach;
 			// A record stays off the wall until its cover image is ready, then
-			// pours on (see cover-reveal.ts). Records with no photo at all show
+			// appears (see cover-reveal.ts). Records with no photo at all show
 			// their plain sleeve straight away.
 			const ready = !!h.cover.map || !!h.cover.userData.noCover;
-			const visible =
-				ready && (inView(pos.row, pos.span) || inView(travelRow, pos.span));
+			const visible = ready && inView && anim.presence > 0.01;
 			h.group.visible = visible;
 			if (!visible) {
 				lift.current[i] = 0;
 				continue;
 			}
 			pickable.current.push(i);
+			const dMiddle = Math.hypot(x - camX, y - camY);
+			if (dMiddle < nearestMiddleD) {
+				nearestMiddleD = dMiddle;
+				nearestMiddle = i;
+			}
 			const cover = h.cover;
 			// Self-light keeps covers true to their photos; while a record is
-			// selected, the others dim with the room and it keeps its own.
-			// Eased per record: moving the selection from one record to the
-			// next switched them instantly, so one flashed bright as the other
-			// dropped dark — now they cross-fade over the camera's move.
+			// selected, the others dim with the room and it keeps its own —
+			// eased, so moving between records cross-fades.
 			const glowGoal = focused === i ? 1 : roomDim;
 			const glow = smoothDamp(
 				cover.userData.glow ?? glowGoal,
 				glowGoal,
 				springs.current,
-				`glow${i}`,
+				`glow${key}`,
 				0.3,
 				dt,
 			);
@@ -1229,10 +1363,12 @@ function Wall({
 			);
 			setCoverStyle(cover, reveal.style);
 			setCoverSpan(cover, anim.spanScale);
-			// Where the record sits on screen: -1 at the bottom edge, 1 at the
-			// top; `reach` is its half-height on the same scale.
-			const dyView = (anim.y - camY) / (viewHeight / 2);
-			const reach = (pos.spanScale * TILE) / viewHeight;
+			// Where the record sits on screen: -1 at the bottom/left edge, 1 at
+			// the top/right; `reachY`/`reachX` are its half-size on that scale.
+			const dyView = (y - camY) / half;
+			const dxView = (x - camX) / halfW;
+			const reachY = (pos.spanScale * TILE) / viewHeight;
+			const reachX = (pos.spanScale * TILE) / viewWidth;
 			// A cover fades up quickly as its image arrives — no transition.
 			const fade = cover.map
 				? Math.min(1, (cover.userData.fade ?? 0) + dt / FADE_S)
@@ -1241,27 +1377,28 @@ function Wall({
 				cover.userData.fade = fade;
 				setCoverFade(cover, reducedMotion && cover.map ? 1 : fade);
 			}
-			// Scroll is the timeline. Records on screen when the page loads
-			// just appear; once a record has been off screen, it reveals as
-			// scrolling brings it in — from the bottom edge as the page scrolls
-			// down, the top as it scrolls up — and un-reveals as it leaves,
-			// reversibly.
-			if (dyView + reach < -1 || dyView - reach > 1) {
+			// Moving is the timeline. Records on screen when the page loads
+			// just appear; once a record has been off screen, it reveals as the
+			// wall brings it in, from the edge it comes in from.
+			if (
+				dyView + reachY < -1 ||
+				dyView - reachY > 1 ||
+				dxView + reachX < -1 ||
+				dxView - reachX > 1
+			) {
 				cover.userData.scrollDriven = true;
 			}
 			// `shown` is the record as a whole (its sleeve, shadow and slip);
-			// the cover itself reveals pixel by pixel with screen height (see
-			// `uScreen`), so big and small records dissolve in the same band.
+			// the cover itself reveals pixel by pixel with its place on screen
+			// (see `uScreen`), so big and small records dissolve in the same band.
 			let shown = 1;
 			let screenReveal = 0;
 			if (cover.userData.scrollDriven && !reducedMotion) {
 				screenReveal = 1;
-				shown =
-					THREE.MathUtils.smoothstep(dyView, -1 - reach, -0.55) *
-					(1 - THREE.MathUtils.smoothstep(dyView, 0.55, 1 + reach));
-				// From below it reveals top edge first; from above, bottom edge
-				// first. (Mid-screen it's fully shown, so the switch is never
-				// seen.)
+				const along = (d: number, r: number, inner: number) =>
+					THREE.MathUtils.smoothstep(d, -1 - r, -inner) *
+					(1 - THREE.MathUtils.smoothstep(d, inner, 1 + r));
+				shown = along(dyView, reachY, 0.55) * along(dxView, reachX, 0.85);
 				setCoverDirection(cover, dyView < 0 ? 1 : -1);
 			}
 			// The selected record is always fully shown — eased the rest of
@@ -1271,7 +1408,7 @@ function Wall({
 					cover.userData.focusShow ?? 0,
 					1,
 					springs.current,
-					`show${i}`,
+					`show${key}`,
 					0.3,
 					dt,
 				);
@@ -1279,65 +1416,97 @@ function Wall({
 				screenReveal *= 1 - cover.userData.focusShow;
 			} else {
 				cover.userData.focusShow = undefined;
-				springs.current[`show${i}`] = 0;
+				springs.current[`show${key}`] = 0;
 			}
 			cover.userData.shown = shown;
-			// Covers revealing with screen height take their progress from
-			// that; the rest (eased in when selected) from the record.
 			setCoverReveal(
 				cover,
 				screenReveal > 0 ? Math.max(shown, screenReveal) : shown,
 			);
 			setCoverScreenReveal(cover, screenReveal);
+		}
+
+		if (focused >= 0) {
+			hovered.current = focused;
+		} else if (!isTouch) {
+			hovered.current =
+				pointer.current.overWall && !dragging.current ? pick(ndc) : null;
+			document.body.style.cursor = hovered.current == null ? "" : "pointer";
+		} else {
+			hovered.current = nearestMiddle >= 0 ? nearestMiddle : null;
+		}
+		if (hovered.current !== active.current) {
+			active.current = hovered.current;
+			onActiveChange(
+				active.current == null ? null : (insts[active.current]?.record ?? null),
+			);
+		}
+		// Lift (after hover, which needs this frame's positions): a hover
+		// answers quickly; the selected record (and the one being let go of)
+		// eases forward and back with the camera's move.
+		for (const i of pickable.current) {
+			const h = handles.current[i];
+			if (!h) continue;
+			const key = insts[i].key;
 			const goal = hovered.current === i ? 1 : 0;
-			// A hover answers quickly; the selected record (and the one being
-			// let go of) eases forward and back with the camera's move rather
-			// than jumping at the viewer ahead of it.
-			if (focused === i) cover.userData.liftEasing = true;
-			const easing = cover.userData.liftEasing === true;
+			if (focused === i) h.cover.userData.liftEasing = true;
+			const easing = h.cover.userData.liftEasing === true;
 			const l = easing
 				? smoothDamp(
 						lift.current[i],
 						goal,
 						springs.current,
-						`lift${i}`,
+						`lift${key}`,
 						0.32,
 						dt,
 					)
 				: THREE.MathUtils.damp(lift.current[i], goal, 9, dt);
 			if (easing && focused !== i && Math.abs(l - goal) < 0.001) {
-				cover.userData.liftEasing = false;
-				springs.current[`lift${i}`] = 0;
+				h.cover.userData.liftEasing = false;
+				springs.current[`lift${key}`] = 0;
 			}
 			lift.current[i] = l;
-			place(h, anim, pos.z, l, anim.presence);
+			const at = drawnAt.current.get(key);
+			const anim = anims.current.get(key);
+			if (at && anim) {
+				place(h, at.x, at.y, anim.spanScale, layout[i].z, l, anim.presence);
+			}
 		}
 
 		// Filtered-out records sink back into the wall, then unmount.
 		let stillLeaving = false;
 		for (const e of exiting) {
 			e.anim.presence += (0 - e.anim.presence) * ease;
-			const h = exitHandles.current.get(e.record.id);
+			const h = exitHandles.current.get(e.key);
 			if (!h) continue;
 			if (e.anim.presence > 0.01) stillLeaving = true;
+			const x = wrapNear(e.anim.x, camX, tileW);
+			const y = wrapNear(e.anim.y, camY, tileH);
 			h.group.visible =
-				e.anim.presence > 0.01 && inView(Math.round(-e.anim.y / PITCH), e.span);
-			if (h.group.visible) place(h, e.anim, e.z, 0, e.anim.presence);
+				e.anim.presence > 0.01 &&
+				Math.abs(x - camX) < halfW + 1 &&
+				Math.abs(y - camY) < half + 1;
+			if (h.group.visible) {
+				place(h, x, y, e.anim.spanScale, e.z, 0, e.anim.presence);
+			}
 		}
 		if (exiting.length > 0 && !stillLeaving) setExiting([]);
 	});
 
-	const liveIds = useMemo(() => new Set(records.map((r) => r.id)), [records]);
+	const liveKeys = useMemo(
+		() => new Set(instances.map((i) => i.key)),
+		[instances],
+	);
 	const register = useCallback(
-		(i: number, _id: number, h: TileHandle | null) => {
+		(i: number, _key: string, h: TileHandle | null) => {
 			handles.current[i] = h;
 		},
 		[],
 	);
 	const registerExit = useCallback(
-		(_i: number, id: number, h: TileHandle | null) => {
-			if (h) exitHandles.current.set(id, h);
-			else exitHandles.current.delete(id);
+		(_i: number, key: string, h: TileHandle | null) => {
+			if (h) exitHandles.current.set(key, h);
+			else exitHandles.current.delete(key);
 		},
 		[],
 	);
@@ -1402,7 +1571,8 @@ function Wall({
 				// On a pale wall, pale dust vanishes: light mode gets darker
 				// specks instead, like dust caught in daylight against paper.
 				color={theme.dark ? "#fff1d0" : "#5c4a2a"}
-				getScroll={getTravel}
+				getScroll={getTravelY}
+				getScrollX={getTravelX}
 			/>
 			<Dust
 				count={isTouch ? 14 : 36}
@@ -1414,28 +1584,31 @@ function Wall({
 				size={2.6}
 				opacity={theme.dark ? 0.3 : 0.35}
 				color={theme.dark ? "#fff1d0" : "#5c4a2a"}
-				getScroll={getTravel}
+				getScroll={getTravelY}
+				getScrollX={getTravelX}
 			/>
 			{/* One keyed list for live and leaving records, so a record that gets
 			    filtered out keeps its component (and loaded cover) as it sinks
 			    away, rather than remounting blank. */}
 			{[
-				...records.map((record, i) => (
+				...instances.map((inst, i) => (
 					<Tile
-						key={record.id}
+						key={inst.key}
 						index={i}
-						record={record}
+						instanceKey={inst.key}
+						record={inst.record}
 						shared={shared}
 						placeholder={theme.placeholder}
 						register={register}
 					/>
 				)),
 				...exiting
-					.filter((e) => !liveIds.has(e.record.id))
+					.filter((e) => !liveKeys.has(e.key))
 					.map((e) => (
 						<Tile
-							key={e.record.id}
+							key={e.key}
 							index={-1}
+							instanceKey={e.key}
 							record={e.record}
 							shared={shared}
 							placeholder={theme.placeholder}
@@ -1449,16 +1622,18 @@ function Wall({
 
 const Tile = memo(function Tile({
 	index,
+	instanceKey,
 	record,
 	shared,
 	placeholder,
 	register,
 }: {
 	index: number;
+	instanceKey: string;
 	record: PublicRecord;
 	shared: Shared;
 	placeholder: string;
-	register: (index: number, id: number, handle: TileHandle | null) => void;
+	register: (index: number, key: string, handle: TileHandle | null) => void;
 }) {
 	const group = useRef<THREE.Group>(null);
 	const sleeve = useRef<THREE.Mesh>(null);
@@ -1560,7 +1735,7 @@ const Tile = memo(function Tile({
 		if (!group.current || !sleeve.current || !disc.current) return;
 		// The picker reads the index straight off the hit mesh.
 		sleeve.current.userData.index = index;
-		register(index, record.id, {
+		register(index, instanceKey, {
 			id: record.id,
 			group: group.current,
 			sleeve: sleeve.current,
@@ -1570,8 +1745,8 @@ const Tile = memo(function Tile({
 			discMaterial,
 			scale,
 		});
-		return () => register(index, record.id, null);
-	}, [index, record.id, register, cover, discMaterial, scale]);
+		return () => register(index, instanceKey, null);
+	}, [index, instanceKey, record.id, register, cover, discMaterial, scale]);
 
 	return (
 		<group ref={group}>

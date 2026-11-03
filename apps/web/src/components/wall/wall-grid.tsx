@@ -9,20 +9,13 @@ import type { RevealConfig, WallTheme } from "./wall-scene";
 const WallScene = lazy(() => import("./wall-scene"));
 
 /**
- * Prototype stand-in for `CollectionGrid`: the same records rendered as a lit
- * 3D wall (see `wall-scene.tsx`). This component only reserves the grid's
- * space in the page (`slot`) — the canvas itself is portalled to `<body>`,
- * fixed full-screen *behind* the page, because the grid's wrapper animates
- * opacity, which would trap a fixed child in its own stacking context and
- * paint it over the hero and footer.
- *
- * Also drives the page parallax: any element marked `data-parallax="<f>"`
- * drifts against the scroll by factor `f` — 0 scrolls normally, positive
- * moves slower than the page (lags behind), negative moves faster — so the
- * header and footer move independently of the wall. Add `data-parallax-fade`
- * and it also fades and blurs out as it leaves the top of the screen, and in
- * ("fades up") as it arrives from the bottom. Transform/opacity/filter only —
- * no layout — written once per scrolled frame.
+ * The collection as an endless 3D wall (see `wall-scene.tsx`), in place of
+ * `CollectionGrid`. The canvas is portalled to `<body>`, fixed full-screen
+ * over the page's own content (the grid's wrapper animates opacity, which
+ * would trap a fixed child in its own stacking context). This component
+ * only marks where the wall starts on screen at load — just under the hero
+ * and filters — after which it moves by dragging; the page itself doesn't
+ * scroll (see `[data-wall]` in styles.css).
  */
 export function WallGrid({
 	records,
@@ -37,9 +30,9 @@ export function WallGrid({
 	/** The record the panel has open — see `WallSceneProps`. */
 	focusedRecordId: number | null;
 }) {
-	const [slot, setSlot] = useState<HTMLDivElement | null>(null);
-	const [height, setHeight] = useState<number | null>(null);
-	const [active, setActive] = useState<number | null>(null);
+	const [marker, setMarker] = useState<HTMLDivElement | null>(null);
+	const [startTop, setStartTop] = useState<number | null>(null);
+	const [record, setRecord] = useState<PublicRecord | null>(null);
 	const theme = useWallTheme();
 	const [env, setEnv] = useState<{
 		isTouch: boolean;
@@ -52,8 +45,13 @@ export function WallGrid({
 			showStats: new URLSearchParams(window.location.search).has("stats"),
 		});
 	}, []);
-	useParallax();
 	const [reveal, setReveal] = useRevealConfig();
+	// Where the wall starts: measured once, from the top of the page.
+	useEffect(() => {
+		if (!marker) return;
+		window.scrollTo(0, 0);
+		setStartTop(marker.getBoundingClientRect().top);
+	}, [marker]);
 	// Lets CSS adjust page chrome for the wall — see `[data-wall]` in
 	// styles.css (the record panel's backdrop).
 	useEffect(() => {
@@ -63,18 +61,10 @@ export function WallGrid({
 		};
 	}, []);
 
-	const onContentHeight = useCallback((px: number) => setHeight(px), []);
-	const record = active == null ? null : records[active];
-
 	return (
 		<>
-			<div
-				ref={setSlot}
-				// Until the scene reports its height, hold roughly the DOM grid's.
-				style={{ height: height ?? "70vh" }}
-				aria-hidden
-			/>
-			{slot &&
+			<div ref={setMarker} style={{ height: "70vh" }} aria-hidden />
+			{startTop != null &&
 				env &&
 				theme &&
 				createPortal(
@@ -86,12 +76,11 @@ export function WallGrid({
 						<Suspense fallback={null}>
 							<WallScene
 								records={records}
-								slot={slot}
-								onActiveChange={setActive}
+								startTop={startTop}
+								onActiveChange={setRecord}
 								onOpen={onOpen}
 								onClose={onClose}
 								focusedRecordId={focusedRecordId}
-								onContentHeight={onContentHeight}
 								theme={theme}
 								reveal={reveal}
 								isTouch={env.isTouch}
@@ -144,113 +133,6 @@ function useWallTheme(): WallTheme | null {
 		return () => observer.disconnect();
 	}, []);
 	return theme;
-}
-
-/** See `WallGrid`: `data-parallax` elements drift (and fade) with scroll. */
-function useParallax() {
-	useEffect(() => {
-		type Entry = {
-			el: HTMLElement;
-			factor: number;
-			fade: boolean;
-			/** Document-space top and height, measured without our transform. */
-			top: number;
-			height: number;
-			/** Last written style, so unchanged frames write nothing. */
-			last: string;
-		};
-		let entries: Entry[] = [];
-		let maxScroll = 0;
-		const measure = () => {
-			entries = [
-				...document.querySelectorAll<HTMLElement>("[data-parallax]"),
-			].map((el) => {
-				el.style.transform = "";
-				const r = el.getBoundingClientRect();
-				const fade = el.hasAttribute("data-parallax-fade");
-				if (fade) el.style.willChange = "transform, opacity, filter";
-				return {
-					el,
-					factor: Number(el.dataset.parallax) || 0,
-					fade,
-					top: r.top + window.scrollY,
-					height: r.height,
-					last: "",
-				};
-			});
-			maxScroll = Math.max(
-				0,
-				document.documentElement.scrollHeight - window.innerHeight,
-			);
-			apply();
-		};
-		const apply = () => {
-			const vh = window.innerHeight;
-			const scrollY = window.scrollY;
-			for (const e of entries) {
-				// Each element's resting scroll position: where it's centred on
-				// screen, clamped to what the page can actually scroll to. At rest
-				// it sits exactly where layout put it, fully visible — so the hero
-				// is untouched at the top of the page and the footer at the bottom,
-				// however far from the screen's centre either one sits there.
-				const rest = Math.min(
-					maxScroll,
-					Math.max(0, e.top + e.height / 2 - vh / 2),
-				);
-				// > 0 once scrolled past its rest, < 0 while still arriving.
-				const past = scrollY - rest;
-				const offset = past * e.factor;
-				let visible = 1;
-				if (e.fade) {
-					// Arriving: fades up over the last stretch before its rest.
-					// Leaving: only once its bottom edge nears the top of the
-					// screen — so an element whose rest sits a little above the
-					// page's end (the footer) is still crisp at the very bottom.
-					const bottom = e.top + e.height + offset - scrollY;
-					const t =
-						past < 0
-							? Math.min(1, -past / (vh * 0.55))
-							: Math.min(1, Math.max(0, 1 - bottom / (vh * 0.35)));
-					// Ease, and quantise so a slow scroll doesn't rewrite the
-					// filter every frame for invisible changes.
-					const v = 1 - t * t * (3 - 2 * t);
-					visible = Math.round(v * 40) / 40;
-				}
-				const blur = (1 - visible) * 10;
-				const style = `${offset.toFixed(1)}|${visible}`;
-				if (style === e.last) continue;
-				e.last = style;
-				e.el.style.transform = `translate3d(0, ${offset.toFixed(1)}px, 0)`;
-				if (e.fade) {
-					e.el.style.opacity = String(visible);
-					e.el.style.filter = blur > 0.05 ? `blur(${blur.toFixed(1)}px)` : "";
-				}
-			}
-		};
-		let raf = 0;
-		const onScroll = () => {
-			if (!raf)
-				raf = requestAnimationFrame(() => {
-					raf = 0;
-					apply();
-				});
-		};
-		measure();
-		const observer = new ResizeObserver(measure);
-		observer.observe(document.body);
-		window.addEventListener("scroll", onScroll, { passive: true });
-		return () => {
-			observer.disconnect();
-			window.removeEventListener("scroll", onScroll);
-			cancelAnimationFrame(raf);
-			for (const { el } of entries) {
-				el.style.transform = "";
-				el.style.opacity = "";
-				el.style.filter = "";
-				el.style.willChange = "";
-			}
-		};
-	}, []);
 }
 
 // Bumped when the default changes, so an earlier saved pick doesn't hide it.

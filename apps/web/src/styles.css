@@ -1358,6 +1358,70 @@ a {
   background-color: #fff;
 }
 
+/* The wall is moved by dragging, not by scrolling the page: the page holds
+   still (no scrollbar), the browser's own touch gestures and text selection
+   stay off the surface it's dragged across, and the hero fades once the
+   wall first moves. */
+:root[data-wall] {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+:root[data-wall] [data-wall-surface] {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+:root[data-wall][data-wall-dragging],
+:root[data-wall][data-wall-dragging] * {
+  cursor: grabbing !important;
+}
+[data-wall-hero] {
+  transition: opacity 600ms ease;
+}
+:root[data-wall-moved] [data-wall-hero] {
+  opacity: 0;
+  pointer-events: none;
+}
+/* Once the wall has moved, the filters float in the top-left corner, over
+   the records, opposite the search — so filtering stays to hand anywhere on
+   the wall. (Positioned on the outer, `rise-in` wrapper: that animation
+   holds a transform, which would make it the containing block for a fixed
+   child.) On a phone there's no room beside the search: they fade with the
+   hero. */
+:root[data-wall-moved] [data-wall-filters] > [data-wall-chrome] {
+  opacity: 0;
+  pointer-events: none;
+}
+@media (min-width: 640px) {
+  :root[data-wall-moved] [data-wall-filters] {
+    position: fixed;
+    top: 1.5rem;
+    left: 1.5rem;
+    z-index: 30;
+    max-width: calc(100vw - 24rem);
+  }
+  /* The pill itself is the inner element, which fades (the outer one's
+     opacity is held by its animation). */
+  :root[data-wall-moved] [data-wall-filters] > [data-wall-chrome] {
+    overflow-x: auto;
+    padding: 0.375rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    background: var(--background);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  /* Zoomed in, it steps aside with the rest of the page's text. */
+  :root[data-wall-moved][data-wall-focus]
+    [data-wall-filters]
+    > [data-wall-chrome] {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
 /* Zoomed in on a record, the page's own text fades out of the way. */
 [data-wall-chrome] {
   transition: opacity 600ms ease;

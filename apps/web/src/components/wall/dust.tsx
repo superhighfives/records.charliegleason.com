@@ -23,6 +23,7 @@ export function Dust({
 	opacity,
 	color,
 	getScroll,
+	getScrollX,
 }: {
 	count: number;
 	width: number;
@@ -37,6 +38,8 @@ export function Dust({
 	color: string;
 	/** How far the camera has travelled down the wall, in world units. */
 	getScroll: () => number;
+	/** Sideways travel, for a wall that pans as well as scrolls. */
+	getScrollX?: () => number;
 }) {
 	const geometry = useMemo(() => {
 		const positions = new Float32Array(count * 3);
@@ -66,6 +69,8 @@ export function Dust({
 				uniforms: {
 					uTime: { value: 0 },
 					uOffset: { value: 0 },
+					uOffsetX: { value: 0 },
+					uWidth: { value: width },
 					uHeight: { value: height },
 					uSize: { value: size },
 					uPixelRatio: { value: 1 },
@@ -76,6 +81,8 @@ export function Dust({
 					attribute float seed;
 					uniform float uTime;
 					uniform float uOffset;
+					uniform float uOffsetX;
+					uniform float uWidth;
 					uniform float uHeight;
 					uniform float uSize;
 					uniform float uPixelRatio;
@@ -83,7 +90,8 @@ export function Dust({
 					void main() {
 						vec3 p = position;
 						// Slow individual drift, then wrap the height into the box.
-						p.x += sin(uTime * 0.21 + seed * 40.0) * 0.12;
+						p.x = mod(p.x + uWidth * 0.5 + uOffsetX + sin(uTime * 0.21 + seed * 40.0) * 0.12, uWidth)
+							- uWidth * 0.5;
 						p.y = mod(p.y + uOffset + sin(uTime * 0.17 + seed * 25.0) * 0.1, uHeight)
 							- uHeight * 0.5;
 						vec4 mv = modelViewMatrix * vec4(p, 1.0);
@@ -110,7 +118,8 @@ export function Dust({
 		material.uniforms.uSize.value = size;
 		material.uniforms.uOpacity.value = opacity;
 		material.uniforms.uColor.value.set(color);
-	}, [material, size, opacity, color]);
+		material.uniforms.uWidth.value = width;
+	}, [material, size, opacity, color, width]);
 
 	useEffect(
 		() => () => {
@@ -129,8 +138,13 @@ export function Dust({
 		// still on screen; sliding its particles up by `parallax` × the scroll
 		// moves them against the view at that rate (the wall moves at 1).
 		u.uOffset.value = getScroll() * parallax;
+		u.uOffsetX.value = -(getScrollX?.() ?? 0) * parallax;
 		if (points.current) {
-			points.current.position.set(0, state.camera.position.y, z);
+			points.current.position.set(
+				state.camera.position.x,
+				state.camera.position.y,
+				z,
+			);
 		}
 	});
 

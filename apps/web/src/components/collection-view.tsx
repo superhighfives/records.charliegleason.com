@@ -237,13 +237,9 @@ export function CollectionView({
 	return (
 		<div
 			className="w-full px-4 py-10 sm:px-6"
-			// Wall mode's parallax translates the footer down while it's still
-			// arriving, past the end of the page. `body` is a scroll container
-			// (it has `overflow-x: hidden`), so that overflow gave it a second
-			// scrollbar. Clipping here hides only what's below the page's end,
-			// which can't be scrolled to anyway; `clip` (unlike `hidden`) doesn't
-			// make this a scroll container itself.
-			style={wallMode ? { overflowY: "clip" } : undefined}
+			// On the wall, the page is the surface it's dragged across (see
+			// `[data-wall-surface]` in styles.css).
+			data-wall-surface={wallMode ? "" : undefined}
 		>
 			{/* Staged reveal on first paint: hero copy, then the grid, then the
 			    header chrome — see the `rise-in`/`fade-in` utilities in styles.css.
@@ -289,19 +285,18 @@ export function CollectionView({
 				<ThemeToggle className="size-8 rounded-full border-0" />
 			</div>
 
-			{/* `data-parallax` (wall mode only): see `WallGrid`. */}
+			{/* On the wall, the hero fades once the wall is first moved. */}
 			{!search.trim() && (
-				<div data-wall-chrome>
-					<div
-						data-parallax={wallMode ? -0.3 : undefined}
-						data-parallax-fade={wallMode ? "" : undefined}
-					>
-						<CollectionHero count={data.length} />
-					</div>
+				<div data-wall-chrome data-wall-hero>
+					<CollectionHero count={data.length} />
 				</div>
 			)}
 
-			<div className="rise-in" style={{ animationDelay: `${revealMs}ms` }}>
+			<div
+				className="rise-in"
+				data-wall-filters
+				style={{ animationDelay: `${revealMs}ms` }}
+			>
 				<div data-wall-chrome>
 					<FilterStrip
 						records={data}
@@ -397,16 +392,10 @@ export function CollectionView({
 				data-wall-chrome
 				className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground"
 			>
-				<div
-					data-parallax={wallMode ? -0.2 : undefined}
-					data-parallax-fade={wallMode ? "" : undefined}
-				>
+				<div>
 					<CollectionStatsSentence records={data} />
 				</div>
-				<div
-					className="mt-24 flex flex-wrap items-end justify-between gap-4"
-					data-parallax={wallMode ? -0.08 : undefined}
-				>
+				<div className="mt-24 flex flex-wrap items-end justify-between gap-4">
 					<div>
 						<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
 						<a

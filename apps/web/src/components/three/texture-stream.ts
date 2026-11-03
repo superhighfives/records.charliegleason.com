@@ -20,9 +20,10 @@ export type StreamTarget = {
 type StreamOptions = {
 	/** Cover texture width requested from `/api/photos`, or per record. */
 	coverPx: number | ((index: number) => number);
-	/** Records either side of the centre to load covers for. */
-	window: number;
-	/** Records either side of the centre to load vinyl swatches for. */
+	/**
+	 * How many of the records at the front of `update`'s order also load
+	 * their vinyl swatch (the nearest few — a vinyl only shows on hover).
+	 */
 	discWindow: number;
 	/** Most textures held at once; the least recently used are evicted. */
 	cacheMax: number;
@@ -35,10 +36,11 @@ type StreamOptions = {
 };
 
 /**
- * Streams cover + vinyl textures for records near a moving centre index and
- * evicts the least recently used beyond `cacheMax`, so a 300-record scene
- * never holds 300 textures on the GPU (phones kill tabs that try).
- * `update(center)` is cheap to call every time the centre changes. The cache
+ * Streams cover + vinyl textures for the records nearest the view and evicts
+ * the least recently used beyond `cacheMax`, so a 300-record scene never
+ * holds 300 textures on the GPU (phones kill tabs that try). `update(order)`
+ * takes record indices nearest first — the caller decides "near", which on
+ * an endless wall means on screen, not next in the list. The cache
  * outlives `records` changes (filtering), so a re-filter reuses what's loaded.
  *
  * A material shows `userData.placeholder` (a theme colour) until its texture
@@ -163,12 +165,13 @@ export function useTextureStream(
 			);
 		};
 
-		const update = (center: number) => {
+		const update = (order: readonly number[]) => {
 			const records = recordsRef.current;
-			const { window: span, discWindow } = sizesRef.current;
+			const { discWindow } = sizesRef.current;
 			// Nearest first, so what you're looking at loads before its neighbours.
-			for (let r = 0; r <= span; r++) {
-				for (const i of r === 0 ? [center] : [center + r, center - r]) {
+			for (let r = 0; r < order.length; r++) {
+				{
+					const i = order[r];
 					const record = records[i];
 					const target = getTarget(i);
 					if (!record || !target) continue;
@@ -181,7 +184,7 @@ export function useTextureStream(
 						const px = typeof size === "number" ? size : size(i);
 						load(photoUrl(key, px), target.cover);
 					}
-					if (record.colorTextureImageKey && r <= discWindow) {
+					if (record.colorTextureImageKey && r < discWindow) {
 						load(
 							photoUrl(record.colorTextureImageKey, 256),
 							target.discMaterial,
