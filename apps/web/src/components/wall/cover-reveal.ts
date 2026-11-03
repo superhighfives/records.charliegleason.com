@@ -98,6 +98,14 @@ type RevealUniforms = {
 	 */
 	uScreen: { value: number };
 	uViewportHeight: { value: number };
+	/**
+	 * How much each edge band dissolves (0–1): only the edge records are
+	 * coming in from — the bottom while scrolling down, the top while
+	 * scrolling up — so records on their way out stay whole rather than
+	 * breaking back into dust.
+	 */
+	uBandBottom: { value: number };
+	uBandTop: { value: number };
 };
 
 const HEADER_GLSL = /* glsl */ `
@@ -113,6 +121,8 @@ const HEADER_GLSL = /* glsl */ `
 	uniform float uSpan;
 	uniform float uScreen;
 	uniform float uViewportHeight;
+	uniform float uBandBottom;
+	uniform float uBandTop;
 	float revealHash(vec2 p) {
 		return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 	}
@@ -165,7 +175,9 @@ const MAP_GLSL = /* glsl */ `
 		float t = uReveal;
 		{
 			float v = gl_FragCoord.y / uViewportHeight;
-			float onScreen = smoothstep(0.0, 0.25, v) * (1.0 - smoothstep(0.75, 1.0, v));
+			float onScreen =
+				mix(1.0, smoothstep(0.0, 0.25, v), uBandBottom) *
+				mix(1.0, 1.0 - smoothstep(0.75, 1.0, v), uBandTop);
 			t = mix(t, min(t, onScreen), uScreen);
 		}
 		vec2 uv = vMapUv;
@@ -449,6 +461,8 @@ export function makeCoverMaterial(
 		uSpan: { value: 1 },
 		uScreen: { value: 0 },
 		uViewportHeight: revealViewportHeight,
+		uBandBottom: revealBands.bottom,
+		uBandTop: revealBands.top,
 	};
 	material.userData.revealUniforms = uniforms;
 	material.onBeforeCompile = (shader) => {
@@ -500,6 +514,9 @@ export function setCoverDirection(
  * uniforms) so the scene sets it once a frame.
  */
 export const revealViewportHeight = { value: 1 };
+
+/** The edge bands' weights, shared like `revealViewportHeight` — see `uBandBottom`. */
+export const revealBands = { bottom: { value: 1 }, top: { value: 0 } };
 
 /** How much the reveal follows screen height — see `uScreen`. */
 export function setCoverScreenReveal(

@@ -35,6 +35,7 @@ import type { PublicRecord } from "#/lib/records";
 import {
 	makeCoverMaterial,
 	type RevealStyle,
+	revealBands,
 	revealViewportHeight,
 	setCoverDirection,
 	setCoverFade,
@@ -553,6 +554,9 @@ function Wall({
 	const pan = useRef({ x: 0, y: 0 });
 	/** A record picked by letting go of a drag, until the route catches up. */
 	const pendingFocus = useRef<number | null>(null);
+	/** Which way the page last scrolled (down on load), and where it was. */
+	const scrollDown = useRef(true);
+	const lastScrollY = useRef<number | null>(null);
 	/** Where on the wall a selected record is framed (for picking the nearest). */
 	const frameOffset = useRef(0);
 
@@ -852,6 +856,23 @@ function Wall({
 		const slotTop = slot.getBoundingClientRect().top;
 		const scrollY =
 			TILE / 2 + TOP_PAD - (size.height / 2 - slotTop) * unitsPerPx;
+		// Which way the page is scrolling decides which edge band dissolves
+		// (see `revealBands`); eased, so turning round mid-reveal doesn't pop.
+		if (lastScrollY.current != null) {
+			const moved = scrollY - lastScrollY.current;
+			// The camera's y falls as the page scrolls down.
+			if (Math.abs(moved) > 1e-4) scrollDown.current = moved < 0;
+		}
+		lastScrollY.current = scrollY;
+		revealBands.bottom.value = smoothDamp(
+			revealBands.bottom.value,
+			scrollDown.current ? 1 : 0,
+			springs.current,
+			"bandBottom",
+			0.25,
+			dt,
+		);
+		revealBands.top.value = 1 - revealBands.bottom.value;
 		if (pendingFocus.current === focusedRef.current) {
 			pendingFocus.current = null;
 		}
