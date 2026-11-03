@@ -1411,6 +1411,13 @@ a {
   right: 1rem;
   z-index: 30;
 }
+/* In the pill, the strip loses the margin that spaced it from the grid
+   below on the page, and stays one line (scrolling sideways if need be). */
+:root[data-wall] [data-wall-filters] .filter-strip {
+  margin-bottom: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
 :root[data-wall] [data-wall-filters] > [data-wall-chrome] {
   overflow-x: auto;
   padding: 0.375rem 0.75rem;
