@@ -250,7 +250,15 @@ export function CollectionView({
 			// On the wall, the page is the surface it's dragged across (see
 			// `[data-wall-surface]` in styles.css).
 			data-wall-surface={wallMode ? "" : undefined}
+			// Until the wall's scene is up, the page shows only the loading
+			// line below (see `[data-wall-page]` in styles.css).
+			data-wall-page={wallMode ? "" : undefined}
 		>
+			{wallMode && (
+				<output aria-live="polite" className="wall-loading loading-hint">
+					Loading records…
+				</output>
+			)}
 			{/* Staged reveal on first paint: hero copy, then the grid, then the
 			    header chrome — see the `rise-in`/`fade-in` utilities in styles.css.
 			    Each is a CSS `animation ... both`, so it only ever plays once per
@@ -373,7 +381,9 @@ export function CollectionView({
 				}}
 			>
 				<SheetContent
-					className="p-0"
+					// A floating card, inset from the window's edges (full screen on
+					// phones) — see `.record-sheet` in styles.css.
+					className="record-sheet p-0 sm:inset-y-6 sm:right-6 sm:h-auto sm:overflow-hidden sm:rounded-2xl sm:border lg:inset-y-16 lg:right-16"
 					enterAnimation={enterAnimation}
 					// On the wall, a press beside the panel may be a drag (panning
 					// the zoomed-in wall), so the wall decides: a click on the empty

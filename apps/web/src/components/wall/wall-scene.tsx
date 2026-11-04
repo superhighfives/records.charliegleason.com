@@ -155,6 +155,9 @@ const FACT_MOVE_S = 1.6;
 const FACT_ZOOM = 0.25;
 /** The record panel's width (`sm:max-w-md`), for framing beside it. */
 const PANEL_PX = 448;
+/** How far the floating panel sits in from the window's edge (`.record-sheet`). */
+const panelInsetPx = (width: number) =>
+	width >= 1024 ? 64 : width >= 640 ? 24 : 0;
 /** How far the pointer moves before a press on the wall is a drag. */
 const DRAG_PX = 5;
 
@@ -674,8 +677,12 @@ function Wall({
 		hovered.current = null;
 	}, [instances]);
 
+	// The scene's up: the page can show its hero and controls (until now
+	// it shows only "Loading records…" — see `[data-wall-page]`).
 	useEffect(() => {
+		document.documentElement.dataset.wallReady = "";
 		return () => {
+			delete document.documentElement.dataset.wallReady;
 			delete document.documentElement.dataset.wallHeroGone;
 		};
 	}, []);
@@ -1089,7 +1096,8 @@ function Wall({
 			);
 			// Halfway between the screen's left edge (-1) and the panel's —
 			// from the panel's settled width, not its rect, which slides in.
-			const panelLeft = size.width - Math.min(PANEL_PX, size.width);
+			const panelLeft =
+				size.width - Math.min(PANEL_PX + panelInsetPx(size.width), size.width);
 			const centreNdc =
 				!visiting && !isTouch && panelLeft > size.width * 0.3
 					? panelLeft / size.width - 1

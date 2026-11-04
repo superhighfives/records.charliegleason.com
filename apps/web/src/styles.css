@@ -1309,6 +1309,20 @@ a {
  * spotlight on the selected record" while the record panel is open, so the
  * panel's dimming backdrop would only hide that. It stays (transparent) to
  * catch the click that closes the panel. */
+/* The record panel floats inset from the window's edge (collection-view.tsx):
+   it slides that much further, so it clears the window before it goes. */
+@media (min-width: 640px) {
+  .record-sheet {
+    --tw-enter-translate-x: calc(100% + 1.5rem);
+    --tw-exit-translate-x: calc(100% + 1.5rem);
+  }
+}
+@media (min-width: 1024px) {
+  .record-sheet {
+    --tw-enter-translate-x: calc(100% + 4rem);
+    --tw-exit-translate-x: calc(100% + 4rem);
+  }
+}
 :root[data-wall] [data-slot="sheet-overlay"] {
   background-color: transparent;
   /* Zoomed in on a record, the wall beside the panel drags to pan. */
@@ -1374,6 +1388,33 @@ a {
   line-height: 1.25;
 }
 :root[data-wall-hero-gone] [data-wall-hero] {
+  display: none;
+}
+
+/* Until the wall's scene is up (`data-wall-ready`, set by wall-scene.tsx),
+   a wall page shows only "Loading records…" in the middle — not the hero
+   and filters in the page's own layout, jumping to the wall's once it
+   loads. They still lay out (the hero's measured for its gap), and their
+   entrances hold until the wall's ready, then play. */
+:root:not([data-wall-ready]) [data-wall-page] > :not(.wall-loading) {
+  visibility: hidden;
+}
+:root:not([data-wall-ready]) [data-wall-page] :is(.hero-word, .rise-in, .fade-in) {
+  animation-play-state: paused;
+}
+.wall-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  pointer-events: none;
+  animation-delay: 300ms;
+}
+:root[data-wall-ready] .wall-loading {
   display: none;
 }
 
