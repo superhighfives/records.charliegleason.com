@@ -1378,7 +1378,7 @@ a {
 }
 
 /* `?hero=` prototypes (hero-modes.ts). The plaque only shows in its own
-   mode; labels, tour and record show the hero without the sentence (the
+   mode; labels, facts and record show the hero without the sentence (the
    stats are elsewhere); panel keeps the DOM hero for measuring only — the
    scene hangs its own copy on the wall; record makes the hero a caption
    under the record the wall opens on. */
@@ -1387,7 +1387,6 @@ a {
 }
 :root[data-hero-mode="plaque"] [data-wall-hero] .stats-sentence,
 :root[data-hero-mode="labels"] [data-wall-hero] .stats-sentence,
-:root[data-hero-mode="tour"] [data-wall-hero] .stats-sentence,
 :root[data-hero-mode="facts"] [data-wall-hero] .stats-sentence,
 :root[data-hero-mode="record"] [data-wall-hero] .stats-sentence {
   display: none;
@@ -1463,14 +1462,13 @@ a {
   font-size: 0.6875rem;
   transition: opacity 300ms ease;
 }
-/* The tour's caption: each fact, as the camera visits its record. */
-/* `?hero=facts` / `tour`: a small timeline of the facts, fixed above the
+/* `?hero=facts`: a small timeline of the facts, fixed above the
    filters — the fact, a tick per fact (the one being visited in the
    hero's yellow), previous / next. */
 .wall-facts {
   position: fixed;
   left: 50%;
-  bottom: 5rem;
+  bottom: 6.25rem;
   z-index: 35;
   display: flex;
   flex-direction: column;
@@ -1493,7 +1491,7 @@ a {
 }
 @media (min-width: 640px) {
   .wall-facts {
-    bottom: 6rem;
+    bottom: 7.25rem;
   }
 }
 .wall-facts-caption {
@@ -1573,12 +1571,28 @@ button.wall-facts-tick:hover::before {
    below on the page, and stays one line (scrolling sideways if need be). */
 :root[data-corners] [data-wall-filters] .filter-strip {
   margin-bottom: 0;
+  padding-block: 0;
   flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0;
   overflow-x: auto;
+}
+/* Groups split by a divider the pill's full height. */
+:root[data-corners] [data-wall-filters] .filter-group {
+  padding: 0.625rem 1.25rem;
+}
+:root[data-corners] [data-wall-filters] .filter-group:first-child {
+  padding-left: 0;
+}
+:root[data-corners] [data-wall-filters] .filter-group:last-child {
+  padding-right: 0;
+}
+:root[data-corners] [data-wall-filters] .filter-group + .filter-group {
+  border-left: 1px solid var(--border);
 }
 :root[data-corners] [data-wall-filters] > [data-wall-chrome] {
   overflow-x: auto;
-  padding: 0.375rem 0.75rem;
+  padding: 0 1rem;
   border: 1px solid var(--border);
   border-radius: 9999px;
   background: var(--background);

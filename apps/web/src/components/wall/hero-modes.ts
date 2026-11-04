@@ -11,8 +11,6 @@ import type { PublicRecord } from "#/lib/records";
  *   parallaxing with the records around it.
  * - `labels` — the hero alone; the stats become small captions under the
  *   records they're about, found as you explore.
- * - `tour` — after the hero, a short guided tour: the camera visits each
- *   record the stats mention, one clause at a time, then hands over.
  * - `plaque` — the hero with the stats as a small museum-style wall text.
  * - `record` — opens zoomed in on the newest record, the hero as its
  *   caption, pulling back to the wall as soon as you move.
@@ -24,7 +22,6 @@ export const HERO_MODES = [
 	"default",
 	"panel",
 	"labels",
-	"tour",
 	"plaque",
 	"record",
 	"facts",

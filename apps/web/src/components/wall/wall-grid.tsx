@@ -44,7 +44,7 @@ export function WallGrid({
 		showStats: boolean;
 		heroMode: HeroMode;
 	}>();
-	const [tourStep, setTourStep] = useState<number | null>(null);
+	const [factStep, setFactStep] = useState<number | null>(null);
 
 	useEffect(() => {
 		const heroMode = readHeroMode();
@@ -121,8 +121,8 @@ export function WallGrid({
 								introRecordId={
 									env.heroMode === "record" ? (newest?.id ?? null) : null
 								}
-								onTourStep={setTourStep}
-								factStep={env.heroMode === "facts" ? tourStep : null}
+								onFactStep={setFactStep}
+								factStep={env.heroMode === "facts" ? factStep : null}
 								onActiveChange={setRecord}
 								onOpen={onOpen}
 								onClose={onClose}
@@ -135,11 +135,11 @@ export function WallGrid({
 					</div>,
 					document.body,
 				)}
-			{(env?.heroMode === "tour" || env?.heroMode === "facts") && (
+			{env?.heroMode === "facts" && (
 				<WallFacts
 					featured={featured}
-					step={tourStep}
-					onStep={env.heroMode === "facts" ? setTourStep : undefined}
+					step={factStep}
+					onStep={setFactStep}
 					hidden={focusedRecordId != null}
 				/>
 			)}

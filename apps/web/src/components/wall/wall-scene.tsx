@@ -150,12 +150,9 @@ const SLIP_PULL = 0.07;
 const FOCUS_ZOOM = 0.38;
 /** The camera's move to (and between, and away from) a selected record. */
 const CAMERA_MOVE_S = 0.9;
-/** `?hero=tour`: how long the hero holds before the tour, and each stop. */
-const TOUR_DELAY_S = 2.5;
-const TOUR_STEP_S = 3.2;
-/** The tour's moves are slower, and closer in less, than selecting a record. */
-const TOUR_MOVE_S = 1.6;
-const TOUR_ZOOM = 0.25;
+/** `?hero=facts`: visits are slower, and closer in less, than selecting a record. */
+const FACT_MOVE_S = 1.6;
+const FACT_ZOOM = 0.25;
 /** The record panel's width (`sm:max-w-md`), for framing beside it. */
 const PANEL_PX = 448;
 /** How far the pointer moves before a press on the wall is a drag. */
@@ -198,12 +195,12 @@ export type WallSceneProps = {
 	showStats?: boolean;
 	/** How the wall opens (`?hero=`, see hero-modes.ts). */
 	heroMode: HeroMode;
-	/** The records the stats are about (captions for `labels`, stops for `tour`). */
+	/** The records the stats are about (captions for `labels`, stops for `facts`). */
 	featured: Featured[];
 	/** `?hero=record`: the record the wall opens zoomed in on. */
 	introRecordId: number | null;
-	/** `?hero=tour`: which stop the tour is at (null between / after). */
-	onTourStep: (index: number | null) => void;
+	/** `?hero=facts`: the wall's been moved, so no fact is being visited. */
+	onFactStep: (index: number | null) => void;
 	/** `?hero=facts`: the fact being visited, stepped through by the page. */
 	factStep: number | null;
 };
@@ -421,7 +418,7 @@ function Wall({
 	heroMode,
 	featured,
 	introRecordId,
-	onTourStep,
+	onFactStep,
 	factStep,
 	onActiveChange,
 	onOpen,
@@ -628,13 +625,13 @@ function Wall({
 	} | null>(null);
 	const heroGone = useRef(hero == null);
 	/**
-	 * `?hero=record` / `tour`: the camera visiting records on its own — one
-	 * (record), or each in turn (tour) — until the first drag, scroll or
+	 * `?hero=record` / `facts`: the camera visiting a record — the newest
+	 * (record), or the fact picked (facts) — until the first drag, scroll or
 	 * click hands it over.
 	 */
 	const intro = useRef({
-		active: heroMode === "record" || heroMode === "tour",
-		step: heroMode === "tour" ? -1 : 0,
+		active: heroMode === "record",
+		step: 0,
 		/** Clock time the intro began. */
 		start: -1,
 		/** The copy being visited, picked once per step. */
@@ -651,8 +648,8 @@ function Wall({
 				: null,
 		[heroMode, featured],
 	);
-	const onTourStepRef = useRef(onTourStep);
-	onTourStepRef.current = onTourStep;
+	const onFactStepRef = useRef(onFactStep);
+	onFactStepRef.current = onFactStep;
 	const factStepRef = useRef(factStep);
 	factStepRef.current = factStep;
 	const featuredRef = useRef(featured);
@@ -749,14 +746,14 @@ function Wall({
 			);
 		const onWall = (target: EventTarget | null) =>
 			target instanceof Element && target.closest(INTERACTIVE) == null;
-		// The first drag, scroll or click ends a record / tour intro: the
+		// The first drag, scroll or click ends a record / facts visit: the
 		// camera zooms back out where it is, and it's yours.
 		const endIntro = () => {
 			const it = intro.current;
 			if (!it.active) return;
 			it.active = false;
 			factStepRef.current = null;
-			onTourStepRef.current(null);
+			onFactStepRef.current(null);
 			if (heroMode === "record") {
 				document.documentElement.dataset.wallHeroGone = "";
 			}
@@ -1017,7 +1014,7 @@ function Wall({
 				});
 			}
 		}
-		// The intro (record / tour): which record the camera's visiting now.
+		// The intro (record / facts): which record the camera's visiting now.
 		const it = intro.current;
 		if (heroMode === "facts") {
 			const step = factStepRef.current;
@@ -1029,23 +1026,11 @@ function Wall({
 				heroHole.current = null;
 				document.documentElement.dataset.wallHeroGone = "";
 			}
-		} else if (it.active) {
-			if (it.start < 0) it.start = t;
-			if (heroMode === "tour") {
-				const step = Math.floor((t - it.start - TOUR_DELAY_S) / TOUR_STEP_S);
-				if (step >= featuredRef.current.length) {
-					it.active = false;
-					onTourStepRef.current(null);
-				} else if (step !== it.step) {
-					it.step = step;
-					if (step >= 0) onTourStepRef.current(step);
-				}
-			}
 		}
 		let introIdx = -1;
 		if (it.active && it.step >= 0) {
 			const id =
-				heroMode === "tour" || heroMode === "facts"
+				heroMode === "facts"
 					? featuredRef.current[it.step]?.recordId
 					: introRecordId;
 			if (it.forStep !== it.step) {
@@ -1092,7 +1077,7 @@ function Wall({
 			// A lifted record also looks bigger (it's closer to the camera).
 			const extent = pos.spanScale * TILE * 1.15;
 			camGoalZoom = Math.min(
-				visiting && heroMode !== "record" ? TOUR_ZOOM : FOCUS_ZOOM,
+				visiting && heroMode !== "record" ? FACT_ZOOM : FOCUS_ZOOM,
 				Math.max(0, 1 - extent / (viewHeight * 0.62)),
 			);
 			// Halfway between the screen's left edge (-1) and the panel's —
@@ -1133,7 +1118,7 @@ function Wall({
 			tw.down = lightsDown.current;
 		}
 		const moveS =
-			visiting && heroMode !== "record" ? TOUR_MOVE_S : CAMERA_MOVE_S;
+			visiting && heroMode !== "record" ? FACT_MOVE_S : CAMERA_MOVE_S;
 		tw.t = reducedMotion ? 1 : Math.min(1, tw.t + dt / moveS);
 		const camEase = easeInOutCubic(tw.t);
 		c.x = tw.x + (camGoalX - tw.x) * camEase;
