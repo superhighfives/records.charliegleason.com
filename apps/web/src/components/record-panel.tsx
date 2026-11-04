@@ -454,7 +454,7 @@ export function RecordPanel({
 			    specs and notes scroll beneath. `bg-background` hides that content
 			    behind the band, and the backdrop fades out via `--hero` as it
 			    collapses, leaving just the title and thumbnail once pinned. */}
-			<div ref={scrollRef} className="relative flex-1 overflow-y-auto">
+			<div ref={scrollRef} className="relative min-h-0 flex-1 overflow-y-auto">
 				<div
 					ref={headerRef}
 					className="sticky z-10 flex aspect-[3/2] flex-col justify-end bg-background"

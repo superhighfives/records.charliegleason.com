@@ -1162,7 +1162,11 @@ function Wall({
 			const scale = unitsPerPx * (1 - c.zoom);
 			const dx = -(camX - heroStart.current.x) / scale;
 			const dy = (camY - heroStart.current.y) / scale;
+			// Gone once it's off screen — or once a record's opened: the wall's
+			// yours from then, and records fill the space it held.
 			const off =
+				focusIndex.current >= 0 ||
+				pendingFocus.current != null ||
 				!el?.isConnected ||
 				hero.right + dx < 0 ||
 				hero.left + dx > size.width ||
