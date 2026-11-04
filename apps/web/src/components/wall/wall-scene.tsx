@@ -63,8 +63,7 @@ import { WhitePointEffect } from "./white-point";
  * - The hovered record lifts off the wall and its vinyl slides out. On touch,
  *   the record nearest the middle of the screen is the "hovered" one.
  * - Clicking a record moves the camera in on it beside the record panel;
- *   dragging or scrolling then pans, and settles on the nearest record, and
- *   clicking it again zooms back out.
+ *   dragging, scrolling or clicking it again zooms back out.
  * - Records reveal as they come in from an edge (the edge being the one the
  *   view is moving toward); at load, the page opens like a page, with the
  *   wall below the hero, until it first moves.
@@ -756,8 +755,7 @@ function Wall({
 	// Pointer, from `window` (the page and, with a record open, the panel's
 	// transparent overlay sit over the canvas). Anywhere that isn't a control
 	// is wall. A press that moves drags the wall (with momentum when let
-	// go); zoomed in on a record it pans, and letting go selects the record
-	// nearest the middle. A press that doesn't move is a click: on a record,
+	// go); zoomed in on a record, it also zooms back out to the wall. A press that doesn't move is a click: on a record,
 	// open it; on the empty wall with a record open, close it.
 	useEffect(() => {
 		const toNdc = (e: MouseEvent) =>
@@ -791,35 +789,13 @@ function Wall({
 				free.current.y -= dyPx * k;
 			}
 		};
-		// After a zoomed-in drag or wheel pan: fold it into the camera, then
-		// frame the record nearest the middle of the view from there.
-		const settle = () => {
-			const c = cam.current;
-			const p = pan.current;
-			c.x += p.x;
-			c.y += p.y;
-			p.x = 0;
-			p.y = 0;
-			const cx = c.x + frameOffset.current;
-			let nearest = -1;
-			let best = Number.POSITIVE_INFINITY;
-			const { w, h } = tileRef.current;
-			layoutRef.current.forEach((l, i) => {
-				const d = Math.hypot(
-					wrapNear(l.x, cx, w) - cx,
-					wrapNear(l.y, c.y, h) - c.y,
-				);
-				if (d < best) {
-					best = d;
-					nearest = i;
-				}
-			});
-			if (nearest < 0) return;
-			camTween.current.key = -2; // restart the move, even to the same record
-			pendingFocus.current = nearest;
-			focusIndex.current = nearest;
-			const record = instancesRef.current[nearest]?.record;
-			if (record && record.id !== focusedRecordRef.current) onOpen(record);
+		// Dragging or scrolling with a record open lets go of it: the camera
+		// zooms back out to the wall as you move, and the move carries on there.
+		const letGo = () => {
+			if (focusIndex.current < 0 && pendingFocus.current == null) return;
+			focusIndex.current = -1;
+			pendingFocus.current = null;
+			onClose();
 		};
 		let press: {
 			x: number;
@@ -848,7 +824,8 @@ function Wall({
 			}
 			if (!press.moved) {
 				press.moved = true;
-				dragging.current = focusIndex.current < 0;
+				letGo();
+				dragging.current = true;
 				document.documentElement.dataset.wallDragging = "";
 			}
 			// Grab the wall: it follows the pointer, so the view goes the other way.
@@ -865,10 +842,6 @@ function Wall({
 			dragging.current = false;
 			delete document.documentElement.dataset.wallDragging;
 			if (wasDrag) {
-				if (focusIndex.current >= 0) {
-					settle();
-					return;
-				}
 				// Fling: carry on at the speed of the last tenth of a second.
 				const first = trail[0];
 				const last = trail[trail.length - 1];
@@ -895,9 +868,7 @@ function Wall({
 			} else if (focusIndex.current >= 0) onClose();
 		};
 		// The wheel / trackpad moves around the wall (the page itself no
-		// longer scrolls). Zoomed in, it pans and then settles on the nearest
-		// record. The panel's own content still scrolls itself.
-		let wheelSettle = 0;
+		// longer scrolls). Zoomed in, it lets go of the record, as a drag does. The panel's own content still scrolls itself.
 		const onWheel = (e: WheelEvent) => {
 			if (
 				e.target instanceof Element &&
@@ -910,11 +881,8 @@ function Wall({
 			const line = e.deltaMode === 1 ? 16 : 1;
 			free.current.vx = 0;
 			free.current.vy = 0;
+			letGo();
 			panBy(e.deltaX * line, e.deltaY * line);
-			if (focusIndex.current >= 0) {
-				window.clearTimeout(wheelSettle);
-				wheelSettle = window.setTimeout(settle, 250);
-			}
 		};
 		window.addEventListener("pointerdown", onDown);
 		window.addEventListener("pointermove", onMove, { passive: true });
@@ -922,7 +890,6 @@ function Wall({
 		window.addEventListener("pointercancel", onUp);
 		window.addEventListener("wheel", onWheel, { passive: false });
 		return () => {
-			window.clearTimeout(wheelSettle);
 			window.removeEventListener("wheel", onWheel);
 			window.removeEventListener("pointerdown", onDown);
 			window.removeEventListener("pointermove", onMove);
