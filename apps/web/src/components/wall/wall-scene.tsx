@@ -625,6 +625,8 @@ function Wall({
 	const heroEl = useRef<HTMLElement | null>(null);
 	/** Last frame's camera, for which edges records are coming in from. */
 	const lastCam = useRef<{ x: number; y: number } | null>(null);
+	/** How long the wall has been at rest, in seconds. */
+	const stillFor = useRef(0);
 	/** Where textures were last streamed around. */
 	const streamedAt = useRef<{ x: number; y: number } | null>(null);
 
@@ -1097,11 +1099,19 @@ function Wall({
 
 		// Which edges records are coming in from decides which edge bands
 		// dissolve (see `revealBands`); eased, so turning round mid-reveal
-		// doesn't pop. At rest it keeps the last direction (down on load).
+		// doesn't pop. Once the wall comes to rest the bands ease away too,
+		// so everything on screen settles fully shown — left on, they read as
+		// a vignette darkening the edge last moved toward.
 		if (lastCam.current) {
 			const mx = camX - lastCam.current.x;
 			const my = camY - lastCam.current.y;
 			const speed = Math.hypot(mx, my);
+			stillFor.current = speed > 1e-4 ? 0 : stillFor.current + dt;
+			if (stillFor.current > 0.35) {
+				for (const key of ["bottom", "top", "left", "right"]) {
+					springs.current[`${key}Goal`] = 0;
+				}
+			}
 			if (speed > 1e-4) {
 				const goal = (key: string, on: number) => {
 					springs.current[`${key}Goal`] = on;
@@ -1114,13 +1124,13 @@ function Wall({
 		}
 		lastCam.current = { x: camX, y: camY };
 		for (const key of ["bottom", "top", "left", "right"] as const) {
-			const goal = springs.current[`${key}Goal`] ?? (key === "bottom" ? 1 : 0);
+			const goal = springs.current[`${key}Goal`] ?? 0;
 			revealBands[key].value = smoothDamp(
 				revealBands[key].value,
 				goal,
 				springs.current,
 				`band${key}`,
-				0.25,
+				stillFor.current > 0.35 ? 0.6 : 0.25,
 				dt,
 			);
 		}

@@ -549,7 +549,7 @@ export const revealViewportHeight = { value: 1 };
 
 /** The edge bands' weights, shared like `revealViewportHeight` — see `uBandBottom`. */
 export const revealBands = {
-	bottom: { value: 1 },
+	bottom: { value: 0 },
 	top: { value: 0 },
 	left: { value: 0 },
 	right: { value: 0 },
