@@ -104,13 +104,6 @@ export function DebugOverlay() {
 		return () => window.removeEventListener("keydown", onKey);
 	}, []);
 
-	// `data-debug` on <html> lets page-level dev tools (the wall's reveal
-	// panel) show only while the HUD is on.
-	useEffect(() => {
-		if (enabled) document.documentElement.dataset.debug = "";
-		else delete document.documentElement.dataset.debug;
-	}, [enabled]);
-
 	return enabled ? <DebugPanel /> : null;
 }
 

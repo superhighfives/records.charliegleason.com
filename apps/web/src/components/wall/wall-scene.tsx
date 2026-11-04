@@ -30,19 +30,10 @@ import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import {
 	makeCoverMaterial,
-	type RevealStyle,
-	revealBands,
-	revealViewportHeight,
-	revealViewportWidth,
-	setCoverDirection,
 	setCoverFade,
-	setCoverReveal,
-	setCoverScreenReveal,
 	setCoverSelfLight,
-	setCoverSpan,
-	setCoverStyle,
 	setCoverTheme,
-} from "./cover-reveal";
+} from "./cover-material";
 import { Dust } from "./dust";
 import type { Featured, HeroMode } from "./hero-modes";
 import { loadNoteFont, makeNoteTexture, noteExcerpt } from "./note-texture";
@@ -64,9 +55,8 @@ import { WhitePointEffect } from "./white-point";
  *   the record nearest the middle of the screen is the "hovered" one.
  * - Clicking a record moves the camera in on it beside the record panel;
  *   dragging, scrolling or clicking it again zooms back out.
- * - Records reveal as they come in from an edge (the edge being the one the
- *   view is moving toward); at load, the page opens like a page, with the
- *   wall below the hero, until it first moves.
+ * - Each cover fades up as its image arrives; at load, the page opens like
+ *   a page, with the wall below the hero, until it first moves.
  *
  * Hover and clicks raycast against each record's resting cell by hand (once
  * per frame, once per click) rather than through R3F's per-mesh events.
@@ -185,11 +175,6 @@ export type WallTheme = {
 	placeholder: string;
 };
 
-/** Prototype controls for how records appear (see the reveal panel). */
-export type RevealConfig = {
-	style: RevealStyle;
-};
-
 export type WallSceneProps = {
 	records: PublicRecord[];
 	/**
@@ -209,7 +194,6 @@ export type WallSceneProps = {
 	 */
 	focusedRecordId: number | null;
 	theme: WallTheme;
-	reveal: RevealConfig;
 	isTouch: boolean;
 	showStats?: boolean;
 	/** How the wall opens (`?hero=`, see hero-modes.ts). */
@@ -444,7 +428,6 @@ function Wall({
 	onClose,
 	focusedRecordId,
 	theme,
-	reveal,
 	isTouch,
 }: WallSceneProps) {
 	const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
@@ -676,10 +659,6 @@ function Wall({
 	featuredRef.current = featured;
 	const heroStart = useRef({ x: 0, y: 0 });
 	const heroEl = useRef<HTMLElement | null>(null);
-	/** Last frame's camera, for which edges records are coming in from. */
-	const lastCam = useRef<{ x: number; y: number } | null>(null);
-	/** How long the wall has been at rest, in seconds. */
-	const stillFor = useRef(0);
 	/** Where textures were last streamed around. */
 	const streamedAt = useRef<{ x: number; y: number } | null>(null);
 
@@ -951,8 +930,6 @@ function Wall({
 	}, [viewWidth, viewHeight]);
 
 	useFrame((state, delta) => {
-		revealViewportHeight.value = state.gl.domElement.height;
-		revealViewportWidth.value = state.gl.domElement.width;
 		// How dim the room is (1 = normal): set by the lights-down step below,
 		// read by the covers' self-light.
 		let roomDim = 1;
@@ -1202,44 +1179,6 @@ function Wall({
 			}
 		}
 
-		// Which edges records are coming in from decides which edge bands
-		// dissolve (see `revealBands`); eased, so turning round mid-reveal
-		// doesn't pop. Once the wall comes to rest the bands ease away too,
-		// so everything on screen settles fully shown — left on, they read as
-		// a vignette darkening the edge last moved toward.
-		if (lastCam.current) {
-			const mx = camX - lastCam.current.x;
-			const my = camY - lastCam.current.y;
-			const speed = Math.hypot(mx, my);
-			stillFor.current = speed > 1e-4 ? 0 : stillFor.current + dt;
-			if (stillFor.current > 0.35) {
-				for (const key of ["bottom", "top", "left", "right"]) {
-					springs.current[`${key}Goal`] = 0;
-				}
-			}
-			if (speed > 1e-4) {
-				const goal = (key: string, on: number) => {
-					springs.current[`${key}Goal`] = on;
-				};
-				goal("bottom", my < 0 ? -my / speed : 0);
-				goal("top", my > 0 ? my / speed : 0);
-				goal("right", mx > 0 ? mx / speed : 0);
-				goal("left", mx < 0 ? -mx / speed : 0);
-			}
-		}
-		lastCam.current = { x: camX, y: camY };
-		for (const key of ["bottom", "top", "left", "right"] as const) {
-			const goal = springs.current[`${key}Goal`] ?? 0;
-			revealBands[key].value = smoothDamp(
-				revealBands[key].value,
-				goal,
-				springs.current,
-				`band${key}`,
-				stillFor.current > 0.35 ? 0.6 : 0.25,
-				dt,
-			);
-		}
-
 		// Parallax: the camera drifts toward the pointer (a slow idle sway on
 		// touch). While a record is selected the pointer is on the panel, not
 		// the wall: it no longer drifts the camera or tilts the record.
@@ -1396,33 +1335,21 @@ function Wall({
 		) => {
 			const dy = (y - camY) / half;
 			const grow = presence * presence * (3 - 2 * presence);
-			// A record emerges flat against the wall — its shadow hidden right
-			// beneath it — and only lifts off to its resting depth once the
-			// image is whole.
-			const revealed = h.cover.map ? (h.cover.userData.shown ?? 1) : 1;
-			const settled = THREE.MathUtils.smoothstep(revealed, 0.7, 1);
 			const rotY = -(x - camX) * 0.035 + l * tilt.x * 0.25;
 			const tipX = l * -tilt.y * 0.18;
-			// Turned, a record's edges swing back toward the wall; keep them
-			// clear of it, or the wall shows through a half-revealed cover.
-			const halfSize = (TILE / 2) * h.scale * spanScale;
-			const gap = 0.03 + (Math.abs(rotY) + Math.abs(tipX)) * halfSize;
-			const flush = Math.max(0, (1 - settled) * (z - WALL_Z - gap));
 			h.group.position.set(
 				x,
 				y,
-				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5 - flush,
+				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5,
 			);
 			h.group.rotation.x = -Math.atan((2 * CURVE_DEPTH * dy) / half) + tipX;
 			h.group.rotation.y = rotY;
 			h.group.scale.setScalar(
 				Math.max(0.001, h.scale * spanScale * (1 + l * 0.05) * grow),
 			);
-			// While the cover emerges (or fades up) the sleeve has no thickness,
-			// and casts no shadow until the image is whole.
-			const poured = h.cover.map
-				? Math.min(revealed, h.cover.userData.fade ?? 1)
-				: 1;
+			// While the cover fades up the sleeve has no thickness, and casts no
+			// shadow until the image is whole.
+			const poured = h.cover.map ? (h.cover.userData.fade ?? 1) : 1;
 			h.group.scale.z *= Math.max(
 				0.001,
 				THREE.MathUtils.smoothstep(poured, 0.55, 1),
@@ -1442,7 +1369,7 @@ function Wall({
 				// part of the sleeve.
 				const k = 1 / Math.sqrt(spanScale);
 				h.slip.scale.setScalar(k);
-				// It slides up out of the sleeve as the reveal finishes.
+				// It slides up out of the sleeve as the cover finishes fading up.
 				const tuck = THREE.MathUtils.smoothstep(poured, 0.9, 1);
 				h.slip.position.y =
 					TILE / 2 + ((SLIP_PEEK + l * SLIP_PULL) * tuck - SLIP_H / 2) * k;
@@ -1497,7 +1424,7 @@ function Wall({
 			const inView =
 				Math.abs(x - camX) < halfW + reach && Math.abs(y - camY) < half + reach;
 			// A record stays off the wall until its cover image is ready, then
-			// appears (see cover-reveal.ts). Records with no photo at all show
+			// fades up (see cover-material.ts). Records with no photo at all show
 			// their plain sleeve straight away.
 			const ready = !!h.cover.map || !!h.cover.userData.noCover;
 			const visible = ready && inView && anim.presence > 0.01;
@@ -1530,14 +1457,6 @@ function Wall({
 				cover,
 				(theme.dark ? SELF_LIGHT_DARK : SELF_LIGHT_LIGHT) * glow,
 			);
-			setCoverStyle(cover, reveal.style);
-			setCoverSpan(cover, anim.spanScale);
-			// Where the record sits on screen: -1 at the bottom/left edge, 1 at
-			// the top/right; `reachY`/`reachX` are its half-size on that scale.
-			const dyView = (y - camY) / half;
-			const dxView = (x - camX) / halfW;
-			const reachY = (pos.spanScale * TILE) / viewHeight;
-			const reachX = (pos.spanScale * TILE) / viewWidth;
 			// A cover fades up quickly as its image arrives — no transition.
 			const fade = cover.map
 				? Math.min(1, (cover.userData.fade ?? 0) + dt / FADE_S)
@@ -1546,53 +1465,6 @@ function Wall({
 				cover.userData.fade = fade;
 				setCoverFade(cover, reducedMotion && cover.map ? 1 : fade);
 			}
-			// Moving is the timeline. Records on screen when the page loads
-			// just appear; once a record has been off screen, it reveals as the
-			// wall brings it in, from the edge it comes in from.
-			if (
-				dyView + reachY < -1 ||
-				dyView - reachY > 1 ||
-				dxView + reachX < -1 ||
-				dxView - reachX > 1
-			) {
-				cover.userData.scrollDriven = true;
-			}
-			// `shown` is the record as a whole (its sleeve, shadow and slip);
-			// the cover itself reveals pixel by pixel with its place on screen
-			// (see `uScreen`), so big and small records dissolve in the same band.
-			let shown = 1;
-			let screenReveal = 0;
-			if (cover.userData.scrollDriven && !reducedMotion) {
-				screenReveal = 1;
-				const along = (d: number, r: number, inner: number) =>
-					THREE.MathUtils.smoothstep(d, -1 - r, -inner) *
-					(1 - THREE.MathUtils.smoothstep(d, inner, 1 + r));
-				shown = along(dyView, reachY, 0.55) * along(dxView, reachX, 0.85);
-				setCoverDirection(cover, dyView < 0 ? 1 : -1);
-			}
-			// The selected record is always fully shown — eased the rest of
-			// the way if it was mid-reveal, not snapped there.
-			if (focused === i && cover.map) {
-				cover.userData.focusShow = smoothDamp(
-					cover.userData.focusShow ?? 0,
-					1,
-					springs.current,
-					`show${key}`,
-					0.3,
-					dt,
-				);
-				shown = Math.max(shown, cover.userData.focusShow);
-				screenReveal *= 1 - cover.userData.focusShow;
-			} else {
-				cover.userData.focusShow = undefined;
-				springs.current[`show${key}`] = 0;
-			}
-			cover.userData.shown = shown;
-			setCoverReveal(
-				cover,
-				screenReveal > 0 ? Math.max(shown, screenReveal) : shown,
-			);
-			setCoverScreenReveal(cover, screenReveal);
 		}
 
 		if (focused >= 0) {
@@ -1865,7 +1737,7 @@ const Tile = memo(function Tile({
 	// Created once per record; theme changes are applied by `Wall`.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation
 	const cover = useMemo(() => {
-		const m = makeCoverMaterial(placeholder, record.id);
+		const m = makeCoverMaterial(placeholder);
 		m.userData.noCover = !displayCoverKey(record);
 		return m;
 	}, [record]);
