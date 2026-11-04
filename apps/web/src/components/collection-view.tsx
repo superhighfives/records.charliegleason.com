@@ -21,6 +21,7 @@ import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { WallCorners } from "#/components/wall/wall-corners";
+import { WallPlaque } from "#/components/wall/wall-plaque";
 import {
 	type CollectionFilters,
 	hasAnyFilter,
@@ -300,6 +301,7 @@ export function CollectionView({
 				<div data-wall-chrome data-wall-hero>
 					<CollectionHero count={data.length} />
 					{wallMode && <CollectionStatsSentence records={data} intro />}
+					{wallMode && <WallPlaque records={data} />}
 				</div>
 			)}
 

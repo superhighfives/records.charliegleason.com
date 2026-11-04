@@ -1377,6 +1377,113 @@ a {
   display: none;
 }
 
+/* `?hero=` prototypes (hero-modes.ts). The plaque only shows in its own
+   mode; labels, tour and record show the hero without the sentence (the
+   stats are elsewhere); panel keeps the DOM hero for measuring only — the
+   scene hangs its own copy on the wall; record makes the hero a caption
+   under the record the wall opens on. */
+.wall-plaque {
+  display: none;
+}
+:root[data-hero-mode="plaque"] [data-wall-hero] .stats-sentence,
+:root[data-hero-mode="labels"] [data-wall-hero] .stats-sentence,
+:root[data-hero-mode="tour"] [data-wall-hero] .stats-sentence,
+:root[data-hero-mode="record"] [data-wall-hero] .stats-sentence {
+  display: none;
+}
+:root[data-hero-mode="plaque"] .wall-plaque {
+  display: block;
+  width: max-content;
+  max-width: 26rem;
+  margin: 4vh auto 0;
+  padding-left: 1rem;
+  border-left: 2px solid var(--color-yellow-500, #eab308);
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+.wall-plaque-title {
+  margin-bottom: 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--foreground);
+}
+:root[data-hero-mode="panel"] [data-wall-hero] {
+  visibility: hidden;
+}
+:root[data-hero-mode="record"] [data-wall-hero] {
+  /* Clear of the filters, and over the records (the canvas is z-10). */
+  top: auto;
+  bottom: calc(6rem + 2vh);
+  z-index: 25;
+  width: max-content;
+  max-width: min(90vw, 56rem);
+  padding: 1rem 1.75rem;
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  backdrop-filter: blur(12px);
+  transform: translateX(-50%);
+}
+:root[data-hero-mode="record"] [data-wall-hero] > :first-child {
+  font-size: min(2.2vw, 3.6vh);
+}
+/* `?hero=panel`: the hero hung on the wall (drei's Html, in 3D), set like
+   the centred hero. */
+[data-wall-hero-panel] {
+  width: min(90vw, 72rem);
+}
+[data-wall-hero-panel] > * {
+  margin: 0;
+  text-align: center;
+}
+[data-wall-hero-panel] > :first-child {
+  font-size: min(5.5vw, 9vh);
+  line-height: 1.05;
+}
+[data-wall-hero-panel] .stats-sentence {
+  max-width: 56rem;
+  margin: 3vh auto 0;
+  font-size: min(2.4vw, 3.8vh);
+  line-height: 1.2;
+}
+/* `?hero=labels`: the caption pinned under a record the stats are about. */
+.wall-caption {
+  white-space: nowrap;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  transition: opacity 300ms ease;
+}
+/* The tour's caption: each fact, as the camera visits its record. */
+.wall-tour-caption {
+  position: fixed;
+  left: 50%;
+  bottom: calc(6rem + 2vh);
+  z-index: 25;
+  width: max-content;
+  max-width: min(90vw, 48rem);
+  padding: 0.5rem 1.25rem;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  backdrop-filter: blur(12px);
+  transform: translateX(-50%);
+  text-align: center;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: min(3.2vw, 4.4vh);
+  line-height: 1.15;
+  pointer-events: none;
+  transition: opacity 500ms ease;
+}
+
 /* On both the wall and the grid (`data-corners`, set by CollectionView),
    the controls sit in the corners: the search top-left, the filters
    bottom-left, the footer's links bottom-right.

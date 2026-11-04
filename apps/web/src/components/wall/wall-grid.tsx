@@ -1,9 +1,22 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import {
+	lazy,
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 import type { PublicRecord } from "#/lib/records";
 import { cn } from "#/lib/utils";
 import { REVEAL_STYLES } from "./cover-reveal";
+import {
+	featuredRecords,
+	type HeroMode,
+	newestRecord,
+	readHeroMode,
+} from "./hero-modes";
 import type { RevealConfig, WallSceneProps, WallTheme } from "./wall-scene";
 
 const WallScene = lazy(() => import("./wall-scene"));
@@ -36,14 +49,25 @@ export function WallGrid({
 	const [env, setEnv] = useState<{
 		isTouch: boolean;
 		showStats: boolean;
+		heroMode: HeroMode;
 	}>();
+	const [tourStep, setTourStep] = useState<number | null>(null);
 
 	useEffect(() => {
+		const heroMode = readHeroMode();
+		// Before the hero's measured: each mode's CSS shapes it.
+		document.documentElement.dataset.heroMode = heroMode;
 		setEnv({
 			isTouch: window.matchMedia("(hover: none) and (pointer: coarse)").matches,
 			showStats: new URLSearchParams(window.location.search).has("stats"),
+			heroMode,
 		});
+		return () => {
+			delete document.documentElement.dataset.heroMode;
+		};
 	}, []);
+	const featured = useMemo(() => featuredRecords(records), [records]);
+	const newest = useMemo(() => newestRecord(records), [records]);
 	const [reveal, setReveal] = useRevealConfig();
 	// Where the hero sits on screen (if it's showing), once its fonts are in
 	// — the wall leaves it a gap that size.
@@ -52,6 +76,11 @@ export function WallGrid({
 		window.scrollTo(0, 0);
 		document.fonts.ready.then(() => {
 			if (cancelled) return;
+			// Opening on a record, the hero is its caption, not a gap in the wall.
+			if (readHeroMode() === "record") {
+				setHero(null);
+				return;
+			}
 			// The text itself, not its box (wider than its lines), so the
 			// records come right up to the words.
 			const el = document.querySelector("[data-wall-hero]");
@@ -95,6 +124,12 @@ export function WallGrid({
 							<WallScene
 								records={records}
 								hero={hero}
+								heroMode={env.heroMode}
+								featured={featured}
+								introRecordId={
+									env.heroMode === "record" ? (newest?.id ?? null) : null
+								}
+								onTourStep={setTourStep}
 								onActiveChange={setRecord}
 								onOpen={onOpen}
 								onClose={onClose}
@@ -109,6 +144,14 @@ export function WallGrid({
 					document.body,
 				)}
 			<RevealPanel config={reveal} onChange={setReveal} />
+			{env?.heroMode === "tour" && (
+				<p
+					className="wall-tour-caption text-foreground"
+					style={{ opacity: tourStep == null ? 0 : 1 }}
+				>
+					{tourStep != null ? featured[tourStep]?.caption : null}
+				</p>
+			)}
 			<div
 				className={cn(
 					// Top centre on desktop (the filters and links take the bottom

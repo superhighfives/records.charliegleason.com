@@ -1,4 +1,4 @@
-import { Stats } from "@react-three/drei";
+import { Html, Stats } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { EffectComposer, ToneMapping } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
@@ -17,6 +17,8 @@ import {
 	hasNotes,
 	TILE_MIN_PX,
 } from "#/components/collection-grid";
+import { CollectionHero } from "#/components/collection-hero";
+import { CollectionStatsSentence } from "#/components/collection-stats-sentence";
 import { SceneStatsProbe } from "#/components/three/scene-stats-probe";
 import {
 	makeGrooveTexture,
@@ -42,6 +44,7 @@ import {
 	setCoverTheme,
 } from "./cover-reveal";
 import { Dust } from "./dust";
+import type { Featured, HeroMode } from "./hero-modes";
 import { loadNoteFont, makeNoteTexture, noteExcerpt } from "./note-texture";
 import { packDense } from "./pack";
 import { WhitePointEffect } from "./white-point";
@@ -158,6 +161,12 @@ const SLIP_PULL = 0.07;
 const FOCUS_ZOOM = 0.38;
 /** The camera's move to (and between, and away from) a selected record. */
 const CAMERA_MOVE_S = 0.9;
+/** `?hero=tour`: how long the hero holds before the tour, and each stop. */
+const TOUR_DELAY_S = 2.5;
+const TOUR_STEP_S = 3.2;
+/** The tour's moves are slower, and closer in less, than selecting a record. */
+const TOUR_MOVE_S = 1.6;
+const TOUR_ZOOM = 0.25;
 /** The record panel's width (`sm:max-w-md`), for framing beside it. */
 const PANEL_PX = 448;
 /** How far the pointer moves before a press on the wall is a drag. */
@@ -204,6 +213,14 @@ export type WallSceneProps = {
 	reveal: RevealConfig;
 	isTouch: boolean;
 	showStats?: boolean;
+	/** How the wall opens (`?hero=`, see hero-modes.ts). */
+	heroMode: HeroMode;
+	/** The records the stats are about (captions for `labels`, stops for `tour`). */
+	featured: Featured[];
+	/** `?hero=record`: the record the wall opens zoomed in on. */
+	introRecordId: number | null;
+	/** `?hero=tour`: which stop the tour is at (null between / after). */
+	onTourStep: (index: number | null) => void;
 };
 
 /**
@@ -416,6 +433,10 @@ const INTERACTIVE =
 function Wall({
 	records,
 	hero,
+	heroMode,
+	featured,
+	introRecordId,
+	onTourStep,
 	onActiveChange,
 	onOpen,
 	onClose,
@@ -621,6 +642,34 @@ function Wall({
 		y1: number;
 	} | null>(null);
 	const heroGone = useRef(hero == null);
+	/**
+	 * `?hero=record` / `tour`: the camera visiting records on its own — one
+	 * (record), or each in turn (tour) — until the first drag, scroll or
+	 * click hands it over.
+	 */
+	const intro = useRef({
+		active: heroMode === "record" || heroMode === "tour",
+		step: heroMode === "tour" ? -1 : 0,
+		/** Clock time the intro began. */
+		start: -1,
+		/** The copy being visited, picked once per step. */
+		index: -1,
+		forStep: -2,
+	});
+	/** `?hero=panel`: where on the wall the hero hangs, while it's there. */
+	const [panelAt, setPanelAt] = useState<{ x: number; y: number } | null>(null);
+	const panel = useRef<THREE.Group>(null);
+	const captionById = useMemo(
+		() =>
+			heroMode === "labels"
+				? new Map(featured.map((f) => [f.recordId, f.caption]))
+				: null,
+		[heroMode, featured],
+	);
+	const onTourStepRef = useRef(onTourStep);
+	onTourStepRef.current = onTourStep;
+	const featuredRef = useRef(featured);
+	featuredRef.current = featured;
 	const heroStart = useRef({ x: 0, y: 0 });
 	const heroEl = useRef<HTMLElement | null>(null);
 	/** Last frame's camera, for which edges records are coming in from. */
@@ -718,6 +767,17 @@ function Wall({
 			);
 		const onWall = (target: EventTarget | null) =>
 			target instanceof Element && target.closest(INTERACTIVE) == null;
+		// The first drag, scroll or click ends a record / tour intro: the
+		// camera zooms back out where it is, and it's yours.
+		const endIntro = () => {
+			const it = intro.current;
+			if (!it.active) return;
+			it.active = false;
+			onTourStepRef.current(null);
+			if (heroMode === "record") {
+				document.documentElement.dataset.wallHeroGone = "";
+			}
+		};
 		// Moves the view by a screen-pixel distance: zoomed in, the pan
 		// offset; otherwise where the camera rests.
 		const panBy = (dxPx: number, dyPx: number) => {
@@ -770,6 +830,7 @@ function Wall({
 		} | null = null;
 		const onDown = (e: PointerEvent) => {
 			if (e.button !== 0 || !onWall(e.target)) return;
+			endIntro();
 			press = { x: e.clientX, y: e.clientY, moved: false, trail: [] };
 			free.current.vx = 0;
 			free.current.vy = 0;
@@ -845,6 +906,7 @@ function Wall({
 				return;
 			}
 			e.preventDefault();
+			endIntro();
 			const line = e.deltaMode === 1 ? 16 : 1;
 			free.current.vx = 0;
 			free.current.vy = 0;
@@ -869,7 +931,7 @@ function Wall({
 			delete document.documentElement.dataset.wallDragging;
 			document.body.style.cursor = "";
 		};
-	}, [pick, onOpen, onClose, unitsPerPx]);
+	}, [pick, onOpen, onClose, unitsPerPx, heroMode]);
 
 	const getTarget = useCallback((i: number) => handles.current[i], []);
 	const textures = useTextureStream(drawn, getTarget, {
@@ -932,6 +994,12 @@ function Wall({
 		if (Number.isNaN(f.y)) {
 			f.x = 0;
 			f.y = -tileH / 2;
+			// Opening on a record: start right over it, then zoom in.
+			const opening = insts.findIndex((i) => i.record.id === introRecordId);
+			if (opening >= 0 && layout[opening]) {
+				f.x = layout[opening].x;
+				f.y = layout[opening].y;
+			}
 			if (hero && !heroGone.current) {
 				const toX = (px: number) => f.x + (px - size.width / 2) * unitsPerPx;
 				const toY = (px: number) => f.y - (px - size.height / 2) * unitsPerPx;
@@ -942,6 +1010,12 @@ function Wall({
 					y0: toY(hero.bottom) - GAP,
 					y1: toY(hero.top) + GAP,
 				};
+				if (heroMode === "panel") {
+					setPanelAt({
+						x: toX((hero.left + hero.right) / 2),
+						y: toY((hero.top + hero.bottom) / 2),
+					});
+				}
 			}
 		}
 		// Momentum: a fling coasts on and slows to a stop.
@@ -993,7 +1067,52 @@ function Wall({
 				});
 			}
 		}
-		const focused = pendingFocus.current ?? focusIndex.current;
+		// The intro (record / tour): which record the camera's visiting now.
+		const it = intro.current;
+		if (it.active) {
+			if (it.start < 0) it.start = t;
+			if (heroMode === "tour") {
+				const step = Math.floor((t - it.start - TOUR_DELAY_S) / TOUR_STEP_S);
+				if (step >= featuredRef.current.length) {
+					it.active = false;
+					onTourStepRef.current(null);
+				} else if (step !== it.step) {
+					it.step = step;
+					if (step >= 0) onTourStepRef.current(step);
+				}
+			}
+		}
+		let introIdx = -1;
+		if (it.active && it.step >= 0) {
+			const id =
+				heroMode === "tour"
+					? featuredRef.current[it.step]?.recordId
+					: introRecordId;
+			if (it.forStep !== it.step) {
+				it.forStep = it.step;
+				it.index = -1;
+				const cx = Number.isNaN(cam.current.y) ? f.x : cam.current.x;
+				const cy = Number.isNaN(cam.current.y) ? f.y : cam.current.y;
+				let best = Number.POSITIVE_INFINITY;
+				layout.forEach((l, i) => {
+					if (insts[i]?.record.id !== id) return;
+					const d = Math.hypot(
+						wrapNear(l.x, cx, tileW) - cx,
+						wrapNear(l.y, cy, tileH) - cy,
+					);
+					if (d < best) {
+						best = d;
+						it.index = i;
+					}
+				});
+			}
+			introIdx = it.index;
+		}
+		const chosen = pendingFocus.current ?? focusIndex.current;
+		// Visiting a record on the intro looks just like selecting it (lifted,
+		// lit, the room dimmed) — but centred, with no panel beside it.
+		const visiting = chosen < 0 && introIdx >= 0;
+		const focused = chosen >= 0 ? chosen : introIdx;
 
 		// Where the camera is headed: where the wall was dragged to; or, with
 		// a record selected, framing it — closer (as far as it still fits on
@@ -1013,14 +1132,14 @@ function Wall({
 			// A lifted record also looks bigger (it's closer to the camera).
 			const extent = pos.spanScale * TILE * 1.15;
 			camGoalZoom = Math.min(
-				FOCUS_ZOOM,
+				visiting && heroMode === "tour" ? TOUR_ZOOM : FOCUS_ZOOM,
 				Math.max(0, 1 - extent / (viewHeight * 0.62)),
 			);
 			// Halfway between the screen's left edge (-1) and the panel's —
 			// from the panel's settled width, not its rect, which slides in.
 			const panelLeft = size.width - Math.min(PANEL_PX, size.width);
 			const centreNdc =
-				!isTouch && panelLeft > size.width * 0.3
+				!visiting && !isTouch && panelLeft > size.width * 0.3
 					? panelLeft / size.width - 1
 					: 0;
 			frameOffset.current = centreNdc * (viewWidth / 2) * (1 - camGoalZoom);
@@ -1053,7 +1172,8 @@ function Wall({
 			}
 			tw.down = lightsDown.current;
 		}
-		tw.t = reducedMotion ? 1 : Math.min(1, tw.t + dt / CAMERA_MOVE_S);
+		const moveS = visiting && heroMode === "tour" ? TOUR_MOVE_S : CAMERA_MOVE_S;
+		tw.t = reducedMotion ? 1 : Math.min(1, tw.t + dt / moveS);
 		const camEase = easeInOutCubic(tw.t);
 		c.x = tw.x + (camGoalX - tw.x) * camEase;
 		c.y = tw.y + (camGoalY - tw.y) * camEase;
@@ -1091,6 +1211,7 @@ function Wall({
 				heroGone.current = true;
 				heroHole.current = null;
 				document.documentElement.dataset.wallHeroGone = "";
+				if (heroMode === "panel") setPanelAt(null);
 			} else if (el) {
 				el.style.setProperty("--wall-pan-x", `${dx.toFixed(1)}px`);
 				el.style.setProperty("--wall-pan-y", `${dy.toFixed(1)}px`);
@@ -1252,6 +1373,20 @@ function Wall({
 			);
 		}
 		if (wall.current) wall.current.position.set(camX, camY, WALL_Z);
+		// The hung hero follows the wall's curve, like a record would.
+		if (panel.current && panelAt) {
+			const px = wrapNear(panelAt.x, camX, tileW);
+			const py = wrapNear(panelAt.y, camY, tileH);
+			const dy = (py - camY) / (viewHeight / 2);
+			panel.current.position.set(px, py, 0.02 - CURVE_DEPTH * dy * dy);
+			panel.current.rotation.x = -Math.atan(
+				(2 * CURVE_DEPTH * dy) / (viewHeight / 2),
+			);
+			panel.current.rotation.y = -(px - camX) * 0.035;
+			// drei's transform mode draws 40 CSS px a world unit: this makes the
+			// panel the size the hero is on screen.
+			panel.current.scale.setScalar(unitsPerPx * 40);
+		}
 		if (sun.current && !theme.dark) {
 			const d = sun.current;
 			d.position.set(camX - 2.5, camY + 4, 9);
@@ -1638,6 +1773,16 @@ function Wall({
 				getScroll={getTravelY}
 				getScrollX={getTravelX}
 			/>
+			{panelAt && (
+				<group ref={panel}>
+					<Html transform center pointerEvents="none">
+						<div data-wall-hero-panel>
+							<CollectionHero count={records.length} />
+							<CollectionStatsSentence records={records} intro />
+						</div>
+					</Html>
+				</group>
+			)}
 			{/* One keyed list for live and leaving records, so a record that gets
 			    filtered out keeps its component (and loaded cover) as it sinks
 			    away, rather than remounting blank. */}
@@ -1647,6 +1792,7 @@ function Wall({
 						key={inst.key}
 						index={i}
 						instanceKey={inst.key}
+						caption={captionById?.get(inst.record.id)}
 						record={inst.record}
 						shared={shared}
 						placeholder={theme.placeholder}
@@ -1674,6 +1820,7 @@ function Wall({
 const Tile = memo(function Tile({
 	index,
 	instanceKey,
+	caption,
 	record,
 	shared,
 	placeholder,
@@ -1681,6 +1828,8 @@ const Tile = memo(function Tile({
 }: {
 	index: number;
 	instanceKey: string;
+	/** `?hero=labels`: a fact about this record, pinned under it. */
+	caption?: string;
 	record: PublicRecord;
 	shared: Shared;
 	placeholder: string;
@@ -1801,6 +1950,7 @@ const Tile = memo(function Tile({
 
 	return (
 		<group ref={group}>
+			{caption && <TileCaption text={caption} group={group} />}
 			<mesh
 				ref={disc}
 				geometry={shared.discGeometry}
@@ -1830,3 +1980,26 @@ const Tile = memo(function Tile({
 		</group>
 	);
 });
+
+/** `?hero=labels`: a caption under a record, hidden while it isn't drawn. */
+function TileCaption({
+	text,
+	group,
+}: {
+	text: string;
+	group: React.RefObject<THREE.Group | null>;
+}) {
+	const el = useRef<HTMLDivElement>(null);
+	useFrame(() => {
+		if (el.current) {
+			el.current.style.opacity = group.current?.visible ? "1" : "0";
+		}
+	});
+	return (
+		<Html position={[0, -TILE / 2 - 0.12, 0]} center pointerEvents="none">
+			<div ref={el} className="wall-caption">
+				{text}
+			</div>
+		</Html>
+	);
+}
