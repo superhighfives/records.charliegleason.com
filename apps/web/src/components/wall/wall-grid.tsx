@@ -66,30 +66,47 @@ export function WallGrid({
 	useEffect(() => {
 		let cancelled = false;
 		window.scrollTo(0, 0);
+		// The text itself, not its box (wider than its lines), so the records
+		// come right up to the words; and where it sits with the wall back
+		// where it started (less how far it's been panned).
+		const measure = () => {
+			const el = document.querySelector<HTMLElement>("[data-wall-hero]");
+			if (!el) return null;
+			const range = document.createRange();
+			range.selectNodeContents(el);
+			const r = range.getBoundingClientRect();
+			const dx =
+				Number.parseFloat(el.style.getPropertyValue("--wall-pan-x")) || 0;
+			const dy =
+				Number.parseFloat(el.style.getPropertyValue("--wall-pan-y")) || 0;
+			return {
+				left: r.left - dx,
+				top: r.top - dy,
+				right: r.right - dx,
+				bottom: r.bottom - dy,
+			};
+		};
 		document.fonts.ready.then(() => {
 			if (cancelled) return;
 			// Opening on a record, the hero is its caption, not a gap in the wall.
-			if (readHeroMode() === "record") {
-				setHero(null);
-				return;
-			}
-			// The text itself, not its box (wider than its lines), so the
-			// records come right up to the words.
-			const el = document.querySelector("[data-wall-hero]");
-			let r: DOMRect | undefined;
-			if (el) {
-				const range = document.createRange();
-				range.selectNodeContents(el);
-				r = range.getBoundingClientRect();
-			}
-			setHero(
-				r
-					? { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
-					: null,
-			);
+			setHero(readHeroMode() === "record" ? null : measure());
 		});
+		// Resizing reflows the text: its gap follows, while it's still there.
+		let timer = 0;
+		const onResize = () => {
+			window.clearTimeout(timer);
+			timer = window.setTimeout(() => {
+				if (readHeroMode() === "record") return;
+				if ("wallHeroGone" in document.documentElement.dataset) return;
+				const next = measure();
+				if (next) setHero(next);
+			}, 150);
+		};
+		window.addEventListener("resize", onResize);
 		return () => {
 			cancelled = true;
+			window.clearTimeout(timer);
+			window.removeEventListener("resize", onResize);
 		};
 	}, []);
 	// Lets CSS adjust page chrome for the wall — see `[data-wall]` in

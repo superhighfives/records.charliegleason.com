@@ -1364,14 +1364,14 @@ a {
 /* Both have to fit the screen together, so they size to whichever of its
    width or height is tighter. */
 :root[data-wall] [data-wall-hero] > :first-child {
-  font-size: min(5.5vw, 9vh);
+  font-size: clamp(2rem, min(4.25vw, 7vh), 5rem);
   line-height: 1.05;
 }
 :root[data-wall] [data-wall-hero] .stats-sentence {
-  max-width: 56rem;
-  margin: 3vh auto 0;
-  font-size: min(2.4vw, 3.8vh);
-  line-height: 1.2;
+  max-width: 46rem;
+  margin: 2.5vh auto 0;
+  font-size: clamp(1rem, min(1.75vw, 2.8vh), 1.75rem);
+  line-height: 1.25;
 }
 :root[data-wall-hero-gone] [data-wall-hero] {
   display: none;

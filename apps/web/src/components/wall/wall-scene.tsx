@@ -655,6 +655,8 @@ function Wall({
 	const featuredRef = useRef(featured);
 	featuredRef.current = featured;
 	const heroStart = useRef({ x: 0, y: 0 });
+	/** The hero measurement `heroHole` was built from. */
+	const holeFor = useRef<WallSceneProps["hero"]>(null);
 	const heroEl = useRef<HTMLElement | null>(null);
 	/** Where textures were last streamed around. */
 	const streamedAt = useRef<{ x: number; y: number } | null>(null);
@@ -947,22 +949,27 @@ function Wall({
 				f.x = layout[opening].x;
 				f.y = layout[opening].y;
 			}
-			if (hero && !heroGone.current) {
-				const toX = (px: number) => f.x + (px - size.width / 2) * unitsPerPx;
-				const toY = (px: number) => f.y - (px - size.height / 2) * unitsPerPx;
-				heroStart.current = { x: f.x, y: f.y };
-				heroHole.current = {
-					x0: toX(hero.left) - GAP,
-					x1: toX(hero.right) + GAP,
-					y0: toY(hero.bottom) - GAP,
-					y1: toY(hero.top) + GAP,
-				};
-				if (heroMode === "panel") {
-					setPanelAt({
-						x: toX((hero.left + hero.right) / 2),
-						y: toY((hero.top + hero.bottom) / 2),
-					});
-				}
+			heroStart.current = { x: f.x, y: f.y };
+		}
+		// The hero's gap in the wall: where its text is when the wall is back
+		// where it started. Rebuilt whenever the page re-measures it (the
+		// window resized and the text reflowed).
+		if (hero && !heroGone.current && holeFor.current !== hero) {
+			holeFor.current = hero;
+			const s0 = heroStart.current;
+			const toX = (px: number) => s0.x + (px - size.width / 2) * unitsPerPx;
+			const toY = (px: number) => s0.y - (px - size.height / 2) * unitsPerPx;
+			heroHole.current = {
+				x0: toX(hero.left) - GAP,
+				x1: toX(hero.right) + GAP,
+				y0: toY(hero.bottom) - GAP,
+				y1: toY(hero.top) + GAP,
+			};
+			if (heroMode === "panel") {
+				setPanelAt({
+					x: toX((hero.left + hero.right) / 2),
+					y: toY((hero.top + hero.bottom) / 2),
+				});
 			}
 		}
 		// Momentum: a fling coasts on and slows to a stop.
