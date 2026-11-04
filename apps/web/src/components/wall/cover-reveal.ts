@@ -121,6 +121,15 @@ const HEADER_GLSL = /* glsl */ `
 	// Shapes are worked out in a space flipped with the scroll direction;
 	// sampling flips back, so the picture itself is never upside down.
 	float revealFlip;
+	// The cover's texture-coordinate gradients, taken once before any
+	// branching. The reveal now varies across the screen, so neighbouring
+	// pixels take different branches (the fully-revealed shortcut, or a
+	// style's code); a plain texture read inside them got no valid gradients
+	// along that boundary, picked the wrong mip level, and drew a thin line
+	// down the covers at a fixed place on screen. Reading with these instead
+	// keeps every branch sharp and seamless.
+	vec2 revealDx;
+	vec2 revealDy;
 	uniform vec3 uPlaceholder;
 	uniform float uSeed;
 	uniform float uSelfLight;
@@ -145,7 +154,7 @@ const HEADER_GLSL = /* glsl */ `
 	vec3 revealSample(sampler2D tex, vec2 uv) {
 		vec2 s = clamp(uv, 0.0, 1.0);
 		if (revealFlip > 0.5) s.y = 1.0 - s.y;
-		return texture2D(tex, s).rgb;
+		return textureGrad(tex, s, revealDx, revealDy).rgb;
 	}
 	// A cheap soft blur: the centre plus four diagonal taps.
 	vec3 revealBlur(sampler2D tex, vec2 uv, float r) {
@@ -194,6 +203,8 @@ const MAP_GLSL = /* glsl */ `
 			t = mix(t, min(t, onScreen), uScreen);
 		}
 		vec2 uv = vMapUv;
+		revealDx = dFdx(vMapUv);
+		revealDy = dFdy(vMapUv);
 		revealFlip = uDir < 0.0 && REVEAL_MODE != 8 ? 1.0 : 0.0;
 		if (revealFlip > 0.5) uv.y = 1.0 - uv.y;
 		vec3 img;
