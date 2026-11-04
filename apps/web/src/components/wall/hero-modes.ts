@@ -16,6 +16,9 @@ import type { PublicRecord } from "#/lib/records";
  * - `plaque` — the hero with the stats as a small museum-style wall text.
  * - `record` — opens zoomed in on the newest record, the hero as its
  *   caption, pulling back to the wall as soon as you move.
+ * - `facts` — the hero alone, big; previous / next buttons in the filter
+ *   pill step the camera through the records the stats are about, each with
+ *   its fact as a caption.
  */
 export const HERO_MODES = [
 	"default",
@@ -24,6 +27,7 @@ export const HERO_MODES = [
 	"tour",
 	"plaque",
 	"record",
+	"facts",
 ] as const;
 export type HeroMode = (typeof HERO_MODES)[number];
 

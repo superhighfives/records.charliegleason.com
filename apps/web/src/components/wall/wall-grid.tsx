@@ -1,3 +1,4 @@
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
 	lazy,
 	Suspense,
@@ -52,6 +53,18 @@ export function WallGrid({
 		heroMode: HeroMode;
 	}>();
 	const [tourStep, setTourStep] = useState<number | null>(null);
+	// `?hero=facts`: the stepper lives in the filter pill (collection-view.tsx).
+	const [factsSlot, setFactsSlot] = useState<Element | null>(null);
+	useEffect(() => {
+		if (env?.heroMode !== "facts") return;
+		setFactsSlot(document.querySelector("[data-wall-facts-slot]"));
+	}, [env?.heroMode]);
+	const stepFacts = (by: 1 | -1) =>
+		setTourStep((step) => {
+			const n = featured.length;
+			if (step == null) return by > 0 ? 0 : n - 1;
+			return (step + by + n) % n;
+		});
 
 	useEffect(() => {
 		const heroMode = readHeroMode();
@@ -130,6 +143,7 @@ export function WallGrid({
 									env.heroMode === "record" ? (newest?.id ?? null) : null
 								}
 								onTourStep={setTourStep}
+								factStep={env.heroMode === "facts" ? tourStep : null}
 								onActiveChange={setRecord}
 								onOpen={onOpen}
 								onClose={onClose}
@@ -144,7 +158,37 @@ export function WallGrid({
 					document.body,
 				)}
 			<RevealPanel config={reveal} onChange={setReveal} />
-			{env?.heroMode === "tour" && (
+			{factsSlot &&
+				featured.length > 0 &&
+				createPortal(
+					// biome-ignore lint/a11y/useSemanticElements: a labelled group of controls, as the filter groups beside it
+					<div role="group" aria-label="Facts" className="filter-group">
+						<span className="kicker-muted shrink-0" aria-hidden="true">
+							Facts
+						</span>
+						<button
+							type="button"
+							className="filter-chip"
+							aria-label="Previous fact"
+							onClick={() => stepFacts(-1)}
+						>
+							<ChevronLeft className="size-3.5" />
+						</button>
+						<span className="filter-count tabular-nums">
+							{tourStep == null ? "–" : tourStep + 1}/{featured.length}
+						</span>
+						<button
+							type="button"
+							className="filter-chip"
+							aria-label="Next fact"
+							onClick={() => stepFacts(1)}
+						>
+							<ChevronRight className="size-3.5" />
+						</button>
+					</div>,
+					factsSlot,
+				)}
+			{(env?.heroMode === "tour" || env?.heroMode === "facts") && (
 				<p
 					className="wall-tour-caption text-foreground"
 					style={{ opacity: tourStep == null ? 0 : 1 }}

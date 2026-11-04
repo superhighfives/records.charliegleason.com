@@ -1388,6 +1388,7 @@ a {
 :root[data-hero-mode="plaque"] [data-wall-hero] .stats-sentence,
 :root[data-hero-mode="labels"] [data-wall-hero] .stats-sentence,
 :root[data-hero-mode="tour"] [data-wall-hero] .stats-sentence,
+:root[data-hero-mode="facts"] [data-wall-hero] .stats-sentence,
 :root[data-hero-mode="record"] [data-wall-hero] .stats-sentence {
   display: none;
 }
@@ -1508,6 +1509,8 @@ a {
   overflow-x: auto;
 }
 :root[data-corners] [data-wall-filters] > [data-wall-chrome] {
+  display: flex;
+  align-items: center;
   overflow-x: auto;
   padding: 0.375rem 0.75rem;
   border: 1px solid var(--border);
@@ -1579,4 +1582,12 @@ a {
 }
 :root.dark[data-wall] body {
   background-color: #000;
+}
+
+/* `?hero=facts`: the facts stepper, first in the filter pill. */
+[data-wall-facts-slot]:not(:empty) {
+  flex-shrink: 0;
+  margin-right: 1.25rem;
+  padding-right: 1.25rem;
+  border-right: 1px solid var(--border);
 }

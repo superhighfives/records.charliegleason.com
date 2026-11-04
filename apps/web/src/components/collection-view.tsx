@@ -311,6 +311,7 @@ export function CollectionView({
 				style={{ animationDelay: `${revealMs}ms` }}
 			>
 				<div data-wall-chrome>
+					{layout === "wall" && <div data-wall-facts-slot />}
 					<FilterStrip
 						records={data}
 						countRecords={searched}
