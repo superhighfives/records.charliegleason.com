@@ -1,10 +1,6 @@
 import { Stats } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import {
-	EffectComposer,
-	ToneMapping,
-	Vignette,
-} from "@react-three/postprocessing";
+import { EffectComposer, ToneMapping } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
 import {
 	memo,
@@ -237,7 +233,6 @@ export default memo(function WallScene(props: WallSceneProps) {
 				// (four samples a pixel, on the biggest buffer in the frame)
 				// costs far more than it shows.
 				multisample={!props.isTouch && dpr < 1.5}
-				dark={props.theme.dark}
 			/>
 			{props.showStats && <Stats />}
 			<SceneStatsProbe />
@@ -245,13 +240,7 @@ export default memo(function WallScene(props: WallSceneProps) {
 	);
 });
 
-function Effects({
-	multisample,
-	dark,
-}: {
-	multisample: boolean;
-	dark: boolean;
-}) {
+function Effects({ multisample }: { multisample: boolean }) {
 	// Neutral (Khronos) tone mapping keeps colours faithful — the ACES default
 	// greyed and desaturated covers, and turned the light theme's white wall
 	// to mud — and the white point puts its whites back at true white.
@@ -259,8 +248,6 @@ function Effects({
 	useEffect(() => () => whitePoint.dispose(), [whitePoint]);
 	const finish = (
 		<>
-			{/* A subtle one, in the dark only: on white it greyed the corners. */}
-			<Vignette offset={0.3} darkness={dark ? 0.35 : 0} />
 			<ToneMapping mode={ToneMappingMode.NEUTRAL} />
 			<primitive object={whitePoint} />
 		</>
@@ -1607,7 +1594,8 @@ function Wall({
 				{/* Shadows only, over the plain background: lit as a surface, the
 				    wall came out grey (light) or lifted (dark) instead of the
 				    page's pure white / black. */}
-				<shadowMaterial opacity={theme.dark ? 0.6 : 0.16} />
+				{/* Faint: just enough to sit the records on the wall. */}
+				<shadowMaterial opacity={theme.dark ? 0.25 : 0.06} />
 			</mesh>
 			{/* Dust in two layers: a fine one just off the wall that drifts slower
 			    than the scroll, and a sparse, larger one near the camera that
