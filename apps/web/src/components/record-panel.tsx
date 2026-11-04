@@ -34,6 +34,7 @@ import type { Record } from "#/db/schema";
 import { parseColorPalette } from "#/lib/color-palette";
 import { DEFAULT_COLOR_NAME } from "#/lib/colors";
 import { displayCoverKey, photoUrl } from "#/lib/cover";
+import { loadCoverColors } from "#/lib/cover-colors";
 import type { PublicRecord } from "#/lib/records";
 import { recordPath } from "#/lib/records-path";
 import { sleeveEdgeClipPath } from "#/lib/sleeve-edge";
@@ -334,6 +335,20 @@ export function RecordPanel({
 	// Admin drawer falls back to the raw capture so an in-progress record still
 	// shows an image; the public panel shows only an approved photo (else nothing).
 	const cover = displayCoverKey(record, { includeCapture: admin });
+	// The header's backdrop: a soft mesh of the cover's key colours, sampled
+	// from the thumbnail it already shows (so it's a cache hit).
+	const [meshColors, setMeshColors] = useState<string[] | null>(null);
+	useEffect(() => {
+		setMeshColors(null);
+		if (!cover) return;
+		let cancelled = false;
+		loadCoverColors(photoUrl(cover, 500)).then((colors) => {
+			if (!cancelled) setMeshColors(colors);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [cover]);
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
@@ -442,24 +457,18 @@ export function RecordPanel({
 			<div ref={scrollRef} className="relative flex-1 overflow-y-auto">
 				<div
 					ref={headerRef}
-					className="sticky z-10 flex aspect-square flex-col justify-end bg-background"
+					className="sticky z-10 flex aspect-[3/2] flex-col justify-end bg-background"
 				>
-					{cover && (
+					{meshColors && (
 						<div
 							aria-hidden
-							className="pointer-events-none absolute inset-0 -z-10"
-							// The backdrop's faint 10% lives here, not on FadeImage: a
-							// caller `opacity-*` class would clobber FadeImage's own
-							// 0→100 fade toggle. Parent × child opacity multiply, so the
-							// image fades 0 → 0.1 on load, then out as `--hero` pins.
-							style={{ opacity: "calc(1.0 * (1 - var(--hero, 0)))" }}
-						>
-							<FadeImage
-								src={photoUrl(cover, 800)}
-								alt=""
-								className="size-full object-cover mask-b-from-0% mask-b-to-75%"
-							/>
-						</div>
+							className="pointer-events-none absolute inset-0 -z-10 mask-b-from-25% mask-b-to-100%"
+							// Fades out as `--hero` pins, leaving just the title band.
+							style={{
+								...meshStyle(meshColors),
+								opacity: "calc(0.6 * (1 - var(--hero, 0)))",
+							}}
+						/>
 					)}
 					<div
 						ref={barRef}
@@ -666,4 +675,16 @@ export function RecordPanel({
 			</SheetFooter>
 		</>
 	);
+}
+
+/** Where each colour of the header's mesh glows from (x% y%). */
+const MESH_SPOTS = ["18% 22%", "82% 18%", "78% 80%", "22% 82%"];
+
+/** The header backdrop: a radial glow per key colour, over the first. */
+function meshStyle(colors: string[]): CSSProperties {
+	const glows = MESH_SPOTS.map(
+		(at, i) =>
+			`radial-gradient(at ${at}, ${colors[i % colors.length]} 0, transparent 65%)`,
+	);
+	return { backgroundColor: colors[0], backgroundImage: glows.join(", ") };
 }
