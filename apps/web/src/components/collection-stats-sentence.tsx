@@ -20,8 +20,14 @@ function S({ children }: { children: ReactNode }) {
  */
 export function CollectionStatsSentence({
 	records,
+	intro = false,
 }: {
 	records: StatsRecord[];
+	/**
+	 * Following the hero rather than closing the page (the wall): "Among
+	 * them, the oldest is…" instead of "Well, that was all three hundred…".
+	 */
+	intro?: boolean;
 }) {
 	const stats = useMemo(() => collectionStats(records), [records]);
 	const words = (n: number) => numberToWords(n);
@@ -102,10 +108,17 @@ export function CollectionStatsSentence({
 		);
 	}
 
+	if (intro && clauses.length === 0) return null;
 	return (
 		<p className="stats-sentence max-w-6xl font-serif text-3xl font-medium tracking-tight text-pretty text-muted-foreground italic sm:text-4xl lg:text-6xl lg:leading-[1.1]">
-			Well, that was all <S>{words(stats.total)}</S>
-			{clauses.length > 0 ? ": " : "."}
+			{intro ? (
+				"Among them, "
+			) : (
+				<>
+					Well, that was all <S>{words(stats.total)}</S>
+					{clauses.length > 0 ? ": " : "."}
+				</>
+			)}
 			{clauses.map((clause, i) => (
 				// biome-ignore lint/suspicious/noArrayIndexKey: clause order is fixed
 				<span key={i}>

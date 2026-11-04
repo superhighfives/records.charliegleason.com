@@ -1378,7 +1378,9 @@ function NowShowing({
 	return (
 		<div
 			className={cn(
-				"pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 transition-opacity duration-300 ease-out motion-reduce:transition-none",
+				// Top centre on desktop, clear of the filters (bottom-left) and
+				// links (bottom-right); just above the filters on phones.
+				"pointer-events-none fixed inset-x-0 bottom-20 z-40 flex justify-center px-4 transition-opacity duration-300 ease-out motion-reduce:transition-none sm:top-6 sm:bottom-auto",
 				visible ? "opacity-100" : "opacity-0",
 			)}
 		>

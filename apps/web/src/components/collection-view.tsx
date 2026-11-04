@@ -207,6 +207,14 @@ export function CollectionView({
 	// unlike gating on `open` alone, this stays correct even though the flag
 	// keeps getting set to `true` by paging in between.
 	const open = selected != null;
+	// Both layouts keep their controls in the screen's corners — see
+	// `[data-corners]` in styles.css.
+	useEffect(() => {
+		document.documentElement.dataset.corners = "";
+		return () => {
+			delete document.documentElement.dataset.corners;
+		};
+	}, []);
 	// Zoomed in on a record on the wall, the page's own text (hero, filters,
 	// footer) fades away — see `[data-wall-focus]` in styles.css.
 	useEffect(() => {
@@ -291,7 +299,7 @@ export function CollectionView({
 			{!search.trim() && (
 				<div data-wall-chrome data-wall-hero>
 					<CollectionHero count={data.length} />
-					{wallMode && <CollectionStatsSentence records={data} />}
+					{wallMode && <CollectionStatsSentence records={data} intro />}
 				</div>
 			)}
 
@@ -391,7 +399,7 @@ export function CollectionView({
 				</SheetContent>
 			</Sheet>
 
-			{wallMode && <WallCorners />}
+			<WallCorners layout={layout} />
 
 			<footer
 				data-wall-chrome

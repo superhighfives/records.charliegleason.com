@@ -416,28 +416,11 @@ body {
   inset: 24px 112px 24px 24px;
 }
 
-/* Grid tile cover (`RecordTile`'s `FadeImage`). Full colour at rest. While
- * any record is hovered, every *other* cover drains to grey and dims a touch,
- * so the one under the pointer is the only colour on the page. Unlayered,
- * so it beats FadeImage's own Tailwind transition utilities.
- *
- * Timing is what makes it feel continuous rather than flickery:
- * - The hovered cover floods back to colour fast (300ms).
- * - A cover the pointer has just left waits 250ms, then drains slowly
- *   (1.4s), so wiping across the grid leaves a short colour trail behind.
- * - Leaving the grid entirely restores everything after a 150ms hold — long
- *   enough that hopping the gap between two tiles (which briefly clears
- *   `:has(.group:hover)`) never flashes the whole grid back to colour.
- * Durations/delays are lists matching `transition-property` (opacity,
- * scale, filter) so these rules only retime the filter. They never set
- * `transition-property` itself — the touch rule further down narrows that
- * to `opacity`, and must keep winning on touch (which has no hover, and
- * now no desaturation at all).
- *
- * The recede rule's `.group:not(:hover)` (rather than a separate, more
- * specific un-recede rule for the hovered tile) is deliberate: `:has()`
- * takes its argument's specificity, which would otherwise outrank a plain
- * `.group:hover .cover-art`. */
+/* A record's cover drains to grey (and dims a touch) while another record
+ * is open in the panel — see the rule below. Unlayered, so it beats
+ * FadeImage's own Tailwind transition utilities. Durations/delays are lists
+ * matching `transition-property` (opacity, scale, filter) so the recede
+ * only retimes the filter. (Hovering no longer greys the rest of the grid.) */
 .cover-art {
   filter: grayscale(0) brightness(1);
   transition-property: opacity, scale, filter;
@@ -448,24 +431,7 @@ body {
     cubic-bezier(0.33, 1, 0.68, 1);
 }
 
-@media (pointer: fine) {
-  .collection-grid:has(.group:hover) .group:not(:hover) .cover-art {
-    filter: grayscale(1) brightness(0.82);
-    transition-duration: 1000ms, 1000ms, 1400ms;
-    transition-delay: 0s, 0s, 250ms;
-    transition-timing-function:
-      cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
-      cubic-bezier(0.45, 0, 0.55, 1);
-  }
-
-  .group:hover .cover-art {
-    transition-duration: 1000ms, 1000ms, 300ms;
-    transition-delay: 0s;
-    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-  }
-}
-
-/* Same recede while a record is open in the panel (`data-active` marks the
+/* The recede while a record is open in the panel (`data-active` marks the
  * pinned tile): everything else stays grey for as long as the panel is up,
  * leaving the open record the only colour on the page behind it. Not gated
  * to `pointer: fine` — the pinned tile is explicit state on every device. */
@@ -1411,12 +1377,16 @@ a {
   display: none;
 }
 
-/* The filters float bottom-left, over the records (across the bottom on a
+/* On both the wall and the grid (`data-corners`, set by CollectionView),
+   the controls sit in the corners: the search top-left, the filters
+   bottom-left, the footer's links bottom-right.
+
+   The filters float bottom-left, over the records (across the bottom on a
    phone). Positioned on the outer, `rise-in` wrapper: that animation holds
    a transform, which would make it the containing block for a fixed child.
    The pill is the inner element, which can fade (the outer one's opacity is
    held by its animation). */
-:root[data-wall] [data-wall-filters] {
+:root[data-corners] [data-wall-filters] {
   position: fixed;
   bottom: 1rem;
   left: 1rem;
@@ -1425,12 +1395,12 @@ a {
 }
 /* In the pill, the strip loses the margin that spaced it from the grid
    below on the page, and stays one line (scrolling sideways if need be). */
-:root[data-wall] [data-wall-filters] .filter-strip {
+:root[data-corners] [data-wall-filters] .filter-strip {
   margin-bottom: 0;
   flex-wrap: nowrap;
   overflow-x: auto;
 }
-:root[data-wall] [data-wall-filters] > [data-wall-chrome] {
+:root[data-corners] [data-wall-filters] > [data-wall-chrome] {
   overflow-x: auto;
   padding: 0.375rem 0.75rem;
   border: 1px solid var(--border);
@@ -1439,7 +1409,7 @@ a {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
 }
 @media (min-width: 640px) {
-  :root[data-wall] [data-wall-filters] {
+  :root[data-corners] [data-wall-filters] {
     bottom: 1.5rem;
     left: 1.5rem;
     right: auto;
@@ -1454,12 +1424,12 @@ a {
 }
 
 /* The search top-left. */
-:root[data-wall] .floating-controls {
+:root[data-corners] .floating-controls {
   left: 1rem;
   right: auto;
 }
 @media (min-width: 640px) {
-  :root[data-wall] .floating-controls {
+  :root[data-corners] .floating-controls {
     left: 1.5rem;
   }
 }
