@@ -24,7 +24,8 @@ collection). That's the raw material both the manual picker and the AI grouper w
 Relevant existing code:
 - `apps/web/src/db/schema.ts` — `records` table (the members being grouped)
 - `apps/web/src/routes/admin/` — admin table + editor + Discogs search UX to mirror
-- `@tanstack/ai-anthropic` is already a dependency — AI grouping can reuse it, no new SDK
+- `runClaude` in `apps/web/src/lib/ai.ts` (Claude via Workers AI + AI Gateway) is already
+  the app's AI integration — AI grouping can reuse it, no new SDK
 - CI excludes biome; SerpApi / CF Images notes in memory aren't relevant here
 
 ## Rough shape
@@ -34,7 +35,7 @@ Relevant existing code:
   several collections.
 - **Manual flow:** admin creates a collection, then adds records via a picker (reuse the
   existing admin record search/filter). Remove + reorder. Nothing surprising.
-- **AI flow:** feed the collection's records' metadata to Claude (`@tanstack/ai-anthropic`)
+- **AI flow:** feed the collection's records' metadata to Claude (`runClaude`)
   and ask it to propose N themed groupings ("moody late-night", "upbeat 80s", "same
   label", "same era") with a name + member record ids + a one-line rationale. Present as
   *suggestions* — the admin accepts/edits/rejects before anything is saved. An accepted
