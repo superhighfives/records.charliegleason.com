@@ -416,34 +416,14 @@ body {
   inset: 24px 112px 24px 24px;
 }
 
-/* A record's cover drains to grey (and dims a touch) while another record
- * is open in the panel — see the rule below. Unlayered, so it beats
- * FadeImage's own Tailwind transition utilities. Durations/delays are lists
- * matching `transition-property` (opacity, scale, filter) so the recede
- * only retimes the filter. (Hovering no longer greys the rest of the grid.) */
+/* A record's cover fades and scales in (FadeImage). Unlayered, so it beats
+ * FadeImage's own Tailwind transition utilities. (Nothing greys out any
+ * more — hovering, or a record open in the panel: re-filtering every cover
+ * on the page cost long frames on each open.) */
 .cover-art {
-  filter: grayscale(0) brightness(1);
-  transition-property: opacity, scale, filter;
-  transition-duration: 1000ms, 1000ms, 600ms;
-  transition-delay: 0s, 0s, 150ms;
-  transition-timing-function:
-    cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
-    cubic-bezier(0.33, 1, 0.68, 1);
-}
-
-/* The recede while a record is open in the panel (`data-active` marks the
- * pinned tile): everything else stays grey for as long as the panel is up,
- * leaving the open record the only colour on the page behind it. Not gated
- * to `pointer: fine` — the pinned tile is explicit state on every device. */
-.collection-grid:has(.group[data-active="true"])
-  .group:not([data-active="true"])
-  .cover-art {
-  filter: grayscale(1) brightness(0.82);
-  transition-duration: 1000ms, 1000ms, 1400ms;
-  transition-delay: 0s, 0s, 250ms;
-  transition-timing-function:
-    cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
-    cubic-bezier(0.45, 0, 0.55, 1);
+  transition-property: opacity, scale;
+  transition-duration: 1000ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -458,7 +438,7 @@ body {
  * transition on any of those would smooth the already-eased values a second
  * time, lagging the loop's own motion. Only the cover's load fade (opacity)
  * keeps its transition. Out-specifies `.cover-art`'s `transition-property`
- * above, which is why `.cover-art`'s hover/active rules only retime. */
+ * above. */
 .collection-grid[data-touch="true"] img {
   transition-property: opacity;
   /* Promote each mounted cover to its own compositing layer. The touch loop
