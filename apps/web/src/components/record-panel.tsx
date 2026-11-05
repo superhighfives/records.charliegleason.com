@@ -24,11 +24,7 @@ import { NotesContent } from "#/components/notes-content";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Button } from "#/components/ui/button";
 import { ImageZoom } from "#/components/ui/image-zoom";
-import {
-	SheetDescription,
-	SheetFooter,
-	SheetTitle,
-} from "#/components/ui/sheet";
+import { SheetDescription, SheetTitle } from "#/components/ui/sheet";
 import { VinylDisc } from "#/components/vinyl-disc";
 import type { Record } from "#/db/schema";
 import { parseColorPalette } from "#/lib/color-palette";
@@ -428,11 +424,39 @@ export function RecordPanel({
 
 	return (
 		<>
+			{/* Paging through the collection, top left across from the close
+			    button — fixed in place, so it doesn't move with the panel's
+			    height from one record to the next. */}
+			<div className="absolute top-2.5 left-3 z-20 flex items-center gap-0.5">
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-sm"
+					disabled={index <= 0}
+					onClick={onPrev}
+					aria-label="Previous record"
+				>
+					<ChevronLeft />
+				</Button>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-sm"
+					disabled={index >= total - 1}
+					onClick={onNext}
+					aria-label="Next record"
+				>
+					<ChevronRight />
+				</Button>
+				<span className="ml-1 font-mono text-xs text-muted-foreground tabular-nums">
+					{index + 1} / {total}
+				</span>
+			</div>
 			{/* Admin-only jump to the full editor. Clerk's `SignedIn` renders nothing
 			    for signed-out visitors, so this never shows on the public site. `pr-12`
 			    keeps the row clear of the Sheet's top-right close button. */}
 			<SignedIn>
-				<div className="flex items-center gap-2 border-b border-border bg-brand/5 px-6 py-4 pr-12">
+				<div className="flex items-center gap-2 border-b border-border bg-brand/5 px-6 py-4 pr-12 pl-40">
 					<span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
 						Admin
 					</span>
@@ -645,34 +669,6 @@ export function RecordPanel({
 					{admin && <AdminValuation record={record} />}
 				</div>
 			</div>
-
-			<SheetFooter className="justify-between border-t border-border">
-				<span className="text-sm text-muted-foreground tabular-nums">
-					{index + 1} / {total}
-				</span>
-				<div className="flex gap-2">
-					<Button
-						type="button"
-						variant="outline"
-						size="icon-sm"
-						disabled={index <= 0}
-						onClick={onPrev}
-						aria-label="Previous record"
-					>
-						<ChevronLeft />
-					</Button>
-					<Button
-						type="button"
-						variant="outline"
-						size="icon-sm"
-						disabled={index >= total - 1}
-						onClick={onNext}
-						aria-label="Next record"
-					>
-						<ChevronRight />
-					</Button>
-				</div>
-			</SheetFooter>
 		</>
 	);
 }

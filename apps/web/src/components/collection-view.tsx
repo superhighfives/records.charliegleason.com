@@ -387,11 +387,10 @@ export function CollectionView({
 				}}
 			>
 				<SheetContent
-					// A floating card, inset from the window's edges and only as tall
-					// as it needs to be, centred down the right (full screen on
-					// phones) — see `.record-sheet` in styles.css. Centred with
-					// `translate`, not `transform`, so the slide in / out still works.
-					className="record-sheet p-0 sm:top-1/2 sm:right-6 sm:bottom-auto sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:-translate-y-1/2 sm:overflow-hidden sm:rounded-2xl sm:border lg:right-16 lg:max-h-[calc(100dvh-8rem)]"
+					// A floating card in the top right, inset from the window's edges
+					// and only as tall as it needs to be (full screen on phones) —
+					// see `.record-sheet` in styles.css.
+					className="record-sheet p-0 sm:top-6 sm:right-6 sm:bottom-auto sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:overflow-hidden sm:rounded-2xl sm:border lg:top-16 lg:right-16 lg:max-h-[calc(100dvh-8rem)]"
 					enterAnimation={enterAnimation}
 					// On the wall, a press beside the panel may be a drag (panning
 					// the zoomed-in wall), so the wall decides: a click on the empty
