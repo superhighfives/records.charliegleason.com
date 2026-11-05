@@ -39,7 +39,16 @@ export default defineConfig(({ mode }) => {
 		// (reading 'useContext')" during server rendering (see RECORDS-2/3).
 		resolve: { tsconfigPaths: true, dedupe: ["react", "react-dom"] },
 		plugins: [
-			devtools(),
+			devtools({
+				// Source injection adds a `data-tsd-source` prop to every JSX
+				// element. In the three.js scenes those elements are three objects,
+				// not DOM, and React Three Fiber throws trying to set it whenever a
+				// hot reload shifts its line number.
+				injectSource: {
+					enabled: true,
+					ignore: { files: [/components\/(wall|three)\//] },
+				},
+			}),
 			// remoteBindings: dev connects to the real D1/R2 (bindings marked
 			// `remote: true` in wrangler.jsonc). No local DB — single source of truth.
 			cloudflare({ viteEnvironment: { name: "ssr" }, remoteBindings: true }),

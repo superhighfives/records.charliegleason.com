@@ -21,6 +21,7 @@ import { Route as AdminReviewRouteImport } from './routes/admin/review'
 import { Route as AdminFiltersRouteImport } from './routes/admin/filters'
 import { Route as AdminColorsRouteImport } from './routes/admin/colors'
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
+import { Route as CollectionGridIndexRouteImport } from './routes/_collection/grid.index'
 import { Route as ApiRecordsLiteRouteImport } from './routes/api/records.lite'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
 import { Route as ApiInboundDailyRecordRouteImport } from './routes/api/inbound.daily-record'
@@ -33,6 +34,7 @@ import { Route as ApiAdminBackupRouteImport } from './routes/api/admin/backup'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdRouteImport } from './routes/admin/records.$id'
 import { Route as CollectionRecordsIdRouteImport } from './routes/_collection/records.$id'
+import { Route as CollectionGridRecordsIdRouteImport } from './routes/_collection/grid.records.$id'
 
 const R500Route = R500RouteImport.update({
   id: '/500',
@@ -92,6 +94,11 @@ const AdminCaptureRoute = AdminCaptureRouteImport.update({
   id: '/capture',
   path: '/capture',
   getParentRoute: () => AdminRouteRoute,
+} as any)
+const CollectionGridIndexRoute = CollectionGridIndexRouteImport.update({
+  id: '/grid/',
+  path: '/grid/',
+  getParentRoute: () => CollectionRouteRoute,
 } as any)
 const ApiRecordsLiteRoute = ApiRecordsLiteRouteImport.update({
   id: '/lite',
@@ -153,6 +160,11 @@ const CollectionRecordsIdRoute = CollectionRecordsIdRouteImport.update({
   path: '/records/$id',
   getParentRoute: () => CollectionRouteRoute,
 } as any)
+const CollectionGridRecordsIdRoute = CollectionGridRecordsIdRouteImport.update({
+  id: '/grid/records/$id',
+  path: '/grid/records/$id',
+  getParentRoute: () => CollectionRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof CollectionIndexRoute
@@ -178,6 +190,8 @@ export interface FileRoutesByFullPath {
   '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
+  '/grid/': typeof CollectionGridIndexRoute
+  '/grid/records/$id': typeof CollectionGridRecordsIdRoute
 }
 export interface FileRoutesByTo {
   '/404': typeof R404Route
@@ -202,6 +216,8 @@ export interface FileRoutesByTo {
   '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
+  '/grid': typeof CollectionGridIndexRoute
+  '/grid/records/$id': typeof CollectionGridRecordsIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -229,6 +245,8 @@ export interface FileRoutesById {
   '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
+  '/_collection/grid/': typeof CollectionGridIndexRoute
+  '/_collection/grid/records/$id': typeof CollectionGridRecordsIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -256,6 +274,8 @@ export interface FileRouteTypes {
     | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
+    | '/grid/'
+    | '/grid/records/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/404'
@@ -280,6 +300,8 @@ export interface FileRouteTypes {
     | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
+    | '/grid'
+    | '/grid/records/$id'
   id:
     | '__root__'
     | '/_collection'
@@ -306,6 +328,8 @@ export interface FileRouteTypes {
     | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
+    | '/_collection/grid/'
+    | '/_collection/grid/records/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -410,6 +434,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCaptureRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/_collection/grid/': {
+      id: '/_collection/grid/'
+      path: '/grid'
+      fullPath: '/grid/'
+      preLoaderRoute: typeof CollectionGridIndexRouteImport
+      parentRoute: typeof CollectionRouteRoute
+    }
     '/api/records/lite': {
       id: '/api/records/lite'
       path: '/lite'
@@ -494,17 +525,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CollectionRecordsIdRouteImport
       parentRoute: typeof CollectionRouteRoute
     }
+    '/_collection/grid/records/$id': {
+      id: '/_collection/grid/records/$id'
+      path: '/grid/records/$id'
+      fullPath: '/grid/records/$id'
+      preLoaderRoute: typeof CollectionGridRecordsIdRouteImport
+      parentRoute: typeof CollectionRouteRoute
+    }
   }
 }
 
 interface CollectionRouteRouteChildren {
   CollectionIndexRoute: typeof CollectionIndexRoute
   CollectionRecordsIdRoute: typeof CollectionRecordsIdRoute
+  CollectionGridIndexRoute: typeof CollectionGridIndexRoute
+  CollectionGridRecordsIdRoute: typeof CollectionGridRecordsIdRoute
 }
 
 const CollectionRouteRouteChildren: CollectionRouteRouteChildren = {
   CollectionIndexRoute: CollectionIndexRoute,
   CollectionRecordsIdRoute: CollectionRecordsIdRoute,
+  CollectionGridIndexRoute: CollectionGridIndexRoute,
+  CollectionGridRecordsIdRoute: CollectionGridRecordsIdRoute,
 }
 
 const CollectionRouteRouteWithChildren = CollectionRouteRoute._addFileChildren(

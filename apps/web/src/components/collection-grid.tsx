@@ -44,7 +44,7 @@ const MIN_SPAN_GAP = 3;
  * way still show their notes — normally, in the detail panel — this only
  * affects the grid tile's size.
  */
-function computeSpanningIds(records: PublicRecord[]): Set<number> {
+export function computeSpanningIds(records: PublicRecord[]): Set<number> {
 	const spanning = new Set<number>();
 	let sinceLastSpan = MIN_SPAN_GAP;
 	for (const record of records) {
@@ -438,7 +438,7 @@ function useCoverPreload(
 // `smoothScrollCenterTo`. Slower than the browser's own native smooth
 // scroll (which has no duration knob to tune in the first place) so paging
 // through the record panel reads as a deliberate glide, not a blink.
-const GRID_SCROLL_DURATION_MS = 900;
+export const GRID_SCROLL_DURATION_MS = 900;
 
 // Ease-in-out-expo — ramps up gently rather than starting at full speed,
 // since the grid-centring scroll should read as a
@@ -456,9 +456,23 @@ function easeInOutExpo(t: number): number {
  * so paging through the record panel needs its own rAF-driven tween instead.
  */
 function smoothScrollCenterTo(el: HTMLElement, duration: number): void {
-	const startY = window.scrollY;
 	const rect = el.getBoundingClientRect();
-	const targetY = startY + rect.top + rect.height / 2 - window.innerHeight / 2;
+	smoothScrollTo(
+		window.scrollY + rect.top + rect.height / 2 - window.innerHeight / 2,
+		duration,
+	);
+}
+
+/**
+ * The tween behind `smoothScrollCenterTo`, for callers that know the target
+ * scroll position but have no element to centre (the 3D wall prototype).
+ */
+export function smoothScrollTo(
+	targetY: number,
+	duration: number,
+	easing: (t: number) => number = easeInOutExpo,
+): void {
+	const startY = window.scrollY;
 	const delta = targetY - startY;
 	if (Math.abs(delta) < 1) return;
 	const startTime = performance.now();
@@ -471,7 +485,7 @@ function smoothScrollCenterTo(el: HTMLElement, duration: number): void {
 		// backwards — so an unclamped `t` here jerks the scroll away from the
 		// target for one frame before snapping back toward it.
 		const t = Math.min(1, Math.max(0, (now - startTime) / duration));
-		window.scrollTo(0, startY + delta * easeInOutExpo(t));
+		window.scrollTo(0, startY + delta * easing(t));
 		if (t < 1) requestAnimationFrame(step);
 	}
 	requestAnimationFrame(step);
@@ -1364,7 +1378,9 @@ function NowShowing({
 	return (
 		<div
 			className={cn(
-				"pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 transition-opacity duration-300 ease-out motion-reduce:transition-none",
+				// Top centre on desktop, clear of the filters (bottom-left) and
+				// links (bottom-right); just above the filters on phones.
+				"pointer-events-none fixed inset-x-0 bottom-20 z-40 flex justify-center px-4 transition-opacity duration-300 ease-out motion-reduce:transition-none sm:top-6 sm:bottom-auto",
 				visible ? "opacity-100" : "opacity-0",
 			)}
 		>

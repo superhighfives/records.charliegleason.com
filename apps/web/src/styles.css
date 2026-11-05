@@ -178,6 +178,25 @@ body,
    Scoped below `sm` (640px, Tailwind's default and `SheetContent`'s own
    `sm:max-w-md` breakpoint) — above that the panel is a right-hand drawer
    and Radix's own lock (untouched here) already covers it. */
+/* Wider screens, where the panel is a drawer beside the page. The page
+   scrolls on `<html>` (its `overflow-x: hidden` makes it the scroller), so
+   Radix's lock on `<body>` left `<html>`'s scrollbar showing beside the
+   panel's own — two scrollbars side by side. Lock `<html>` too, keeping the
+   scrollbar's gutter so nothing shifts sideways as it goes, which also
+   makes Radix's own width compensation (a right margin on `<body>`) a
+   second gap to drop. */
+@media (min-width: 640px) {
+  html {
+    scrollbar-gutter: stable;
+  }
+  html:has(body[data-scroll-locked]) {
+    overflow: hidden;
+  }
+  html body[data-scroll-locked] {
+    margin-right: 0 !important;
+  }
+}
+
 @media (max-width: 639px) {
   html body[data-scroll-locked] {
     overflow: visible !important;
@@ -397,68 +416,14 @@ body {
   inset: 24px 112px 24px 24px;
 }
 
-/* Grid tile cover (`RecordTile`'s `FadeImage`). Full colour at rest. While
- * any record is hovered, every *other* cover drains to grey and dims a touch,
- * so the one under the pointer is the only colour on the page. Unlayered,
- * so it beats FadeImage's own Tailwind transition utilities.
- *
- * Timing is what makes it feel continuous rather than flickery:
- * - The hovered cover floods back to colour fast (300ms).
- * - A cover the pointer has just left waits 250ms, then drains slowly
- *   (1.4s), so wiping across the grid leaves a short colour trail behind.
- * - Leaving the grid entirely restores everything after a 150ms hold — long
- *   enough that hopping the gap between two tiles (which briefly clears
- *   `:has(.group:hover)`) never flashes the whole grid back to colour.
- * Durations/delays are lists matching `transition-property` (opacity,
- * scale, filter) so these rules only retime the filter. They never set
- * `transition-property` itself — the touch rule further down narrows that
- * to `opacity`, and must keep winning on touch (which has no hover, and
- * now no desaturation at all).
- *
- * The recede rule's `.group:not(:hover)` (rather than a separate, more
- * specific un-recede rule for the hovered tile) is deliberate: `:has()`
- * takes its argument's specificity, which would otherwise outrank a plain
- * `.group:hover .cover-art`. */
+/* A record's cover fades and scales in (FadeImage). Unlayered, so it beats
+ * FadeImage's own Tailwind transition utilities. (Nothing greys out any
+ * more — hovering, or a record open in the panel: re-filtering every cover
+ * on the page cost long frames on each open.) */
 .cover-art {
-  filter: grayscale(0) brightness(1);
-  transition-property: opacity, scale, filter;
-  transition-duration: 1000ms, 1000ms, 600ms;
-  transition-delay: 0s, 0s, 150ms;
-  transition-timing-function:
-    cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
-    cubic-bezier(0.33, 1, 0.68, 1);
-}
-
-@media (pointer: fine) {
-  .collection-grid:has(.group:hover) .group:not(:hover) .cover-art {
-    filter: grayscale(1) brightness(0.82);
-    transition-duration: 1000ms, 1000ms, 1400ms;
-    transition-delay: 0s, 0s, 250ms;
-    transition-timing-function:
-      cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
-      cubic-bezier(0.45, 0, 0.55, 1);
-  }
-
-  .group:hover .cover-art {
-    transition-duration: 1000ms, 1000ms, 300ms;
-    transition-delay: 0s;
-    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-  }
-}
-
-/* Same recede while a record is open in the panel (`data-active` marks the
- * pinned tile): everything else stays grey for as long as the panel is up,
- * leaving the open record the only colour on the page behind it. Not gated
- * to `pointer: fine` — the pinned tile is explicit state on every device. */
-.collection-grid:has(.group[data-active="true"])
-  .group:not([data-active="true"])
-  .cover-art {
-  filter: grayscale(1) brightness(0.82);
-  transition-duration: 1000ms, 1000ms, 1400ms;
-  transition-delay: 0s, 0s, 250ms;
-  transition-timing-function:
-    cubic-bezier(0.16, 1, 0.3, 1), cubic-bezier(0.16, 1, 0.3, 1),
-    cubic-bezier(0.45, 0, 0.55, 1);
+  transition-property: opacity, scale;
+  transition-duration: 1000ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -473,7 +438,7 @@ body {
  * transition on any of those would smooth the already-eased values a second
  * time, lagging the loop's own motion. Only the cover's load fade (opacity)
  * keeps its transition. Out-specifies `.cover-art`'s `transition-property`
- * above, which is why `.cover-art`'s hover/active rules only retime. */
+ * above. */
 .collection-grid[data-touch="true"] img {
   transition-property: opacity;
   /* Promote each mounted cover to its own compositing layer. The touch loop
@@ -1318,4 +1283,496 @@ a {
   line-height: 1.4;
   letter-spacing: 0.02em;
   pointer-events: none;
+}
+
+/* 3D wall prototype (wall-grid.tsx): the scene does its own "lights down,
+ * spotlight on the selected record" while the record panel is open, so the
+ * panel's dimming backdrop would only hide that. It stays (transparent) to
+ * catch the click that closes the panel. */
+/* The record panel floats inset from the window's edge (collection-view.tsx):
+   it slides that much further, so it clears the window before it goes. */
+@media (min-width: 640px) {
+  .record-sheet {
+    --tw-enter-translate-x: calc(100% + 1.5rem);
+    --tw-exit-translate-x: calc(100% + 1.5rem);
+  }
+}
+@media (min-width: 1024px) {
+  .record-sheet {
+    --tw-enter-translate-x: calc(100% + 4rem);
+    --tw-exit-translate-x: calc(100% + 4rem);
+  }
+}
+:root[data-wall] [data-slot="sheet-overlay"] {
+  background-color: transparent;
+  /* Zoomed in on a record, the wall beside the panel drags to pan. */
+  cursor: grab;
+}
+:root[data-wall][data-wall-dragging] [data-slot="sheet-overlay"] {
+  cursor: grabbing;
+}
+
+/* The wall is pure black / white, so the page around it is too (overscroll,
+   the edges while the canvas catches up). */
+:root[data-wall] body {
+  background-color: #fff;
+}
+
+/* The wall is moved by dragging, not by scrolling the page: the page holds
+   still (no scrollbar), and the browser's own touch gestures and text
+   selection stay off the surface it's dragged across. */
+:root[data-wall] {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+:root[data-wall] [data-wall-surface] {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+:root[data-wall][data-wall-dragging],
+:root[data-wall][data-wall-dragging] * {
+  cursor: grabbing !important;
+}
+
+/* The wall's own pointer (wall-cursor.tsx): a small ring in place of the
+   system cursor while it's over the wall. It swells over a record, with the
+   record's title and artist under it, and becomes a little grabbing hand
+   while dragging — all with a bit of bounce. Inverts what's under it, so it
+   reads on any cover. */
+.wall-cursor {
+  --bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0;
+  mix-blend-mode: difference;
+  color: #fff;
+  transition: opacity 150ms ease;
+}
+.wall-cursor::before {
+  content: "";
+  position: absolute;
+  width: 1.25rem;
+  height: 1.25rem;
+  translate: -50% -50%;
+  border: 1.5px solid #fff;
+  border-radius: 9999px;
+  transition:
+    width 350ms var(--bounce),
+    height 350ms var(--bounce);
+}
+.wall-cursor-hand {
+  position: absolute;
+  width: 1rem;
+  height: 1rem;
+  translate: -50% -50%;
+  opacity: 0;
+  scale: 0.6;
+  transition:
+    opacity 150ms ease,
+    scale 350ms var(--bounce);
+}
+.wall-cursor-label {
+  position: absolute;
+  top: 2.5rem;
+  width: max-content;
+  max-width: 18rem;
+  text-align: center;
+  text-wrap: balance;
+  opacity: 0;
+  translate: -50% -0.25rem;
+  transition:
+    opacity 150ms ease,
+    translate 350ms var(--bounce);
+}
+.wall-cursor.is-low .wall-cursor-label {
+  top: auto;
+  bottom: 2.5rem;
+}
+:root[data-wall-cursor="wall"] .wall-cursor,
+:root[data-wall-cursor="record"] .wall-cursor {
+  opacity: 1;
+}
+/* Over a record: bigger, named underneath (not while one's open — the
+   panel names it). */
+:root[data-wall-cursor="record"] .wall-cursor::before {
+  width: 3.5rem;
+  height: 3.5rem;
+}
+:root[data-wall-cursor="record"]:not([data-wall-focus]) .wall-cursor-label {
+  opacity: 1;
+  translate: -50% 0;
+}
+/* Dragging: the little hand. */
+:root[data-wall-dragging] .wall-cursor::before {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+:root[data-wall-dragging] .wall-cursor-hand {
+  opacity: 1;
+  scale: 1;
+}
+/* While it shows, the system cursor doesn't. */
+:root[data-wall-cursor="wall"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
+:root[data-wall-cursor="record"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
+:root[data-wall-cursor][data-wall-dragging],
+:root[data-wall-cursor][data-wall-dragging] * {
+  cursor: none !important;
+}
+
+/* The hero is part of the wall: it sits in the middle of the screen over a
+   gap the records leave it, and moves as the wall does (the scene writes
+   `--wall-pan-x`/`-y`) until it's dragged off screen — then it's gone. */
+:root[data-wall] [data-wall-hero] {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 20;
+  width: min(90vw, 72rem);
+  transform: translate(
+    calc(-50% + var(--wall-pan-x, 0px)),
+    calc(-50% + var(--wall-pan-y, 0px))
+  );
+  pointer-events: none;
+}
+:root[data-wall] [data-wall-hero] > * {
+  margin: 0;
+  text-align: center;
+}
+/* Both have to fit the screen together, so they size to whichever of its
+   width or height is tighter. */
+:root[data-wall] [data-wall-hero] > :first-child {
+  font-size: clamp(2rem, min(4.25vw, 7vh), 5rem);
+  line-height: 1.05;
+}
+:root[data-wall] [data-wall-hero] .stats-sentence {
+  /* In once the statement's written (see `--hero-ms`, collection-view.tsx);
+     then the records follow (wall-scene.tsx). */
+  animation: rise-in 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--hero-ms, 0ms) - 150ms);
+  max-width: 46rem;
+  margin: 2.5vh auto 0;
+  font-size: clamp(1rem, min(1.75vw, 2.8vh), 1.75rem);
+  line-height: 1.25;
+}
+:root[data-wall-hero-gone] [data-wall-hero] {
+  display: none;
+}
+
+/* Until the wall's scene is up (`data-wall-ready`, set by wall-scene.tsx),
+   a wall page shows only "Loading records…" in the middle — not the hero
+   and filters in the page's own layout, jumping to the wall's once it
+   loads. They still lay out (the hero's measured for its gap), and their
+   entrances hold until the wall's ready, then play. */
+:root:not([data-wall-ready]) [data-wall-page] > :not(.wall-loading) {
+  visibility: hidden;
+}
+:root:not([data-wall-ready]) [data-wall-page] :is(.hero-word, .rise-in, .fade-in, .stats-sentence) {
+  animation-play-state: paused;
+}
+.wall-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  pointer-events: none;
+  animation-delay: 300ms;
+}
+:root[data-wall-ready] .wall-loading {
+  display: none;
+}
+
+/* `?hero=` prototypes (hero-modes.ts). The plaque only shows in its own
+   mode; labels, facts and record show the hero without the sentence (the
+   stats are elsewhere); panel keeps the DOM hero for measuring only — the
+   scene hangs its own copy on the wall; record makes the hero a caption
+   under the record the wall opens on. */
+.wall-plaque {
+  display: none;
+}
+:root[data-hero-mode="plaque"] [data-wall-hero] .stats-sentence,
+:root[data-hero-mode="labels"] [data-wall-hero] .stats-sentence,
+:root[data-hero-mode="facts"] [data-wall-hero] .stats-sentence,
+:root[data-hero-mode="record"] [data-wall-hero] .stats-sentence {
+  display: none;
+}
+:root[data-hero-mode="plaque"] .wall-plaque {
+  display: block;
+  width: max-content;
+  max-width: 26rem;
+  margin: 4vh auto 0;
+  padding-left: 1rem;
+  border-left: 2px solid var(--color-yellow-500, #eab308);
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+.wall-plaque-title {
+  margin-bottom: 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--foreground);
+}
+:root[data-hero-mode="panel"] [data-wall-hero] {
+  visibility: hidden;
+}
+:root[data-hero-mode="record"] [data-wall-hero] {
+  /* Clear of the filters, and over the records (the canvas is z-10). */
+  top: auto;
+  bottom: calc(6rem + 2vh);
+  z-index: 25;
+  width: max-content;
+  max-width: min(90vw, 56rem);
+  padding: 1rem 1.75rem;
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  backdrop-filter: blur(12px);
+  transform: translateX(-50%);
+}
+:root[data-hero-mode="record"] [data-wall-hero] > :first-child {
+  font-size: min(2.2vw, 3.6vh);
+}
+/* `?hero=panel`: the hero hung on the wall (drei's Html, in 3D), set like
+   the centred hero. */
+[data-wall-hero-panel] {
+  width: min(90vw, 72rem);
+}
+[data-wall-hero-panel] > * {
+  margin: 0;
+  text-align: center;
+}
+[data-wall-hero-panel] > :first-child {
+  font-size: min(5.5vw, 9vh);
+  line-height: 1.05;
+}
+[data-wall-hero-panel] .stats-sentence {
+  max-width: 56rem;
+  margin: 3vh auto 0;
+  font-size: min(2.4vw, 3.8vh);
+  line-height: 1.2;
+}
+/* `?hero=labels`: the caption pinned under a record the stats are about. */
+.wall-caption {
+  white-space: nowrap;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  transition: opacity 300ms ease;
+}
+/* `?hero=facts`: a small timeline of the facts, fixed above the
+   filters — the fact, a tick per fact (the one being visited in the
+   hero's yellow), previous / next. */
+.wall-facts {
+  position: fixed;
+  left: 50%;
+  bottom: 6.25rem;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  width: max-content;
+  max-width: min(calc(100vw - 2rem), 30rem);
+  padding: 0.625rem 1rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  text-align: center;
+  transform: translateX(-50%);
+  transition: opacity 300ms ease;
+}
+.wall-facts.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+@media (min-width: 640px) {
+  .wall-facts {
+    bottom: 7.25rem;
+  }
+}
+.wall-facts-caption {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.0625rem;
+  line-height: 1.3;
+  text-wrap: balance;
+  color: var(--foreground);
+}
+.wall-facts-track {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.wall-facts-track ol {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wall-facts-arrow {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  color: var(--muted-foreground);
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.wall-facts-arrow:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+/* A tall, invisible hit area around a short bar. */
+.wall-facts-tick {
+  display: block;
+  position: relative;
+  width: 1.75rem;
+  height: 1.75rem;
+}
+.wall-facts-tick::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0.25rem auto;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 9999px;
+  background: var(--border);
+  transition: background-color 200ms ease;
+}
+button.wall-facts-tick:hover::before {
+  background: var(--muted-foreground);
+}
+.wall-facts-tick[aria-current]::before {
+  background: var(--color-yellow-400, #facc15);
+}
+
+/* On both the wall and the grid (`data-corners`, set by CollectionView),
+   the controls sit in the corners: the search top-left, the filters
+   bottom-left, the footer's links bottom-right.
+
+   The filters float bottom-left, over the records (across the bottom on a
+   phone). Positioned on the outer, `rise-in` wrapper: that animation holds
+   a transform, which would make it the containing block for a fixed child.
+   The pill is the inner element, which can fade (the outer one's opacity is
+   held by its animation). */
+:root[data-corners] [data-wall-filters] {
+  position: fixed;
+  bottom: 1rem;
+  left: 1rem;
+  right: 1rem;
+  z-index: 30;
+}
+/* In the pill, the strip loses the margin that spaced it from the grid
+   below on the page, and stays one line (scrolling sideways if need be). */
+:root[data-corners] [data-wall-filters] .filter-strip {
+  margin-bottom: 0;
+  padding-block: 0;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+}
+/* Groups split by a divider the pill's full height. */
+:root[data-corners] [data-wall-filters] .filter-group {
+  padding: 0.625rem 1.25rem;
+}
+:root[data-corners] [data-wall-filters] .filter-group:first-child {
+  padding-left: 0;
+}
+:root[data-corners] [data-wall-filters] .filter-group:last-child {
+  padding-right: 0;
+}
+:root[data-corners] [data-wall-filters] .filter-group + .filter-group {
+  border-left: 1px solid var(--border);
+}
+:root[data-corners] [data-wall-filters] > [data-wall-chrome] {
+  overflow-x: auto;
+  padding: 0 1rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+@media (min-width: 640px) {
+  :root[data-corners] [data-wall-filters] {
+    bottom: 1.5rem;
+    left: 1.5rem;
+    right: auto;
+    max-width: calc(100vw - 22rem);
+  }
+}
+
+/* The page's footer has nothing to scroll to on the wall: its links sit
+   in the bottom-right corner instead (wall-corners.tsx). */
+:root[data-wall] [data-wall-footer] {
+  display: none;
+}
+
+/* The search top-left. */
+:root[data-corners] .floating-controls {
+  left: 1rem;
+  right: auto;
+}
+@media (min-width: 640px) {
+  :root[data-corners] .floating-controls {
+    left: 1.5rem;
+  }
+}
+
+/* The footer's links bottom-right (wall-corners.tsx), a pill like the
+   search, so it reads over the covers. Phones have no room beside the
+   filters. */
+[data-wall-corner] {
+  position: fixed;
+  z-index: 30;
+  padding: 0.375rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  transition: opacity 600ms ease;
+}
+[data-wall-corner="footer"] {
+  display: none;
+}
+@media (min-width: 640px) {
+  [data-wall-corner="footer"] {
+    display: flex;
+    bottom: 1.5rem;
+    right: 1.5rem;
+  }
+}
+:root[data-wall-focus] [data-wall-corner] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Zoomed in on a record, the page's own text fades out of the way. */
+[data-wall-chrome] {
+  transition: opacity 600ms ease;
+}
+:root[data-wall-focus] [data-wall-chrome] {
+  opacity: 0;
+  pointer-events: none;
+}
+:root.dark[data-wall] body {
+  background-color: #000;
 }

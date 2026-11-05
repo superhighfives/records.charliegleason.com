@@ -24,16 +24,13 @@ import { NotesContent } from "#/components/notes-content";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { Button } from "#/components/ui/button";
 import { ImageZoom } from "#/components/ui/image-zoom";
-import {
-	SheetDescription,
-	SheetFooter,
-	SheetTitle,
-} from "#/components/ui/sheet";
+import { SheetDescription, SheetTitle } from "#/components/ui/sheet";
 import { VinylDisc } from "#/components/vinyl-disc";
 import type { Record } from "#/db/schema";
 import { parseColorPalette } from "#/lib/color-palette";
 import { DEFAULT_COLOR_NAME } from "#/lib/colors";
 import { displayCoverKey, photoUrl } from "#/lib/cover";
+import { loadCoverColors } from "#/lib/cover-colors";
 import type { PublicRecord } from "#/lib/records";
 import { recordPath } from "#/lib/records-path";
 import { sleeveEdgeClipPath } from "#/lib/sleeve-edge";
@@ -334,6 +331,20 @@ export function RecordPanel({
 	// Admin drawer falls back to the raw capture so an in-progress record still
 	// shows an image; the public panel shows only an approved photo (else nothing).
 	const cover = displayCoverKey(record, { includeCapture: admin });
+	// The header's backdrop: a soft mesh of the cover's key colours, sampled
+	// from the thumbnail it already shows (so it's a cache hit).
+	const [meshColors, setMeshColors] = useState<string[] | null>(null);
+	useEffect(() => {
+		setMeshColors(null);
+		if (!cover) return;
+		let cancelled = false;
+		loadCoverColors(photoUrl(cover, 500)).then((colors) => {
+			if (!cancelled) setMeshColors(colors);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [cover]);
 
 	const added = record.createdAt
 		? record.createdAt.toLocaleDateString(undefined, {
@@ -413,11 +424,39 @@ export function RecordPanel({
 
 	return (
 		<>
+			{/* Paging through the collection, top left across from the close
+			    button — fixed in place, so it doesn't move with the panel's
+			    height from one record to the next. */}
+			<div className="absolute top-2.5 left-3 z-20 flex items-center gap-0.5">
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-sm"
+					disabled={index <= 0}
+					onClick={onPrev}
+					aria-label="Previous record"
+				>
+					<ChevronLeft />
+				</Button>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-sm"
+					disabled={index >= total - 1}
+					onClick={onNext}
+					aria-label="Next record"
+				>
+					<ChevronRight />
+				</Button>
+				<span className="ml-1 font-mono text-xs text-muted-foreground tabular-nums">
+					{index + 1} / {total}
+				</span>
+			</div>
 			{/* Admin-only jump to the full editor. Clerk's `SignedIn` renders nothing
 			    for signed-out visitors, so this never shows on the public site. `pr-12`
 			    keeps the row clear of the Sheet's top-right close button. */}
 			<SignedIn>
-				<div className="flex items-center gap-2 border-b border-border bg-brand/5 px-6 py-4 pr-12">
+				<div className="flex items-center gap-2 border-b border-border bg-brand/5 px-6 py-4 pr-12 pl-40">
 					<span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
 						Admin
 					</span>
@@ -439,27 +478,21 @@ export function RecordPanel({
 			    specs and notes scroll beneath. `bg-background` hides that content
 			    behind the band, and the backdrop fades out via `--hero` as it
 			    collapses, leaving just the title and thumbnail once pinned. */}
-			<div ref={scrollRef} className="relative flex-1 overflow-y-auto">
+			<div ref={scrollRef} className="relative min-h-0 flex-1 overflow-y-auto">
 				<div
 					ref={headerRef}
-					className="sticky z-10 flex aspect-square flex-col justify-end bg-background"
+					className="sticky z-10 flex aspect-[3/2] flex-col justify-end bg-background"
 				>
-					{cover && (
+					{meshColors && (
 						<div
 							aria-hidden
-							className="pointer-events-none absolute inset-0 -z-10"
-							// The backdrop's faint 10% lives here, not on FadeImage: a
-							// caller `opacity-*` class would clobber FadeImage's own
-							// 0→100 fade toggle. Parent × child opacity multiply, so the
-							// image fades 0 → 0.1 on load, then out as `--hero` pins.
-							style={{ opacity: "calc(1.0 * (1 - var(--hero, 0)))" }}
-						>
-							<FadeImage
-								src={photoUrl(cover, 800)}
-								alt=""
-								className="size-full object-cover mask-b-from-0% mask-b-to-75%"
-							/>
-						</div>
+							className="pointer-events-none absolute inset-0 -z-10 mask-b-from-25% mask-b-to-100%"
+							// Fades out as `--hero` pins, leaving just the title band.
+							style={{
+								...meshStyle(meshColors),
+								opacity: "calc(0.6 * (1 - var(--hero, 0)))",
+							}}
+						/>
 					)}
 					<div
 						ref={barRef}
@@ -487,7 +520,7 @@ export function RecordPanel({
 								type="button"
 								onClick={copyLink}
 								aria-label="Copy link to this record"
-								className="ml-0.5 inline-flex -translate-y-px items-center align-middle text-muted-foreground transition-colors hover:text-foreground"
+								className="ml-0.5 inline-flex -translate-y-px items-center rounded-full p-0.5 align-middle text-muted-foreground transition-colors hover:text-foreground"
 							>
 								{copied === "link" ? (
 									<Check className="size-3.5" />
@@ -636,34 +669,18 @@ export function RecordPanel({
 					{admin && <AdminValuation record={record} />}
 				</div>
 			</div>
-
-			<SheetFooter className="justify-between border-t border-border">
-				<span className="text-sm text-muted-foreground tabular-nums">
-					{index + 1} / {total}
-				</span>
-				<div className="flex gap-2">
-					<Button
-						type="button"
-						variant="outline"
-						size="icon-sm"
-						disabled={index <= 0}
-						onClick={onPrev}
-						aria-label="Previous record"
-					>
-						<ChevronLeft />
-					</Button>
-					<Button
-						type="button"
-						variant="outline"
-						size="icon-sm"
-						disabled={index >= total - 1}
-						onClick={onNext}
-						aria-label="Next record"
-					>
-						<ChevronRight />
-					</Button>
-				</div>
-			</SheetFooter>
 		</>
 	);
+}
+
+/** Where each colour of the header's mesh glows from (x% y%). */
+const MESH_SPOTS = ["18% 22%", "82% 18%", "78% 80%", "22% 82%"];
+
+/** The header backdrop: a radial glow per key colour, over the first. */
+function meshStyle(colors: string[]): CSSProperties {
+	const glows = MESH_SPOTS.map(
+		(at, i) =>
+			`radial-gradient(at ${at}, ${colors[i % colors.length]} 0, transparent 65%)`,
+	);
+	return { backgroundColor: colors[0], backgroundImage: glows.join(", ") };
 }

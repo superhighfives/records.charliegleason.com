@@ -1,6 +1,15 @@
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type CSSProperties,
+	lazy,
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 import { CollectionGrid } from "#/components/collection-grid";
 import { CollectionHero, heroDurationMs } from "#/components/collection-hero";
@@ -12,6 +21,8 @@ import { RecordPanel } from "#/components/record-panel";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import { WallCorners } from "#/components/wall/wall-corners";
+import { WallPlaque } from "#/components/wall/wall-plaque";
 import {
 	type CollectionFilters,
 	hasAnyFilter,
@@ -82,13 +93,28 @@ function useFontsReady(): boolean {
 }
 
 /**
- * The public collection: a grid of records with a record drawer overlaid on top.
- * The open record is driven by `selectedId`, which comes from the route — `null`
- * on `/`, the path id on `/records/<id>-<slug>`. Both routes render this one
- * component so the grid (and the text filter, held in context) survive opening
- * and closing a record.
+ * The 3D record wall, split out so three.js and friends are their own chunk:
+ * loaded after the page, and never by the plain grid at `/grid`.
  */
-export function CollectionView({ selectedId }: { selectedId: number | null }) {
+const WallGrid = lazy(() =>
+	import("#/components/wall/wall-grid").then((m) => ({ default: m.WallGrid })),
+);
+
+/**
+ * The public collection — the 3D record wall (`layout: "wall"`, at `/`) or the
+ * plain grid (`"grid"`, at `/grid`) — with a record drawer overlaid on top.
+ * The open record is driven by `selectedId`, which comes from the route —
+ * `null` on the collection, the path id on `…/records/<id>-<slug>`. Every
+ * route renders this one component so the collection (and the text filter,
+ * held in context) survive opening and closing a record.
+ */
+export function CollectionView({
+	selectedId,
+	layout,
+}: {
+	selectedId: number | null;
+	layout: "wall" | "grid";
+}) {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
 	// Prefetched by the layout's loader; the defaults only cover a failed fetch.
 	const { data: filterSettings = DEFAULT_FILTER_SETTINGS } = useQuery(
@@ -97,6 +123,7 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const navigate = useNavigate();
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 	const fontsReady = useFontsReady();
+	const wallMode = layout === "wall";
 
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
@@ -109,16 +136,23 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 			{ replace = false }: { replace?: boolean } = {},
 		) => {
 			animateOpenRef.current = r != null;
+			// Records open and close within the layout they were opened from.
+			const grid = layout === "grid";
 			return r
 				? navigate({
-						to: "/records/$id",
+						to: grid ? "/grid/records/$id" : "/records/$id",
 						params: { id: recordIdParam(r) },
 						replace,
 						resetScroll: false,
 					})
-				: navigate({ to: "/", replace, resetScroll: false });
+				: navigate({ to: grid ? "/grid" : "/", replace, resetScroll: false });
 		},
-		[navigate, animateOpenRef],
+		[navigate, animateOpenRef, layout],
+	);
+
+	const closeRecord = useCallback(
+		() => openRecord(null, { replace: true }),
+		[openRecord],
 	);
 
 	const [filters, setFilters] = useState<CollectionFilters>(NO_FILTERS);
@@ -175,6 +209,24 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	// unlike gating on `open` alone, this stays correct even though the flag
 	// keeps getting set to `true` by paging in between.
 	const open = selected != null;
+	// Both layouts keep their controls in the screen's corners — see
+	// `[data-corners]` in styles.css.
+	useEffect(() => {
+		document.documentElement.dataset.corners = "";
+		return () => {
+			delete document.documentElement.dataset.corners;
+		};
+	}, []);
+	// Zoomed in on a record on the wall, the page's own text (hero, filters,
+	// footer) fades away — see `[data-wall-focus]` in styles.css.
+	useEffect(() => {
+		const root = document.documentElement;
+		if (wallMode && open) root.dataset.wallFocus = "";
+		else delete root.dataset.wallFocus;
+		return () => {
+			delete root.dataset.wallFocus;
+		};
+	}, [wallMode, open]);
 	const wasOpenRef = useRef(false);
 	const enterAnimation = open && !wasOpenRef.current && animateOpenRef.current;
 	useEffect(() => {
@@ -194,7 +246,20 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 	const revealMs = heroDurationMs(data.length);
 
 	return (
-		<div className="w-full px-4 py-10 sm:px-6">
+		<div
+			className="w-full px-4 py-10 sm:px-6"
+			// On the wall, the page is the surface it's dragged across (see
+			// `[data-wall-surface]` in styles.css).
+			data-wall-surface={wallMode ? "" : undefined}
+			// Until the wall's scene is up, the page shows only the loading
+			// line below (see `[data-wall-page]` in styles.css).
+			data-wall-page={wallMode ? "" : undefined}
+		>
+			{wallMode && (
+				<output aria-live="polite" className="wall-loading loading-hint">
+					Loading records…
+				</output>
+			)}
 			{/* Staged reveal on first paint: hero copy, then the grid, then the
 			    header chrome — see the `rise-in`/`fade-in` utilities in styles.css.
 			    Each is a CSS `animation ... both`, so it only ever plays once per
@@ -239,16 +304,35 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				<ThemeToggle className="size-8 rounded-full border-0" />
 			</div>
 
-			{!search.trim() && <CollectionHero count={data.length} />}
+			{/* On the wall, the hero — with the footer's stats sentence under it
+			    — sits in the middle of it at load (see styles.css). */}
+			{!search.trim() && (
+				<div
+					data-wall-chrome
+					data-wall-hero
+					// On the wall, the stats sentence follows the statement in.
+					style={{ "--hero-ms": `${revealMs}ms` } as CSSProperties}
+				>
+					<CollectionHero count={data.length} />
+					{wallMode && <CollectionStatsSentence records={data} intro />}
+					{wallMode && <WallPlaque records={data} />}
+				</div>
+			)}
 
-			<div className="rise-in" style={{ animationDelay: `${revealMs}ms` }}>
-				<FilterStrip
-					records={data}
-					countRecords={searched}
-					filters={filters}
-					settings={filterSettings}
-					onChange={setFilters}
-				/>
+			<div
+				className="rise-in"
+				data-wall-filters
+				style={{ animationDelay: `${revealMs}ms` }}
+			>
+				<div data-wall-chrome>
+					<FilterStrip
+						records={data}
+						countRecords={searched}
+						filters={filters}
+						settings={filterSettings}
+						onChange={setFilters}
+					/>
+				</div>
 			</div>
 
 			<div
@@ -276,6 +360,15 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 							? `No records match “${search}”.`
 							: "No records match those filters."}
 					</p>
+				) : wallMode ? (
+					<Suspense fallback={<div className="min-h-[70vh]" />}>
+						<WallGrid
+							records={filtered}
+							onOpen={openRecord}
+							onClose={closeRecord}
+							focusedRecordId={selected?.id ?? null}
+						/>
+					</Suspense>
 				) : (
 					<CollectionGrid
 						records={filtered}
@@ -293,7 +386,19 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 					if (!next) openRecord(null, { replace: true });
 				}}
 			>
-				<SheetContent className="p-0" enterAnimation={enterAnimation}>
+				<SheetContent
+					// A floating card in the top right, inset from the window's edges
+					// and only as tall as it needs to be (full screen on phones) —
+					// see `.record-sheet` in styles.css.
+					className="record-sheet p-0 sm:top-6 sm:right-6 sm:bottom-auto sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:overflow-hidden sm:rounded-2xl sm:border lg:top-16 lg:right-16 lg:max-h-[calc(100dvh-8rem)]"
+					enterAnimation={enterAnimation}
+					// On the wall, a press beside the panel may be a drag (panning
+					// the zoomed-in wall), so the wall decides: a click on the empty
+					// wall still closes it (`onClose`).
+					onPointerDownOutside={
+						wallMode ? (e) => e.preventDefault() : undefined
+					}
+				>
 					{shown && (
 						<RecordPanel
 							key={shown.record.id}
@@ -313,8 +418,16 @@ export function CollectionView({ selectedId }: { selectedId: number | null }) {
 				</SheetContent>
 			</Sheet>
 
-			<footer className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground">
-				<CollectionStatsSentence records={data} />
+			<WallCorners layout={layout} />
+
+			<footer
+				data-wall-chrome
+				data-wall-footer
+				className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground"
+			>
+				<div>
+					<CollectionStatsSentence records={data} />
+				</div>
 				<div className="mt-24 flex flex-wrap items-end justify-between gap-4">
 					<div>
 						<p className="kicker-muted mb-2">The collection</p>A corner of{" "}
