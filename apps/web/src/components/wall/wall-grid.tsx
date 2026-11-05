@@ -153,7 +153,7 @@ export function WallGrid({
 					</div>,
 					document.body,
 				)}
-			{env && !env.isTouch && <WallCursor />}
+			{env && !env.isTouch && <WallCursor record={record} />}
 			{env?.heroMode === "facts" && (
 				<WallFacts
 					featured={featured}
@@ -162,25 +162,29 @@ export function WallGrid({
 					hidden={focusedRecordId != null}
 				/>
 			)}
-			<div
-				className={cn(
-					// Top centre on desktop (the filters and links take the bottom
-					// corners); on phones, just above the filters.
-					"pointer-events-none fixed inset-x-0 bottom-20 z-40 flex justify-center px-4 transition-opacity duration-300 sm:top-6 sm:bottom-auto",
-					record ? "opacity-100" : "opacity-0",
-				)}
-			>
-				{record && (
-					<div className="flex max-w-[calc(100%-2rem)] flex-col items-center gap-0.5 rounded-md border bg-popover/95 px-4 py-2 text-center text-popover-foreground shadow-lg">
-						<p className="text-balance font-serif text-base font-medium leading-tight">
-							{record.title}
-						</p>
-						<p className="font-mono text-muted-foreground text-xs">
-							{record.artist}
-						</p>
-					</div>
-				)}
-			</div>
+			{/* With a mouse, the record's named under the cursor (wall-cursor.tsx);
+			    on touch, here. */}
+			{env?.isTouch && (
+				<div
+					className={cn(
+						// Top centre on desktop (the filters and links take the bottom
+						// corners); on phones, just above the filters.
+						"pointer-events-none fixed inset-x-0 bottom-20 z-40 flex justify-center px-4 transition-opacity duration-300 sm:top-6 sm:bottom-auto",
+						record ? "opacity-100" : "opacity-0",
+					)}
+				>
+					{record && (
+						<div className="flex max-w-[calc(100%-2rem)] flex-col items-center gap-0.5 rounded-md border bg-popover/95 px-4 py-2 text-center text-popover-foreground shadow-lg">
+							<p className="text-balance font-serif text-base font-medium leading-tight">
+								{record.title}
+							</p>
+							<p className="font-mono text-muted-foreground text-xs">
+								{record.artist}
+							</p>
+						</div>
+					)}
+				</div>
+			)}
 		</>
 	);
 }

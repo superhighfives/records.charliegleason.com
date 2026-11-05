@@ -1,15 +1,17 @@
 import { HandGrab } from "lucide-react";
 import { useEffect, useRef } from "react";
 
+import type { PublicRecord } from "#/lib/records";
+
 /**
  * The wall's own pointer (mouse only), in place of the system cursor: a
- * small ring that trails the mouse a touch. It swells to say "View" over a
- * record and "Drag" over the hero's text, and turns into a little grabbing
- * hand while the wall's dragged. Over the page's controls the system cursor
- * comes back. Its state is CSS: `data-wall-cursor` (set by the scene from
- * what's under the pointer) and `data-wall-cursor-hero` (set here).
+ * small ring that trails the mouse a touch. Over a record it swells, with
+ * the record's title and artist underneath; while the wall's dragged it's a
+ * little grabbing hand. Over the page's controls the system cursor comes
+ * back. Its state is CSS on `data-wall-cursor`, set by the scene from
+ * what's under the pointer.
  */
-export function WallCursor() {
+export function WallCursor({ record }: { record: PublicRecord | null }) {
 	const ref = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		const el = ref.current;
@@ -28,9 +30,10 @@ export function WallCursor() {
 			at.x += (to.x - at.x) * k;
 			at.y += (to.y - at.y) * k;
 			el.style.transform = `translate(${at.x}px, ${at.y}px)`;
+			// Near the bottom, the label goes above (clear of the filters).
+			el.classList.toggle("is-low", at.y > window.innerHeight - 160);
 			raf = requestAnimationFrame(tick);
 		};
-		let heroEl: Element | null = null;
 		const onMove = (e: PointerEvent) => {
 			if (e.pointerType !== "mouse") return;
 			if (to.x < -50) {
@@ -39,24 +42,6 @@ export function WallCursor() {
 			}
 			to.x = e.clientX;
 			to.y = e.clientY;
-			// Over the hero's words (it takes no pointer events itself, so by
-			// where it is): "Drag".
-			heroEl ??= document.querySelector("[data-wall-hero]");
-			let overHero = false;
-			if (heroEl?.isConnected && !("wallHeroGone" in root.dataset)) {
-				const range = document.createRange();
-				range.selectNodeContents(heroEl);
-				const r = range.getBoundingClientRect();
-				overHero =
-					e.clientX > r.left &&
-					e.clientX < r.right &&
-					e.clientY > r.top &&
-					e.clientY < r.bottom;
-			}
-			if (overHero !== "wallCursorHero" in root.dataset) {
-				if (overHero) root.dataset.wallCursorHero = "";
-				else delete root.dataset.wallCursorHero;
-			}
 		};
 		// Leaving the window: hide it rather than leave it at the edge.
 		const onLeave = () => {
@@ -69,14 +54,24 @@ export function WallCursor() {
 			cancelAnimationFrame(raf);
 			window.removeEventListener("pointermove", onMove);
 			root.removeEventListener("pointerleave", onLeave);
-			delete root.dataset.wallCursorHero;
 		};
 	}, []);
+	// The label keeps the last record's words while it fades, rather than
+	// emptying as it goes.
+	const shown = useRef<PublicRecord | null>(null);
+	if (record) shown.current = record;
+	const label = shown.current;
 	return (
 		<div ref={ref} aria-hidden className="wall-cursor">
-			<span className="wall-cursor-view">View</span>
-			<span className="wall-cursor-drag">Drag</span>
 			<HandGrab className="wall-cursor-hand" strokeWidth={1.75} />
+			{label && (
+				<div className="wall-cursor-label">
+					<p className="font-serif text-base font-medium leading-tight">
+						{label.title}
+					</p>
+					<p className="font-mono text-xs opacity-70">{label.artist}</p>
+				</div>
+			)}
 		</div>
 	);
 }

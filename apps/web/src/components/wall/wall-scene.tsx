@@ -1506,23 +1506,29 @@ function Wall({
 			}
 		}
 
+		// The record under the mouse, if any.
+		const under =
+			!isTouch && pointer.current.overWall && !dragging.current
+				? pick(ndc)
+				: null;
 		if (focused >= 0) {
 			hovered.current = focused;
 		} else if (!isTouch) {
-			hovered.current =
-				pointer.current.overWall && !dragging.current ? pick(ndc) : null;
+			hovered.current = under;
+		} else {
+			hovered.current = nearestMiddle >= 0 ? nearestMiddle : null;
+		}
+		if (!isTouch) {
 			// The wall's own cursor (wall-cursor.tsx): over the wall or a
 			// record, or off over the page's controls.
 			const cursor = !pointer.current.overWall
 				? "off"
-				: hovered.current == null
+				: under == null
 					? "wall"
 					: "record";
 			if (document.documentElement.dataset.wallCursor !== cursor) {
 				document.documentElement.dataset.wallCursor = cursor;
 			}
-		} else {
-			hovered.current = nearestMiddle >= 0 ? nearestMiddle : null;
 		}
 		if (hovered.current !== active.current) {
 			active.current = hovered.current;
