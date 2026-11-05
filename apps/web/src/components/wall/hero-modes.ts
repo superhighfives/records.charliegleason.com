@@ -116,7 +116,7 @@ export function newestRecord(records: PublicRecord[]): PublicRecord | null {
 	let best: PublicRecord | null = null;
 	let at = Number.NEGATIVE_INFINITY;
 	for (const r of records) {
-		const t = new Date(r.createdAt as unknown as string).getTime();
+		const t = r.createdAt?.getTime() ?? Number.NEGATIVE_INFINITY;
 		if (t > at) {
 			at = t;
 			best = r;
