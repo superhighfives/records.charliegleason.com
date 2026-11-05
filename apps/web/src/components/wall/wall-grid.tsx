@@ -9,6 +9,7 @@ import {
 	newestRecord,
 	readHeroMode,
 } from "./hero-modes";
+import { WallCursor } from "./wall-cursor";
 import { WallFacts } from "./wall-facts";
 import type { WallSceneProps, WallTheme } from "./wall-scene";
 
@@ -152,6 +153,7 @@ export function WallGrid({
 					</div>,
 					document.body,
 				)}
+			{env && !env.isTouch && <WallCursor />}
 			{env?.heroMode === "facts" && (
 				<WallFacts
 					featured={featured}

@@ -17,7 +17,7 @@ import {
 	hasNotes,
 	TILE_MIN_PX,
 } from "#/components/collection-grid";
-import { CollectionHero } from "#/components/collection-hero";
+import { CollectionHero, heroDurationMs } from "#/components/collection-hero";
 import { CollectionStatsSentence } from "#/components/collection-stats-sentence";
 import { SceneStatsProbe } from "#/components/three/scene-stats-probe";
 import {
@@ -155,6 +155,11 @@ const FACT_MOVE_S = 1.6;
 const FACT_ZOOM = 0.25;
 /** The record panel's width (`sm:max-w-md`), for framing beside it. */
 const PANEL_PX = 448;
+/** The records' entrance: how long after the hero's written in it starts… */
+const ENTRANCE_AFTER_HERO_S = 0.45;
+/** …and how it ripples out from the middle (seconds per world unit, capped). */
+const ENTRANCE_S_PER_UNIT = 0.06;
+const ENTRANCE_SPREAD_S = 0.8;
 /** How far the floating panel sits in from the window's edge (`.record-sheet`). */
 const panelInsetPx = (width: number) =>
 	width >= 1024 ? 64 : width >= 640 ? 24 : 0;
@@ -514,6 +519,17 @@ function Wall({
 	const anims = useRef(new Map<string, TileAnim>());
 	/** False until the first re-filter — the initial load doesn't animate in. */
 	const animateIn = useRef(false);
+	/**
+	 * At load, the hero and its stats write in first and the records follow
+	 * (rippling out from the middle): when, on the frame clock, they start.
+	 * Opening straight onto a record, there's no hero to wait for.
+	 */
+	const entrance = useRef<{ at: number; x: number; y: number } | null>(null);
+	const entranceDelayS = useRef(
+		hero && focusedRecordId == null
+			? heroDurationMs(records.length) / 1000 + ENTRANCE_AFTER_HERO_S
+			: 0,
+	);
 	const [exiting, setExiting] = useState<Exiting[]>([]);
 	const exitingRef = useRef(exiting);
 	exitingRef.current = exiting;
@@ -887,7 +903,7 @@ function Wall({
 			window.removeEventListener("pointerup", onUp);
 			window.removeEventListener("pointercancel", onUp);
 			delete document.documentElement.dataset.wallDragging;
-			document.body.style.cursor = "";
+			delete document.documentElement.dataset.wallCursor;
 		};
 	}, [pick, onOpen, onClose, unitsPerPx, heroMode]);
 
@@ -1387,6 +1403,12 @@ function Wall({
 
 		pickable.current.length = 0;
 		const ease = reducedMotion ? 1 : 1 - Math.exp(-6 * dt);
+		entrance.current ??= {
+			at: t + (reducedMotion ? 0 : entranceDelayS.current),
+			x: camX,
+			y: camY,
+		};
+		const enter = entrance.current;
 		for (let i = 0; i < insts.length; i++) {
 			const h = handles.current[i];
 			if (!h) continue;
@@ -1405,6 +1427,19 @@ function Wall({
 					hy + r > hole.y0 &&
 					hy - r < hole.y1;
 			}
+			// Still waiting for its turn in the entrance (nearer the middle,
+			// sooner).
+			const held =
+				t <
+				enter.at +
+					Math.min(
+						ENTRANCE_SPREAD_S,
+						Math.hypot(
+							wrapNear(pos.x, enter.x, tileW) - enter.x,
+							wrapNear(pos.y, enter.y, tileH) - enter.y,
+						) * ENTRANCE_S_PER_UNIT,
+					);
+			if (held) above = true;
 			let anim = anims.current.get(key);
 			if (!anim) {
 				anim = {
@@ -1476,7 +1511,16 @@ function Wall({
 		} else if (!isTouch) {
 			hovered.current =
 				pointer.current.overWall && !dragging.current ? pick(ndc) : null;
-			document.body.style.cursor = hovered.current == null ? "" : "pointer";
+			// The wall's own cursor (wall-cursor.tsx): over the wall or a
+			// record, or off over the page's controls.
+			const cursor = !pointer.current.overWall
+				? "off"
+				: hovered.current == null
+					? "wall"
+					: "record";
+			if (document.documentElement.dataset.wallCursor !== cursor) {
+				document.documentElement.dataset.wallCursor = cursor;
+			}
 		} else {
 			hovered.current = nearestMiddle >= 0 ? nearestMiddle : null;
 		}

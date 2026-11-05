@@ -1,6 +1,7 @@
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
+	type CSSProperties,
 	lazy,
 	Suspense,
 	useCallback,
@@ -306,7 +307,12 @@ export function CollectionView({
 			{/* On the wall, the hero — with the footer's stats sentence under it
 			    — sits in the middle of it at load (see styles.css). */}
 			{!search.trim() && (
-				<div data-wall-chrome data-wall-hero>
+				<div
+					data-wall-chrome
+					data-wall-hero
+					// On the wall, the stats sentence follows the statement in.
+					style={{ "--hero-ms": `${revealMs}ms` } as CSSProperties}
+				>
 					<CollectionHero count={data.length} />
 					{wallMode && <CollectionStatsSentence records={data} intro />}
 					{wallMode && <WallPlaque records={data} />}

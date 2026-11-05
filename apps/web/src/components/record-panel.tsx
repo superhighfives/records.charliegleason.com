@@ -496,7 +496,7 @@ export function RecordPanel({
 								type="button"
 								onClick={copyLink}
 								aria-label="Copy link to this record"
-								className="ml-0.5 inline-flex -translate-y-px items-center align-middle text-muted-foreground transition-colors hover:text-foreground"
+								className="ml-0.5 inline-flex -translate-y-px items-center rounded-full p-0.5 align-middle text-muted-foreground transition-colors hover:text-foreground"
 							>
 								{copied === "link" ? (
 									<Check className="size-3.5" />
