@@ -12,16 +12,17 @@ import * as THREE from "three";
  */
 
 const FONT = "DM Sans";
-// Medium weight holds up at the few pixels a slip gets on screen. Two lines
-// read at rest and three when pulled; the third starts just below the slip's
-// resting edge (a 0.115 / 0.3 peek is ~74 of 192), so it never shows
-// half-cut.
+// Medium weight, set tight (1.2 leading) inside a generous margin, like a
+// note written on a post-it. Two lines read at rest and three when pulled;
+// the slip's resting peek (`SLIP_PEEK` in wall-scene.tsx, ~64 of 192) ends
+// midway between the second line's descenders and the third's capitals, with
+// room either side for the slip's lean, so neither shows half-cut.
 const FONT_WEIGHT = 500;
-const FONT_SIZE = 19;
-const LINE_HEIGHT = 28;
+const FONT_SIZE = 20;
+const LINE_HEIGHT = 24;
 /** Paper margins around the writing. */
-const TOP = 18;
-const SIDE = 18;
+const TOP = 16;
+const SIDE = 22;
 /** Layout units; the canvas is `RESOLUTION`× this, so small writing stays crisp. */
 const WIDTH = 256;
 const HEIGHT = 192;
@@ -89,7 +90,7 @@ export function makeNoteTexture(
 		}
 
 		// Dark ink, set straight.
-		ctx.fillStyle = "rgba(40, 26, 6, 0.94)";
+		ctx.fillStyle = "#24180a";
 		ctx.textBaseline = "top";
 		ctx.font = `${FONT_WEIGHT} ${FONT_SIZE}px "${FONT}", system-ui, sans-serif`;
 		const maxWidth = WIDTH - SIDE * 2 - 6;
@@ -132,4 +133,35 @@ export function makeNoteTexture(
 	// (three clamps this to what the GPU supports).
 	texture.anisotropy = 16;
 	return texture;
+}
+
+/**
+ * Samples a slip's writing a mip level sharper than three would pick. A slip
+ * is small on screen, so the GPU reads its texture from a smaller, blended
+ * mip, and the writing went soft; nudging the level down keeps it crisp, at
+ * the cost of a little shimmer that still, flat text doesn't show.
+ */
+export function sharpenNoteMaps(material: THREE.MeshStandardMaterial) {
+	material.onBeforeCompile = (shader) => {
+		shader.fragmentShader = shader.fragmentShader
+			.replace(
+				"#include <map_fragment>",
+				THREE.ShaderChunk.map_fragment.replace(
+					"texture2D( map, vMapUv )",
+					"texture2D( map, vMapUv, NOTE_LOD_BIAS )",
+				),
+			)
+			.replace(
+				"#include <emissivemap_fragment>",
+				THREE.ShaderChunk.emissivemap_fragment.replace(
+					"texture2D( emissiveMap, vEmissiveMapUv )",
+					"texture2D( emissiveMap, vEmissiveMapUv, NOTE_LOD_BIAS )",
+				),
+			)
+			.replace(
+				"#include <common>",
+				"#include <common>\n#define NOTE_LOD_BIAS -0.75",
+			);
+	};
+	material.customProgramCacheKey = () => "note-slip";
 }

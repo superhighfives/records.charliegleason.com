@@ -30,13 +30,19 @@ import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import {
 	makeCoverMaterial,
+	setCoverDesaturate,
 	setCoverFade,
 	setCoverSelfLight,
 	setCoverTheme,
 } from "./cover-material";
 import { Dust } from "./dust";
 import type { Featured, HeroMode } from "./hero-modes";
-import { loadNoteFont, makeNoteTexture, noteExcerpt } from "./note-texture";
+import {
+	loadNoteFont,
+	makeNoteTexture,
+	noteExcerpt,
+	sharpenNoteMaps,
+} from "./note-texture";
 import { packDense } from "./pack";
 import { WhitePointEffect } from "./white-point";
 
@@ -77,7 +83,14 @@ const CURVE_DEPTH = 0.45;
 const LIFT_Z = 0.42;
 /** How far the hovered record's vinyl slides out to the right. */
 const DISC_SLIDE = 0.4;
-const WALL_Z = -0.32;
+/**
+ * Where the shadow-catching wall sits: just behind the records, so their
+ * shadows fall tight against them, as if they hang flat on it. A record
+ * turned toward the screen's edge can tip partly behind it — harmless, as
+ * the wall draws first and writes no depth (see its mesh), so it never
+ * hides anything.
+ */
+const WALL_Z = -0.06;
 /**
  * Spotlight peak. Kept modest: a lifted record sits closer to the light, so
  * it's hit harder than the wall around it, and a hotter spot washed covers
@@ -96,6 +109,9 @@ const ZERO2 = new THREE.Vector2();
 /** How much each cover lights itself, per theme — see `uSelfLight`. */
 const SELF_LIGHT_DARK = 0.55;
 const SELF_LIGHT_LIGHT = 0.3;
+/** How much each note slip lights itself, per theme. */
+const SLIP_SELF_LIGHT_DARK = 0.2;
+const SLIP_SELF_LIGHT_LIGHT = 0.45;
 /** The plain fade as a cover's image arrives. */
 const FADE_S = 0.3;
 
@@ -123,6 +139,36 @@ function smoothDamp(
 	return target + (change + temp) * decay;
 }
 
+/**
+ * Dark mode's wall: a dark surface lit by the torch alone. The ambient and
+ * hemisphere fill that keep the covers readable are patched out of it, so
+ * away from the torch it stays the page's black, and inside its pool the
+ * records' shadows show.
+ */
+function makeTorchWallMaterial(): THREE.MeshStandardMaterial {
+	const material = new THREE.MeshStandardMaterial({
+		color: "#555555",
+		roughness: 1,
+		depthWrite: false,
+	});
+	material.onBeforeCompile = (shader) => {
+		shader.fragmentShader = shader.fragmentShader.replace(
+			"#include <lights_fragment_begin>",
+			THREE.ShaderChunk.lights_fragment_begin
+				.replace(
+					"getAmbientLightIrradiance( ambientLightColor )",
+					"vec3( 0.0 )",
+				)
+				.replace(
+					"irradiance += getHemisphereLightIrradiance( hemisphereLights[ i ], geometryNormal );",
+					"",
+				),
+		);
+	};
+	material.customProgramCacheKey = () => "torch-wall";
+	return material;
+}
+
 /** Gentler than the grid's expo curve — paging the wall glides, not snaps. */
 function easeInOutCubic(t: number): number {
 	return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
@@ -144,7 +190,7 @@ const PAGE_PAD_PX = 24;
 const SLIP_W = 0.4;
 const SLIP_H = 0.3;
 /** How far the slip pokes above the sleeve at rest, and extra on hover. */
-const SLIP_PEEK = 0.115;
+const SLIP_PEEK = 0.1;
 const SLIP_PULL = 0.07;
 /** Most the camera closes in on a selected record (a share of its distance). */
 const FOCUS_ZOOM = 0.38;
@@ -418,7 +464,7 @@ function hash01(key: string) {
 
 /** Page elements a press on the wall must leave alone. */
 const INTERACTIVE =
-	'button, a, input, textarea, select, label, [role="button"], [data-slot="sheet-content"], .floating-controls, [data-debug-overlay]';
+	'button, a, input, textarea, select, label, [role="button"], [data-slot="sheet-content"], .floating-controls, [data-wall-filters] > [data-wall-chrome], [data-wall-corner], [data-debug-overlay]';
 
 function Wall({
 	records,
@@ -470,7 +516,7 @@ function Wall({
 				return {
 					x: (col + (span - 1) / 2 - (tile.cols - 1) / 2) * PITCH,
 					y: -(row + (span - 1) / 2) * PITCH,
-					z: (hash01(inst.key) - 0.5) * 0.14,
+					z: (hash01(inst.key) - 0.5) * 0.06,
 					span,
 					/** World size relative to a 1×1 — a 2×2 also covers the gap. */
 					spanScale: (span * PITCH - GAP) / TILE,
@@ -498,6 +544,10 @@ function Wall({
 			// The brand yellow the DOM grid's notes dot used, as paper.
 			slip: new THREE.MeshStandardMaterial({
 				color: "#eab308",
+				// Its own paper as glow (see `SLIP_SELF_LIGHT_*`); swapped for
+				// the written-on texture once that's drawn.
+				emissive: "#eab308",
+				emissiveIntensity: 0,
 				roughness: 0.85,
 				side: THREE.DoubleSide,
 			}),
@@ -717,6 +767,8 @@ function Wall({
 		return g;
 	}, [viewWidth, viewHeight]);
 	useEffect(() => () => wallGeometry.dispose(), [wallGeometry]);
+	const torchWall = useMemo(makeTorchWallMaterial, []);
+	useEffect(() => () => torchWall.dispose(), [torchWall]);
 	const lookAt = useMemo(() => new THREE.Vector3(), []);
 	const raycaster = useMemo(() => new THREE.Raycaster(), []);
 	/** Pointer in NDC (-1…1), and whether it's over the wall right now. */
@@ -1377,7 +1429,7 @@ function Wall({
 			h.sleeve.castShadow = poured > 0.75;
 			// The slip sits inside the sleeve: shown before the sleeve has its
 			// depth back, it would share the flattened cover's plane and z-fight.
-			if (h.slip) h.slip.visible = poured > 0.9;
+			if (h.slip) h.slip.visible = poured > 0.9 && down < 0.99;
 			// The vinyl waits for the cover to be whole before sliding out.
 			const discOut = l * THREE.MathUtils.smoothstep(poured, 0.85, 1);
 			h.disc.visible = discOut > 0.01;
@@ -1389,8 +1441,10 @@ function Wall({
 				// part of the sleeve.
 				const k = 1 / Math.sqrt(spanScale);
 				h.slip.scale.setScalar(k);
-				// It slides up out of the sleeve as the cover finishes fading up.
-				const tuck = THREE.MathUtils.smoothstep(poured, 0.9, 1);
+				// It slides up out of the sleeve as the cover finishes fading up,
+				// and back in while a record's open — on the camera's own ease —
+				// since the panel shows the notes itself.
+				const tuck = THREE.MathUtils.smoothstep(poured, 0.9, 1) * (1 - down);
 				h.slip.position.y =
 					TILE / 2 + ((SLIP_PEEK + l * SLIP_PULL) * tuck - SLIP_H / 2) * k;
 			}
@@ -1496,6 +1550,28 @@ function Wall({
 				cover,
 				(theme.dark ? SELF_LIGHT_DARK : SELF_LIGHT_LIGHT) * glow,
 			);
+			// The note slip glows a share of its own paper too, eased with the
+			// cover's: lit only by the room it came out a dull mustard on the
+			// light wall, dimmer than the brand yellow it's printed in.
+			if (h.slip) {
+				const slipMat = h.slip.material as THREE.MeshStandardMaterial;
+				slipMat.emissiveIntensity =
+					(theme.dark ? SLIP_SELF_LIGHT_DARK : SLIP_SELF_LIGHT_LIGHT) * glow;
+			}
+			// The rest of the wall drains to black and white as the lights go
+			// down, leaving the selected record the only one in colour — on
+			// the same spring, so moving between records cross-fades too.
+			const greyGoal = focused === i ? 0 : down;
+			const grey = smoothDamp(
+				cover.userData.grey ?? greyGoal,
+				greyGoal,
+				springs.current,
+				`grey${key}`,
+				0.3,
+				dt,
+			);
+			cover.userData.grey = grey;
+			setCoverDesaturate(cover, grey);
 			// A cover fades up quickly as its image arrives — no transition.
 			const fade = cover.map
 				? Math.min(1, (cover.userData.fade ?? 0) + dt / FADE_S)
@@ -1637,7 +1713,10 @@ function Wall({
 				penumbra={1}
 				distance={12}
 				decay={1.6}
-				castShadow={!isTouch}
+				// Dark only: in light mode the daylight casts the shadows, and a
+				// second set from the faint cursor highlight doubled them up,
+				// offset in another direction.
+				castShadow={theme.dark && !isTouch}
 			/>
 			{/* The wall the records hang on — there to catch shadows. */}
 			<mesh
@@ -1645,12 +1724,21 @@ function Wall({
 				geometry={wallGeometry}
 				position={[0, 0, WALL_Z]}
 				receiveShadow
+				// Drawn first and writing no depth, so it sits behind everything
+				// whatever its z — a record tipped partly behind it still shows.
+				renderOrder={-1}
 			>
-				{/* Shadows only, over the plain background: lit as a surface, the
-				    wall came out grey (light) or lifted (dark) instead of the
-				    page's pure white / black. */}
-				{/* Faint: just enough to sit the records on the wall. */}
-				<shadowMaterial opacity={theme.dark ? 0.25 : 0.06} />
+				{/* Light: shadows only, over the plain background — lit as a
+				    surface, the wall came out grey instead of the page's pure
+				    white. Faint: just enough to sit the records on the wall.
+				    Dark: a shadow can't darken pure black, so the wall is a
+				    near-black surface the torch lights a soft pool on, and the
+				    records' shadows show inside that pool. */}
+				{theme.dark ? (
+					<primitive object={torchWall} attach="material" />
+				) : (
+					<shadowMaterial opacity={0.12} depthWrite={false} />
+				)}
 			</mesh>
 			{/* Dust in two layers: a fine one just off the wall that drifts slower
 			    than the scroll, and a sparse, larger one near the camera that
@@ -1752,10 +1840,12 @@ const Tile = memo(function Tile({
 	const withNotes = hasNotes(record);
 	// Each note slip carries its own handwriting: plain paper until the hand
 	// font arrives, then the opening words of the record's notes.
-	const slipMaterial = useMemo(
-		() => (withNotes ? shared.slip.clone() : null),
-		[withNotes, shared],
-	);
+	const slipMaterial = useMemo(() => {
+		if (!withNotes) return null;
+		const material = shared.slip.clone();
+		sharpenNoteMaps(material);
+		return material;
+	}, [withNotes, shared]);
 	useEffect(() => {
 		if (!slipMaterial || !record.notes) return;
 		let texture: THREE.Texture | null = null;
@@ -1769,6 +1859,8 @@ const Tile = memo(function Tile({
 			);
 			slipMaterial.map = texture;
 			slipMaterial.color.set("#ffffff");
+			slipMaterial.emissiveMap = texture;
+			slipMaterial.emissive.set("#ffffff");
 			slipMaterial.needsUpdate = true;
 		});
 		return () => {
@@ -1786,7 +1878,9 @@ const Tile = memo(function Tile({
 		const b = Math.sin(record.id * 78.233) * 12345.678;
 		const u = a - Math.floor(a);
 		const v = b - Math.floor(b);
-		return [(u - 0.5) * 0.52, (v - 0.5) * 0.16];
+		// The lean stays small: its high corner shows more of the slip, and
+		// past ±0.03 rad that was enough to show the top of a third line.
+		return [(u - 0.5) * 0.52, (v - 0.5) * 0.06];
 	}, [record.id]);
 	// Created once per record; theme changes are applied by `Wall`.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: placeholder is read once at creation

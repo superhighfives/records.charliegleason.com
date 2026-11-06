@@ -676,11 +676,24 @@ export function RecordPanel({
 /** Where each colour of the header's mesh glows from (x% y%). */
 const MESH_SPOTS = ["18% 22%", "82% 18%", "78% 80%", "22% 82%"];
 
+/**
+ * A key colour, lifted to at least `--mesh-floor` lightness (keeping its hue
+ * and chroma). In light mode a dark cover's navies and blacks, laid over
+ * white, came out as a muddy grey; lifted, they read as a tint of the same
+ * colour. Dark mode's floor is 0, so colours pass through as sampled.
+ */
+function meshTint(color: string): string {
+	return `oklch(from ${color} max(l, var(--mesh-floor, 0)) c h)`;
+}
+
 /** The header backdrop: a radial glow per key colour, over the first. */
 function meshStyle(colors: string[]): CSSProperties {
 	const glows = MESH_SPOTS.map(
 		(at, i) =>
-			`radial-gradient(at ${at}, ${colors[i % colors.length]} 0, transparent 65%)`,
+			`radial-gradient(at ${at}, ${meshTint(colors[i % colors.length])} 0, transparent 65%)`,
 	);
-	return { backgroundColor: colors[0], backgroundImage: glows.join(", ") };
+	return {
+		backgroundColor: meshTint(colors[0]),
+		backgroundImage: glows.join(", "),
+	};
 }

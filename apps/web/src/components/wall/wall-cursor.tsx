@@ -8,14 +8,39 @@ import type { PublicRecord } from "#/lib/records";
  * small ring that trails the mouse a touch. Over a record it swells, with
  * the record's title and artist underneath; while the wall's dragged it's a
  * little grabbing hand. Over the page's controls the system cursor comes
- * back. Its state is CSS on `data-wall-cursor`, set by the scene from
- * what's under the pointer.
+ * back, and near them it shrinks to a dot. Its state is CSS on
+ * `data-wall-cursor`, set by the scene from what's under the pointer.
  */
+/** The page's floating panels — the cursor shrinks to a dot near these. */
+const PANELS =
+	'.floating-controls, [data-wall-filters] > [data-wall-chrome], [data-wall-corner], [data-slot="sheet-content"]';
+/** How close (px) to a panel counts as near it. */
+const NEAR_PX = 40;
+
+function nearPanel(x: number, y: number): boolean {
+	for (const panel of document.querySelectorAll(PANELS)) {
+		const r = panel.getBoundingClientRect();
+		if (r.width === 0) continue;
+		if (
+			x > r.left - NEAR_PX &&
+			x < r.right + NEAR_PX &&
+			y > r.top - NEAR_PX &&
+			y < r.bottom + NEAR_PX
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export function WallCursor({ record }: { record: PublicRecord | null }) {
 	const ref = useRef<HTMLDivElement>(null);
+	const labelRef = useRef<HTMLDivElement>(null);
 	useEffect(() => {
-		const el = ref.current;
-		if (!el) return;
+		const layers = [ref.current, labelRef.current].filter(
+			(el): el is HTMLDivElement => el != null,
+		);
+		if (layers.length === 0) return;
 		const root = document.documentElement;
 		const at = { x: -100, y: -100 };
 		const to = { x: -100, y: -100 };
@@ -29,9 +54,14 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 			const k = 1 - Math.exp(-28 * dt);
 			at.x += (to.x - at.x) * k;
 			at.y += (to.y - at.y) * k;
-			el.style.transform = `translate(${at.x}px, ${at.y}px)`;
 			// Near the bottom, the label goes above (clear of the filters).
-			el.classList.toggle("is-low", at.y > window.innerHeight - 160);
+			const low = at.y > window.innerHeight - 160;
+			const near = nearPanel(at.x, at.y);
+			for (const el of layers) {
+				el.style.transform = `translate(${at.x}px, ${at.y}px)`;
+				el.classList.toggle("is-low", low);
+				el.classList.toggle("is-near", near);
+			}
 			raf = requestAnimationFrame(tick);
 		};
 		const onMove = (e: PointerEvent) => {
@@ -62,16 +92,24 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 	if (record) shown.current = record;
 	const label = shown.current;
 	return (
-		<div ref={ref} aria-hidden className="wall-cursor">
-			<HandGrab className="wall-cursor-hand" strokeWidth={1.75} />
-			{label && (
-				<div className="wall-cursor-label">
-					<p className="font-serif text-base font-medium leading-tight">
-						{label.title}
-					</p>
-					<p className="font-mono text-xs opacity-70">{label.artist}</p>
-				</div>
-			)}
-		</div>
+		<>
+			<div ref={ref} aria-hidden className="wall-cursor">
+				<HandGrab className="wall-cursor-hand" strokeWidth={1.75} />
+			</div>
+			<div
+				ref={labelRef}
+				aria-hidden
+				className="wall-cursor wall-cursor--label"
+			>
+				{label && (
+					<div className="wall-cursor-label">
+						<p className="font-serif text-base font-medium leading-tight">
+							{label.title}
+						</p>
+						<p className="font-mono text-xs opacity-80">{label.artist}</p>
+					</div>
+				)}
+			</div>
+		</>
 	);
 }

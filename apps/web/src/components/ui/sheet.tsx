@@ -96,6 +96,7 @@ function SheetContent({
 			>
 				{children}
 				<SheetPrimitive.Close
+					data-slot="sheet-close"
 					type="button"
 					className="absolute top-4 right-4 rounded-sm opacity-70 outline-none ring-offset-background transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none z-10"
 				>
