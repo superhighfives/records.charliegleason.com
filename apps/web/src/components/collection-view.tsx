@@ -395,6 +395,15 @@ export function CollectionView({
 					// On the wall, a press beside the panel may be a drag (panning
 					// the zoomed-in wall), so the wall decides: a click on the empty
 					// wall still closes it (`onClose`).
+					// Start keyboard focus on the close button rather than the
+					// first control in the panel (the previous-record arrow).
+					onOpenAutoFocus={(e) => {
+						e.preventDefault();
+						if (!(e.target instanceof HTMLElement)) return;
+						e.target
+							.querySelector<HTMLElement>('[data-slot="sheet-close"]')
+							?.focus();
+					}}
 					onPointerDownOutside={
 						wallMode ? (e) => e.preventDefault() : undefined
 					}

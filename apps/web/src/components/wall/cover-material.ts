@@ -3,8 +3,9 @@ import * as THREE from "three";
 /**
  * The cover material: the standard lit material (lighting, shadows, the
  * matte finish) with its `map` step patched via `onBeforeCompile`, so a
- * cover can fade up as its image arrives (`uFade`) and carry a share of
- * self-light (`uSelfLight`) to stay true to its photo.
+ * cover can fade up as its image arrives (`uFade`), carry a share of
+ * self-light (`uSelfLight`) to stay true to its photo, and drain to black
+ * and white (`uDesaturate`) while another record is open.
  */
 
 type CoverUniforms = {
@@ -17,17 +18,21 @@ type CoverUniforms = {
 	 * to their true colours, with the room's lighting as shading on top.
 	 */
 	uSelfLight: { value: number };
+	/** 0 = full colour, 1 = black and white. */
+	uDesaturate: { value: number };
 };
 
 const HEADER_GLSL = /* glsl */ `
 	uniform float uFade;
 	uniform float uSelfLight;
+	uniform float uDesaturate;
 `;
 
 const MAP_GLSL = /* glsl */ `
 	vec3 coverSelf = vec3(0.0);
 	#ifdef USE_MAP
 		vec3 img = texture2D(map, vMapUv).rgb;
+		img = mix(img, vec3(dot(img, vec3(0.2126, 0.7152, 0.0722))), uDesaturate);
 		diffuseColor.rgb *= img;
 		diffuseColor.a *= uFade;
 		coverSelf = img * uFade;
@@ -51,6 +56,7 @@ export function makeCoverMaterial(
 	const uniforms: CoverUniforms = {
 		uFade: { value: 1 },
 		uSelfLight: { value: 0 },
+		uDesaturate: { value: 0 },
 	};
 	material.userData.coverUniforms = uniforms;
 	material.onBeforeCompile = (shader) => {
@@ -93,4 +99,13 @@ export function setCoverSelfLight(
 ) {
 	const u = uniformsOf(material);
 	if (u) u.uSelfLight.value = amount;
+}
+
+/** How far the cover drains to black and white — see `uDesaturate`. */
+export function setCoverDesaturate(
+	material: THREE.MeshStandardMaterial,
+	amount: number,
+) {
+	const u = uniformsOf(material);
+	if (u) u.uDesaturate.value = amount;
 }

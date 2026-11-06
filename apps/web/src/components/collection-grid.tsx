@@ -267,8 +267,9 @@ const RecordTile = memo(function RecordTile({
 													// through a second component's state update, which
 													// can resolve before the browser ever paints the
 													// hidden frame, skipping the fade entirely. Scale is
-													// active-only (the panel-pinned tile) — a gentle
-													// zoom marking the tile the panel has open. The
+													// a gentle zoom on hover (fine pointers only, same
+													// gate as the disc peek) and on the active tile
+													// (the one the panel has open). The
 													// sleeve edge is this element's own `clip-path`, which
 													// `scale` applies after — so the whole sleeve grows
 													// (into the 3% inset), edge and all, rather than the
@@ -280,7 +281,7 @@ const RecordTile = memo(function RecordTile({
 													// only — filter/scale there are driven per-frame by
 													// the ambient loop, whose easing a CSS transition
 													// would smooth *again*, lagging it.
-													"cover-art sleeve-clip size-full object-cover group-data-[active=true]:scale-105",
+													"cover-art sleeve-clip size-full object-cover pointer-fine:group-hover:scale-105 group-data-[active=true]:scale-105",
 												)}
 												style={{ clipPath }}
 												loading="lazy"

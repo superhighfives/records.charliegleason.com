@@ -15,6 +15,8 @@
  */
 
 :root {
+  /* The record panel header's lightest-allowed tint (see `meshTint`). */
+  --mesh-floor: 0.86;
   /* Brand accent (Tailwind yellow) */
   --accent-yellow: #eab308; /* yellow-500 */
   --accent-yellow-strong: #ca8a04; /* yellow-600 */
@@ -65,6 +67,7 @@
 }
 
 .dark {
+  --mesh-floor: 0;
   --accent-yellow: #eab308;
   --accent-yellow-strong: #facc15; /* yellow-400 reads brighter on dark */
   --accent-yellow-soft: #fde047;
@@ -1339,8 +1342,13 @@ a {
 /* The wall's own pointer (wall-cursor.tsx): a small ring in place of the
    system cursor while it's over the wall. It swells over a record, with the
    record's title and artist under it, and becomes a little grabbing hand
-   while dragging — all with a bit of bounce. Inverts what's under it, so it
-   reads on any cover. */
+   while dragging — all with a bit of bounce. Two layers that move together:
+   the ring and hand invert what's under them (`difference`), so they read
+   on any cover; the label sits on a chip of the cover behind it, inverted,
+   blurred and tinted down, so the inversion carries over but its white text
+   always has a dark ground. They're separate because the label's backdrop
+   can't see past a blended parent. Near the floating panels it all shrinks
+   to a dot (`is-near`), so a big ring and label don't spill over them. */
 .wall-cursor {
   --bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
   position: fixed;
@@ -1349,11 +1357,13 @@ a {
   z-index: 60;
   pointer-events: none;
   opacity: 0;
-  mix-blend-mode: difference;
   color: #fff;
   transition: opacity 150ms ease;
 }
-.wall-cursor::before {
+.wall-cursor:not(.wall-cursor--label) {
+  mix-blend-mode: difference;
+}
+.wall-cursor:not(.wall-cursor--label)::before {
   content: "";
   position: absolute;
   width: 1.25rem;
@@ -1361,9 +1371,11 @@ a {
   translate: -50% -50%;
   border: 1.5px solid #fff;
   border-radius: 9999px;
+  background-color: transparent;
   transition:
     width 350ms var(--bounce),
-    height 350ms var(--bounce);
+    height 350ms var(--bounce),
+    background-color 150ms ease;
 }
 .wall-cursor-hand {
   position: absolute;
@@ -1381,6 +1393,11 @@ a {
   top: 2.5rem;
   width: max-content;
   max-width: 18rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.75rem;
+  background: rgb(0 0 0 / 0.55);
+  -webkit-backdrop-filter: invert(1) blur(14px) saturate(1.4);
+  backdrop-filter: invert(1) blur(14px) saturate(1.4);
   text-align: center;
   text-wrap: balance;
   opacity: 0;
@@ -1406,6 +1423,16 @@ a {
 :root[data-wall-cursor="record"]:not([data-wall-focus]) .wall-cursor-label {
   opacity: 1;
   translate: -50% 0;
+}
+/* Near a floating panel: a small solid dot, no label. After the record
+   rules so it wins over them. */
+:root[data-wall-cursor] .wall-cursor.is-near::before {
+  width: 0.5rem;
+  height: 0.5rem;
+  background-color: #fff;
+}
+:root[data-wall-cursor] .wall-cursor.is-near .wall-cursor-label {
+  opacity: 0;
 }
 /* Dragging: the little hand. */
 :root[data-wall-dragging] .wall-cursor::before {
@@ -1771,6 +1798,16 @@ button.wall-facts-tick:hover::before {
 }
 :root[data-wall-focus] [data-wall-chrome] {
   opacity: 0;
+  pointer-events: none;
+}
+/* The search pill too. Faded with `filter` rather than `opacity`: its
+   `.rise-in` entrance (`animation-fill-mode: both`) holds `opacity` at 1
+   for good, which would win over a plain opacity rule. */
+:root[data-wall] .floating-controls {
+  transition: filter 600ms ease;
+}
+:root[data-wall-focus] .floating-controls {
+  filter: opacity(0);
   pointer-events: none;
 }
 :root.dark[data-wall] body {
