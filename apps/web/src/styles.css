@@ -1377,7 +1377,7 @@ a {
     height 350ms var(--bounce),
     background-color 150ms ease;
 }
-.wall-cursor-hand {
+.wall-cursor-icon {
   position: absolute;
   width: 1rem;
   height: 1rem;
@@ -1387,6 +1387,11 @@ a {
   transition:
     opacity 150ms ease,
     scale 350ms var(--bounce);
+}
+.wall-cursor-open,
+.wall-cursor-close {
+  width: 1.375rem;
+  height: 1.375rem;
 }
 .wall-cursor-label {
   position: absolute;
@@ -1411,14 +1416,21 @@ a {
   bottom: 2.5rem;
 }
 :root[data-wall-cursor="wall"] .wall-cursor,
-:root[data-wall-cursor="record"] .wall-cursor {
+:root[data-wall-cursor="record"] .wall-cursor,
+:root[data-wall-cursor="close"] .wall-cursor {
   opacity: 1;
 }
-/* Over a record: bigger, named underneath (not while one's open — the
-   panel names it). */
-:root[data-wall-cursor="record"] .wall-cursor::before {
+/* Over a record: bigger, with what a click does inside — an arrow to open
+   it, or a cross over the one that's open, to close it — and named
+   underneath (not while one's open — the panel names it). */
+:root:is([data-wall-cursor="record"], [data-wall-cursor="close"]) .wall-cursor::before {
   width: 3.5rem;
   height: 3.5rem;
+}
+:root[data-wall-cursor="record"]:not([data-wall-dragging]) .wall-cursor:not(.is-near) .wall-cursor-open,
+:root[data-wall-cursor="close"]:not([data-wall-dragging]) .wall-cursor:not(.is-near) .wall-cursor-close {
+  opacity: 1;
+  scale: 1;
 }
 :root[data-wall-cursor="record"]:not([data-wall-focus]) .wall-cursor-label {
   opacity: 1;
@@ -1446,6 +1458,7 @@ a {
 /* While it shows, the system cursor doesn't. */
 :root[data-wall-cursor="wall"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
 :root[data-wall-cursor="record"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
+:root[data-wall-cursor="close"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
 :root[data-wall-cursor][data-wall-dragging],
 :root[data-wall-cursor][data-wall-dragging] * {
   cursor: none !important;
@@ -1491,7 +1504,8 @@ a {
 }
 
 /* Until the wall's scene is up (`data-wall-ready`, set by wall-scene.tsx),
-   a wall page shows only "Loading records…" in the middle — not the hero
+   a wall page shows only a spinner in the middle (`WallLoading`, on the
+   wall's own black / white) — not the hero
    and filters in the page's own layout, jumping to the wall's once it
    loads. They still lay out (the hero's measured for its gap), and their
    entrances hold until the wall's ready, then play. */
@@ -1507,11 +1521,13 @@ a {
   z-index: 5;
   display: grid;
   place-items: center;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--muted-foreground);
+  background-color: #fff;
+  color: #a3a3a3;
   pointer-events: none;
-  animation-delay: 300ms;
+}
+.dark .wall-loading {
+  background-color: #000;
+  color: #737373;
 }
 :root[data-wall-ready] .wall-loading {
   display: none;
