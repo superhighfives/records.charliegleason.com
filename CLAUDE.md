@@ -6,7 +6,8 @@ This file is the repo-specific part.
 ## Commands
 
 Bun, not npm or pnpm. There is **no `typecheck` script** — CI runs
-`bunx tsc --noEmit` directly, so use that. `bun run lint` is Biome.
+`bunx tsc --noEmit` from `apps/web` (the only `tsconfig.json`), so from the
+root use `bunx tsc --noEmit -p apps/web`. `bun run lint` is Biome.
 
 ## Layout
 
