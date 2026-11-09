@@ -744,7 +744,7 @@ function Wall({
 	}, [instances]);
 
 	// The scene's up: the page can show its hero and controls (until now
-	// it shows only "Loading records…" — see `[data-wall-page]`).
+	// it shows only a spinner — see `[data-wall-page]`).
 	useEffect(() => {
 		document.documentElement.dataset.wallReady = "";
 		return () => {
@@ -1595,13 +1595,17 @@ function Wall({
 			hovered.current = nearestMiddle >= 0 ? nearestMiddle : null;
 		}
 		if (!isTouch) {
-			// The wall's own cursor (wall-cursor.tsx): over the wall or a
-			// record, or off over the page's controls.
+			// The wall's own cursor (wall-cursor.tsx): over the wall, a
+			// record (a click opens it), the open record (a click closes it —
+			// not one visited on the intro, which a click opens), or off over
+			// the page's controls.
 			const cursor = !pointer.current.overWall
 				? "off"
 				: under == null
 					? "wall"
-					: "record";
+					: chosen >= 0 && under === chosen
+						? "close"
+						: "record";
 			if (document.documentElement.dataset.wallCursor !== cursor) {
 				document.documentElement.dataset.wallCursor = cursor;
 			}

@@ -13,7 +13,10 @@ import {
 
 import { CollectionGrid } from "#/components/collection-grid";
 import { CollectionHero, heroDurationMs } from "#/components/collection-hero";
-import { CollectionSkeleton } from "#/components/collection-skeleton";
+import {
+	CollectionSkeleton,
+	WallLoading,
+} from "#/components/collection-skeleton";
 import { CollectionStatsSentence } from "#/components/collection-stats-sentence";
 import { useCollectionUI } from "#/components/collection-ui";
 import { FilterStrip } from "#/components/filter-strip";
@@ -251,15 +254,11 @@ export function CollectionView({
 			// On the wall, the page is the surface it's dragged across (see
 			// `[data-wall-surface]` in styles.css).
 			data-wall-surface={wallMode ? "" : undefined}
-			// Until the wall's scene is up, the page shows only the loading
-			// line below (see `[data-wall-page]` in styles.css).
+			// Until the wall's scene is up, the page shows only the spinner
+			// below (see `[data-wall-page]` in styles.css).
 			data-wall-page={wallMode ? "" : undefined}
 		>
-			{wallMode && (
-				<output aria-live="polite" className="wall-loading loading-hint">
-					Loading records…
-				</output>
-			)}
+			{wallMode && <WallLoading />}
 			{/* Staged reveal on first paint: hero copy, then the grid, then the
 			    header chrome — see the `rise-in`/`fade-in` utilities in styles.css.
 			    Each is a CSS `animation ... both`, so it only ever plays once per
