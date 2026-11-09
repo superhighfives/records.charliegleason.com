@@ -1,6 +1,8 @@
 import { useLocation } from "@tanstack/react-router";
 import { LoaderCircle } from "lucide-react";
 
+import { isGridPath } from "#/lib/records-path";
+
 /**
  * Route-level fallback for {@link CollectionView} (`_collection`'s
  * `pendingComponent`), and its font-loading gate (see `useFontsReady`). The
@@ -16,9 +18,7 @@ import { LoaderCircle } from "lucide-react";
  * is there from the first paint.
  */
 export function CollectionSkeleton() {
-	const grid = useLocation({
-		select: (l) => l.pathname === "/grid" || l.pathname.startsWith("/grid/"),
-	});
+	const grid = useLocation({ select: (l) => isGridPath(l.pathname) });
 	if (!grid) return <WallLoading />;
 	return (
 		<div className="w-full px-4 py-10 sm:px-6">

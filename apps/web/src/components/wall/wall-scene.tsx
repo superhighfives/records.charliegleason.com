@@ -1596,13 +1596,14 @@ function Wall({
 		}
 		if (!isTouch) {
 			// The wall's own cursor (wall-cursor.tsx): over the wall, a
-			// record (a click opens it), the open record (a click closes it),
-			// or off over the page's controls.
+			// record (a click opens it), the open record (a click closes it —
+			// not one visited on the intro, which a click opens), or off over
+			// the page's controls.
 			const cursor = !pointer.current.overWall
 				? "off"
 				: under == null
 					? "wall"
-					: under === focused
+					: chosen >= 0 && under === chosen
 						? "close"
 						: "record";
 			if (document.documentElement.dataset.wallCursor !== cursor) {

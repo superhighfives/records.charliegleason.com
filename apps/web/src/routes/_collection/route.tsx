@@ -7,7 +7,7 @@ import {
 
 import { CollectionSkeleton } from "#/components/collection-skeleton";
 import { CollectionView } from "#/components/collection-view";
-import { parseRecordIdParam } from "#/lib/records-path";
+import { isGridPath, parseRecordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 import { filterSettingsQueryOptions } from "#/lib/settings-queries";
 
@@ -46,10 +46,7 @@ function CollectionLayout() {
 	const raw = params.id;
 	const selectedId = typeof raw === "string" ? parseRecordIdParam(raw) : null;
 	const layout = useLocation({
-		select: (l) =>
-			l.pathname === "/grid" || l.pathname.startsWith("/grid/")
-				? "grid"
-				: "wall",
+		select: (l) => (isGridPath(l.pathname) ? "grid" : "wall"),
 	});
 
 	return (

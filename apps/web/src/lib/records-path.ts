@@ -47,3 +47,12 @@ export function parseRecordIdParam(param: string): number | null {
 	const n = Number(m[1]);
 	return Number.isInteger(n) && n > 0 ? n : null;
 }
+
+/**
+ * Whether a path is the plain grid (`/grid`, `/grid/records/…`) rather than
+ * the wall. Shared by the collection's layout and its loading fallback, so
+ * they never disagree about which one's showing.
+ */
+export function isGridPath(pathname: string): boolean {
+	return pathname === "/grid" || pathname.startsWith("/grid/");
+}
