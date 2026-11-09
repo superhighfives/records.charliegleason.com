@@ -44,6 +44,7 @@ import {
 	sharpenNoteMaps,
 } from "./note-texture";
 import { packDense } from "./pack";
+import { cursorTarget } from "./wall-cursor";
 import { WhitePointEffect } from "./white-point";
 
 /**
@@ -770,6 +771,7 @@ function Wall({
 	const torchWall = useMemo(makeTorchWallMaterial, []);
 	useEffect(() => () => torchWall.dispose(), [torchWall]);
 	const lookAt = useMemo(() => new THREE.Vector3(), []);
+	const cursorWorld = useMemo(() => new THREE.Vector3(), []);
 	const raycaster = useMemo(() => new THREE.Raycaster(), []);
 	/** Pointer in NDC (-1…1), and whether it's over the wall right now. */
 	const pointer = useRef({ ndc: new THREE.Vector2(), overWall: false });
@@ -1608,6 +1610,17 @@ function Wall({
 						: "record";
 			if (document.documentElement.dataset.wallCursor !== cursor) {
 				document.documentElement.dataset.wallCursor = cursor;
+			}
+			// Where that record's middle is on screen, for the cursor's arrow
+			// (as drawn last frame — close enough, and it's already placed).
+			const target = under != null ? handles.current[under] : null;
+			if (target) {
+				target.sleeve.getWorldPosition(cursorWorld).project(camera);
+				cursorTarget.x = ((cursorWorld.x + 1) / 2) * size.width;
+				cursorTarget.y = ((1 - cursorWorld.y) / 2) * size.height;
+				cursorTarget.set = true;
+			} else {
+				cursorTarget.set = false;
 			}
 		}
 		if (hovered.current !== active.current) {
