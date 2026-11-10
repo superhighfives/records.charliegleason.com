@@ -1449,16 +1449,15 @@ a {
   opacity: 0;
 }
 /* Over something to click (a button, a link): it becomes part of it — the
-   control's own shape (measured by wall-cursor.tsx), as a soft highlight.
-   Still inverting, but faintly, so it lightens a dark control and darkens a
-   light one. Over a text field: a caret. After the dot rules so they win
+   control's own shape (measured by wall-cursor.tsx), inverting it like the
+   dot does. Over a text field: a caret. After the dot rules so they win
    over them. */
 :root[data-wall-cursor]:not([data-wall-dragging]) .wall-cursor.is-clickable::before {
   width: var(--morph-w);
   height: var(--morph-h);
   border-width: 0;
   border-radius: var(--morph-r);
-  background-color: rgb(255 255 255 / 0.18);
+  background-color: #fff;
 }
 :root[data-wall-cursor]:not([data-wall-dragging]) .wall-cursor.is-text::before {
   width: 0.125rem;
