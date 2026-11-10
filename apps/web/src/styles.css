@@ -1767,6 +1767,10 @@ button.wall-facts-tick:hover::before {
 :root[data-corners] [data-wall-filters] .filter-group + .filter-group {
   border-left: 1px solid var(--border);
 }
+/* The groups stretch (for the dividers); Clear, a lone chip, sits centred. */
+:root[data-corners] [data-wall-filters] .filter-clear {
+  align-self: center;
+}
 :root[data-corners] [data-wall-filters] > [data-wall-chrome] {
   overflow-x: auto;
   padding: 0 1rem;
