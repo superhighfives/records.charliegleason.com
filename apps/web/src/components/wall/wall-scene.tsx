@@ -207,6 +207,8 @@ const ENTRANCE_AFTER_HERO_S = 0.45;
 /** …and how it ripples out from the middle (seconds per world unit, capped). */
 const ENTRANCE_S_PER_UNIT = 0.06;
 const ENTRANCE_SPREAD_S = 0.8;
+/** Re-filtering: how long the wall takes to sink away before the entrance replays. */
+const REFILTER_OUT_S = 0.4;
 /** How far the floating panel sits in from the window's edge (`.record-sheet`). */
 const panelInsetPx = (width: number) =>
 	width >= 1024 ? 64 : width >= 640 ? 24 : 0;
@@ -367,7 +369,17 @@ type TileHandle = StreamTarget & {
 };
 
 /** Where a record is drawn right now, easing toward its packed slot. */
-type TileAnim = { x: number; y: number; spanScale: number; presence: number };
+type TileAnim = {
+	x: number;
+	y: number;
+	spanScale: number;
+	presence: number;
+	/**
+	 * Re-filtered: it sinks where it is, then moves to its new slot while
+	 * it's out of sight, rather than gliding there across the wall.
+	 */
+	relocate?: boolean;
+};
 
 /** A record filtered out, kept around while it sinks back into the wall. */
 type Exiting = {
@@ -563,10 +575,11 @@ function Wall({
 	const instancesRef = useRef(instances);
 	instancesRef.current = instances;
 
-	// Filtering animates: records that stay glide to their new slot, new ones
-	// rise out of the wall and grow in, and filtered-out ones sink back into
-	// it (kept in `exiting` until they're gone). Keyed by instance, since a
-	// re-filter moves every index.
+	// Filtering animates like the wall's first entrance: everything sinks back
+	// into the wall where it is (filtered-out records kept in `exiting` until
+	// they're gone), then the new set rises out of it, rippling from the
+	// middle of the screen. Records that stay move to their new slot while
+	// they're sunk. Keyed by instance, since a re-filter moves every index.
 	const anims = useRef(new Map<string, TileAnim>());
 	/** False until the first re-filter — the initial load doesn't animate in. */
 	const animateIn = useRef(false);
@@ -581,6 +594,8 @@ function Wall({
 			? heroDurationMs(records.length) / 1000 + ENTRANCE_AFTER_HERO_S
 			: 0,
 	);
+	/** A re-filter happened: the frame loop restarts the entrance. */
+	const refilter = useRef(false);
 	const [exiting, setExiting] = useState<Exiting[]>([]);
 	const exitingRef = useRef(exiting);
 	exitingRef.current = exiting;
@@ -594,10 +609,15 @@ function Wall({
 		prevLayout.current = layout;
 		if (before === instances) return;
 		animateIn.current = true;
+		refilter.current = true;
 		const kept = new Set(instances.map((i) => i.key));
 		// A record filtered back in mid-exit picks up from where it was.
 		for (const e of exitingRef.current) {
 			if (kept.has(e.key)) anims.current.set(e.key, e.anim);
+		}
+		for (const key of kept) {
+			const anim = anims.current.get(key);
+			if (anim) anim.relocate = true;
 		}
 		const leaving: Exiting[] = [];
 		before.forEach((inst, i) => {
@@ -1459,6 +1479,15 @@ function Wall({
 
 		pickable.current.length = 0;
 		const ease = reducedMotion ? 1 : 1 - Math.exp(-6 * dt);
+		// A re-filter replays the entrance, once the wall has sunk away.
+		if (refilter.current) {
+			refilter.current = false;
+			entrance.current = {
+				at: t + (reducedMotion ? 0 : REFILTER_OUT_S),
+				x: camX,
+				y: camY,
+			};
+		}
 		entrance.current ??= {
 			at: t + (reducedMotion ? 0 : entranceDelayS.current),
 			x: camX,
@@ -1506,9 +1535,20 @@ function Wall({
 				};
 				anims.current.set(key, anim);
 			}
-			anim.x += (pos.x - anim.x) * ease;
-			anim.y += (pos.y - anim.y) * ease;
-			anim.spanScale += (pos.spanScale - anim.spanScale) * ease;
+			if (anim.relocate) {
+				// Moves once it's out of sight — or when its turn to rise
+				// comes, sunk or not.
+				if (anim.presence < 0.05 || !above) {
+					anim.x = pos.x;
+					anim.y = pos.y;
+					anim.spanScale = pos.spanScale;
+					anim.relocate = false;
+				}
+			} else {
+				anim.x += (pos.x - anim.x) * ease;
+				anim.y += (pos.y - anim.y) * ease;
+				anim.spanScale += (pos.spanScale - anim.spanScale) * ease;
+			}
 			anim.presence += ((above ? 0 : 1) - anim.presence) * ease;
 
 			// Drawn at its copy nearest the camera.
