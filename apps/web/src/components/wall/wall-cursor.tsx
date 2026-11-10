@@ -120,8 +120,10 @@ function morphFor(el: Element): Morph | null {
 	const framed =
 		Number.parseFloat(cs.borderTopWidth) > 0 ||
 		!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(cs.backgroundColor);
+	// Text (a link) gets more room either side than it does above and below.
 	const pad = framed ? -3 : 3;
-	const w = r.width + pad * 2;
+	const padX = !framed && r.width > r.height * 1.5 ? 4 : pad;
+	const w = r.width + padX * 2;
 	const h = r.height + pad * 2;
 	const own = Number.parseFloat(cs.borderTopLeftRadius) || 0;
 	const round = own === 0 || own >= Math.min(r.width, r.height) / 2;
