@@ -1376,6 +1376,8 @@ a {
   transition:
     width 350ms var(--bounce),
     height 350ms var(--bounce),
+    border-radius 350ms var(--bounce),
+    border-width 150ms ease,
     background-color 150ms ease;
 }
 .wall-cursor-icon {
@@ -1446,12 +1448,17 @@ a {
 :root[data-wall-cursor] .wall-cursor.is-near .wall-cursor-label {
   opacity: 0;
 }
-/* Over something to click (a button, a link): the dot grows a little. Over
-   a text field: a caret. After the dot rules so they win over them. */
+/* Over something to click (a button, a link): it becomes part of it — the
+   control's own shape (measured by wall-cursor.tsx), as a soft highlight.
+   Still inverting, but faintly, so it lightens a dark control and darkens a
+   light one. Over a text field: a caret. After the dot rules so they win
+   over them. */
 :root[data-wall-cursor]:not([data-wall-dragging]) .wall-cursor.is-clickable::before {
-  width: 0.875rem;
-  height: 0.875rem;
-  background-color: #fff;
+  width: var(--morph-w);
+  height: var(--morph-h);
+  border-width: 0;
+  border-radius: var(--morph-r);
+  background-color: rgb(255 255 255 / 0.18);
 }
 :root[data-wall-cursor]:not([data-wall-dragging]) .wall-cursor.is-text::before {
   width: 0.125rem;

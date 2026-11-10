@@ -93,6 +93,41 @@ function watchPanels(): { boxes: () => Box[]; stop: () => void } {
 	};
 }
 
+/** Past this size (px) a control's too big to become: it gets the dot. */
+const MORPH_MAX = { w: 320, h: 120 };
+/** How far (0–1) the cursor leans off a control's middle toward the mouse. */
+const MORPH_LEAN = 0.12;
+
+/** The shape the cursor takes over a control. */
+type Morph = { x: number; y: number; w: number; h: number; r: number };
+
+/**
+ * The cursor as part of a control: the control's own shape, just inside its
+ * outline if it has one (a filter chip's pill), or just around it if not
+ * (the logo, a text link) — round, unless it has corners of its own.
+ */
+function morphFor(el: Element): Morph | null {
+	const r = el.getBoundingClientRect();
+	if (r.width === 0 || r.width > MORPH_MAX.w || r.height > MORPH_MAX.h) {
+		return null;
+	}
+	const cs = getComputedStyle(el);
+	const framed =
+		Number.parseFloat(cs.borderTopWidth) > 0 ||
+		!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(cs.backgroundColor);
+	const pad = framed ? -3 : 3;
+	const w = r.width + pad * 2;
+	const h = r.height + pad * 2;
+	const own = Number.parseFloat(cs.borderTopLeftRadius) || 0;
+	return {
+		x: r.left + r.width / 2,
+		y: r.top + r.height / 2,
+		w,
+		h,
+		r: own > 0 ? Math.max(2, own + pad) : Math.min(w, h) / 2,
+	};
+}
+
 function near(boxes: Box[], x: number, y: number): boolean {
 	return boxes.some(
 		(b) => x > b.left && x < b.right && y > b.top && y < b.bottom,
@@ -106,8 +141,8 @@ function near(boxes: Box[], x: number, y: number): boolean {
  * arrow pointing at its middle (a click opens it) — or, over the record
  * that's open, a cross (a click closes it); while the wall's dragged it's a
  * little grabbing hand. Over and near the page's controls it shrinks to a
- * dot — a little bigger over something to click, and a text caret over a
- * text field. Its state is CSS on `data-wall-cursor`, set by the scene from what's
+ * dot; over something to click it becomes part of it, taking its shape;
+ * and over a text field it's a caret. Its state is CSS on `data-wall-cursor`, set by the scene from what's
  * under the pointer.
  */
 export function WallCursor({ record }: { record: PublicRecord | null }) {
@@ -125,6 +160,20 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 		const to = { x: -100, y: -100 };
 		/** The arrow's heading (radians), easing toward the record's middle. */
 		let angle = -Math.PI / 4;
+		/** The control under the mouse, and the shape the cursor takes on it. */
+		let control: Element | null = null;
+		let morph: Morph | null = null;
+		const reshape = () => {
+			const el = ref.current;
+			morph = control ? morphFor(control) : null;
+			if (!el) return;
+			el.classList.toggle("is-clickable", morph != null);
+			if (morph) {
+				el.style.setProperty("--morph-w", `${morph.w}px`);
+				el.style.setProperty("--morph-h", `${morph.h}px`);
+				el.style.setProperty("--morph-r", `${morph.r}px`);
+			}
+		};
 		let raf = 0;
 		let last = 0;
 		// Eases toward the mouse — close enough to feel attached, loose
@@ -133,8 +182,12 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 			const dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
 			last = now;
 			const k = 1 - Math.exp(-28 * dt);
-			at.x += (to.x - at.x) * k;
-			at.y += (to.y - at.y) * k;
+			// On a control it settles on the control, leaning a little
+			// toward the mouse.
+			const gx = morph ? morph.x + (to.x - morph.x) * MORPH_LEAN : to.x;
+			const gy = morph ? morph.y + (to.y - morph.y) * MORPH_LEAN : to.y;
+			at.x += (gx - at.x) * k;
+			at.y += (gy - at.y) * k;
 			// Near the bottom, the label goes above (clear of the filters).
 			const low = at.y > window.innerHeight - 160;
 			const isNear = near(panels.boxes(), at.x, at.y);
@@ -169,18 +222,21 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 			}
 			to.x = e.clientX;
 			to.y = e.clientY;
-			// What it's over: a caret on text fields, a bigger dot on things
-			// to click.
-			const el = ref.current;
+			// What it's over: a caret on text fields; on things to click, it
+			// becomes part of them (measured once on the way in).
 			const target = e.target instanceof Element ? e.target : null;
 			const text = target?.closest(TEXT) != null;
-			if (el) {
-				el.classList.toggle("is-text", text);
-				el.classList.toggle(
-					"is-clickable",
-					!text && target?.closest(CLICKABLE) != null,
-				);
+			ref.current?.classList.toggle("is-text", text);
+			const next = text ? null : (target?.closest(CLICKABLE) ?? null);
+			if (next !== control) {
+				control = next;
+				reshape();
 			}
+		};
+		// A control can move under a still mouse when what it's in scrolls
+		// (the record panel).
+		const onScroll = () => {
+			if (control) reshape();
 		};
 		// Leaving the window: hide it rather than leave it at the edge.
 		const onLeave = () => {
@@ -188,11 +244,16 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 		};
 		raf = requestAnimationFrame(tick);
 		window.addEventListener("pointermove", onMove, { passive: true });
+		window.addEventListener("scroll", onScroll, {
+			capture: true,
+			passive: true,
+		});
 		root.addEventListener("pointerleave", onLeave);
 		return () => {
 			cancelAnimationFrame(raf);
 			panels.stop();
 			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("scroll", onScroll, { capture: true });
 			root.removeEventListener("pointerleave", onLeave);
 		};
 	}, []);
