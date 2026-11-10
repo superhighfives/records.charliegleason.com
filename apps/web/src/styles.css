@@ -1340,15 +1340,16 @@ a {
 }
 
 /* The wall's own pointer (wall-cursor.tsx): a small ring in place of the
-   system cursor while it's over the wall. It swells over a record, with the
+   system cursor, everywhere on the page. It swells over a record, with the
    record's title and artist under it, and becomes a little grabbing hand
    while dragging — all with a bit of bounce. Two layers that move together:
    the ring and hand invert what's under them (`difference`), so they read
    on any cover; the label sits on a chip of the cover behind it, inverted,
    blurred and tinted down, so the inversion carries over but its white text
    always has a dark ground. They're separate because the label's backdrop
-   can't see past a blended parent. Near the floating panels it all shrinks
-   to a dot (`is-near`), so a big ring and label don't spill over them. */
+   can't see past a blended parent. Over and near the floating panels it
+   all shrinks to a dot (`off`, `is-near`), so a big ring and label don't
+   spill over them. */
 .wall-cursor {
   --bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
   position: fixed;
@@ -1415,9 +1416,7 @@ a {
   top: auto;
   bottom: 2.5rem;
 }
-:root[data-wall-cursor="wall"] .wall-cursor,
-:root[data-wall-cursor="record"] .wall-cursor,
-:root[data-wall-cursor="close"] .wall-cursor {
+:root[data-wall-cursor] .wall-cursor {
   opacity: 1;
 }
 /* Over a record: bigger, with what a click does inside — an arrow to open
@@ -1436,8 +1435,9 @@ a {
   opacity: 1;
   translate: -50% 0;
 }
-/* Near a floating panel: a small solid dot, no label. After the record
-   rules so it wins over them. */
+/* Over or near a floating panel: a small solid dot, no label. After the
+   record rules so it wins over them. */
+:root[data-wall-cursor="off"] .wall-cursor::before,
 :root[data-wall-cursor] .wall-cursor.is-near::before {
   width: 0.5rem;
   height: 0.5rem;
@@ -1455,10 +1455,11 @@ a {
   opacity: 1;
   scale: 1;
 }
-/* While it shows, the system cursor doesn't. */
-:root[data-wall-cursor="wall"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
-:root[data-wall-cursor="record"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
-:root[data-wall-cursor="close"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
+/* While it shows — anywhere on the page, over the wall or not — the
+   system cursor doesn't. The dragging pair outranks the wall's own
+   `grabbing` rule. */
+:root[data-wall-cursor],
+:root[data-wall-cursor] *,
 :root[data-wall-cursor][data-wall-dragging],
 :root[data-wall-cursor][data-wall-dragging] * {
   cursor: none !important;

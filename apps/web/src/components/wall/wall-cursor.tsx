@@ -94,13 +94,14 @@ function near(boxes: Box[], x: number, y: number): boolean {
 }
 
 /**
- * The wall's own pointer (mouse only), in place of the system cursor: a
- * small ring that trails the mouse a touch. Over a record it swells, with
- * the record's title and artist underneath and an arrow pointing at its middle (a click opens it) —
- * or, over the record that's open, a cross (a click closes it); while the
- * wall's dragged it's a little grabbing hand. Over the page's controls the system cursor comes
- * back, and near them it shrinks to a dot. Its state is CSS on
- * `data-wall-cursor`, set by the scene from what's under the pointer.
+ * The wall's own pointer (mouse only), in place of the system cursor
+ * everywhere on the page: a small ring that trails the mouse a touch. Over
+ * a record it swells, with the record's title and artist underneath and an
+ * arrow pointing at its middle (a click opens it) — or, over the record
+ * that's open, a cross (a click closes it); while the wall's dragged it's a
+ * little grabbing hand. Over and near the page's controls it shrinks to a
+ * dot. Its state is CSS on `data-wall-cursor`, set by the scene from what's
+ * under the pointer.
  */
 export function WallCursor({ record }: { record: PublicRecord | null }) {
 	const ref = useRef<HTMLDivElement>(null);
