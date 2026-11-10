@@ -207,8 +207,10 @@ const ENTRANCE_AFTER_HERO_S = 0.45;
 /** …and how it ripples out from the middle (seconds per world unit, capped). */
 const ENTRANCE_S_PER_UNIT = 0.06;
 const ENTRANCE_SPREAD_S = 0.8;
-/** Re-filtering: how long the wall takes to fade away before the entrance replays. */
+/** Re-filtering: how long the wall fades out before the new set's laid out… */
 const REFILTER_OUT_S = 0.4;
+/** …and how long after that it waits (out of the new records' mounting) to fade in. */
+const REFILTER_SETTLE_S = 0.15;
 /** How far the floating panel sits in from the window's edge (`.record-sheet`). */
 const panelInsetPx = (width: number) =>
 	width >= 1024 ? 64 : width >= 640 ? 24 : 0;
@@ -510,9 +512,33 @@ function Wall({
 	const unitsPerPx = viewHeight / size.height;
 	const visibleRows = Math.ceil(viewHeight / PITCH);
 
+	// A re-filter fades the wall out on the records it has, and only then
+	// lays out the new set — while nothing's showing, so the frame that does
+	// that heavy work (a new tile, new records mounting) can't stutter the
+	// fade. Filtering again mid-fade just waits for the latest set.
+	const [laid, setLaid] = useState(records);
+	/** The wall's fading out for a re-filter. */
+	const fadingOut = useRef(false);
+	useEffect(() => {
+		if (records === laid) {
+			fadingOut.current = false;
+			return;
+		}
+		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			setLaid(records);
+			return;
+		}
+		fadingOut.current = true;
+		const timer = window.setTimeout(
+			() => setLaid(records),
+			REFILTER_OUT_S * 1000,
+		);
+		return () => window.clearTimeout(timer);
+	}, [records, laid]);
+
 	const tile = useMemo(
-		() => buildTile(records, visibleCols + 4, visibleRows + 4),
-		[records, visibleCols, visibleRows],
+		() => buildTile(laid, visibleCols + 4, visibleRows + 4),
+		[laid, visibleCols, visibleRows],
 	);
 	const instances = tile.instances;
 	const tileW = tile.cols * PITCH;
@@ -576,10 +602,10 @@ function Wall({
 	instancesRef.current = instances;
 
 	// Filtering animates like the wall's first entrance: everything fades
-	// out where it is (filtered-out records kept in `exiting` until they're
-	// gone), then the new set fades in, rippling from the middle of the
-	// screen. Records that stay move to their new slot while they're out of
-	// sight. Keyed by instance, since a re-filter moves every index.
+	// out where it is (see `laid`), then the new set fades in, rippling from
+	// the middle of the screen. Records that stay move to their new slot
+	// while they're out of sight; filtered-out ones are kept in `exiting`
+	// until they've finished fading. Keyed by instance, since a re-filter moves every index.
 	const anims = useRef(new Map<string, TileAnim>());
 	/** False until the first re-filter — the initial load doesn't animate in. */
 	const animateIn = useRef(false);
@@ -1486,11 +1512,12 @@ function Wall({
 
 		pickable.current.length = 0;
 		const ease = reducedMotion ? 1 : 1 - Math.exp(-6 * dt);
-		// A re-filter replays the entrance, once the wall has faded away.
+		// A re-filter replays the entrance (the wall's already faded away),
+		// once the new records have mounted.
 		if (refilter.current) {
 			refilter.current = false;
 			entrance.current = {
-				at: t + (reducedMotion ? 0 : REFILTER_OUT_S),
+				at: t + (reducedMotion ? 0 : REFILTER_SETTLE_S),
 				x: camX,
 				y: camY,
 			};
@@ -1531,7 +1558,7 @@ function Wall({
 							wrapNear(pos.y, enter.y, tileH) - enter.y,
 						) * ENTRANCE_S_PER_UNIT,
 					);
-			if (held) above = true;
+			if (held || fadingOut.current) above = true;
 			let anim = anims.current.get(key);
 			if (!anim) {
 				anim = {
