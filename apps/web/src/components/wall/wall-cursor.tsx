@@ -101,10 +101,15 @@ const MORPH_LEAN = 0.12;
 /** The shape the cursor takes over a control. */
 type Morph = { x: number; y: number; w: number; h: number; r: number };
 
+/** How long (ms) after a click the cursor keeps re-measuring its control. */
+const SETTLE_MS = 500;
+
 /**
  * The cursor as part of a control: the control's own shape, just inside its
  * outline if it has one (a filter chip's pill), or just around it if not
- * (the logo, a text link) — round, unless it has corners of its own.
+ * (the logo, a text link) — round, unless it has corners of its own. Round
+ * stays the dot's own (huge) radius, so morphing to it never passes
+ * through a corner.
  */
 function morphFor(el: Element): Morph | null {
 	const r = el.getBoundingClientRect();
@@ -119,12 +124,13 @@ function morphFor(el: Element): Morph | null {
 	const w = r.width + pad * 2;
 	const h = r.height + pad * 2;
 	const own = Number.parseFloat(cs.borderTopLeftRadius) || 0;
+	const round = own === 0 || own >= Math.min(r.width, r.height) / 2;
 	return {
 		x: r.left + r.width / 2,
 		y: r.top + r.height / 2,
 		w,
 		h,
-		r: own > 0 ? Math.max(2, own + pad) : Math.min(w, h) / 2,
+		r: round ? 9999 : Math.max(2, own + pad),
 	};
 }
 
@@ -178,9 +184,12 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 		let last = 0;
 		// Eases toward the mouse — close enough to feel attached, loose
 		// enough to feel alive.
+		/** Until when (clock ms) to re-measure the control every frame. */
+		let settleUntil = 0;
 		const tick = (now: number) => {
 			const dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
 			last = now;
+			if (control && now < settleUntil) reshape();
 			const k = 1 - Math.exp(-28 * dt);
 			// On a control it settles on the control, leaning a little
 			// toward the mouse.
@@ -234,9 +243,15 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 			}
 		};
 		// A control can move under a still mouse when what it's in scrolls
-		// (the record panel).
-		const onScroll = () => {
+		// (the record panel), or when something around it finishes moving.
+		const remeasure = () => {
 			if (control) reshape();
+		};
+		// So can a click: a filter chip turning on brings in "Clear", which
+		// shifts the chips along. Follow it until it settles, and again
+		// whenever something finishes animating.
+		const onClick = () => {
+			settleUntil = performance.now() + SETTLE_MS;
 		};
 		// Leaving the window: hide it rather than leave it at the edge.
 		const onLeave = () => {
@@ -244,16 +259,22 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 		};
 		raf = requestAnimationFrame(tick);
 		window.addEventListener("pointermove", onMove, { passive: true });
-		window.addEventListener("scroll", onScroll, {
+		window.addEventListener("scroll", remeasure, {
 			capture: true,
 			passive: true,
 		});
+		window.addEventListener("click", onClick, { capture: true });
+		document.addEventListener("transitionend", remeasure, true);
+		document.addEventListener("animationend", remeasure, true);
 		root.addEventListener("pointerleave", onLeave);
 		return () => {
 			cancelAnimationFrame(raf);
 			panels.stop();
 			window.removeEventListener("pointermove", onMove);
-			window.removeEventListener("scroll", onScroll, { capture: true });
+			window.removeEventListener("scroll", remeasure, { capture: true });
+			window.removeEventListener("click", onClick, { capture: true });
+			document.removeEventListener("transitionend", remeasure, true);
+			document.removeEventListener("animationend", remeasure, true);
 			root.removeEventListener("pointerleave", onLeave);
 		};
 	}, []);
