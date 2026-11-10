@@ -9,7 +9,10 @@ import * as THREE from "three";
  */
 
 type CoverUniforms = {
-	/** Opacity: the quick fade as a cover loads. */
+	/**
+	 * Opacity: the quick fade as a cover loads, and a record fading in and
+	 * out of the wall as it's filtered (with or without a photo).
+	 */
 	uFade: { value: number };
 	/**
 	 * How much of the cover lights itself (its own image as glow). Lit only
@@ -34,9 +37,9 @@ const MAP_GLSL = /* glsl */ `
 		vec3 img = texture2D(map, vMapUv).rgb;
 		img = mix(img, vec3(dot(img, vec3(0.2126, 0.7152, 0.0722))), uDesaturate);
 		diffuseColor.rgb *= img;
-		diffuseColor.a *= uFade;
 		coverSelf = img * uFade;
 	#endif
+	diffuseColor.a *= uFade;
 `;
 
 export function makeCoverMaterial(
