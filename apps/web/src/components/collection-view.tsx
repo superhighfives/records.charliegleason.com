@@ -21,6 +21,7 @@ import { CollectionStatsSentence } from "#/components/collection-stats-sentence"
 import { useCollectionUI } from "#/components/collection-ui";
 import { FilterStrip } from "#/components/filter-strip";
 import { RecordPanel } from "#/components/record-panel";
+import { useRecordPanelSwap } from "#/components/record-panel-swap";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
@@ -197,6 +198,11 @@ export function CollectionView({
 	const shown = selected
 		? { record: selected, index: selectedIndex }
 		: lastShown.current;
+	// Paging with the panel open eases it to the new record's height and
+	// slides the new one in (see `useRecordPanelSwap`).
+	useRecordPanelSwap(
+		selected ? { id: selected.id, index: selectedIndex } : null,
+	);
 
 	// If the open record is filtered out (e.g. the search no longer matches it) or
 	// the id in the URL isn't a real record, drop back to the grid.

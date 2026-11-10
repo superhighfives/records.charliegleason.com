@@ -1154,9 +1154,11 @@ a {
   border-color: var(--foreground);
 }
 
+/* One ring, not the app's two-line focus treatment as well. */
 .filter-chip:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+  box-shadow: none;
 }
 
 .filter-swatch {
@@ -1166,7 +1168,11 @@ a {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 25%, transparent);
 }
 
+/* Two digits wide whatever it shows (mono, so every digit's the same
+   width), so a chip doesn't resize — and shove the rest along — as its
+   count changes with the filters. */
 .filter-count {
+  min-width: 2ch;
   font-family: var(--font-mono);
   font-size: 0.5rem;
   opacity: 0.6;
@@ -1340,15 +1346,16 @@ a {
 }
 
 /* The wall's own pointer (wall-cursor.tsx): a small ring in place of the
-   system cursor while it's over the wall. It swells over a record, with the
+   system cursor, everywhere on the page. It swells over a record, with the
    record's title and artist under it, and becomes a little grabbing hand
    while dragging — all with a bit of bounce. Two layers that move together:
    the ring and hand invert what's under them (`difference`), so they read
    on any cover; the label sits on a chip of the cover behind it, inverted,
    blurred and tinted down, so the inversion carries over but its white text
    always has a dark ground. They're separate because the label's backdrop
-   can't see past a blended parent. Near the floating panels it all shrinks
-   to a dot (`is-near`), so a big ring and label don't spill over them. */
+   can't see past a blended parent. Over and near the floating panels it
+   all shrinks to a dot (`off`, `is-near`), so a big ring and label don't
+   spill over them. */
 .wall-cursor {
   --bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
   position: fixed;
@@ -1375,6 +1382,9 @@ a {
   transition:
     width 350ms var(--bounce),
     height 350ms var(--bounce),
+    /* No bounce: overshooting a radius squares the corners off. */
+    border-radius 350ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-width 150ms ease,
     background-color 150ms ease;
 }
 .wall-cursor-icon {
@@ -1415,9 +1425,7 @@ a {
   top: auto;
   bottom: 2.5rem;
 }
-:root[data-wall-cursor="wall"] .wall-cursor,
-:root[data-wall-cursor="record"] .wall-cursor,
-:root[data-wall-cursor="close"] .wall-cursor {
+:root[data-wall-cursor] .wall-cursor {
   opacity: 1;
 }
 /* Over a record: bigger, with what a click does inside — an arrow to open
@@ -1436,8 +1444,9 @@ a {
   opacity: 1;
   translate: -50% 0;
 }
-/* Near a floating panel: a small solid dot, no label. After the record
-   rules so it wins over them. */
+/* Over or near a floating panel: a small solid dot, no label. After the
+   record rules so it wins over them. */
+:root[data-wall-cursor="off"] .wall-cursor::before,
 :root[data-wall-cursor] .wall-cursor.is-near::before {
   width: 0.5rem;
   height: 0.5rem;
@@ -1445,6 +1454,23 @@ a {
 }
 :root[data-wall-cursor] .wall-cursor.is-near .wall-cursor-label {
   opacity: 0;
+}
+/* Over something to click (a button, a link): it becomes part of it — the
+   control's own shape (measured by wall-cursor.tsx), inverting it like the
+   dot does. Over a text field: a caret. After the dot rules so they win
+   over them. */
+:root[data-wall-cursor]:not([data-wall-dragging]) .wall-cursor.is-clickable::before {
+  width: var(--morph-w);
+  height: var(--morph-h);
+  border-width: 0;
+  border-radius: var(--morph-r);
+  background-color: #fff;
+}
+:root[data-wall-cursor]:not([data-wall-dragging]) .wall-cursor.is-text::before {
+  width: 0.125rem;
+  height: 1.25rem;
+  border-width: 0;
+  background-color: #fff;
 }
 /* Dragging: the little hand. */
 :root[data-wall-dragging] .wall-cursor::before {
@@ -1455,10 +1481,11 @@ a {
   opacity: 1;
   scale: 1;
 }
-/* While it shows, the system cursor doesn't. */
-:root[data-wall-cursor="wall"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
-:root[data-wall-cursor="record"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
-:root[data-wall-cursor="close"] :is([data-wall-surface], [data-slot="sheet-overlay"]),
+/* While it shows — anywhere on the page, over the wall or not — the
+   system cursor doesn't. The dragging pair outranks the wall's own
+   `grabbing` rule. */
+:root[data-wall-cursor],
+:root[data-wall-cursor] *,
 :root[data-wall-cursor][data-wall-dragging],
 :root[data-wall-cursor][data-wall-dragging] * {
   cursor: none !important;
@@ -1731,7 +1758,9 @@ button.wall-facts-tick:hover::before {
   flex-wrap: nowrap;
   align-items: stretch;
   gap: 0;
-  overflow-x: auto;
+  /* The pill around it scrolls (with room inside its padding); a second
+     scroll box here would crop the chips' focus rings at its edges. */
+  overflow-x: visible;
 }
 /* Groups split by a divider the pill's full height. */
 :root[data-corners] [data-wall-filters] .filter-group {
@@ -1793,11 +1822,25 @@ button.wall-facts-tick:hover::before {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
   transition: opacity 600ms ease;
 }
+/* Its links focus (and the cursor highlights them) as pills, with room
+   either side of the text — taken back out of the layout by the margin. */
+[data-wall-corner] a {
+  margin-inline: -0.375rem;
+  padding-inline: 0.375rem;
+  border-radius: 9999px;
+}
 [data-wall-corner="footer"] {
   display: none;
 }
 @media (min-width: 640px) {
-  [data-wall-corner="footer"] {
+  /* Its links focus (and the cursor highlights them) as pills, with room
+   either side of the text — taken back out of the layout by the margin. */
+[data-wall-corner] a {
+  margin-inline: -0.375rem;
+  padding-inline: 0.375rem;
+  border-radius: 9999px;
+}
+[data-wall-corner="footer"] {
     display: flex;
     bottom: 1.5rem;
     right: 1.5rem;

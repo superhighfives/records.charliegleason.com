@@ -73,15 +73,18 @@ export function FilterStrip({
 					))}
 				</Group>
 			))}
+			{/* In a group of its own, so it's divided off like one. */}
 			{active && (
-				<button
-					type="button"
-					className="filter-chip filter-clear"
-					onClick={() => onChange(NO_FILTERS)}
-				>
-					Clear
-					<XIcon aria-hidden="true" className="size-3" />
-				</button>
+				<div className="filter-group">
+					<button
+						type="button"
+						className="filter-chip filter-clear"
+						onClick={() => onChange(NO_FILTERS)}
+					>
+						Clear
+						<XIcon aria-hidden="true" className="size-3" />
+					</button>
+				</div>
 			)}
 		</nav>
 	);

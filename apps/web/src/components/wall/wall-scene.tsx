@@ -44,6 +44,7 @@ import {
 	sharpenNoteMaps,
 } from "./note-texture";
 import { packDense } from "./pack";
+import { cursorTarget } from "./wall-cursor";
 import { WhitePointEffect } from "./white-point";
 
 /**
@@ -206,6 +207,10 @@ const ENTRANCE_AFTER_HERO_S = 0.45;
 /** …and how it ripples out from the middle (seconds per world unit, capped). */
 const ENTRANCE_S_PER_UNIT = 0.06;
 const ENTRANCE_SPREAD_S = 0.8;
+/** Re-filtering: how long the wall fades out before the new set's laid out… */
+const REFILTER_OUT_S = 0.4;
+/** …and how long after that it waits (out of the new records' mounting) to fade in. */
+const REFILTER_SETTLE_S = 0.15;
 /** How far the floating panel sits in from the window's edge (`.record-sheet`). */
 const panelInsetPx = (width: number) =>
 	width >= 1024 ? 64 : width >= 640 ? 24 : 0;
@@ -366,9 +371,19 @@ type TileHandle = StreamTarget & {
 };
 
 /** Where a record is drawn right now, easing toward its packed slot. */
-type TileAnim = { x: number; y: number; spanScale: number; presence: number };
+type TileAnim = {
+	x: number;
+	y: number;
+	spanScale: number;
+	presence: number;
+	/**
+	 * Re-filtered: it fades out where it is, then moves to its new slot
+	 * while it's out of sight, rather than gliding there across the wall.
+	 */
+	relocate?: boolean;
+};
 
-/** A record filtered out, kept around while it sinks back into the wall. */
+/** A record filtered out, kept around while it fades out. */
 type Exiting = {
 	key: string;
 	record: PublicRecord;
@@ -497,9 +512,33 @@ function Wall({
 	const unitsPerPx = viewHeight / size.height;
 	const visibleRows = Math.ceil(viewHeight / PITCH);
 
+	// A re-filter fades the wall out on the records it has, and only then
+	// lays out the new set — while nothing's showing, so the frame that does
+	// that heavy work (a new tile, new records mounting) can't stutter the
+	// fade. Filtering again mid-fade just waits for the latest set.
+	const [laid, setLaid] = useState(records);
+	/** The wall's fading out for a re-filter. */
+	const fadingOut = useRef(false);
+	useEffect(() => {
+		if (records === laid) {
+			fadingOut.current = false;
+			return;
+		}
+		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			setLaid(records);
+			return;
+		}
+		fadingOut.current = true;
+		const timer = window.setTimeout(
+			() => setLaid(records),
+			REFILTER_OUT_S * 1000,
+		);
+		return () => window.clearTimeout(timer);
+	}, [records, laid]);
+
 	const tile = useMemo(
-		() => buildTile(records, visibleCols + 4, visibleRows + 4),
-		[records, visibleCols, visibleRows],
+		() => buildTile(laid, visibleCols + 4, visibleRows + 4),
+		[laid, visibleCols, visibleRows],
 	);
 	const instances = tile.instances;
 	const tileW = tile.cols * PITCH;
@@ -562,10 +601,11 @@ function Wall({
 	const instancesRef = useRef(instances);
 	instancesRef.current = instances;
 
-	// Filtering animates: records that stay glide to their new slot, new ones
-	// rise out of the wall and grow in, and filtered-out ones sink back into
-	// it (kept in `exiting` until they're gone). Keyed by instance, since a
-	// re-filter moves every index.
+	// Filtering animates like the wall's first entrance: everything fades
+	// out where it is (see `laid`), then the new set fades in, rippling from
+	// the middle of the screen. Records that stay move to their new slot
+	// while they're out of sight; filtered-out ones are kept in `exiting`
+	// until they've finished fading. Keyed by instance, since a re-filter moves every index.
 	const anims = useRef(new Map<string, TileAnim>());
 	/** False until the first re-filter — the initial load doesn't animate in. */
 	const animateIn = useRef(false);
@@ -580,6 +620,8 @@ function Wall({
 			? heroDurationMs(records.length) / 1000 + ENTRANCE_AFTER_HERO_S
 			: 0,
 	);
+	/** A re-filter happened: the frame loop restarts the entrance. */
+	const refilter = useRef(false);
 	const [exiting, setExiting] = useState<Exiting[]>([]);
 	const exitingRef = useRef(exiting);
 	exitingRef.current = exiting;
@@ -593,10 +635,15 @@ function Wall({
 		prevLayout.current = layout;
 		if (before === instances) return;
 		animateIn.current = true;
+		refilter.current = true;
 		const kept = new Set(instances.map((i) => i.key));
 		// A record filtered back in mid-exit picks up from where it was.
 		for (const e of exitingRef.current) {
 			if (kept.has(e.key)) anims.current.set(e.key, e.anim);
+		}
+		for (const key of kept) {
+			const anim = anims.current.get(key);
+			if (anim) anim.relocate = true;
 		}
 		const leaving: Exiting[] = [];
 		before.forEach((inst, i) => {
@@ -770,6 +817,7 @@ function Wall({
 	const torchWall = useMemo(makeTorchWallMaterial, []);
 	useEffect(() => () => torchWall.dispose(), [torchWall]);
 	const lookAt = useMemo(() => new THREE.Vector3(), []);
+	const cursorWorld = useMemo(() => new THREE.Vector3(), []);
 	const raycaster = useMemo(() => new THREE.Raycaster(), []);
 	/** Pointer in NDC (-1…1), and whether it's over the wall right now. */
 	const pointer = useRef({ ndc: new THREE.Vector2(), overWall: false });
@@ -1395,7 +1443,7 @@ function Wall({
 		const tilt = focused >= 0 ? ZERO2 : ndc;
 		// Places one record at (x, y): the curve (rows recede and tip back the
 		// further they are from the middle of the screen), the hover lift, and
-		// presence (0 = sunk into the wall).
+		// presence (0 = faded out of the wall).
 		const place = (
 			h: TileHandle,
 			x: number,
@@ -1409,19 +1457,20 @@ function Wall({
 			const grow = presence * presence * (3 - 2 * presence);
 			const rotY = -(x - camX) * 0.035 + l * tilt.x * 0.25;
 			const tipX = l * -tilt.y * 0.18;
-			h.group.position.set(
-				x,
-				y,
-				z - CURVE_DEPTH * dy * dy + l * LIFT_Z - (1 - grow) * 0.5,
-			);
+			h.group.position.set(x, y, z - CURVE_DEPTH * dy * dy + l * LIFT_Z);
 			h.group.rotation.x = -Math.atan((2 * CURVE_DEPTH * dy) / half) + tipX;
 			h.group.rotation.y = rotY;
-			h.group.scale.setScalar(
-				Math.max(0.001, h.scale * spanScale * (1 + l * 0.05) * grow),
-			);
-			// While the cover fades up the sleeve has no thickness, and casts no
-			// shadow until the image is whole.
-			const poured = h.cover.map ? (h.cover.userData.fade ?? 1) : 1;
+			h.group.scale.setScalar(h.scale * spanScale * (1 + l * 0.05));
+			// Presence fades the cover like its image arriving does — the two
+			// multiply. While the cover's faded the sleeve has no thickness,
+			// and casts no shadow until the image is whole.
+			const loaded = h.cover.map
+				? reducedMotion
+					? 1
+					: (h.cover.userData.fade ?? 1)
+				: 1;
+			const poured = loaded * grow;
+			setCoverFade(h.cover, poured);
 			h.group.scale.z *= Math.max(
 				0.001,
 				THREE.MathUtils.smoothstep(poured, 0.55, 1),
@@ -1429,7 +1478,13 @@ function Wall({
 			h.sleeve.castShadow = poured > 0.75;
 			// The slip sits inside the sleeve: shown before the sleeve has its
 			// depth back, it would share the flattened cover's plane and z-fight.
-			if (h.slip) h.slip.visible = poured > 0.9 && down < 0.99;
+			// It also goes first as the record fades out (and comes back last),
+			// rather than showing through the fading cover.
+			if (h.slip) {
+				const paper = THREE.MathUtils.smoothstep(poured, 0.9, 1);
+				h.slip.visible = paper > 0.001 && down < 0.99;
+				(h.slip.material as THREE.MeshStandardMaterial).opacity = paper;
+			}
 			// The vinyl waits for the cover to be whole before sliding out.
 			const discOut = l * THREE.MathUtils.smoothstep(poured, 0.85, 1);
 			h.disc.visible = discOut > 0.01;
@@ -1457,6 +1512,16 @@ function Wall({
 
 		pickable.current.length = 0;
 		const ease = reducedMotion ? 1 : 1 - Math.exp(-6 * dt);
+		// A re-filter replays the entrance (the wall's already faded away),
+		// once the new records have mounted.
+		if (refilter.current) {
+			refilter.current = false;
+			entrance.current = {
+				at: t + (reducedMotion ? 0 : REFILTER_SETTLE_S),
+				x: camX,
+				y: camY,
+			};
+		}
 		entrance.current ??= {
 			at: t + (reducedMotion ? 0 : entranceDelayS.current),
 			x: camX,
@@ -1493,7 +1558,7 @@ function Wall({
 							wrapNear(pos.y, enter.y, tileH) - enter.y,
 						) * ENTRANCE_S_PER_UNIT,
 					);
-			if (held) above = true;
+			if (held || fadingOut.current) above = true;
 			let anim = anims.current.get(key);
 			if (!anim) {
 				anim = {
@@ -1504,9 +1569,20 @@ function Wall({
 				};
 				anims.current.set(key, anim);
 			}
-			anim.x += (pos.x - anim.x) * ease;
-			anim.y += (pos.y - anim.y) * ease;
-			anim.spanScale += (pos.spanScale - anim.spanScale) * ease;
+			if (anim.relocate) {
+				// Moves once it's out of sight — or when its turn to fade in
+				// comes, faded or not.
+				if (anim.presence < 0.05 || !above) {
+					anim.x = pos.x;
+					anim.y = pos.y;
+					anim.spanScale = pos.spanScale;
+					anim.relocate = false;
+				}
+			} else {
+				anim.x += (pos.x - anim.x) * ease;
+				anim.y += (pos.y - anim.y) * ease;
+				anim.spanScale += (pos.spanScale - anim.spanScale) * ease;
+			}
 			anim.presence += ((above ? 0 : 1) - anim.presence) * ease;
 
 			// Drawn at its copy nearest the camera.
@@ -1576,10 +1652,8 @@ function Wall({
 			const fade = cover.map
 				? Math.min(1, (cover.userData.fade ?? 0) + dt / FADE_S)
 				: 0;
-			if (fade !== cover.userData.fade) {
-				cover.userData.fade = fade;
-				setCoverFade(cover, reducedMotion && cover.map ? 1 : fade);
-			}
+			// (Applied, with the record's presence, where it's placed.)
+			cover.userData.fade = fade;
 		}
 
 		// The record under the mouse, if any.
@@ -1608,6 +1682,17 @@ function Wall({
 						: "record";
 			if (document.documentElement.dataset.wallCursor !== cursor) {
 				document.documentElement.dataset.wallCursor = cursor;
+			}
+			// Where that record's middle is on screen, for the cursor's arrow
+			// (as drawn last frame — close enough, and it's already placed).
+			const target = under != null ? handles.current[under] : null;
+			if (target) {
+				target.sleeve.getWorldPosition(cursorWorld).project(camera);
+				cursorTarget.x = ((cursorWorld.x + 1) / 2) * size.width;
+				cursorTarget.y = ((1 - cursorWorld.y) / 2) * size.height;
+				cursorTarget.set = true;
+			} else {
+				cursorTarget.set = false;
 			}
 		}
 		if (hovered.current !== active.current) {
@@ -1648,7 +1733,7 @@ function Wall({
 			}
 		}
 
-		// Filtered-out records sink back into the wall, then unmount.
+		// Filtered-out records fade out, then unmount.
 		let stillLeaving = false;
 		for (const e of exiting) {
 			e.anim.presence += (0 - e.anim.presence) * ease;
@@ -1786,7 +1871,7 @@ function Wall({
 				</group>
 			)}
 			{/* One keyed list for live and leaving records, so a record that gets
-			    filtered out keeps its component (and loaded cover) as it sinks
+			    filtered out keeps its component (and loaded cover) as it fades
 			    away, rather than remounting blank. */}
 			{[
 				...instances.map((inst, i) => (
@@ -1847,6 +1932,8 @@ const Tile = memo(function Tile({
 	const slipMaterial = useMemo(() => {
 		if (!withNotes) return null;
 		const material = shared.slip.clone();
+		// So it can fade with the record (see `place`).
+		material.transparent = true;
 		sharpenNoteMaps(material);
 		return material;
 	}, [withNotes, shared]);
