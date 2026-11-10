@@ -1446,6 +1446,19 @@ a {
 :root[data-wall-cursor] .wall-cursor.is-near .wall-cursor-label {
   opacity: 0;
 }
+/* Over something to click (a button, a link): the dot grows a little. Over
+   a text field: a caret. After the dot rules so they win over them. */
+:root[data-wall-cursor]:not([data-wall-dragging]) .wall-cursor.is-clickable::before {
+  width: 0.875rem;
+  height: 0.875rem;
+  background-color: #fff;
+}
+:root[data-wall-cursor]:not([data-wall-dragging]) .wall-cursor.is-text::before {
+  width: 0.125rem;
+  height: 1.25rem;
+  border-width: 0;
+  background-color: #fff;
+}
 /* Dragging: the little hand. */
 :root[data-wall-dragging] .wall-cursor::before {
   width: 2.25rem;

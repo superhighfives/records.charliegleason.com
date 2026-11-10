@@ -8,6 +8,12 @@ const PANELS =
 	'.floating-controls, [data-wall-filters] > [data-wall-chrome], [data-wall-corner], [data-slot="sheet-content"]';
 /** How close (px) to a panel counts as near it. */
 const NEAR_PX = 40;
+/** Where the cursor becomes a text caret. */
+const TEXT =
+	'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="range"]), textarea, [contenteditable="true"]';
+/** What the cursor grows a little over: anything clickable. */
+const CLICKABLE =
+	'a[href], button:not(:disabled), [role="button"], [role="link"], select, summary, label[for]';
 
 type Box = { left: number; right: number; top: number; bottom: number };
 
@@ -100,7 +106,8 @@ function near(boxes: Box[], x: number, y: number): boolean {
  * arrow pointing at its middle (a click opens it) — or, over the record
  * that's open, a cross (a click closes it); while the wall's dragged it's a
  * little grabbing hand. Over and near the page's controls it shrinks to a
- * dot. Its state is CSS on `data-wall-cursor`, set by the scene from what's
+ * dot — a little bigger over something to click, and a text caret over a
+ * text field. Its state is CSS on `data-wall-cursor`, set by the scene from what's
  * under the pointer.
  */
 export function WallCursor({ record }: { record: PublicRecord | null }) {
@@ -162,6 +169,18 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 			}
 			to.x = e.clientX;
 			to.y = e.clientY;
+			// What it's over: a caret on text fields, a bigger dot on things
+			// to click.
+			const el = ref.current;
+			const target = e.target instanceof Element ? e.target : null;
+			const text = target?.closest(TEXT) != null;
+			if (el) {
+				el.classList.toggle("is-text", text);
+				el.classList.toggle(
+					"is-clickable",
+					!text && target?.closest(CLICKABLE) != null,
+				);
+			}
 		};
 		// Leaving the window: hide it rather than leave it at the edge.
 		const onLeave = () => {
