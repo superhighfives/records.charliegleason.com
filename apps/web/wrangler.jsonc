@@ -7,6 +7,11 @@
 	],
 	// relative to this file, apps/web/
 	"main": "src/server.ts",
+	// Source maps go to Sentry, not Cloudflare (vite.config.ts builds them
+	// "hidden" for the Sentry plugin, which deletes them after uploading).
+	// Newer Cloudflare Vite plugins default this on, which would make wrangler
+	// look for maps that are gone by deploy time.
+	"upload_source_maps": false,
 	// Workers Logs — capture invocation logs + outcomes (incl. uncatchable kills
 	// like exceededMemory / exceededCpu that never reach Sentry). Without this a
 	// queue consumer OOM'd mid-generation was completely invisible; with it, the

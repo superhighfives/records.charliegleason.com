@@ -38,6 +38,12 @@ export default defineConfig(({ mode }) => {
 		// copies — that's what surfaced as "Cannot read properties of null
 		// (reading 'useContext')" during server rendering (see RECORDS-2/3).
 		resolve: { tsconfigPaths: true, dedupe: ["react", "react-dom"] },
+		// With Sentry on, build "hidden" maps (no `sourceMappingURL` comment) for it
+		// to upload and then delete. Set here, not left to the Sentry plugin: the
+		// Cloudflare plugin picks the Worker's source map setting from this config
+		// before Sentry's runs, and would otherwise fall back to
+		// `upload_source_maps` (off, see wrangler.jsonc) and build none at all.
+		build: env.SENTRY_AUTH_TOKEN ? { sourcemap: "hidden" } : undefined,
 		plugins: [
 			devtools({
 				// Source injection adds a `data-tsd-source` prop to every JSX

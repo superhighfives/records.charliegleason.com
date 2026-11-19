@@ -24,7 +24,7 @@
     "@cf-wasm/photon": "^0.3.6",
     "@clerk/backend": "^3.8.2",
     "@clerk/clerk-react": "^5.61.3",
-    "@cloudflare/vite-plugin": "^1.45.1",
+    "@cloudflare/vite-plugin": "^1.70.0",
     "@faker-js/faker": "^10.3.0",
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
@@ -94,7 +94,7 @@
     "typescript": "^6.0.2",
     "vite": "^8.0.0",
     "vitest": "^4.1.5",
-    "wrangler": "^4.112.0"
+    "wrangler": "^4.163.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
