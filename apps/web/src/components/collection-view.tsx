@@ -2,6 +2,7 @@ import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
 	type CSSProperties,
+	Fragment,
 	lazy,
 	Suspense,
 	useCallback,
@@ -25,6 +26,7 @@ import { useRecordPanelSwap } from "#/components/record-panel-swap";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import { useWallPage } from "#/components/wall/use-wall-page";
 import { WallCorners } from "#/components/wall/wall-corners";
 import { WallPlaque } from "#/components/wall/wall-plaque";
 import {
@@ -128,6 +130,7 @@ export function CollectionView({
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 	const fontsReady = useFontsReady();
 	const wallMode = layout === "wall";
+	useWallPage(wallMode);
 
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
@@ -180,18 +183,6 @@ export function CollectionView({
 				: searched,
 		[searched, filters],
 	);
-	// The wall's loading gate only holds while there's a scene to wait for —
-	// with nothing matching, there's no scene, and the page (with its "No
-	// records match" and the search box to fix it) has to show regardless.
-	const awaitingWall = wallMode && filtered.length > 0;
-	// `WallScene` sets `data-wall-ready` once it's up; it's cleared here, on
-	// leaving the wall, rather than when the scene unmounts (see there).
-	useEffect(() => {
-		if (!wallMode) return;
-		return () => {
-			delete document.documentElement.dataset.wallReady;
-		};
-	}, [wallMode]);
 
 	// Track the open record by id (not index) so re-filtering never jumps to the
 	// wrong one.
@@ -266,38 +257,28 @@ export function CollectionView({
 	// everything else follows it in once it's done.
 	const revealMs = heroDurationMs(data.length);
 
-	return (
-		<div
-			className="w-full px-4 py-10 sm:px-6"
-			// On the wall, the page is the surface it's dragged across (see
-			// `[data-wall-surface]` in styles.css).
-			data-wall-surface={wallMode ? "" : undefined}
-			// Until the wall's scene is up, the page shows only the spinner
-			// below (see `[data-wall-page]` in styles.css).
-			data-wall-page={awaitingWall ? "" : undefined}
-		>
-			{awaitingWall && <WallLoading />}
-			{/* Staged reveal on first paint: hero copy, then the grid, then the
-			    header chrome — see the `rise-in`/`fade-in` utilities in styles.css.
-			    Each is a CSS `animation ... both`, so it only ever plays once per
-			    mount (a search keystroke re-rendering this component doesn't
-			    retrigger it) and holds `opacity: 0` for its own delay rather than
-			    flashing in at full opacity before its turn. The grid wrapper uses
-			    `fade-in` (opacity only), not `rise-in` (which also animates
-			    `transform`) — see the comment on `.fade-in` for why a `transform`
-			    on an ancestor of `CollectionGrid` would break its own fixed-position
-			    children. Delays are inline `style`, not a Tailwind arbitrary
-			    `[animation-delay:…]` class — `.rise-in`/`.fade-in` are plain
-			    unlayered CSS (not `@layer utilities`), so they'd always beat a
-			    layered Tailwind utility regardless of class order; inline style
-			    always wins instead. */}
-			{/* No header: the big statement is the page's opening. The home
-			    link, search and the theme toggle live in one small floating pill in the corner instead, so
-			    they're always within reach without a bar across the page.
-			    Opaque rather than backdrop-blurred — it sits over the grid for
-			    the whole scroll, and a blur under it would be recomposited every
-			    scroll frame. */}
+	const emptyMessage =
+		data.length === 0
+			? "Nothing here yet."
+			: search.trim()
+				? `No records match “${search}”.`
+				: "No records match those filters.";
+
+	// What both layouts share: the floating search pill, the filter strip, the
+	// record panel and the corner links. Each layout below is only the page
+	// around them. Delays are inline `style`, not a Tailwind arbitrary
+	// `[animation-delay:…]` class — `.rise-in`/`.fade-in` are plain unlayered
+	// CSS (not `@layer utilities`), so they'd always beat a layered Tailwind
+	// utility regardless of class order; inline style always wins instead.
+	const chrome = (
+		<>
 			<h1 className="sr-only">Records — Charlie Gleason's vinyl collection</h1>
+			{/* No header: the big statement is the page's opening. The home
+			    link, search and the theme toggle live in one small floating pill
+			    in the corner instead, so they're always within reach without a
+			    bar across the page. Opaque rather than backdrop-blurred — it sits
+			    over the grid for the whole scroll, and a blur under it would be
+			    recomposited every scroll frame. */}
 			<div
 				className="floating-controls rise-in"
 				style={{ animationDelay: `${revealMs}ms` }}
@@ -321,21 +302,6 @@ export function CollectionView({
 				<ThemeToggle className="size-8 rounded-full border-0" />
 			</div>
 
-			{/* On the wall, the hero — with the footer's stats sentence under it
-			    — sits in the middle of it at load (see styles.css). */}
-			{!search.trim() && (
-				<div
-					data-wall-chrome
-					data-wall-hero
-					// On the wall, the stats sentence follows the statement in.
-					style={{ "--hero-ms": `${revealMs}ms` } as CSSProperties}
-				>
-					<CollectionHero count={data.length} />
-					{wallMode && <CollectionStatsSentence records={data} intro />}
-					{wallMode && <WallPlaque records={data} />}
-				</div>
-			)}
-
 			<div
 				className="rise-in"
 				data-wall-filters
@@ -352,57 +318,6 @@ export function CollectionView({
 				</div>
 			</div>
 
-			<div
-				className="fade-in min-h-[70vh]"
-				style={{ animationDelay: `${revealMs + 150}ms` }}
-				// `animation-fill-mode: both` (see `.fade-in`) never really "ends" —
-				// it holds the finished keyframe indefinitely rather than the
-				// animation being removed — which keeps Chrome compositing this
-				// wrapper into its own layer forever. That layer boundary clips
-				// what CollectionGrid's fixed, backdrop-blurred child
-				// (`NowShowing`) can see behind it to just this
-				// subtree, so the blur silently stops reaching sibling content
-				// (e.g. the hero text above) once composited this way. Explicitly
-				// canceling the animation once it visually completes releases the
-				// layer and restores the correct backdrop-filter reach.
-				onAnimationEnd={(e) => {
-					e.currentTarget.style.animation = "none";
-				}}
-			>
-				{data.length === 0 ? (
-					<p className="text-muted-foreground">Nothing here yet.</p>
-				) : filtered.length === 0 ? (
-					// On the wall nothing sits above this, so it's centred rather
-					// than left under the floating search pill in the corner.
-					<p
-						className={
-							wallMode
-								? "pt-[35vh] text-center text-muted-foreground"
-								: "text-muted-foreground"
-						}
-					>
-						{search.trim()
-							? `No records match “${search}”.`
-							: "No records match those filters."}
-					</p>
-				) : wallMode ? (
-					<Suspense fallback={<div className="min-h-[70vh]" />}>
-						<WallGrid
-							records={filtered}
-							onOpen={openRecord}
-							onClose={closeRecord}
-							focusedRecordId={selected?.id ?? null}
-						/>
-					</Suspense>
-				) : (
-					<CollectionGrid
-						records={filtered}
-						onOpen={openRecord}
-						focusedRecordId={selected?.id ?? null}
-					/>
-				)}
-			</div>
-
 			<Sheet
 				open={open}
 				onOpenChange={(next) => {
@@ -417,9 +332,6 @@ export function CollectionView({
 					// see `.record-sheet` in styles.css.
 					className="record-sheet p-0 sm:top-6 sm:right-6 sm:bottom-auto sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:overflow-hidden sm:rounded-2xl sm:border lg:top-16 lg:right-16 lg:max-h-[calc(100dvh-8rem)]"
 					enterAnimation={enterAnimation}
-					// On the wall, a press beside the panel may be a drag (panning
-					// the zoomed-in wall), so the wall decides: a click on the empty
-					// wall still closes it (`onClose`).
 					// Start keyboard focus on the close button rather than the
 					// first control in the panel (the previous-record arrow).
 					onOpenAutoFocus={(e) => {
@@ -429,6 +341,9 @@ export function CollectionView({
 							.querySelector<HTMLElement>('[data-slot="sheet-close"]')
 							?.focus();
 					}}
+					// On the wall, a press beside the panel may be a drag (panning
+					// the zoomed-in wall), so the wall decides: a click on the empty
+					// wall still closes it (`onClose`).
 					onPointerDownOutside={
 						wallMode ? (e) => e.preventDefault() : undefined
 					}
@@ -453,12 +368,87 @@ export function CollectionView({
 			</Sheet>
 
 			<WallCorners layout={layout} />
+		</>
+	);
 
-			<footer
-				data-wall-chrome
-				data-wall-footer
-				className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground"
+	const hasRecords = filtered.length > 0;
+
+	// The wall and the grid are separate pages around the same chrome, which
+	// stays mounted (and its entrance played) across a switch between them —
+	// `/` and `/grid` share this one `CollectionView`, so `layout` flips live.
+	const page = wallMode ? (
+		<Fragment key="wall">
+			{hasRecords ? (
+				<>
+					{/* The hero — with the stats sentence under it — sits in the
+					    middle of the wall at load (see styles.css). */}
+					{!search.trim() && (
+						<div
+							data-wall-chrome
+							data-wall-hero
+							// The stats sentence follows the statement in.
+							style={{ "--hero-ms": `${revealMs}ms` } as CSSProperties}
+						>
+							<CollectionHero count={data.length} />
+							<CollectionStatsSentence records={data} intro />
+							<WallPlaque records={data} />
+						</div>
+					)}
+					<Suspense fallback={null}>
+						<WallGrid
+							records={filtered}
+							onOpen={openRecord}
+							onClose={closeRecord}
+							focusedRecordId={selected?.id ?? null}
+						/>
+					</Suspense>
+				</>
+			) : (
+				<p className="wall-empty">{emptyMessage}</p>
+			)}
+		</Fragment>
+	) : (
+		// Staged reveal on first paint: hero copy, then the grid, then the
+		// chrome — see the `rise-in`/`fade-in` utilities in styles.css. Each is
+		// a CSS `animation ... both`, so it only ever plays once per mount (a
+		// search keystroke re-rendering this component doesn't retrigger it)
+		// and holds `opacity: 0` for its own delay rather than flashing in at
+		// full opacity before its turn. The grid wrapper uses `fade-in`
+		// (opacity only), not `rise-in` (which also animates `transform`) — see
+		// the comment on `.fade-in` for why a `transform` on an ancestor of
+		// `CollectionGrid` would break its own fixed-position children.
+		<Fragment key="grid">
+			{!search.trim() && <CollectionHero count={data.length} />}
+
+			<div
+				className="fade-in min-h-[70vh]"
+				style={{ animationDelay: `${revealMs + 150}ms` }}
+				// `animation-fill-mode: both` (see `.fade-in`) never really "ends" —
+				// it holds the finished keyframe indefinitely rather than the
+				// animation being removed — which keeps Chrome compositing this
+				// wrapper into its own layer forever. That layer boundary clips
+				// what CollectionGrid's fixed, backdrop-blurred child
+				// (`NowShowing`) can see behind it to just this
+				// subtree, so the blur silently stops reaching sibling content
+				// (e.g. the hero text above) once composited this way. Explicitly
+				// canceling the animation once it visually completes releases the
+				// layer and restores the correct backdrop-filter reach.
+				onAnimationEnd={(e) => {
+					e.currentTarget.style.animation = "none";
+				}}
 			>
+				{filtered.length === 0 ? (
+					<p className="text-muted-foreground">{emptyMessage}</p>
+				) : (
+					<CollectionGrid
+						records={filtered}
+						onOpen={openRecord}
+						focusedRecordId={selected?.id ?? null}
+					/>
+				)}
+			</div>
+
+			<footer className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground">
 				<div>
 					<CollectionStatsSentence records={data} />
 				</div>
@@ -482,6 +472,23 @@ export function CollectionView({
 					</button>
 				</div>
 			</footer>
+		</Fragment>
+	);
+
+	return (
+		<div
+			className={wallMode ? "w-full" : "w-full px-4 py-10 sm:px-6"}
+			// On the wall with records, the page is the surface it's dragged
+			// across (see `[data-wall-surface]` in styles.css).
+			data-wall-surface={wallMode && hasRecords ? "" : undefined}
+			// Until the wall's scene is up, the page shows only the spinner (see
+			// `[data-wall-page]` in styles.css). With nothing to draw, there's no
+			// scene to wait for.
+			data-wall-page={wallMode && hasRecords ? "" : undefined}
+		>
+			{wallMode && hasRecords && <WallLoading />}
+			{chrome}
+			{page}
 		</div>
 	);
 }

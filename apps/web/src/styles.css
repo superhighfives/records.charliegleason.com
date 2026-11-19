@@ -1792,10 +1792,17 @@ button.wall-facts-tick:hover::before {
   }
 }
 
-/* The page's footer has nothing to scroll to on the wall: its links sit
-   in the bottom-right corner instead (wall-corners.tsx). */
-:root[data-wall] [data-wall-footer] {
-  display: none;
+/* The wall with nothing matching: the message in the middle of the wall's
+   own black / white, where the records would be. */
+.wall-empty {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  text-align: center;
+  color: #737373;
+  pointer-events: none;
 }
 
 /* The search top-left. */
