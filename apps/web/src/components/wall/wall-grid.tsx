@@ -110,14 +110,6 @@ export function WallGrid({
 			window.removeEventListener("resize", onResize);
 		};
 	}, []);
-	// Lets CSS adjust page chrome for the wall — see `[data-wall]` in
-	// styles.css (the record panel's backdrop).
-	useEffect(() => {
-		document.documentElement.dataset.wall = "";
-		return () => {
-			delete document.documentElement.dataset.wall;
-		};
-	}, []);
 
 	return (
 		<>
