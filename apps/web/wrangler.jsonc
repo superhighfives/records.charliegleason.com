@@ -7,6 +7,11 @@
 	],
 	// relative to this file, apps/web/
 	"main": "src/server.ts",
+	// Source maps go to Sentry, not Cloudflare. Newer Cloudflare Vite plugins turn
+	// this on by default, but the Sentry plugin deletes the maps after
+	// uploading them, and wrangler then refuses to deploy a bundle whose
+	// `sourceMappingURL` points at a missing file.
+	"upload_source_maps": false,
 	// Workers Logs — capture invocation logs + outcomes (incl. uncatchable kills
 	// like exceededMemory / exceededCpu that never reach Sentry). Without this a
 	// queue consumer OOM'd mid-generation was completely invisible; with it, the
