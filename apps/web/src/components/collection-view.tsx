@@ -2,12 +2,11 @@ import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
 	type CSSProperties,
+	Fragment,
 	lazy,
-	type ReactNode,
 	Suspense,
 	useCallback,
 	useEffect,
-	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -27,6 +26,7 @@ import { useRecordPanelSwap } from "#/components/record-panel-swap";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import { useWallPage } from "#/components/wall/use-wall-page";
 import { WallCorners } from "#/components/wall/wall-corners";
 import { WallPlaque } from "#/components/wall/wall-plaque";
 import {
@@ -130,6 +130,7 @@ export function CollectionView({
 	const { search, setSearch, animateOpenRef } = useCollectionUI();
 	const fontsReady = useFontsReady();
 	const wallMode = layout === "wall";
+	useWallPage(wallMode);
 
 	// The open record lives in the URL path (`/records/<id>-<slug>`). Opening
 	// pushes a history entry so the back button steps back out of a record;
@@ -370,57 +371,53 @@ export function CollectionView({
 		</>
 	);
 
-	if (wallMode) {
-		const hasRecords = filtered.length > 0;
-		return (
-			<WallPage hasRecords={hasRecords}>
-				{chrome}
-				{hasRecords ? (
-					<>
-						{/* The hero — with the stats sentence under it — sits in the
-						    middle of the wall at load (see styles.css). */}
-						{!search.trim() && (
-							<div
-								data-wall-chrome
-								data-wall-hero
-								// The stats sentence follows the statement in.
-								style={{ "--hero-ms": `${revealMs}ms` } as CSSProperties}
-							>
-								<CollectionHero count={data.length} />
-								<CollectionStatsSentence records={data} intro />
-								<WallPlaque records={data} />
-							</div>
-						)}
-						<Suspense fallback={null}>
-							<WallGrid
-								records={filtered}
-								onOpen={openRecord}
-								onClose={closeRecord}
-								focusedRecordId={selected?.id ?? null}
-							/>
-						</Suspense>
-					</>
-				) : (
-					<p className="wall-empty">{emptyMessage}</p>
-				)}
-			</WallPage>
-		);
-	}
+	const hasRecords = filtered.length > 0;
 
-	return (
-		<div className="w-full px-4 py-10 sm:px-6">
-			{/* Staged reveal on first paint: hero copy, then the grid, then the
-			    chrome — see the `rise-in`/`fade-in` utilities in styles.css.
-			    Each is a CSS `animation ... both`, so it only ever plays once per
-			    mount (a search keystroke re-rendering this component doesn't
-			    retrigger it) and holds `opacity: 0` for its own delay rather than
-			    flashing in at full opacity before its turn. The grid wrapper uses
-			    `fade-in` (opacity only), not `rise-in` (which also animates
-			    `transform`) — see the comment on `.fade-in` for why a `transform`
-			    on an ancestor of `CollectionGrid` would break its own fixed-position
-			    children. */}
-			{chrome}
-
+	// The wall and the grid are separate pages around the same chrome, which
+	// stays mounted (and its entrance played) across a switch between them —
+	// `/` and `/grid` share this one `CollectionView`, so `layout` flips live.
+	const page = wallMode ? (
+		<Fragment key="wall">
+			{hasRecords ? (
+				<>
+					{/* The hero — with the stats sentence under it — sits in the
+					    middle of the wall at load (see styles.css). */}
+					{!search.trim() && (
+						<div
+							data-wall-chrome
+							data-wall-hero
+							// The stats sentence follows the statement in.
+							style={{ "--hero-ms": `${revealMs}ms` } as CSSProperties}
+						>
+							<CollectionHero count={data.length} />
+							<CollectionStatsSentence records={data} intro />
+							<WallPlaque records={data} />
+						</div>
+					)}
+					<Suspense fallback={null}>
+						<WallGrid
+							records={filtered}
+							onOpen={openRecord}
+							onClose={closeRecord}
+							focusedRecordId={selected?.id ?? null}
+						/>
+					</Suspense>
+				</>
+			) : (
+				<p className="wall-empty">{emptyMessage}</p>
+			)}
+		</Fragment>
+	) : (
+		// Staged reveal on first paint: hero copy, then the grid, then the
+		// chrome — see the `rise-in`/`fade-in` utilities in styles.css. Each is
+		// a CSS `animation ... both`, so it only ever plays once per mount (a
+		// search keystroke re-rendering this component doesn't retrigger it)
+		// and holds `opacity: 0` for its own delay rather than flashing in at
+		// full opacity before its turn. The grid wrapper uses `fade-in`
+		// (opacity only), not `rise-in` (which also animates `transform`) — see
+		// the comment on `.fade-in` for why a `transform` on an ancestor of
+		// `CollectionGrid` would break its own fixed-position children.
+		<Fragment key="grid">
 			{!search.trim() && <CollectionHero count={data.length} />}
 
 			<div
@@ -475,50 +472,23 @@ export function CollectionView({
 					</button>
 				</div>
 			</footer>
-		</div>
+		</Fragment>
 	);
-}
-
-/**
- * The wall's own page: a fixed, unscrolling black / white surface the 3D
- * scene is dragged across, with no footer (its links sit in a corner — see
- * `WallCorners`). It sets `data-wall` on the root itself, from its first
- * paint, so the page is the wall's whether the scene is up yet, still
- * loading, or not drawn at all because nothing matches — see `[data-wall]`
- * in styles.css.
- */
-function WallPage({
-	hasRecords,
-	children,
-}: {
-	hasRecords: boolean;
-	children: ReactNode;
-}) {
-	// Layout effect, so the page never paints (or scrolls) as the grid's first.
-	useLayoutEffect(() => {
-		const root = document.documentElement;
-		root.dataset.wall = "";
-		return () => {
-			delete root.dataset.wall;
-			// Set by `WallScene` once it's up; cleared here, on leaving the wall,
-			// rather than when the scene unmounts — an empty result unmounts it,
-			// and clearing it then would put the spinner back for good.
-			delete root.dataset.wallReady;
-		};
-	}, []);
 
 	return (
 		<div
-			className="w-full"
-			// With records, the page is the surface the wall is dragged across.
-			data-wall-surface={hasRecords ? "" : undefined}
-			// Until the scene is up, the page shows only the spinner (see
-			// `[data-wall-page]` in styles.css). With nothing to draw, there's
-			// no scene to wait for.
-			data-wall-page={hasRecords ? "" : undefined}
+			className={wallMode ? "w-full" : "w-full px-4 py-10 sm:px-6"}
+			// On the wall with records, the page is the surface it's dragged
+			// across (see `[data-wall-surface]` in styles.css).
+			data-wall-surface={wallMode && hasRecords ? "" : undefined}
+			// Until the wall's scene is up, the page shows only the spinner (see
+			// `[data-wall-page]` in styles.css). With nothing to draw, there's no
+			// scene to wait for.
+			data-wall-page={wallMode && hasRecords ? "" : undefined}
 		>
-			{hasRecords && <WallLoading />}
-			{children}
+			{wallMode && hasRecords && <WallLoading />}
+			{chrome}
+			{page}
 		</div>
 	);
 }
