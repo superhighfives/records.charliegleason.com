@@ -791,11 +791,13 @@ function Wall({
 	}, [instances]);
 
 	// The scene's up: the page can show its hero and controls (until now
-	// it shows only a spinner — see `[data-wall-page]`).
+	// it shows only a spinner — see `[data-wall-page]`). Only set here, never
+	// cleared: the scene unmounts whenever a search or filter empties the
+	// wall, and clearing it then would hide the page — search box included —
+	// behind the spinner for good. `CollectionView` clears it on leaving the wall.
 	useEffect(() => {
 		document.documentElement.dataset.wallReady = "";
 		return () => {
-			delete document.documentElement.dataset.wallReady;
 			delete document.documentElement.dataset.wallHeroGone;
 		};
 	}, []);

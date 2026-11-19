@@ -180,6 +180,18 @@ export function CollectionView({
 				: searched,
 		[searched, filters],
 	);
+	// The wall's loading gate only holds while there's a scene to wait for —
+	// with nothing matching, there's no scene, and the page (with its "No
+	// records match" and the search box to fix it) has to show regardless.
+	const awaitingWall = wallMode && filtered.length > 0;
+	// `WallScene` sets `data-wall-ready` once it's up; it's cleared here, on
+	// leaving the wall, rather than when the scene unmounts (see there).
+	useEffect(() => {
+		if (!wallMode) return;
+		return () => {
+			delete document.documentElement.dataset.wallReady;
+		};
+	}, [wallMode]);
 
 	// Track the open record by id (not index) so re-filtering never jumps to the
 	// wrong one.
@@ -262,9 +274,9 @@ export function CollectionView({
 			data-wall-surface={wallMode ? "" : undefined}
 			// Until the wall's scene is up, the page shows only the spinner
 			// below (see `[data-wall-page]` in styles.css).
-			data-wall-page={wallMode ? "" : undefined}
+			data-wall-page={awaitingWall ? "" : undefined}
 		>
-			{wallMode && <WallLoading />}
+			{awaitingWall && <WallLoading />}
 			{/* Staged reveal on first paint: hero copy, then the grid, then the
 			    header chrome — see the `rise-in`/`fade-in` utilities in styles.css.
 			    Each is a CSS `animation ... both`, so it only ever plays once per
@@ -360,7 +372,15 @@ export function CollectionView({
 				{data.length === 0 ? (
 					<p className="text-muted-foreground">Nothing here yet.</p>
 				) : filtered.length === 0 ? (
-					<p className="text-muted-foreground">
+					// On the wall nothing sits above this, so it's centred rather
+					// than left under the floating search pill in the corner.
+					<p
+						className={
+							wallMode
+								? "pt-[35vh] text-center text-muted-foreground"
+								: "text-muted-foreground"
+						}
+					>
 						{search.trim()
 							? `No records match “${search}”.`
 							: "No records match those filters."}
