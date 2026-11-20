@@ -12,11 +12,6 @@ import {
 	useState,
 } from "react";
 import * as THREE from "three";
-import {
-	computeSpanningIds,
-	hasNotes,
-	TILE_MIN_PX,
-} from "#/components/collection-grid";
 import { CollectionHero, heroDurationMs } from "#/components/collection-hero";
 import { CollectionStatsSentence } from "#/components/collection-stats-sentence";
 import { SceneStatsProbe } from "#/components/three/scene-stats-probe";
@@ -26,6 +21,11 @@ import {
 	type StreamTarget,
 	useTextureStream,
 } from "#/components/three/texture-stream";
+import {
+	computeSpanningIds,
+	hasNotes,
+	TILE_MIN_PX,
+} from "#/components/wall/tiles";
 import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import {
@@ -216,6 +216,15 @@ const panelInsetPx = (width: number) =>
 	width >= 1024 ? 64 : width >= 640 ? 24 : 0;
 /** How far the pointer moves before a press on the wall is a drag. */
 const DRAG_PX = 5;
+/** How far one arrow-key press glides the wall, in screen pixels. */
+const ARROW_STEP_PX = 240;
+/** Each arrow key's direction on screen: x right, y down. */
+const ARROW_DIRECTIONS: Record<string, readonly [number, number]> = {
+	ArrowLeft: [-1, 0],
+	ArrowRight: [1, 0],
+	ArrowUp: [0, -1],
+	ArrowDown: [0, 1],
+};
 
 const SIZE_SCALE: Record<string, number> = {
 	'12"': 1,
@@ -479,7 +488,7 @@ function hash01(key: string) {
 
 /** Page elements a press on the wall must leave alone. */
 const INTERACTIVE =
-	'button, a, input, textarea, select, label, [role="button"], [data-slot="sheet-content"], .floating-controls, [data-wall-filters] > [data-wall-chrome], [data-wall-corner], [data-debug-overlay]';
+	'button, a, input, textarea, select, label, [role="button"], [data-slot="sheet-content"], .floating-controls, [data-wall-filters] > [data-wall-chrome], [data-slot="dropdown-menu-content"], [data-debug-overlay]';
 
 function Wall({
 	records,
@@ -993,12 +1002,38 @@ function Wall({
 			letGo();
 			panBy(e.deltaX * line, e.deltaY * line);
 		};
+		// The arrow keys glide around the wall, as scrolling does. Each press
+		// sets the momentum rather than adding to it, so a held key (which
+		// repeats) moves at a steady speed. With a record open they page
+		// through the collection instead (record-panel.tsx).
+		const onKey = (e: KeyboardEvent) => {
+			const dir = ARROW_DIRECTIONS[e.key];
+			if (!dir || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+			if (focusIndex.current >= 0 || pendingFocus.current != null) return;
+			if (
+				e.target instanceof Element &&
+				e.target.closest(
+					"input, textarea, select, [contenteditable], [role=menu], [role=listbox]",
+				)
+			) {
+				return;
+			}
+			e.preventDefault();
+			endIntro();
+			// Under the fling's friction (`Math.exp(-4 * dt)`), a glide covers
+			// a quarter of its starting speed, so one press goes `ARROW_STEP_PX`.
+			const v = ARROW_STEP_PX * 4 * unitsPerPx * (1 - zoom.current);
+			free.current.vx = dir[0] * v;
+			free.current.vy = -dir[1] * v;
+		};
+		window.addEventListener("keydown", onKey);
 		window.addEventListener("pointerdown", onDown);
 		window.addEventListener("pointermove", onMove, { passive: true });
 		window.addEventListener("pointerup", onUp);
 		window.addEventListener("pointercancel", onUp);
 		window.addEventListener("wheel", onWheel, { passive: false });
 		return () => {
+			window.removeEventListener("keydown", onKey);
 			window.removeEventListener("wheel", onWheel);
 			window.removeEventListener("pointerdown", onDown);
 			window.removeEventListener("pointermove", onMove);

@@ -47,6 +47,21 @@ export function isImageDecoded(src: string | undefined) {
 	return typeof src === "string" && decodedSrcs.has(src);
 }
 
+/**
+ * Fetches and decodes `src` ahead of time, then counts it as decoded, so a
+ * `FadeImage` mounted on it later shows it on its very first frame — e.g.
+ * the record panel's neighbours, so paging never shows a blank cover.
+ */
+export function preloadImage(src: string) {
+	if (decodedSrcs.has(src)) return;
+	const img = new Image();
+	img.src = src;
+	img
+		.decode()
+		.then(() => decodedSrcs.add(src))
+		.catch(() => {});
+}
+
 export function FadeImage({
 	alt,
 	className,
@@ -137,9 +152,8 @@ export function FadeImage({
 				commit();
 				return;
 			}
-			// Same reasoning applies if this image's tile is currently being
-			// skipped by an ancestor's `content-visibility: auto` (see the
-			// collection grid's `.tile-art--deferred`) — nothing is going to paint the
+			// Same reasoning applies if this image is currently being skipped
+			// by an ancestor's `content-visibility: auto` — nothing is going to paint the
 			// pre-reveal frame or the transition regardless of how many rAFs
 			// this waits for, so committing now vs. two frames from now makes
 			// no visible difference *while skipped*. What it does fix: on a

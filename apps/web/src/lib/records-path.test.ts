@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	isTablePath,
 	parseRecordIdParam,
 	recordIdParam,
 	recordPath,
@@ -49,5 +50,17 @@ describe("parseRecordIdParam", () => {
 		expect(parseRecordIdParam("abc")).toBeNull();
 		expect(parseRecordIdParam("-5")).toBeNull();
 		expect(parseRecordIdParam("0-x")).toBeNull();
+	});
+});
+
+describe("isTablePath", () => {
+	it("matches the table and its records", () => {
+		expect(isTablePath("/table")).toBe(true);
+		expect(isTablePath("/table/records/293-x")).toBe(true);
+	});
+	it("doesn't match the wall or a path that only starts the same", () => {
+		expect(isTablePath("/")).toBe(false);
+		expect(isTablePath("/records/293-x")).toBe(false);
+		expect(isTablePath("/tablefoo")).toBe(false);
 	});
 });

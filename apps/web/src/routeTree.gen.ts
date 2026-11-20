@@ -13,6 +13,7 @@ import { Route as R500RouteImport } from './routes/500'
 import { Route as R404RouteImport } from './routes/404'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as CollectionRouteRouteImport } from './routes/_collection/route'
+import { Route as GridIndexRouteImport } from './routes/grid/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as CollectionIndexRouteImport } from './routes/_collection/index'
 import { Route as ApiRecordsRouteImport } from './routes/api/records'
@@ -21,7 +22,8 @@ import { Route as AdminReviewRouteImport } from './routes/admin/review'
 import { Route as AdminFiltersRouteImport } from './routes/admin/filters'
 import { Route as AdminColorsRouteImport } from './routes/admin/colors'
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
-import { Route as CollectionGridIndexRouteImport } from './routes/_collection/grid.index'
+import { Route as CollectionTableIndexRouteImport } from './routes/_collection/table.index'
+import { Route as GridRecordsIdRouteImport } from './routes/grid/records.$id'
 import { Route as ApiRecordsLiteRouteImport } from './routes/api/records.lite'
 import { Route as ApiPhotosSplatRouteImport } from './routes/api/photos.$'
 import { Route as ApiInboundDailyRecordRouteImport } from './routes/api/inbound.daily-record'
@@ -34,7 +36,7 @@ import { Route as ApiAdminBackupRouteImport } from './routes/api/admin/backup'
 import { Route as AdminRecordsNewRouteImport } from './routes/admin/records.new'
 import { Route as AdminRecordsIdRouteImport } from './routes/admin/records.$id'
 import { Route as CollectionRecordsIdRouteImport } from './routes/_collection/records.$id'
-import { Route as CollectionGridRecordsIdRouteImport } from './routes/_collection/grid.records.$id'
+import { Route as CollectionTableRecordsIdRouteImport } from './routes/_collection/table.records.$id'
 
 const R500Route = R500RouteImport.update({
   id: '/500',
@@ -53,6 +55,11 @@ const AdminRouteRoute = AdminRouteRouteImport.update({
 } as any)
 const CollectionRouteRoute = CollectionRouteRouteImport.update({
   id: '/_collection',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GridIndexRoute = GridIndexRouteImport.update({
+  id: '/grid/',
+  path: '/grid/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
@@ -95,10 +102,15 @@ const AdminCaptureRoute = AdminCaptureRouteImport.update({
   path: '/capture',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const CollectionGridIndexRoute = CollectionGridIndexRouteImport.update({
-  id: '/grid/',
-  path: '/grid/',
+const CollectionTableIndexRoute = CollectionTableIndexRouteImport.update({
+  id: '/table/',
+  path: '/table/',
   getParentRoute: () => CollectionRouteRoute,
+} as any)
+const GridRecordsIdRoute = GridRecordsIdRouteImport.update({
+  id: '/grid/records/$id',
+  path: '/grid/records/$id',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiRecordsLiteRoute = ApiRecordsLiteRouteImport.update({
   id: '/lite',
@@ -160,11 +172,12 @@ const CollectionRecordsIdRoute = CollectionRecordsIdRouteImport.update({
   path: '/records/$id',
   getParentRoute: () => CollectionRouteRoute,
 } as any)
-const CollectionGridRecordsIdRoute = CollectionGridRecordsIdRouteImport.update({
-  id: '/grid/records/$id',
-  path: '/grid/records/$id',
-  getParentRoute: () => CollectionRouteRoute,
-} as any)
+const CollectionTableRecordsIdRoute =
+  CollectionTableRecordsIdRouteImport.update({
+    id: '/table/records/$id',
+    path: '/table/records/$id',
+    getParentRoute: () => CollectionRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof CollectionIndexRoute
@@ -178,6 +191,7 @@ export interface FileRoutesByFullPath {
   '/admin/settings': typeof AdminSettingsRoute
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/admin/': typeof AdminIndexRoute
+  '/grid/': typeof GridIndexRoute
   '/records/$id': typeof CollectionRecordsIdRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
@@ -190,8 +204,9 @@ export interface FileRoutesByFullPath {
   '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
-  '/grid/': typeof CollectionGridIndexRoute
-  '/grid/records/$id': typeof CollectionGridRecordsIdRoute
+  '/grid/records/$id': typeof GridRecordsIdRoute
+  '/table/': typeof CollectionTableIndexRoute
+  '/table/records/$id': typeof CollectionTableRecordsIdRoute
 }
 export interface FileRoutesByTo {
   '/404': typeof R404Route
@@ -204,6 +219,7 @@ export interface FileRoutesByTo {
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/': typeof CollectionIndexRoute
   '/admin': typeof AdminIndexRoute
+  '/grid': typeof GridIndexRoute
   '/records/$id': typeof CollectionRecordsIdRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
@@ -216,8 +232,9 @@ export interface FileRoutesByTo {
   '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
-  '/grid': typeof CollectionGridIndexRoute
-  '/grid/records/$id': typeof CollectionGridRecordsIdRoute
+  '/grid/records/$id': typeof GridRecordsIdRoute
+  '/table': typeof CollectionTableIndexRoute
+  '/table/records/$id': typeof CollectionTableRecordsIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -233,6 +250,7 @@ export interface FileRoutesById {
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/_collection/': typeof CollectionIndexRoute
   '/admin/': typeof AdminIndexRoute
+  '/grid/': typeof GridIndexRoute
   '/_collection/records/$id': typeof CollectionRecordsIdRoute
   '/admin/records/$id': typeof AdminRecordsIdRoute
   '/admin/records/new': typeof AdminRecordsNewRoute
@@ -245,8 +263,9 @@ export interface FileRoutesById {
   '/api/inbound/daily-record': typeof ApiInboundDailyRecordRoute
   '/api/photos/$': typeof ApiPhotosSplatRoute
   '/api/records/lite': typeof ApiRecordsLiteRoute
-  '/_collection/grid/': typeof CollectionGridIndexRoute
-  '/_collection/grid/records/$id': typeof CollectionGridRecordsIdRoute
+  '/grid/records/$id': typeof GridRecordsIdRoute
+  '/_collection/table/': typeof CollectionTableIndexRoute
+  '/_collection/table/records/$id': typeof CollectionTableRecordsIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -262,6 +281,7 @@ export interface FileRouteTypes {
     | '/admin/settings'
     | '/api/records'
     | '/admin/'
+    | '/grid/'
     | '/records/$id'
     | '/admin/records/$id'
     | '/admin/records/new'
@@ -274,8 +294,9 @@ export interface FileRouteTypes {
     | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
-    | '/grid/'
     | '/grid/records/$id'
+    | '/table/'
+    | '/table/records/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/404'
@@ -288,6 +309,7 @@ export interface FileRouteTypes {
     | '/api/records'
     | '/'
     | '/admin'
+    | '/grid'
     | '/records/$id'
     | '/admin/records/$id'
     | '/admin/records/new'
@@ -300,8 +322,9 @@ export interface FileRouteTypes {
     | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
-    | '/grid'
     | '/grid/records/$id'
+    | '/table'
+    | '/table/records/$id'
   id:
     | '__root__'
     | '/_collection'
@@ -316,6 +339,7 @@ export interface FileRouteTypes {
     | '/api/records'
     | '/_collection/'
     | '/admin/'
+    | '/grid/'
     | '/_collection/records/$id'
     | '/admin/records/$id'
     | '/admin/records/new'
@@ -328,8 +352,9 @@ export interface FileRouteTypes {
     | '/api/inbound/daily-record'
     | '/api/photos/$'
     | '/api/records/lite'
-    | '/_collection/grid/'
-    | '/_collection/grid/records/$id'
+    | '/grid/records/$id'
+    | '/_collection/table/'
+    | '/_collection/table/records/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -338,6 +363,7 @@ export interface RootRouteChildren {
   R404Route: typeof R404Route
   R500Route: typeof R500Route
   ApiRecordsRoute: typeof ApiRecordsRouteWithChildren
+  GridIndexRoute: typeof GridIndexRoute
   ApiAdminBackupRoute: typeof ApiAdminBackupRoute
   ApiAdminCaptureRoute: typeof ApiAdminCaptureRoute
   ApiCronDailyRecordRoute: typeof ApiCronDailyRecordRoute
@@ -346,6 +372,7 @@ export interface RootRouteChildren {
   ApiDiscogsCoverIdRoute: typeof ApiDiscogsCoverIdRoute
   ApiInboundDailyRecordRoute: typeof ApiInboundDailyRecordRoute
   ApiPhotosSplatRoute: typeof ApiPhotosSplatRoute
+  GridRecordsIdRoute: typeof GridRecordsIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -376,6 +403,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof CollectionRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/grid/': {
+      id: '/grid/'
+      path: '/grid'
+      fullPath: '/grid/'
+      preLoaderRoute: typeof GridIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/': {
@@ -434,12 +468,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCaptureRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/_collection/grid/': {
-      id: '/_collection/grid/'
-      path: '/grid'
-      fullPath: '/grid/'
-      preLoaderRoute: typeof CollectionGridIndexRouteImport
+    '/_collection/table/': {
+      id: '/_collection/table/'
+      path: '/table'
+      fullPath: '/table/'
+      preLoaderRoute: typeof CollectionTableIndexRouteImport
       parentRoute: typeof CollectionRouteRoute
+    }
+    '/grid/records/$id': {
+      id: '/grid/records/$id'
+      path: '/grid/records/$id'
+      fullPath: '/grid/records/$id'
+      preLoaderRoute: typeof GridRecordsIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/records/lite': {
       id: '/api/records/lite'
@@ -525,11 +566,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CollectionRecordsIdRouteImport
       parentRoute: typeof CollectionRouteRoute
     }
-    '/_collection/grid/records/$id': {
-      id: '/_collection/grid/records/$id'
-      path: '/grid/records/$id'
-      fullPath: '/grid/records/$id'
-      preLoaderRoute: typeof CollectionGridRecordsIdRouteImport
+    '/_collection/table/records/$id': {
+      id: '/_collection/table/records/$id'
+      path: '/table/records/$id'
+      fullPath: '/table/records/$id'
+      preLoaderRoute: typeof CollectionTableRecordsIdRouteImport
       parentRoute: typeof CollectionRouteRoute
     }
   }
@@ -538,15 +579,15 @@ declare module '@tanstack/react-router' {
 interface CollectionRouteRouteChildren {
   CollectionIndexRoute: typeof CollectionIndexRoute
   CollectionRecordsIdRoute: typeof CollectionRecordsIdRoute
-  CollectionGridIndexRoute: typeof CollectionGridIndexRoute
-  CollectionGridRecordsIdRoute: typeof CollectionGridRecordsIdRoute
+  CollectionTableIndexRoute: typeof CollectionTableIndexRoute
+  CollectionTableRecordsIdRoute: typeof CollectionTableRecordsIdRoute
 }
 
 const CollectionRouteRouteChildren: CollectionRouteRouteChildren = {
   CollectionIndexRoute: CollectionIndexRoute,
   CollectionRecordsIdRoute: CollectionRecordsIdRoute,
-  CollectionGridIndexRoute: CollectionGridIndexRoute,
-  CollectionGridRecordsIdRoute: CollectionGridRecordsIdRoute,
+  CollectionTableIndexRoute: CollectionTableIndexRoute,
+  CollectionTableRecordsIdRoute: CollectionTableRecordsIdRoute,
 }
 
 const CollectionRouteRouteWithChildren = CollectionRouteRoute._addFileChildren(
@@ -597,6 +638,7 @@ const rootRouteChildren: RootRouteChildren = {
   R404Route: R404Route,
   R500Route: R500Route,
   ApiRecordsRoute: ApiRecordsRouteWithChildren,
+  GridIndexRoute: GridIndexRoute,
   ApiAdminBackupRoute: ApiAdminBackupRoute,
   ApiAdminCaptureRoute: ApiAdminCaptureRoute,
   ApiCronDailyRecordRoute: ApiCronDailyRecordRoute,
@@ -605,6 +647,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiDiscogsCoverIdRoute: ApiDiscogsCoverIdRoute,
   ApiInboundDailyRecordRoute: ApiInboundDailyRecordRoute,
   ApiPhotosSplatRoute: ApiPhotosSplatRoute,
+  GridRecordsIdRoute: GridRecordsIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

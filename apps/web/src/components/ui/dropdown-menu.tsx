@@ -50,9 +50,12 @@ function DropdownMenuItem({
 	return (
 		<DropdownMenuPrimitive.Item
 			data-slot="dropdown-menu-item"
+			// No focus ring (styles.css `:focus-visible`): the menu moves focus
+			// to the item under the mouse, which reads as keyboard focus, and
+			// the highlight already marks the current item either way.
 			data-variant={variant}
 			className={cn(
-				"relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10",
+				"relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none focus-visible:shadow-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10",
 				className,
 			)}
 			{...props}

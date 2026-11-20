@@ -7,18 +7,18 @@ import {
 
 import { CollectionSkeleton } from "#/components/collection-skeleton";
 import { CollectionView } from "#/components/collection-view";
-import { isGridPath, parseRecordIdParam } from "#/lib/records-path";
+import { isTablePath, parseRecordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 import { filterSettingsQueryOptions } from "#/lib/settings-queries";
 
 /**
  * Pathless layout shared by the collection's routes: the 3D wall at `/` and
- * `/records/$id`, and the plain grid at `/grid` and `/grid/records/$id`. It
+ * `/records/$id`, and the table at `/table` and `/table/records/$id`. It
  * renders the one
- * `CollectionView` instance, so navigating between the grid and an open record
+ * `CollectionView` instance, so navigating between the table and an open record
  * only changes this layout's `selectedId` — it does **not** unmount/remount the
- * grid. The old sibling-routes setup remounted the whole view (and every
- * `FadeImage`) on open, which read as the grid flickering. The child routes
+ * table. The old sibling-routes setup remounted the whole view (and every
+ * `FadeImage`) on open, which read as the page flickering. The child routes
  * (`index`, `records.$id`) now only carry loaders/redirects and render nothing.
  *
  * Owns its own `ensureQueryData` (redundant with — but a cheap cache hit
@@ -46,7 +46,7 @@ function CollectionLayout() {
 	const raw = params.id;
 	const selectedId = typeof raw === "string" ? parseRecordIdParam(raw) : null;
 	const layout = useLocation({
-		select: (l) => (isGridPath(l.pathname) ? "grid" : "wall"),
+		select: (l) => (isTablePath(l.pathname) ? "table" : "wall"),
 	});
 
 	return (

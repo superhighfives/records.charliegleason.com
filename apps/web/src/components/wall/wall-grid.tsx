@@ -16,10 +16,10 @@ import type { WallSceneProps, WallTheme } from "./wall-scene";
 const WallScene = lazy(() => import("./wall-scene"));
 
 /**
- * The collection as an endless 3D wall (see `wall-scene.tsx`), in place of
- * `CollectionGrid`. The canvas is portalled to `<body>`, fixed full-screen
- * over the page's own content (the grid's wrapper animates opacity, which
- * would trap a fixed child in its own stacking context). The page itself
+ * The collection as an endless 3D wall (see `wall-scene.tsx`). The canvas
+ * is portalled to `<body>`, fixed full-screen over the page's own content
+ * (an animated ancestor would trap a fixed child in its own stacking
+ * context). The page itself
  * doesn't scroll (see `[data-wall]` in styles.css); the hero sits in the
  * middle of the screen as part of the wall, measured here once its fonts
  * are in.

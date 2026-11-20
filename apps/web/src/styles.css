@@ -300,181 +300,6 @@ body {
   );
 }
 
-/* "Has notes" corner dot's idle animation — a strong yellow glow that
- * breathes in and out, rather than Tailwind's stock `animate-pulse` (a flat
- * opacity fade), since that also fought the dot's own `group-hover:opacity-0`
- * fade-out (both animating the same property). Every dot-bearing tile
- * currently on screen runs this at once, so it only ever touches `transform`/
- * `opacity` — both compositor-only — never `box-shadow`, which forces a paint
- * every frame and was measurably janky on iOS Safari once more than a couple
- * tiles were visible mid-scroll. The glow itself is a separate `::after`
- * layer (a blurred, oversized copy of the dot) rather than an animated
- * `box-shadow`, so it composites the same way; `filter: blur()` is set once,
- * unanimated, so it doesn't itself force a repaint each frame. The hover
- * fade-out (`group-hover:opacity-0`) still only targets the dot itself, so
- * the glow keeps animating, just invisibly, once that fires. */
-@keyframes dot-pulse {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.15);
-  }
-}
-
-@keyframes dot-pulse-glow {
-  0%,
-  100% {
-    opacity: 0.35;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.85;
-    transform: scale(1.7);
-  }
-}
-
-.dot-pulse {
-  /* No `position` here — every caller already applies Tailwind's `absolute`
-     utility to this element (it's the corner badge/`NowShowing` dot, meant
-     to sit pinned via `top`/`left`). `.dot-pulse::after` below only needs
-     *some* positioned ancestor to anchor to, and `absolute` already qualifies
-     — an earlier version set `position: relative` here too, which doesn't
-     even win by specificity, but this file's rules are unlayered, and
-     unlayered CSS always beats Tailwind's `@layer utilities` regardless of
-     source order or specificity. That silently downgraded the dot from
-     `absolute` to `relative` everywhere, which is mostly invisible on
-     Chrome/Firefox but not on Safari: a `relative`-positioned element's
-     percentage `top` resolves against the containing block's height only if
-     that height counts as "explicitly specified" per spec, and Safari
-     doesn't treat an `aspect-ratio`-derived height as qualifying — so `top`
-     silently resolved to 0, leaving the dot pinned to the tile's left inset
-     but floating at the very top edge instead of inset down into the corner. */
-  animation: dot-pulse 2s ease-in-out infinite;
-}
-
-.dot-pulse::after {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: 9999px;
-  background: color-mix(in oklab, var(--accent-yellow) 80%, transparent);
-  filter: blur(4px);
-  animation: dot-pulse-glow 2s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .dot-pulse,
-  .dot-pulse::after {
-    animation: none;
-  }
-}
-
-/* Paused for the duration of a scroll gesture (`data-scrolling`, written by
- * `CollectionGrid`'s scroll listener — see its comment) rather than always
- * running. `.dot-pulse::after`'s `blur()` glow is real, continuously
- * recomposited GPU work, and every notes-bearing tile among the (currently
- * ~300, none of them virtualized) tiles mounted at once runs its own copy —
- * cheap individually, but adds up on a mobile GPU specifically while it's
- * also handling the scroll itself. `animation-play-state: paused` (not
- * `animation: none`) freezes the current frame in place instead of
- * snapping back to 0%, so nothing visibly jumps when scrolling stops. */
-.collection-grid[data-scrolling="true"] .dot-pulse,
-.collection-grid[data-scrolling="true"] .dot-pulse::after {
-  animation-play-state: paused;
-}
-
-/* Every layer a grid tile draws — disc, cover, notes dot (see
- * `RecordTile`). Oversized past the tile by enough to hold the hovered disc
- * peek (`min(25%, 64px)` right, plus its scale/rotation), because on
- * desktop it's `content-visibility: auto` (`--deferred`), whose implied
- * paint containment clips anything past the box. `.tile-art-box` insets
- * back to exactly the tile, so children's `inset-[5%]`/`size-[90%]` etc.
- * still resolve against the tile itself. `pointer-events: none` keeps the
- * oversized margin from extending the tile's hover/click area — the
- * button's own `aspect-square` box underneath stays the hit target.
- *
- * Deferring the whole tile as one unit, rather than just the cover's own
- * wrapper, means a tile scrolled (or jumped) into view paints all its
- * layers in the same frame — and offscreen tiles' notes-dot animations stop
- * being serviced entirely, instead of restyling every frame unseen. Touch
- * keeps everything painted (no `--deferred`): its content window already
- * bounds the mounted tiles, and its ambient loop relies on mounted tiles
- * always genuinely painting. No `contain-intrinsic-size` needed — the box
- * is sized purely by its insets against the already-sized tile. */
-.tile-art {
-  position: absolute;
-  inset: -24px -112px -24px -24px;
-  pointer-events: none;
-}
-
-.tile-art--deferred {
-  content-visibility: auto;
-}
-
-.tile-art-box {
-  position: absolute;
-  inset: 24px 112px 24px 24px;
-}
-
-/* A record's cover fades and scales in (FadeImage). Unlayered, so it beats
- * FadeImage's own Tailwind transition utilities. (Nothing greys out any
- * more — hovering, or a record open in the panel: re-filtering every cover
- * on the page cost long frames on each open.) */
-.cover-art {
-  transition-property: opacity, scale;
-  transition-duration: 1000ms;
-  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cover-art {
-    transition: none;
-  }
-}
-
-/* Touch variant (`data-touch`, set by CollectionGrid on coarse-pointer
- * devices). The touch scroll loop eases and writes `filter`/`scale` on the
- * cover and `transform`/`opacity` on the disc directly, every frame — a CSS
- * transition on any of those would smooth the already-eased values a second
- * time, lagging the loop's own motion. Only the cover's load fade (opacity)
- * keeps its transition. Out-specifies `.cover-art`'s `transition-property`
- * above. */
-.collection-grid[data-touch="true"] img {
-  transition-property: opacity;
-  /* Promote each mounted cover to its own compositing layer. The touch loop
-   * writes `filter`/`scale` on these every animation frame — without a
-   * layer, WebKit re-rasterizes the whole image per write, which measured
-   * (Simulator, real flings, the `?perf` meter) as 44-97ms frames vs a
-   * 17-50ms baseline with the writes disabled. Layer memory is bounded by
-   * the content window (~40 mounted tiles), not the ~300-tile collection. */
-  will-change: scale;
-}
-
-.collection-grid[data-touch="true"] .vinyl-disc {
-  transition: none;
-  /* Same reasoning as the cover's `will-change` above, for the per-frame
-   * disc `transform` writes. */
-  will-change: transform;
-}
-
-/* And for the loop's per-frame disc-stack `opacity` writes. */
-.collection-grid[data-touch="true"] .vinyl-peek {
-  will-change: opacity;
-}
-
-/* On touch the disc rests fully invisible (Tailwind `opacity-0` on
- * `.vinyl-peek` — see `RecordTile`; the loop fades it in with the peek).
- * The panel-pinned tile's look is pure CSS (`data-active`), so it needs its
- * own override to reveal the disc — unlayered CSS beats the Tailwind
- * utility regardless of specificity, and the loop clears its inline opacity
- * for pinned tiles so this can win. */
-.collection-grid[data-touch="true"] .group[data-active="true"] .vinyl-peek {
-  opacity: 1;
-}
-
 code {
   font-family: var(--font-mono);
   font-size: 0.9em;
@@ -569,58 +394,6 @@ a {
   z-index: 0;
 }
 
-/* Grid items paint in DOM order by default — without this, a disc sliding out
- * to the right gets painted OVER by the next cell in the row instead of on
- * top of it. `data-active` mirrors this for whenever the tooltip is open
- * (including hovering its own portaled content, which plain `:hover` on
- * `.group` can't see — see the comment on `RecordTile`/`tooltipOpen`), so the
- * raised stacking sticks around for exactly as long as the peek itself does.
- *
- * The `:hover` half is gated to `(pointer: fine)` — real mouse hardware —
- * deliberately. iOS Safari applies `:hover` on tap and doesn't reliably clear
- * it on the next tap elsewhere (no pointerleave fires for a touch), so a
- * touch-device tap could leave a tile's raised z-index (and the vinyl-disc
- * reveal below) stuck indefinitely, sometimes on more than one tile at once.
- * `data-active` — driven explicitly by the grid's own scroll/tap logic on
- * touch devices — is the only source of truth there instead.
- *
- * Lowering is held, raising is instant. Dropping straight back the frame
- * the pointer leaves sank the still-retracting disc under the next cell in
- * a single frame, reading as it vanishing mid-animation. So a tile that's
- * just been left steps down to 9 immediately and holds there for 450ms
- * (the disc retracts in 400ms) before settling to 0. The 9 matters:
- * merely *delaying* the drop kept the old tile at 10, tied with the newly
- * hovered one, and a tie paints in DOM order — so moving right to left, the
- * new tile's disc slid out *under* the tile just left, then flicked on top
- * when that tile finally dropped. At 9 it stays above resting neighbours
- * but always below the tile being hovered now.
- *
- * The step-and-hold is a `linear()` easing over the integer-interpolated
- * z-index (10 → 0): progress jumps straight to 0.1 (= 9), holds, then jumps
- * to 1 (= 0) at the end. The plain delayed transition before it is the
- * fallback for browsers without `linear()`. The raised rules reset
- * `transition` to instant, since the transition used is the one on the
- * state being entered. Resting tiles get an explicit `0` rather than `auto`
- * because `auto` can't be transitioned. Scoped to the grid since `.group`
- * is also Tailwind's generic group marker elsewhere in the app. */
-.collection-grid > .group {
-  z-index: 0;
-  transition: z-index 0s linear 450ms;
-  transition: z-index 450ms linear(0, 0.1 0%, 0.1 100%, 1 100%);
-}
-
-@media (pointer: fine) {
-  .collection-grid > .group:hover {
-    z-index: 10;
-    transition: z-index 0s;
-  }
-}
-
-.collection-grid > .group[data-active="true"] {
-  z-index: 10;
-  transition: z-index 0s;
-}
-
 .vinyl-disc {
   /* Positive rotation, growing with `--vinyl-stack-index` — the back-most
      disc (highest index) tips furthest, matching the fanned "[)))" read the
@@ -680,26 +453,12 @@ a {
     );
 }
 
-/* Contact shadow under a grid tile's clipped cover (`RecordTile`). A parent
- * `drop-shadow` follows the child's `clip-path` outline, where a box-shadow on
- * the clipped element itself would be cut away with it. Desktop only: on touch
- * the ambient loop writes `scale` on the cover every frame, and a filtered
- * parent would have to re-rasterise its whole subtree each time. */
-.collection-grid:not([data-touch="true"]) .sleeve-shadow {
-  filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.18))
-    drop-shadow(0 4px 10px rgb(0 0 0 / 0.12));
-}
-
 /* Debug switches, toggled from the `?debug` overlay (`DebugOverlay`) or
  * preset with `?noclip` / `?noshadow` / `?noanim` / `?nofilter`, so a
  * suspected-expensive effect can be A/B'd live on a real device.
  * `!important` beats inline styles (the clip-path is one). */
 :root[data-noclip="true"] .sleeve-clip {
   clip-path: none !important;
-}
-
-:root[data-noshadow="true"] .sleeve-shadow {
-  filter: none;
 }
 
 :root[data-noanim="true"] *:not([data-debug-overlay] *) {
@@ -710,24 +469,6 @@ a {
   filter: none !important;
   backdrop-filter: none !important;
 }
-
-/* Touch's stand-in for desktop's `:hover`-driven reveal above was, for a
- * while, a pure-CSS `animation-timeline: view()` version of this same idea —
- * each tile driving its own grayscale/scale/peek from its own scroll
- * position, no JS at all. Abandoned after `CSS.supports("animation-timeline:
- * view()")` turned out to only confirm the property *parses*, not that it
- * *works*: verified live via `Element.getAnimations()` against real
- * `getBoundingClientRect()` data that every tile's animation was
- * permanently stuck at its 50% (peak) keyframe regardless of actual scroll
- * position — not a tunable bug, the timeline just never bound to real
- * scroll offset in this environment. (GSAP was also tried and crashed on
- * the SVG discs on real WebKit.) The rAF loop in `collection-grid.tsx`'s
- * touch effect drives this now: continuous progress from each candidate
- * tile's centre distance to the viewport centre (not an edge-clipping
- * metric, so a tall 2×2 spanning tile's single well-defined centre point
- * doesn't have the "which edge is it near" ambiguity that made spanning
- * tiles read as permanently blurred under the earlier `filter: blur()`
- * attempt). */
 
 /*
  * The record detail panel has no hover affordance for its disc (a static
@@ -799,153 +540,6 @@ a {
   }
 }
 
-/*
- * Animated grain, the analog/VHS speckle circularruin.com gets from a looping
- * video — but generated on the fly from an SVG fractal-noise filter, so there's
- * no asset to ship. A reusable overlay: any element with `overflow: hidden`
- * gets living grain by adding the class. The noise layer is deliberately larger
- * than its host and jittered a frame at a time (steps(1)) so a single static
- * texture reads as motion; `multiply` blends it into the cover's own tones; the
- * whole thing ignores pointer events so the host stays interactive.
- */
-.grain {
-  position: relative;
-  /* Confine the overlay's blend to this element's own contents, so the grain
-   * reads the same regardless of whatever sits behind it in the page. */
-  isolation: isolate;
-}
-
-/* Grain intensity lives in a registered custom property so two things can drive
- * it at once without both reaching for `opacity`: the keyframes scale by it to
- * flicker, and hover transitions it to zero to fade the whole layer out. Plain
- * custom properties can't be transitioned — registering it makes it animatable. */
-@property --grain-alpha {
-  syntax: "<number>";
-  inherits: true;
-  initial-value: 0.7;
-}
-
-.grain::after {
-  content: "";
-  position: absolute;
-  /* Flush to the card's clip box. The layer must NOT overflow: a `mix-blend-mode:
-   * multiply` pseudo-element that spills past its `overflow: hidden` host renders a
-   * hairline seam along the clip edge in Chrome — the "line of static" that swept
-   * across the top once the grain faded back to full strength. Keeping it inset: 0
-   * removes the overflow, so the jitter shifts the *background-position* inside an
-   * oversized image (below) instead of translating the whole layer past the edge. */
-  inset: 10px;
-  pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='400'%20height='400'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.85'%20numOctaves='4'%20stitchTiles='stitch'/%3E%3CfeColorMatrix%20type='saturate'%20values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncG%20type='linear'%20slope='5'%20intercept='-2'/%3E%3CfeFuncB%20type='linear'%20slope='5'%20intercept='-2'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width='400'%20height='400'%20filter='url(%23n)'/%3E%3C/svg%3E");
-  /* One copy, oversized so the position-jitter always has image to slide into (no
-   * gaps, no tile-repeat seams). */
-  background-repeat: no-repeat;
-  background-size: 160%;
-  background-position: center;
-  /* Static fallback (reduced-motion, no animation); the keyframes take over and
-   * flicker around this value when motion is allowed. */
-  opacity: var(--grain-alpha);
-  mix-blend-mode: multiply;
-  animation: grain 0.5s steps(1) infinite;
-  transition: --grain-alpha 500ms ease-out;
-}
-
-/* Fade the grain away on hover, in step with the cover blooming into colour. */
-.group:hover .grain::after {
-  --grain-alpha: 0;
-}
-
-/*
- * Desync the flicker across tiles: sharing one timeline makes every cover pulse
- * in unison. A negative delay drops each into a different point of the cycle
- * immediately, and slightly different durations mean they keep drifting apart
- * rather than snapping back into phase. Six buckets by position is plenty for
- * the eye to read it as random.
- */
-.group:nth-child(6n + 1) .grain::after {
-  animation-duration: 0.43s;
-  animation-delay: -0.31s;
-}
-.group:nth-child(6n + 2) .grain::after {
-  animation-duration: 0.53s;
-  animation-delay: -0.11s;
-}
-.group:nth-child(6n + 3) .grain::after {
-  animation-duration: 0.47s;
-  animation-delay: -0.23s;
-}
-.group:nth-child(6n + 4) .grain::after {
-  animation-duration: 0.61s;
-  animation-delay: -0.05s;
-}
-.group:nth-child(6n + 5) .grain::after {
-  animation-duration: 0.5s;
-  animation-delay: -0.41s;
-}
-.group:nth-child(6n) .grain::after {
-  animation-duration: 0.57s;
-  animation-delay: -0.17s;
-}
-
-/* Two things move each step: the texture jitters (so one static noise reads as
- * motion) and its opacity flickers around --grain-alpha, like a struggling
- * signal. The jitter is a background-position shift (not a transform) so the layer
- * itself never moves past its clip edge — see the seam note on .grain::after.
- * Values stay within 37–63% so the oversized background always covers the box. */
-@keyframes grain {
-  0% {
-    background-position: 50% 50%;
-    opacity: var(--grain-alpha);
-  }
-  10% {
-    background-position: 44% 40%;
-    opacity: calc(var(--grain-alpha) * 0.9);
-  }
-  20% {
-    background-position: 37% 53%;
-    opacity: calc(var(--grain-alpha) * 0.97);
-  }
-  30% {
-    background-position: 60% 37%;
-    opacity: calc(var(--grain-alpha) * 0.87);
-  }
-  40% {
-    background-position: 47% 63%;
-    opacity: var(--grain-alpha);
-  }
-  50% {
-    background-position: 37% 56%;
-    opacity: calc(var(--grain-alpha) * 0.93);
-  }
-  60% {
-    background-position: 63% 50%;
-    opacity: calc(var(--grain-alpha) * 0.88);
-  }
-  70% {
-    background-position: 50% 60%;
-    opacity: calc(var(--grain-alpha) * 0.98);
-  }
-  80% {
-    background-position: 56% 44%;
-    opacity: calc(var(--grain-alpha) * 0.91);
-  }
-  90% {
-    background-position: 40% 47%;
-    opacity: calc(var(--grain-alpha) * 0.95);
-  }
-  100% {
-    background-position: 50% 50%;
-    opacity: var(--grain-alpha);
-  }
-}
-
-/* Respect a reduced-motion preference: keep the texture, drop the flicker. */
-@media (prefers-reduced-motion: reduce) {
-  .grain::after {
-    animation: none;
-  }
-}
-
 .rise-in {
   animation: rise-in 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -980,9 +574,8 @@ a {
  * `translateY` is harmless on plain content, but a non-`none` `transform`
  * (even the settled `translateY(0)` an `animation ... both` leaves behind
  * after finishing) establishes a new containing block for any
- * `position: fixed` descendant, which would silently break `CollectionGrid`'s
- * own fixed child (`NowShowing`) into being fixed
- * to *this* box instead of the viewport. Use this for anything that has (or
+ * `position: fixed` descendant, which would silently pin a fixed descendant to
+ * *this* box instead of the viewport. Use this for anything that has (or
  * might grow) a fixed-position descendant.
  */
 .fade-in {
@@ -1086,6 +679,105 @@ a {
   }
 }
 
+/* --- Table (collection-table.tsx) --------------------------------------- */
+
+.collection-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.collection-table th {
+  padding: 0 0.75rem 0.75rem;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.collection-table td {
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+.collection-table th:first-child,
+.collection-table td:first-child {
+  padding-left: 0;
+}
+/* The title's button covers the whole row (its `::after`), so a click
+   anywhere on the row opens the record. */
+/* Room for the search above and the bottom bar below, plus one row (about
+   3.5rem), so a row scrolled into view (collection-table.tsx) stops with
+   the next one still showing past it. */
+.collection-table tbody tr {
+  scroll-margin-block: 9.5rem 10rem;
+  position: relative;
+  transition: background-color 150ms ease-out;
+}
+.collection-table tbody tr:hover,
+.collection-table tbody tr[data-active] {
+  background: var(--muted);
+}
+.collection-table-open {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.collection-table-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.collection-table-open:focus-visible {
+  outline: none;
+}
+.collection-table tbody tr:has(.collection-table-open:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.collection-table-cover {
+  width: 3.5rem;
+}
+.collection-table-cover > * {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.125rem;
+  overflow: hidden;
+}
+.collection-table-mono {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.collection-table-notes {
+  display: block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--accent-yellow);
+}
+/* With the panel open, the open record's row stays undimmed: the overlay
+   drops below the panel's own layer, and the row's cells rise between the
+   two. (Cells, not the row: a raised row is less reliably supported.) */
+:root[data-corners]:not([data-wall]) [data-slot="sheet-overlay"] {
+  z-index: 40;
+}
+.collection-table tbody tr[data-active] > td {
+  position: relative;
+  z-index: 45;
+  background: var(--muted);
+}
+/* Phones: cover, title and artist only. */
+@media (max-width: 639px) {
+  .collection-table th:nth-child(n + 4),
+  .collection-table td:nth-child(n + 4) {
+    display: none;
+  }
+}
+
 /* --- Filter strip (filter-strip.tsx) -------------------------------------- */
 
 /* Groups of chips in one row; on narrow screens it scrolls sideways instead
@@ -1114,10 +806,6 @@ a {
   align-items: center;
   gap: 0.375rem;
   flex-shrink: 0;
-}
-
-.filter-group > .kicker-muted {
-  margin-right: 0.375rem;
 }
 
 .filter-chip {
@@ -1274,30 +962,32 @@ a {
   }
 }
 
-/* --- Size badge (collection-grid.tsx) -------------------------------------- */
-
-/* The small "7″" / "10″" label in a smaller record's top-right corner. A
- * frosted chip would cost a backdrop blur per tile, so it's a plain
- * near-opaque pill that reads on any cover. */
-.size-badge {
-  position: absolute;
-  top: calc(100% / 12);
-  right: calc(100% / 12);
-  padding: 0.0625rem 0.375rem;
-  border-radius: 9999px;
-  background: rgb(0 0 0 / 0.72);
-  color: #fff;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  pointer-events: none;
-}
-
 /* 3D wall prototype (wall-grid.tsx): the scene does its own "lights down,
  * spotlight on the selected record" while the record panel is open, so the
  * panel's dimming backdrop would only hide that. It stays (transparent) to
  * catch the click that closes the panel. */
+/* The record panel slides in on the app's ease-out (it moves at once, then
+   settles, so a busy first frame doesn't read as a jump) and fades in as it
+   comes; it leaves quicker, speeding up and fading as it goes. */
+.record-sheet[data-state="open"] {
+  --tw-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --tw-duration: 500ms;
+  --tw-enter-opacity: 0;
+}
+.record-sheet[data-state="closed"] {
+  --tw-ease: cubic-bezier(0.5, 0, 0.75, 0);
+  --tw-duration: 300ms;
+  --tw-exit-opacity: 0;
+}
+.record-sheet {
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .record-sheet[data-state] {
+    --tw-duration: 0ms;
+  }
+}
+
 /* The record panel floats inset from the window's edge (collection-view.tsx):
    it slides that much further, so it clears the window before it goes. */
 @media (min-width: 640px) {
@@ -1734,49 +1424,42 @@ button.wall-facts-tick:hover::before {
   background: var(--color-yellow-400, #facc15);
 }
 
-/* On both the wall and the grid (`data-corners`, set by CollectionView),
-   the controls sit in the corners: the search top-left, the filters
-   bottom-left, the footer's links bottom-right.
+/* On both the wall and the table (`data-corners`, set by CollectionView),
+   the controls sit in the corners: the search top-left, and one bar
+   bottom-left with the filters, then the links.
 
-   The filters float bottom-left, over the records (across the bottom on a
-   phone). Positioned on the outer, `rise-in` wrapper: that animation holds
+   The bar floats bottom-left, over the records. Positioned on the outer, `rise-in` wrapper: that animation holds
    a transform, which would make it the containing block for a fixed child.
    The pill is the inner element, which can fade (the outer one's opacity is
    held by its animation). */
+/* Only as wide as the bar, so it never covers the page beside it. */
 :root[data-corners] [data-wall-filters] {
   position: fixed;
   bottom: 1rem;
   left: 1rem;
-  right: 1rem;
+  max-width: calc(100vw - 2rem);
   z-index: 30;
 }
-/* In the pill, the strip loses the margin that spaced it from the grid
-   below on the page, and stays one line (scrolling sideways if need be). */
+/* In the bar, the strip loses its page margin and stays one line (the bar
+   scrolls sideways if need be). */
 :root[data-corners] [data-wall-filters] .filter-strip {
   margin-bottom: 0;
   padding-block: 0;
   flex-wrap: nowrap;
   align-items: stretch;
-  gap: 0;
+  gap: 0.375rem;
   /* The pill around it scrolls (with room inside its padding); a second
      scroll box here would crop the chips' focus rings at its edges. */
   overflow-x: visible;
 }
-/* Groups split by a divider the pill's full height. */
+/* No dividers: the groups run on, spaced like the chips in them. */
 :root[data-corners] [data-wall-filters] .filter-group {
-  padding: 0.625rem 1.25rem;
-}
-:root[data-corners] [data-wall-filters] .filter-group:first-child {
-  padding-left: 0;
-}
-:root[data-corners] [data-wall-filters] .filter-group:last-child {
-  padding-right: 0;
-}
-:root[data-corners] [data-wall-filters] .filter-group + .filter-group {
-  border-left: 1px solid var(--border);
+  padding-block: 0.625rem;
 }
 :root[data-corners] [data-wall-filters] > [data-wall-chrome] {
+  display: flex;
   overflow-x: auto;
+  scrollbar-width: none;
   padding: 0 1rem;
   border: 1px solid var(--border);
   border-radius: 9999px;
@@ -1787,8 +1470,7 @@ button.wall-facts-tick:hover::before {
   :root[data-corners] [data-wall-filters] {
     bottom: 1.5rem;
     left: 1.5rem;
-    right: auto;
-    max-width: calc(100vw - 22rem);
+    max-width: calc(100vw - 3rem);
   }
 }
 
@@ -1816,46 +1498,18 @@ button.wall-facts-tick:hover::before {
   }
 }
 
-/* The footer's links bottom-right (wall-corners.tsx), a pill like the
-   search, so it reads over the covers. Phones have no room beside the
-   filters. */
-[data-wall-corner] {
-  position: fixed;
-  z-index: 30;
-  padding: 0.375rem 0.875rem;
-  border: 1px solid var(--border);
-  border-radius: 9999px;
-  background: var(--background);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
-  transition: opacity 600ms ease;
+/* The "…" menu (view-menu.tsx), last in the bottom bar. */
+[data-view-menu] {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-block: 0.625rem;
 }
-/* Its links focus (and the cursor highlights them) as pills, with room
-   either side of the text — taken back out of the layout by the margin. */
-[data-wall-corner] a {
-  margin-inline: -0.375rem;
-  padding-inline: 0.375rem;
-  border-radius: 9999px;
+.filter-strip + [data-view-menu] {
+  margin-left: 0.375rem;
 }
-[data-wall-corner="footer"] {
-  display: none;
-}
-@media (min-width: 640px) {
-  /* Its links focus (and the cursor highlights them) as pills, with room
-   either side of the text — taken back out of the layout by the margin. */
-[data-wall-corner] a {
-  margin-inline: -0.375rem;
-  padding-inline: 0.375rem;
-  border-radius: 9999px;
-}
-[data-wall-corner="footer"] {
-    display: flex;
-    bottom: 1.5rem;
-    right: 1.5rem;
-  }
-}
-:root[data-wall-focus] [data-wall-corner] {
-  opacity: 0;
-  pointer-events: none;
+[data-view-menu] .filter-chip {
+  padding-inline: 0.5rem;
 }
 
 /* Zoomed in on a record, the page's own text fades out of the way. */
