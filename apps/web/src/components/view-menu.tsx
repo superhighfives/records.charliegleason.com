@@ -21,21 +21,27 @@ export function ViewMenu({ layout }: { layout: "wall" | "table" }) {
 				<DropdownMenuTrigger className="filter-chip" aria-label="More">
 					<Ellipsis aria-hidden="true" className="size-4" />
 				</DropdownMenuTrigger>
-				<DropdownMenuContent side="top" align="end" className="min-w-44">
-					<DropdownMenuItem asChild>
+				{/* Pills, like the bar, so the cursor takes a pill's shape over
+				    an item (wall-cursor.tsx). */}
+				<DropdownMenuContent
+					side="top"
+					align="end"
+					className="min-w-44 rounded-2xl p-1.5"
+				>
+					<DropdownMenuItem asChild className="rounded-full px-3">
 						<Link to="/">
 							Wall view
 							{layout === "wall" && <Check className="ml-auto size-4" />}
 						</Link>
 					</DropdownMenuItem>
-					<DropdownMenuItem asChild>
+					<DropdownMenuItem asChild className="rounded-full px-3">
 						<Link to="/table">
 							Table view
 							{layout === "table" && <Check className="ml-auto size-4" />}
 						</Link>
 					</DropdownMenuItem>
 					<DropdownMenuSeparator />
-					<DropdownMenuItem asChild>
+					<DropdownMenuItem asChild className="rounded-full px-3">
 						<a href="https://charliegleason.com">
 							charliegleason.com
 							<ExternalLink className="ml-auto size-3.5 text-muted-foreground" />

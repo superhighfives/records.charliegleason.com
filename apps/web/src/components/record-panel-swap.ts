@@ -5,21 +5,28 @@ const HEIGHT_MS = 380;
 const CONTENT_MS = 320;
 /** How far (px) the new record's content slides in from. */
 const SLIDE_PX = 24;
+/** How long the header's colours take to blend into the next record's. */
+const MESH_MS = 500;
+/** How long to wait for the next record's colours before fading to none. */
+const MESH_WAIT_MS = 1000;
 
 const findPanel = () =>
 	document.querySelector<HTMLElement>('[data-slot="sheet-content"]');
 
 /**
  * Moving from one record to another with the panel open: the panel eases
- * from the old record's height to the new one's, and the new content slides
- * in from the side it's coming from (the next record from the right, the
- * previous from the left). Not on the panel's first open — it slides in
- * whole — and only a fade with reduced motion.
+ * from the old record's height to the new one's; its text and cover fade
+ * and slide in from the side they're coming from (the next record from the
+ * right, the previous from the left); and the header's colours blend from
+ * the old record's into the new one's. The backgrounds don't slide, so no
+ * edge of the panel shows bare behind them. Not on the panel's first open
+ * — it slides in whole — and only fades with reduced motion.
  *
  * The panel (`RecordPanel`) is keyed by record, so a new record is a fresh
  * mount: the swap runs after it's committed but before it paints, so it
  * never shows a frame at the new height. By then the old height is gone
- * from the page, so it's tracked while the panel's open. Paging fast
+ * from the page, so it's tracked while the panel's open — as are the
+ * header's colours, which load a moment after the record. Paging fast
  * interrupts cleanly — the next swap starts from wherever the last one had
  * got to.
  */
@@ -30,11 +37,21 @@ export function useRecordPanelSwap(
 	/** The panel's settled height, kept current while it's open. */
 	const height = useRef(0);
 	const morph = useRef<Animation | null>(null);
+	/** The header's colour layer, and a copy of the last one fading under it. */
+	const mesh = useRef<{
+		el: Element | null;
+		/** What the last record's layer looked like, to copy at the swap. */
+		snapshot: { className: string; style: string } | null;
+		/** That copy, until the new layer has blended in over it. */
+		under: HTMLElement | null;
+		wait: number;
+	}>({ el: null, snapshot: null, under: null, wait: 0 });
 
 	const open = record != null;
 	useEffect(() => {
 		if (!open) return;
 		let watch: ResizeObserver | null = null;
+		let colours: MutationObserver | null = null;
 		// The sheet portals in a render after it opens.
 		const raf = requestAnimationFrame(() => {
 			const panel = findPanel();
@@ -46,11 +63,21 @@ export function useRecordPanelSwap(
 				}
 			});
 			watch.observe(panel);
+			// A record's colours arrive after it does (they're read off its
+			// cover): catch its colour layer as it appears.
+			colours = new MutationObserver(() => meshArrived(panel, mesh.current));
+			colours.observe(panel, { childList: true, subtree: true });
+			meshArrived(panel, mesh.current);
 		});
 		return () => {
 			cancelAnimationFrame(raf);
 			watch?.disconnect();
+			colours?.disconnect();
 			height.current = 0;
+			const m = mesh.current;
+			window.clearTimeout(m.wait);
+			m.under?.remove();
+			mesh.current = { el: null, snapshot: null, under: null, wait: 0 };
 		};
 	}, [open]);
 
@@ -80,13 +107,79 @@ export function useRecordPanelSwap(
 				{ duration: HEIGHT_MS, easing: EASE },
 			);
 		}
+		// The old record's colours, copied in under where the new one's go.
+		const m = mesh.current;
+		window.clearTimeout(m.wait);
+		m.under?.remove();
+		m.under = null;
+		m.el = null;
+		const header = panel.querySelector<HTMLElement>("[data-panel-header]");
+		if (m.snapshot && header) {
+			const under = document.createElement("div");
+			under.setAttribute("aria-hidden", "");
+			under.className = m.snapshot.className;
+			under.setAttribute("style", m.snapshot.style);
+			header.insertBefore(under, header.firstChild);
+			m.under = under;
+			// A record with no colours: the old ones fade to none.
+			m.wait = window.setTimeout(() => {
+				if (m.under !== under) return;
+				under
+					.animate([{ opacity: 0 }], { duration: MESH_MS, easing: EASE })
+					.finished.then(
+						() => under.remove(),
+						() => {},
+					);
+				m.under = null;
+				m.snapshot = null;
+			}, MESH_WAIT_MS);
+		}
+		meshArrived(panel, m);
+
 		const dx = reduced ? 0 : Math.sign(record.index - prev.index) * SLIDE_PX;
-		panel.querySelector<HTMLElement>("[data-panel-body]")?.animate(
-			[
-				{ opacity: 0, transform: `translateX(${dx}px)` },
-				{ opacity: 1, transform: "none" },
-			],
-			{ duration: CONTENT_MS, easing: EASE },
-		);
+		for (const el of panel.querySelectorAll<HTMLElement>(
+			"[data-panel-slide], [data-panel-slide-items] > *",
+		)) {
+			el.animate(
+				[
+					{ opacity: 0, transform: `translateX(${dx}px)` },
+					{ opacity: 1, transform: "none" },
+				],
+				{ duration: CONTENT_MS, easing: EASE },
+			);
+		}
 	}, [record?.id]);
+}
+
+/**
+ * When a record's colour layer appears: remember how it looks (for the next
+ * swap), and blend it in over the last record's copy, if one's waiting.
+ */
+function meshArrived(
+	panel: HTMLElement,
+	m: {
+		el: Element | null;
+		snapshot: { className: string; style: string } | null;
+		under: HTMLElement | null;
+		wait: number;
+	},
+) {
+	const el = panel.querySelector<HTMLElement>("[data-panel-mesh]");
+	if (!el || el === m.el) return;
+	m.el = el;
+	m.snapshot = {
+		className: el.className,
+		style: el.getAttribute("style") ?? "",
+	};
+	const under = m.under;
+	if (!under) return;
+	window.clearTimeout(m.wait);
+	m.under = null;
+	el.animate([{ opacity: 0 }, { opacity: getComputedStyle(el).opacity }], {
+		duration: MESH_MS,
+		easing: EASE,
+	}).finished.then(
+		() => under.remove(),
+		() => under.remove(),
+	);
 }

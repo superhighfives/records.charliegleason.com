@@ -241,6 +241,23 @@ export function CollectionView({
 			delete root.dataset.wallFocus;
 		};
 	}, [wallMode, open]);
+	// Whether the last input was the keyboard (not the mouse or a touch), so
+	// opening a record knows where its focus should start.
+	const usingKeyboard = useRef(false);
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (!e.metaKey && !e.ctrlKey && !e.altKey) usingKeyboard.current = true;
+		};
+		const onPointer = () => {
+			usingKeyboard.current = false;
+		};
+		window.addEventListener("keydown", onKey, true);
+		window.addEventListener("pointerdown", onPointer, true);
+		return () => {
+			window.removeEventListener("keydown", onKey, true);
+			window.removeEventListener("pointerdown", onPointer, true);
+		};
+	}, []);
 	const wasOpenRef = useRef(false);
 	const enterAnimation = open && !wasOpenRef.current && animateOpenRef.current;
 	useEffect(() => {
@@ -335,7 +352,7 @@ export function CollectionView({
 					// see `.record-sheet` in styles.css.
 					// On the table, it runs the window's full height instead.
 					className={cn(
-						"record-sheet p-0 sm:top-6 sm:right-6 sm:overflow-hidden sm:rounded-2xl sm:border lg:top-16 lg:right-16",
+						"record-sheet p-0 focus-visible:shadow-none sm:top-6 sm:right-6 sm:overflow-hidden sm:rounded-2xl sm:border lg:top-16 lg:right-16",
 						wallMode
 							? "sm:bottom-auto sm:h-auto sm:max-h-[calc(100dvh-3rem)] lg:max-h-[calc(100dvh-8rem)]"
 							: "sm:bottom-6 sm:h-auto lg:bottom-16",
@@ -343,12 +360,17 @@ export function CollectionView({
 					enterAnimation={enterAnimation}
 					// Start keyboard focus on the close button rather than the
 					// first control in the panel (the previous-record arrow).
+					// Opened from the keyboard, focus starts on the close button
+					// (its ring shows where you are); opened with the mouse, on the
+					// panel itself, so no ring shows unasked. Tab goes on from either.
 					onOpenAutoFocus={(e) => {
 						e.preventDefault();
 						if (!(e.target instanceof HTMLElement)) return;
-						e.target
-							.querySelector<HTMLElement>('[data-slot="sheet-close"]')
-							?.focus();
+						const close = e.target.querySelector<HTMLElement>(
+							'[data-slot="sheet-close"]',
+						);
+						if (usingKeyboard.current && close) close.focus();
+						else e.target.focus();
 					}}
 					// On the wall, a press beside the panel may be a drag (panning
 					// the zoomed-in wall), so the wall decides: a click on the empty

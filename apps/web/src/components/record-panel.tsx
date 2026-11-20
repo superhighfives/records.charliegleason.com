@@ -440,8 +440,9 @@ export function RecordPanel({
 		<>
 			{/* Paging through the collection, top left across from the close
 			    button — fixed in place, so it doesn't move with the panel's
-			    height from one record to the next. */}
-			<div className="absolute top-2.5 left-3 z-20 flex items-center gap-0.5">
+			    height from one record to the next. On a translucent pill of the
+			    panel's own colour, so it reads over any cover's backdrop. */}
+			<div className="absolute top-2.5 left-3 z-20 flex items-center gap-0.5 rounded-full bg-background/60 pr-3 backdrop-blur-sm">
 				<Button
 					type="button"
 					variant="ghost"
@@ -462,7 +463,7 @@ export function RecordPanel({
 				>
 					{paging === "vertical" ? <ChevronDown /> : <ChevronRight />}
 				</Button>
-				<span className="ml-1 font-mono text-xs text-muted-foreground tabular-nums">
+				<span className="ml-1 font-mono text-xs text-foreground/80 tabular-nums">
 					{index + 1} / {total}
 				</span>
 			</div>
@@ -494,17 +495,22 @@ export function RecordPanel({
 			    collapses, leaving just the title and thumbnail once pinned. */}
 			<div
 				ref={scrollRef}
-				// Slid in when paging between records (record-panel-swap.ts).
+				// Paging between records, the text and cover marked
+				// `data-panel-slide` fade and slide in (record-panel-swap.ts).
+				// `overflow-x-hidden`: so a slide never flashes a scrollbar.
 				data-panel-body=""
-				className="relative min-h-0 flex-1 overflow-y-auto"
+				className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
 			>
 				<div
 					ref={headerRef}
+					data-panel-header=""
 					className="sticky z-10 flex aspect-[3/2] flex-col justify-end bg-background"
 				>
 					{meshColors && (
 						<div
 							aria-hidden
+							// Blends from the last record's when paging (record-panel-swap.ts).
+							data-panel-mesh=""
 							className="pointer-events-none absolute inset-0 -z-10 mask-b-from-25% mask-b-to-100%"
 							// Fades out as `--hero` pins, leaving just the title band.
 							style={{
@@ -515,6 +521,7 @@ export function RecordPanel({
 					)}
 					<div
 						ref={barRef}
+						data-panel-slide=""
 						className="relative min-w-0 p-6 pr-52 before:content-[''] before:h-px before:w-full before:absolute before:bottom-0 before:left-0 before:bg-muted before:opacity-[calc(var(--hero,0))]"
 					>
 						<SheetTitle className="min-w-0 font-serif text-lg leading-tight text-pretty">
@@ -582,7 +589,10 @@ export function RecordPanel({
 					{/* No `group` here (unlike the grid tile) — the detail view's disc stays
 					    at rest until the cover's revealed, then holds its peek (no hover
 					    slide-out). */}
-					<div className="absolute right-8 -bottom-8 z-10 aspect-square w-44">
+					<div
+						data-panel-slide=""
+						className="absolute right-8 -bottom-8 z-10 aspect-square w-44"
+					>
 						<VinylDisc
 							// `.vinyl-disc`'s rest position sits directly behind the cover, but
 							// while the cover is still loading its `FadeImage` is transparent
@@ -623,7 +633,10 @@ export function RecordPanel({
 				</div>
 
 				{record.notes && (
-					<div className="relative overflow-hidden border-t border-brand bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent p-4">
+					<div
+						data-panel-slide-items=""
+						className="relative overflow-hidden border-t border-brand bg-gradient-to-br from-brand/10 via-brand/[0.04] to-transparent p-4"
+					>
 						<h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-brand-strong">
 							Notes
 						</h3>
@@ -633,7 +646,7 @@ export function RecordPanel({
 					</div>
 				)}
 
-				<div className="p-6 space-y-6 border-t">
+				<div data-panel-slide-items="" className="p-6 space-y-6 border-t">
 					<div className="grid grid-cols-3 gap-2">
 						<Stat label="Year">{dash(record.year)}</Stat>
 						<Stat label="Format">{dash(record.format)}</Stat>
