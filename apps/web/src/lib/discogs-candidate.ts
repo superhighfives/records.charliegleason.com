@@ -35,7 +35,7 @@ export const toRelease = (r: DiscogsCandidate): Candidate => ({
  * The `assignRecordIdentity` payload for a pick — a master sets the album link; a
  * release sets the pressing link *and* its parent master (a null `masterId` clears
  * it, for a standalone release). Album-level metadata rides along either way.
- * Shared by the bulk assign dialog and the Amazon importer.
+ * Used by the bulk assign dialog.
  */
 export function assignArgs(c: Candidate, id: number) {
 	const { artist, title, year, genre } = c.data;

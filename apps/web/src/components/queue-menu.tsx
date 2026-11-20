@@ -63,9 +63,6 @@ function stepLabel(item: InFlightItem): { text: string; active: boolean } {
 			? { text: "Analyzing capture", active: true }
 			: { text: "Queued to analyze", active: false };
 	}
-	if (item.kind === "amazon") {
-		return { text: "Looking up pressing on Amazon", active: false };
-	}
 	if (item.state !== "processing")
 		return { text: "Queued to generate", active: false };
 	return { text: "Generating photo", active: true };

@@ -28,7 +28,6 @@ import {
 	chunk,
 	D1_PARAM_CHUNK,
 	MAX_AUTO_RETRIES,
-	STALE_JOB_MS,
 	staleThresholdMs,
 } from "#/lib/batching";
 import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
@@ -61,7 +60,6 @@ import {
 	enqueueAnalyze,
 	enqueueProfessional,
 	enqueueProfessionalBatch,
-	enqueueResolveAsinBatch,
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
@@ -355,7 +353,6 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 					professionalStatus: records.professionalStatus,
 					professionalImageKey: records.professionalImageKey,
 					capturePhotoKey: records.capturePhotoKey,
-					amazonResolveStatus: records.amazonResolveStatus,
 				})
 				.from(records)
 				// Bounded to the client's history size; clamp defensively so a tampered
@@ -366,14 +363,8 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 				// Current cover so the finished row shows a live thumbnail, not the client's
 				// frozen (possibly-since-deleted) key. Admin surface, so include the capture.
 				const coverKey = displayCoverKey(row, { includeCapture: true });
-				// A hard failure on either pipeline (or a failed Amazon resolve — the "amazon"
-				// InFlightItem kind departs into this same finished-history flow) reads red;
-				// anything else is a clean finish.
-				if (
-					row.status === "failed" ||
-					row.professionalJobStatus === "failed" ||
-					row.amazonResolveStatus === "failed"
-				)
+				// A hard failure on either pipeline reads red; anything else is a clean finish.
+				if (row.status === "failed" || row.professionalJobStatus === "failed")
 					return { id: row.id, outcome: "failed", coverKey };
 				return { id: row.id, outcome: "ok", coverKey };
 			});
@@ -398,7 +389,7 @@ export interface InFlightItem {
 	title: string;
 	thumbKey: string | null;
 	/** What's running, for the menu label. */
-	kind: "analyze" | "professional" | "amazon";
+	kind: "analyze" | "professional";
 	/** The finer-grained state (all actively running — the menu shows a spinner). */
 	state: "pending" | "processing" | "queued";
 	/**
@@ -423,12 +414,10 @@ export interface InFlightItem {
  * failed so the reaper stops touching them and each becomes a manual-retry-able row —
  * `professionalStatus` / analysis fields are left intact, so an already-live cover or a
  * prior analysis survives. Clears the progress markers (`professionalStage`, `jobStep`).
- * Also stops the non-record job kind the queue menu can show (`amazonResolveStatus`
- * queued rows) — like the record pipelines above, this
- * flips the DB-tracked state so the UI/reaper stop treating them as running; it can't
- * cancel an already-sent queue message (Cloudflare Queues has no cancel API), so a
+ * This flips the DB-tracked state so the UI/reaper stop treating them as running; it
+ * can't cancel an already-sent queue message (Cloudflare Queues has no cancel API), so a
  * genuinely in-flight message still runs to completion and may overwrite the stopped
- * state on its own success/failure path, same as the existing record pipelines. Admin-only.
+ * state on its own success/failure path. Admin-only.
  * Returns how many rows it stopped.
  */
 export const failAllInFlight = createServerFn({ method: "POST" })
@@ -438,7 +427,7 @@ export const failAllInFlight = createServerFn({ method: "POST" })
 			const db = getDb(env.DB);
 			const note = "Stopped from the queue — Apply / retry to run it again.";
 
-			const [pro, analyze, amazon] = await Promise.all([
+			const [pro, analyze] = await Promise.all([
 				db
 					.update(records)
 					.set({
@@ -462,19 +451,10 @@ export const failAllInFlight = createServerFn({ method: "POST" })
 					})
 					.where(inArray(records.status, ["pending", "processing"]))
 					.returning({ id: records.id }),
-				db
-					.update(records)
-					.set({
-						amazonResolveStatus: "failed",
-						amazonResolveError: note,
-						updatedAt: new Date(),
-					})
-					.where(eq(records.amazonResolveStatus, "queued"))
-					.returning({ id: records.id }),
 			]);
 
 			// A record with both a running analyze and pro job is one stopped row, not two.
-			const ids = new Set([...pro, ...analyze, ...amazon].map((r) => r.id));
+			const ids = new Set([...pro, ...analyze].map((r) => r.id));
 			return { count: ids.size };
 		}),
 	);
@@ -493,53 +473,31 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		const db = getDb(env.DB);
 		// Projected to only the columns InFlightItem + displayCoverKey need — this is
 		// polled on a short interval, so pulling the whole row (incl. large JSON/text
-		// columns) every few seconds would be wasted D1 work as the table grows. The two
-		// selects are independent (none depends on another's result), so they run
-		// concurrently rather than adding up their round-trip latencies on a path that's
-		// polled every few seconds while anything is in flight.
-		const [rows, amazonRows] = await Promise.all([
-			db
-				.select({
-					id: records.id,
-					artist: records.artist,
-					title: records.title,
-					status: records.status,
-					professionalJobStatus: records.professionalJobStatus,
-					professionalStage: records.professionalStage,
-					jobStep: records.jobStep,
-					professionalStatus: records.professionalStatus,
-					professionalImageKey: records.professionalImageKey,
-					capturePhotoKey: records.capturePhotoKey,
-					analyzeRetryCount: records.analyzeRetryCount,
-					professionalRetryCount: records.professionalRetryCount,
-					updatedAt: records.updatedAt,
-				})
-				.from(records)
-				.where(
-					or(
-						inArray(records.status, ["pending", "processing"]),
-						inArray(records.professionalJobStatus, ["queued", "processing"]),
-					),
-				)
-				.orderBy(desc(records.updatedAt)),
-			// Amazon ASIN→pressing resolutions — a separate, much simpler lifecycle (see
-			// `amazonResolveStatus` in schema.ts): one queue message either pins a release or
-			// gives up, both fast and terminal, so there's normally no "processing" state.
-			// `updatedAt` is still selected so the reap loop below can catch the one failure
-			// mode that isn't self-clearing — a message dropped before the consumer ever runs.
-			db
-				.select({
-					id: records.id,
-					artist: records.artist,
-					title: records.title,
-					capturePhotoKey: records.capturePhotoKey,
-					professionalImageKey: records.professionalImageKey,
-					professionalStatus: records.professionalStatus,
-					updatedAt: records.updatedAt,
-				})
-				.from(records)
-				.where(eq(records.amazonResolveStatus, "queued")),
-		]);
+		// columns) every few seconds would be wasted D1 work as the table grows.
+		const rows = await db
+			.select({
+				id: records.id,
+				artist: records.artist,
+				title: records.title,
+				status: records.status,
+				professionalJobStatus: records.professionalJobStatus,
+				professionalStage: records.professionalStage,
+				jobStep: records.jobStep,
+				professionalStatus: records.professionalStatus,
+				professionalImageKey: records.professionalImageKey,
+				capturePhotoKey: records.capturePhotoKey,
+				analyzeRetryCount: records.analyzeRetryCount,
+				professionalRetryCount: records.professionalRetryCount,
+				updatedAt: records.updatedAt,
+			})
+			.from(records)
+			.where(
+				or(
+					inArray(records.status, ["pending", "processing"]),
+					inArray(records.professionalJobStatus, ["queued", "processing"]),
+				),
+			)
+			.orderBy(desc(records.updatedAt));
 
 		// Reap dead jobs so they don't spin forever. Each is either re-enqueued (a fresh,
 		// clean-isolate run, while its auto-retry budget lasts) or flagged terminally failed
@@ -671,52 +629,6 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 			reaped.filter((r) => r.outcome === "fail").map((r) => r.id),
 		);
 
-		// Stale-reap Amazon resolves too: `resolveAsinForRecord`'s own catch block clears
-		// "queued" on every path it can reach, but a message dropped before the consumer
-		// ever runs (a Queues delivery failure, not a catchable error) would otherwise leave
-		// the row "queued" forever — permanently stuck in this menu and permanently excluded
-		// from re-import (amazon-import-dialog.tsx's `!== "queued"` filter). Not auto-retried
-		// (matching the design elsewhere: these jobs are best-effort, not retried), just
-		// flagged failed so a human can re-run the import.
-		const amazonReaps = amazonRows
-			.filter(
-				(row) => row.updatedAt && now - row.updatedAt.getTime() > STALE_JOB_MS,
-			)
-			.map((row) =>
-				db
-					.update(records)
-					.set({
-						amazonResolveStatus: "failed",
-						amazonResolveError:
-							"Stopped — the lookup never completed. Re-run the Amazon import to retry.",
-						updatedAt: new Date(),
-					})
-					.where(
-						and(
-							eq(records.id, row.id),
-							eq(records.amazonResolveStatus, "queued"),
-						),
-					)
-					.then(() => row.id)
-					.catch(() => null),
-			);
-		const staleAmazonIds = new Set(
-			(await Promise.all(amazonReaps)).filter((id): id is number => id != null),
-		);
-
-		const amazonItems: InFlightItem[] = amazonRows
-			.filter((row) => !staleAmazonIds.has(row.id))
-			.map((row) => ({
-				id: row.id,
-				artist: row.artist,
-				title: row.title,
-				thumbKey: displayCoverKey(row, { includeCapture: true }),
-				kind: "amazon",
-				state: "queued",
-				stage: null,
-				step: null,
-			}));
-
 		return [
 			...rows
 				.filter((row) => !dropped.has(row.id))
@@ -749,7 +661,6 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 						step: retried ? null : row.jobStep,
 					};
 				}),
-			...amazonItems,
 		];
 	}),
 );
@@ -1485,28 +1396,6 @@ export const identifyAsin = createServerFn({ method: "POST" })
 			const asin = parseAsin(input);
 			if (!asin) return null;
 			return identifyFromAsin(asin);
-		}),
-	);
-
-/**
- * Queue a batch of Amazon ASIN→pressing resolutions (the importer's "Queue
- * lookups"). Each job barcode-resolves one ASIN in the background and pins the
- * exact pressing on its record, so the slow per-ASIN web search never blocks the
- * modal. Ignores blanks; returns how many were actually enqueued.
- */
-export const enqueueAmazonResolve = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(
-		(data: Array<{ recordId: number; asin: string; country: string | null }>) =>
-			data,
-	)
-	.handler(({ data: jobs }) =>
-		Sentry.startSpan({ name: "enqueueAmazonResolve" }, async () => {
-			const valid = jobs.filter(
-				(j) => Number.isFinite(j.recordId) && parseAsin(j.asin),
-			);
-			if (valid.length > 0) await enqueueResolveAsinBatch(valid);
-			return { queued: valid.length };
 		}),
 	);
 

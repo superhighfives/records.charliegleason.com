@@ -40,22 +40,6 @@ export interface ColorPaletteMessage {
 }
 
 /**
- * A `records`-keyed message that resolves an Amazon ASIN to its exact Discogs
- * *pressing* (via the barcode a web-search reads off the product page) and pins it
- * on the record. Its own variant — like the color jobs — so it never touches the
- * capture-pipeline fields. `country` is the marketplace-implied pressing country
- * (Amazon.co.uk → "UK"), a tiebreaker among barcode hits. Enqueued in bulk by the
- * Amazon importer so the slow per-ASIN web-search runs in the background instead of
- * blocking the modal.
- */
-export interface ResolveAsinMessage {
-	mode: "resolve-asin";
-	recordId: number;
-	asin: string;
-	country: string | null;
-}
-
-/**
  * Deletes R2 objects later rather than now — sent with a delay by Apply for the cover
  * it just replaced, so a page still holding the old key (an open collection while
  * "Re-apply all" runs) keeps loading it instead of 404ing. See `enqueueDeletePhotos`.
@@ -70,7 +54,6 @@ export type AnalyzeMessage =
 	| AnalyzeRecordMessage
 	| ColorTextureMessage
 	| ColorPaletteMessage
-	| ResolveAsinMessage
 	| DeletePhotosMessage;
 
 /**
