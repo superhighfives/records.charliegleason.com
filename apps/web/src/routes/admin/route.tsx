@@ -30,7 +30,6 @@ const ADMIN_PAGES = [
 	{ to: "/admin", label: "List" },
 	{ to: "/admin/colors", label: "Colors" },
 	{ to: "/admin/filters", label: "Filters" },
-	{ to: "/admin/review", label: "Review" },
 	{ to: "/admin/settings", label: "Settings" },
 ] as const;
 

@@ -3,7 +3,6 @@ import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn } from "@tanstack/react-start";
 import {
 	and,
-	asc,
 	count,
 	desc,
 	eq,
@@ -55,7 +54,6 @@ import {
 	runLinkHealthCheck,
 } from "#/lib/master-health";
 import { withPresizedKeys } from "#/lib/photo-variants";
-import { detectCaptureCorners } from "#/lib/professional";
 import {
 	enqueueAnalyze,
 	enqueueProfessional,
@@ -68,7 +66,6 @@ import {
 	type ReframeParams,
 	sanitizeReframeParams,
 } from "#/lib/reframe-params";
-import { maybeTriggerRetrain } from "#/lib/retrain-dispatch";
 import {
 	type CornerBand,
 	parseCornerBand,
@@ -198,41 +195,6 @@ export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 		const db = getDb(env.DB);
 		return db.select().from(records).orderBy(desc(records.createdAt));
 	}),
-);
-
-/**
- * The corner-review queue: auto-seeded crops the admin hasn't approved yet, **worst first**.
- * This is the active-learning list — the lowest-confidence detections are both the ones most
- * likely to need a nudge *and* the highest-value labels for the next retrain (a corrected hard
- * case teaches the model more than an easy one). Only records the current detector actually
- * scored (`detectionConfidence` not null) and that aren't reviewed are included; ordered by
- * confidence ascending. Admin-only (returns capture keys). Capped so a big backlog stays cheap.
- */
-export const listCornerReviewQueue = createServerFn({ method: "GET" }).handler(
-	() =>
-		Sentry.startSpan({ name: "listCornerReviewQueue" }, async () => {
-			if (!(await getAdminSession())) throw new AdminSessionError();
-			const db = getDb(env.DB);
-			return db
-				.select({
-					id: records.id,
-					artist: records.artist,
-					title: records.title,
-					capturePhotoKey: records.capturePhotoKey,
-					detectionConfidence: records.detectionConfidence,
-					detectionSource: records.detectionSource,
-				})
-				.from(records)
-				.where(
-					and(
-						isNotNull(records.detectionConfidence),
-						isNotNull(records.capturePhotoKey),
-						eq(records.cornersReviewed, false),
-					),
-				)
-				.orderBy(asc(records.detectionConfidence))
-				.limit(200);
-		}),
 );
 
 /**
@@ -895,49 +857,11 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Detect the sleeve's corners in a record's capture on demand — the corner editor's
- * "Detect corners" button. Runs the lightweight, free detectors server-side and returns the
- * suggested corners *with a confidence score and which detector won*, so the editor can tell
- * the admin how hard to scrutinise the seed before applying (or null if neither detector can
- * find the sleeve — e.g. a low-contrast cover). Does not persist anything; the follow-up
- * Apply does.
- */
-export const detectCorners = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((id: number) => id)
-	.handler(({ data: id }) =>
-		Sentry.startSpan({ name: "detectCorners" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select({ capturePhotoKey: records.capturePhotoKey })
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record?.capturePhotoKey) {
-				throw new Error("This record has no capture photo to detect.");
-			}
-			const detection = await detectCaptureCorners(record.capturePhotoKey);
-			// Persist the confidence/source so a manual re-detect keeps the on-open badge and
-			// review-queue ranking current. The admin still hasn't committed a band here, so
-			// `cornersReviewed` is untouched (detecting isn't approving).
-			await db
-				.update(records)
-				.set({
-					detectionConfidence: detection?.confidence ?? null,
-					detectionSource: detection?.source ?? null,
-				})
-				.where(eq(records.id, id));
-			return { detection };
-		}),
-	);
-
-/**
  * Kick off "Apply" for a record — re-warp the square from the edited corners + tone and
  * promote it live. The warp runs in the queue consumer ({@link applyProfessional}). This
  * server fn only persists the edited corners + tone knobs, flags
  * `professionalJobStatus: "queued"`, and enqueues the job — returning as soon as that's done
- * so the editor can close and the admin can move on (one exception: it also awaits
- * {@link maybeTriggerRetrain}, a bounded GitHub API dispatch, before returning). Crucially it
+ * so the editor can close and the admin can move on. Crucially it
  * does NOT touch the display `professionalStatus`, so an already-approved cover stays live
  * until the consumer swaps in the new keys. Requires a capture to warp — throws if there's
  * none. Returns the updated row (now `queued`), or null if the record's gone.
@@ -979,9 +903,6 @@ export const reframeRecord = createServerFn({ method: "POST" })
 					professionalJobStatus: "queued",
 					professionalStage: "cover",
 					professionalError: null,
-					// The admin applied this crop → it's reviewed, so it drops out of the
-					// "needs review" queue and the editor stops badging it as an auto-seed.
-					cornersReviewed: true,
 					// Fresh manual Apply → reset the reaper's auto-retry budget.
 					professionalRetryCount: 0,
 					updatedAt: new Date(),
@@ -989,10 +910,6 @@ export const reframeRecord = createServerFn({ method: "POST" })
 				.where(eq(records.id, id))
 				.returning();
 			await enqueueProfessional(id);
-			// This save just moved a corner label — if that's enough to cross the
-			// retrain-worthy drift threshold, kick the retrain workflow now instead of
-			// waiting for Monday's cron (see maybeTriggerRetrain for the dedup logic).
-			await maybeTriggerRetrain();
 			return row ?? null;
 		}),
 	);

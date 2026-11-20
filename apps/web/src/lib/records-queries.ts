@@ -2,7 +2,6 @@ import { queryOptions } from "@tanstack/react-query";
 
 import {
 	getRecord,
-	listCornerReviewQueue,
 	listInFlight,
 	listPublicRecords,
 	listQueueOutcomes,
@@ -19,12 +18,6 @@ export const recordsQueryOptions = queryOptions({
 export const publicRecordsQueryOptions = queryOptions({
 	queryKey: ["records", "public"] as const,
 	queryFn: () => listPublicRecords(),
-});
-
-/** Corner-review queue: unreviewed auto-seeded crops, lowest-confidence first. */
-export const cornerReviewQueueQueryOptions = queryOptions({
-	queryKey: ["records", "corner-review"] as const,
-	queryFn: () => listCornerReviewQueue(),
 });
 
 export const recordQueryOptions = (id: number) =>

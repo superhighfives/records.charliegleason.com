@@ -3,7 +3,6 @@ import entry from "@tanstack/react-start/server-entry";
 
 import { runDailyRecordPick } from "#/lib/daily-record";
 import { runWeeklyDigest } from "#/lib/digest";
-import { runFlywheelCheck } from "#/lib/flywheel-alert";
 import { runLinkHealthCheck } from "#/lib/master-health";
 
 const LINK_CHECK_CRON = "0 9 * * *";
@@ -26,8 +25,7 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 	// Three crons share this handler (see wrangler.jsonc `triggers.crons`) — dispatch
 	// by the cron expression that fired. The daily link-check validates Discogs
 	// master + release links; the daily record-pick emails one notes-empty record
-	// (see src/lib/daily-record.ts); the weekly slot runs the buy digest plus the
-	// "time to retrain the corner detector" nudge (independent; each fails alone).
+	// (see src/lib/daily-record.ts); the weekly slot runs the buy digest.
 	scheduled(controller, _env, ctx) {
 		if (controller.cron === LINK_CHECK_CRON) {
 			ctx.waitUntil(runLinkHealthCheck());
@@ -35,7 +33,6 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 			ctx.waitUntil(runDailyRecordPick());
 		} else {
 			ctx.waitUntil(runWeeklyDigest());
-			ctx.waitUntil(runFlywheelCheck());
 		}
 	},
 	queue: (batch) => handleAnalyzeBatch(batch as MessageBatch<AnalyzeMessage>),
