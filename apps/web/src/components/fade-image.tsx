@@ -47,6 +47,21 @@ export function isImageDecoded(src: string | undefined) {
 	return typeof src === "string" && decodedSrcs.has(src);
 }
 
+/**
+ * Fetches and decodes `src` ahead of time, then counts it as decoded, so a
+ * `FadeImage` mounted on it later shows it on its very first frame — e.g.
+ * the record panel's neighbours, so paging never shows a blank cover.
+ */
+export function preloadImage(src: string) {
+	if (decodedSrcs.has(src)) return;
+	const img = new Image();
+	img.src = src;
+	img
+		.decode()
+		.then(() => decodedSrcs.add(src))
+		.catch(() => {});
+}
+
 export function FadeImage({
 	alt,
 	className,

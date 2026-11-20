@@ -7,6 +7,8 @@ const CONTENT_MS = 320;
 const SLIDE_PX = 24;
 /** How long the header's colours take to blend into the next record's. */
 const MESH_MS = 500;
+/** Keyframes in the blend between two records' colours (see `meshArrived`). */
+const MESH_STEPS = 8;
 /** How long to wait for the next record's colours before fading to none. */
 const MESH_WAIT_MS = 1000;
 
@@ -52,10 +54,16 @@ export function useRecordPanelSwap(
 		if (!open) return;
 		let watch: ResizeObserver | null = null;
 		let colours: MutationObserver | null = null;
-		// The sheet portals in a render after it opens.
-		const raf = requestAnimationFrame(() => {
+		// The sheet portals in a render after it opens — or, opening on a
+		// record's own page, only once the page's fonts are in (see
+		// `useFontsReady`): look each frame until it's there.
+		let raf = 0;
+		const start = () => {
 			const panel = findPanel();
-			if (!panel) return;
+			if (!panel) {
+				raf = requestAnimationFrame(start);
+				return;
+			}
 			height.current = panel.getBoundingClientRect().height;
 			watch = new ResizeObserver(() => {
 				if (morph.current?.playState !== "running") {
@@ -68,7 +76,8 @@ export function useRecordPanelSwap(
 			colours = new MutationObserver(() => meshArrived(panel, mesh.current));
 			colours.observe(panel, { childList: true, subtree: true });
 			meshArrived(panel, mesh.current);
-		});
+		};
+		raf = requestAnimationFrame(start);
 		return () => {
 			cancelAnimationFrame(raf);
 			watch?.disconnect();
@@ -141,8 +150,10 @@ export function useRecordPanelSwap(
 			"[data-panel-slide], [data-panel-slide-items] > *",
 		)) {
 			el.animate(
+				// From partly there, not from nothing: paging quickly, a fade
+				// from 0 blanked the panel for a frame every record.
 				[
-					{ opacity: 0, transform: `translateX(${dx}px)` },
+					{ opacity: 0.35, transform: `translateX(${dx}px)` },
 					{ opacity: 1, transform: "none" },
 				],
 				{ duration: CONTENT_MS, easing: EASE },
@@ -175,10 +186,26 @@ function meshArrived(
 	if (!under) return;
 	window.clearTimeout(m.wait);
 	m.under = null;
-	el.animate([{ opacity: 0 }, { opacity: getComputedStyle(el).opacity }], {
-		duration: MESH_MS,
-		easing: EASE,
-	}).finished.then(
+	// The new layer fades in over the old one's copy as the copy fades out,
+	// keeping how much the two cover together on a straight line from the
+	// old layer's alone to the new one's alone. Fading only the new one in
+	// over the copy, the two together covered more than the new one alone,
+	// so removing the copy at the end dropped the colour back with a jump.
+	const to = Number(getComputedStyle(el).opacity);
+	const from = Number(getComputedStyle(under).opacity);
+	const fadeIn: Keyframe[] = [];
+	const fadeOut: Keyframe[] = [];
+	for (let i = 0; i <= MESH_STEPS; i++) {
+		const t = i / MESH_STEPS;
+		const inOpacity = to * t;
+		// What's left showing through both, eased from (1 - from) to (1 - to).
+		const through = 1 - from + (from - to) * t;
+		fadeIn.push({ opacity: inOpacity });
+		fadeOut.push({ opacity: Math.max(0, 1 - through / (1 - inOpacity)) });
+	}
+	const timing = { duration: MESH_MS, easing: EASE };
+	under.animate(fadeOut, { ...timing, fill: "forwards" });
+	el.animate(fadeIn, timing).finished.then(
 		() => under.remove(),
 		() => under.remove(),
 	);

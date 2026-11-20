@@ -20,6 +20,7 @@ import {
 import { CollectionStatsSentence } from "#/components/collection-stats-sentence";
 import { CollectionTable } from "#/components/collection-table";
 import { useCollectionUI } from "#/components/collection-ui";
+import { preloadImage } from "#/components/fade-image";
 import { FilterStrip } from "#/components/filter-strip";
 import { RecordPanel } from "#/components/record-panel";
 import { useRecordPanelSwap } from "#/components/record-panel-swap";
@@ -36,6 +37,7 @@ import {
 	matchesFilters,
 	NO_FILTERS,
 } from "#/lib/collection-filters";
+import { displayCoverKey, photoUrl } from "#/lib/cover";
 import { emojiSrc } from "#/lib/emoji";
 import { DEFAULT_FILTER_SETTINGS } from "#/lib/filter-settings";
 import { recordIdParam } from "#/lib/records-path";
@@ -208,6 +210,16 @@ export function CollectionView({
 	useRecordPanelSwap(
 		selected ? { id: selected.id, index: selectedIndex } : null,
 	);
+	// The covers either side of the open record, decoded ahead, so paging
+	// shows the next one's cover on its first frame (see `preloadImage`).
+	useEffect(() => {
+		if (selectedIndex < 0) return;
+		for (const i of [-2, -1, 1, 2]) {
+			const near = filtered[selectedIndex + i];
+			const cover = near ? displayCoverKey(near) : null;
+			if (cover) preloadImage(photoUrl(cover, 500));
+		}
+	}, [filtered, selectedIndex]);
 
 	// If the open record is filtered out (e.g. the search no longer matches it) or
 	// the id in the URL isn't a real record, drop back to the collection.
