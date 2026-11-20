@@ -41,7 +41,7 @@ import { BulkAssignMasterDialog } from "#/components/bulk-assign-master-dialog";
 import { DuplicateBadge } from "#/components/duplicate-badge";
 import { FadeImage } from "#/components/fade-image";
 import { GenerationFailedBadge } from "#/components/generation-failed-badge";
-import { RecordPanel } from "#/components/record-panel";
+import { RecordPager, RecordPanel } from "#/components/record-panel";
 import { RecordLoading } from "#/components/spinning-record";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
@@ -1153,6 +1153,10 @@ function AdminRecords() {
 	const shownPreview = previewRecord
 		? { record: previewRecord, index: previewIndex }
 		: lastPreview.current;
+	const pagePreview = (step: number) => {
+		const to = shownPreview && previewRecords[shownPreview.index + step];
+		if (to) setPreviewId(to.id);
+	};
 
 	// If the previewed record drops out of the filtered view, forget it entirely so
 	// a later search can't silently re-open it.
@@ -1689,21 +1693,21 @@ function AdminRecords() {
 			>
 				<SheetContent className="p-0">
 					{shownPreview && (
-						<RecordPanel
-							key={shownPreview.record.id}
-							admin
-							record={shownPreview.record}
-							index={shownPreview.index}
-							total={previewRecords.length}
-							onPrev={() => {
-								const prev = previewRecords[shownPreview.index - 1];
-								if (prev) setPreviewId(prev.id);
-							}}
-							onNext={() => {
-								const next = previewRecords[shownPreview.index + 1];
-								if (next) setPreviewId(next.id);
-							}}
-						/>
+						<>
+							<RecordPager
+								index={shownPreview.index}
+								total={previewRecords.length}
+								onPrev={() => pagePreview(-1)}
+								onNext={() => pagePreview(1)}
+							/>
+							<RecordPanel
+								key={shownPreview.record.id}
+								admin
+								record={shownPreview.record}
+								onPrev={() => pagePreview(-1)}
+								onNext={() => pagePreview(1)}
+							/>
+						</>
 					)}
 				</SheetContent>
 			</Sheet>

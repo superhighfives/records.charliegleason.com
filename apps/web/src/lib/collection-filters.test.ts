@@ -7,6 +7,8 @@ import {
 	facetCounts,
 	matchesFilters,
 	NO_FILTERS,
+	sortRecords,
+	type TableSort,
 	toggleValue,
 } from "#/lib/collection-filters";
 
@@ -138,5 +140,25 @@ describe("facetCounts", () => {
 		expect(c.decades.get(1970)).toBe(1);
 		// Notes: only 80s records, regardless of the notes pick.
 		expect(c.notes).toBe(1);
+	});
+});
+
+describe("sortRecords", () => {
+	const records = [
+		{ id: 1, title: "b", artist: "Zed", year: 1990, size: '7"' },
+		{ id: 2, title: "A", artist: "alpha", year: null, size: null },
+		{ id: 3, title: "c", artist: "Alpha", year: 1970, size: '12"' },
+	];
+	const ids = (sort: TableSort) => sortRecords(records, sort).map((r) => r.id);
+
+	it("sorts text columns case-insensitively, keeping ties in order", () => {
+		expect(ids({ column: "title", direction: "asc" })).toEqual([2, 1, 3]);
+		expect(ids({ column: "artist", direction: "asc" })).toEqual([2, 3, 1]);
+		expect(ids({ column: "artist", direction: "desc" })).toEqual([1, 2, 3]);
+	});
+	it("puts records with no year or size last in both directions", () => {
+		expect(ids({ column: "year", direction: "asc" })).toEqual([3, 1, 2]);
+		expect(ids({ column: "year", direction: "desc" })).toEqual([1, 3, 2]);
+		expect(ids({ column: "size", direction: "asc" })).toEqual([3, 1, 2]);
 	});
 });

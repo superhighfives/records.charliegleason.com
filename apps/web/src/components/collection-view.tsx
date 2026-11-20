@@ -22,7 +22,7 @@ import { CollectionTable } from "#/components/collection-table";
 import { useCollectionUI } from "#/components/collection-ui";
 import { preloadImage } from "#/components/fade-image";
 import { FilterStrip } from "#/components/filter-strip";
-import { RecordPanel } from "#/components/record-panel";
+import { RecordPager, RecordPanel } from "#/components/record-panel";
 import { useRecordPanelSwap } from "#/components/record-panel-swap";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
@@ -36,6 +36,8 @@ import {
 	hasAnyFilter,
 	matchesFilters,
 	NO_FILTERS,
+	sortRecords,
+	type TableSort,
 } from "#/lib/collection-filters";
 import { displayCoverKey, photoUrl } from "#/lib/cover";
 import { emojiSrc } from "#/lib/emoji";
@@ -167,6 +169,9 @@ export function CollectionView({
 	);
 
 	const [filters, setFilters] = useState<CollectionFilters>(NO_FILTERS);
+	// The table's column sort; `null` is the collection's own order (newest
+	// first). The wall ignores it.
+	const [sort, setSort] = useState<TableSort | null>(null);
 
 	// Search first, then the filter strip — kept as two steps because the
 	// strip's chip counts are scoped to the search matches (see `facetCounts`).
@@ -180,13 +185,14 @@ export function CollectionView({
 		);
 	}, [data, search]);
 
-	const filtered = useMemo(
-		() =>
-			hasAnyFilter(filters)
-				? searched.filter((r) => matchesFilters(r, filters))
-				: searched,
-		[searched, filters],
-	);
+	// Then the table's sort, here and not in the table, so the panel pages
+	// through records in the order the table shows them.
+	const filtered = useMemo(() => {
+		const matched = hasAnyFilter(filters)
+			? searched.filter((r) => matchesFilters(r, filters))
+			: searched;
+		return sort && !wallMode ? sortRecords(matched, sort) : matched;
+	}, [searched, filters, sort, wallMode]);
 
 	// Track the open record by id (not index) so re-filtering never jumps to the
 	// wrong one.
@@ -205,6 +211,10 @@ export function CollectionView({
 	const shown = selected
 		? { record: selected, index: selectedIndex }
 		: lastShown.current;
+	const pageBy = (step: number) => {
+		const to = shown && filtered[shown.index + step];
+		if (to) openRecord(to, { replace: true });
+	};
 	// Paging with the panel open eases it to the new record's height and
 	// slides the new one in (see `useRecordPanelSwap`).
 	useRecordPanelSwap(
@@ -392,21 +402,22 @@ export function CollectionView({
 					}
 				>
 					{shown && (
-						<RecordPanel
-							key={shown.record.id}
-							record={shown.record}
-							index={shown.index}
-							total={filtered.length}
-							paging={wallMode ? "horizontal" : "vertical"}
-							onPrev={() => {
-								const prev = filtered[shown.index - 1];
-								if (prev) openRecord(prev, { replace: true });
-							}}
-							onNext={() => {
-								const next = filtered[shown.index + 1];
-								if (next) openRecord(next, { replace: true });
-							}}
-						/>
+						<>
+							<RecordPager
+								index={shown.index}
+								total={filtered.length}
+								paging={wallMode ? "horizontal" : "vertical"}
+								onPrev={() => pageBy(-1)}
+								onNext={() => pageBy(1)}
+							/>
+							<RecordPanel
+								key={shown.record.id}
+								record={shown.record}
+								paging={wallMode ? "horizontal" : "vertical"}
+								onPrev={() => pageBy(-1)}
+								onNext={() => pageBy(1)}
+							/>
+						</>
 					)}
 				</SheetContent>
 			</Sheet>
@@ -473,6 +484,8 @@ export function CollectionView({
 				{hasRecords ? (
 					<CollectionTable
 						records={filtered}
+						sort={sort}
+						onSort={setSort}
 						onOpen={openRecord}
 						focusedRecordId={selected?.id ?? null}
 					/>
