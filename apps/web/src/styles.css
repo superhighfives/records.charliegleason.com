@@ -574,9 +574,8 @@ a {
  * `translateY` is harmless on plain content, but a non-`none` `transform`
  * (even the settled `translateY(0)` an `animation ... both` leaves behind
  * after finishing) establishes a new containing block for any
- * `position: fixed` descendant, which would silently break `CollectionGrid`'s
- * own fixed child (`NowShowing`) into being fixed
- * to *this* box instead of the viewport. Use this for anything that has (or
+ * `position: fixed` descendant, which would silently pin a fixed descendant to
+ * *this* box instead of the viewport. Use this for anything that has (or
  * might grow) a fixed-position descendant.
  */
 .fade-in {
@@ -708,7 +707,11 @@ a {
 }
 /* The title's button covers the whole row (its `::after`), so a click
    anywhere on the row opens the record. */
+/* Room for the search above and the bottom bar below, plus one row (about
+   3.5rem), so a row scrolled into view (collection-table.tsx) stops with
+   the next one still showing past it. */
 .collection-table tbody tr {
+  scroll-margin-block: 9.5rem 10rem;
   position: relative;
   transition: background-color 150ms ease-out;
 }
@@ -756,6 +759,17 @@ a {
   border-radius: 9999px;
   background: var(--accent-yellow);
 }
+/* With the panel open, the open record's row stays undimmed: the overlay
+   drops below the panel's own layer, and the row's cells rise between the
+   two. (Cells, not the row: a raised row is less reliably supported.) */
+:root[data-corners]:not([data-wall]) [data-slot="sheet-overlay"] {
+  z-index: 40;
+}
+.collection-table tbody tr[data-active] > td {
+  position: relative;
+  z-index: 45;
+  background: var(--muted);
+}
 /* Phones: cover, title and artist only. */
 @media (max-width: 639px) {
   .collection-table th:nth-child(n + 4),
@@ -792,10 +806,6 @@ a {
   align-items: center;
   gap: 0.375rem;
   flex-shrink: 0;
-}
-
-.filter-group > .kicker-muted {
-  margin-right: 0.375rem;
 }
 
 .filter-chip {
@@ -956,6 +966,28 @@ a {
  * spotlight on the selected record" while the record panel is open, so the
  * panel's dimming backdrop would only hide that. It stays (transparent) to
  * catch the click that closes the panel. */
+/* The record panel slides in on the app's ease-out (it moves at once, then
+   settles, so a busy first frame doesn't read as a jump) and fades in as it
+   comes; it leaves quicker, speeding up and fading as it goes. */
+.record-sheet[data-state="open"] {
+  --tw-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --tw-duration: 500ms;
+  --tw-enter-opacity: 0;
+}
+.record-sheet[data-state="closed"] {
+  --tw-ease: cubic-bezier(0.5, 0, 0.75, 0);
+  --tw-duration: 300ms;
+  --tw-exit-opacity: 0;
+}
+.record-sheet {
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .record-sheet[data-state] {
+    --tw-duration: 0ms;
+  }
+}
+
 /* The record panel floats inset from the window's edge (collection-view.tsx):
    it slides that much further, so it clears the window before it goes. */
 @media (min-width: 640px) {
@@ -1415,23 +1447,14 @@ button.wall-facts-tick:hover::before {
   padding-block: 0;
   flex-wrap: nowrap;
   align-items: stretch;
-  gap: 0;
+  gap: 0.375rem;
   /* The pill around it scrolls (with room inside its padding); a second
      scroll box here would crop the chips' focus rings at its edges. */
   overflow-x: visible;
 }
-/* Groups split by a divider the pill's full height. */
+/* No dividers: the groups run on, spaced like the chips in them. */
 :root[data-corners] [data-wall-filters] .filter-group {
-  padding: 0.625rem 1.25rem;
-}
-:root[data-corners] [data-wall-filters] .filter-group:first-child {
-  padding-left: 0;
-}
-:root[data-corners] [data-wall-filters] .filter-group:last-child {
-  padding-right: 0;
-}
-:root[data-corners] [data-wall-filters] .filter-group + .filter-group {
-  border-left: 1px solid var(--border);
+  padding-block: 0.625rem;
 }
 :root[data-corners] [data-wall-filters] > [data-wall-chrome] {
   display: flex;
@@ -1475,25 +1498,18 @@ button.wall-facts-tick:hover::before {
   }
 }
 
-/* The links (wall-corners.tsx), last in the bottom bar, divided off from
-   the filters like another group. */
-[data-wall-corner] {
+/* The "…" menu (view-menu.tsx), last in the bottom bar. */
+[data-view-menu] {
   display: flex;
+  align-items: center;
   flex-shrink: 0;
   padding-block: 0.625rem;
-  white-space: nowrap;
 }
-.filter-strip + [data-wall-corner] {
-  margin-left: 1.25rem;
-  padding-left: 1.25rem;
-  border-left: 1px solid var(--border);
+.filter-strip + [data-view-menu] {
+  margin-left: 0.375rem;
 }
-/* Its links focus (and the cursor highlights them) as pills, with room
-   either side of the text — taken back out of the layout by the margin. */
-[data-wall-corner] a {
-  margin-inline: -0.375rem;
-  padding-inline: 0.375rem;
-  border-radius: 9999px;
+[data-view-menu] .filter-chip {
+  padding-inline: 0.5rem;
 }
 
 /* Zoomed in on a record, the page's own text fades out of the way. */

@@ -5,12 +5,17 @@ import type { PublicRecord } from "#/lib/records";
 
 /** The page's floating panels — the cursor shrinks to a dot near these. */
 const PANELS =
-	'.floating-controls, [data-wall-filters] > [data-wall-chrome], [data-wall-corner], [data-slot="sheet-content"]';
+	'.floating-controls, [data-wall-filters] > [data-wall-chrome], [data-slot="dropdown-menu-content"], [data-slot="sheet-content"]';
 /** How close (px) to a panel counts as near it. */
 const NEAR_PX = 40;
 /** Where the cursor becomes a text caret. */
 const TEXT =
 	'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="range"]), textarea, [contenteditable="true"]';
+/**
+ * Off the wall (no scene to say what's under the pointer), what counts as a
+ * record: the cursor swells with its arrow over it, as over one on the wall.
+ */
+const RECORD = '[data-cursor="record"]';
 /** What the cursor grows a little over: anything clickable. */
 const CLICKABLE =
 	'a[href], button:not(:disabled), [role="button"], [role="link"], select, summary, label[for]';
@@ -151,9 +156,17 @@ function near(boxes: Box[], x: number, y: number): boolean {
  * little grabbing hand. Over and near the page's controls it shrinks to a
  * dot; over something to click it becomes part of it, taking its shape;
  * and over a text field it's a caret. Its state is CSS on `data-wall-cursor`, set by the scene from what's
- * under the pointer.
+ * under the pointer — or, off the wall (`page`), by the cursor itself:
+ * the ring, swelling over a record ({@link RECORD}).
  */
-export function WallCursor({ record }: { record: PublicRecord | null }) {
+export function WallCursor({
+	record,
+	page = false,
+}: {
+	record: PublicRecord | null;
+	/** Off the wall: no scene drives the cursor's state, so it does. */
+	page?: boolean;
+}) {
 	const ref = useRef<HTMLDivElement>(null);
 	const labelRef = useRef<HTMLDivElement>(null);
 	useEffect(() => {
@@ -236,9 +249,16 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 			// What it's over: a caret on text fields; on things to click, it
 			// becomes part of them (measured once on the way in).
 			const target = e.target instanceof Element ? e.target : null;
+			const overRecord = target?.closest(RECORD) != null;
+			if (page) {
+				const state = overRecord ? "record" : "wall";
+				if (root.dataset.wallCursor !== state) root.dataset.wallCursor = state;
+			}
 			const text = target?.closest(TEXT) != null;
 			ref.current?.classList.toggle("is-text", text);
-			const next = text ? null : (target?.closest(CLICKABLE) ?? null);
+			// A record is its own cursor state, not a control to become.
+			const next =
+				text || overRecord ? null : (target?.closest(CLICKABLE) ?? null);
 			if (next !== control) {
 				control = next;
 				reshape();
@@ -278,8 +298,9 @@ export function WallCursor({ record }: { record: PublicRecord | null }) {
 			document.removeEventListener("transitionend", remeasure, true);
 			document.removeEventListener("animationend", remeasure, true);
 			root.removeEventListener("pointerleave", onLeave);
+			if (page) delete root.dataset.wallCursor;
 		};
-	}, []);
+	}, [page]);
 	// The label keeps the last record's words while it fades, rather than
 	// emptying as it goes.
 	const shown = useRef<PublicRecord | null>(null);

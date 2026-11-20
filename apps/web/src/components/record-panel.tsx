@@ -4,8 +4,10 @@ import { Link } from "@tanstack/react-router";
 import {
 	BadgeCheck,
 	Check,
+	ChevronDown,
 	ChevronLeft,
 	ChevronRight,
+	ChevronUp,
 	Copy,
 	ExternalLink,
 	Link2,
@@ -199,12 +201,11 @@ function CoverZoom({
 	onReveal?: () => void;
 }) {
 	// 500, not some smaller width tuned to this `w-44` (176px) rotated
-	// thumbnail: it matches the grid tile's own default cover width (see
-	// `collection-grid.tsx`), so this request is a browser cache *hit* off the
-	// tile that opened it (same key, same `?w=`, same URL) rather than a fresh
-	// resize — the whole reason `instant` (below) has anything to show
-	// instantly. A spanning grid tile requests 900 instead, which this still
-	// misses, but that's the minority case.
+	// thumbnail: it's the width the table's row and the wall's texture loader
+	// request too (and the photo route's ready-made size), so this request is
+	// a browser cache *hit* off the row or tile that opened it rather than a
+	// fresh resize — the whole reason `instant` (below) has anything to show
+	// instantly.
 	const thumbSrc = coverKey ? photoUrl(coverKey, 500) : null;
 	const zoomSrc = coverKey ? photoUrl(coverKey, 1600) : null;
 	if (!thumbSrc || !zoomSrc) {
@@ -252,6 +253,7 @@ export function RecordPanel({
 	total,
 	onPrev,
 	onNext,
+	paging,
 	admin = false,
 }: {
 	record: PanelRecord;
@@ -259,6 +261,12 @@ export function RecordPanel({
 	total: number;
 	onPrev: () => void;
 	onNext: () => void;
+	/**
+	 * How the collection behind the panel runs: its arrows point that way,
+	 * and every arrow key pages (up/left back, down/right on). Unset (the
+	 * admin drawer), only left/right page, so up/down still scroll the panel.
+	 */
+	paging?: "horizontal" | "vertical";
 	/** Admin drawer: surface the private valuation + pinned-release status. */
 	admin?: boolean;
 }) {
@@ -363,6 +371,12 @@ export function RecordPanel({
 		[
 			{ hotkey: "ArrowLeft", callback: onPrev },
 			{ hotkey: "ArrowRight", callback: onNext },
+			...(paging
+				? [
+						{ hotkey: "ArrowUp" as const, callback: onPrev },
+						{ hotkey: "ArrowDown" as const, callback: onNext },
+					]
+				: []),
 		],
 		{ enabled: !zoomOpen },
 	);
@@ -436,7 +450,7 @@ export function RecordPanel({
 					onClick={onPrev}
 					aria-label="Previous record"
 				>
-					<ChevronLeft />
+					{paging === "vertical" ? <ChevronUp /> : <ChevronLeft />}
 				</Button>
 				<Button
 					type="button"
@@ -446,7 +460,7 @@ export function RecordPanel({
 					onClick={onNext}
 					aria-label="Next record"
 				>
-					<ChevronRight />
+					{paging === "vertical" ? <ChevronDown /> : <ChevronRight />}
 				</Button>
 				<span className="ml-1 font-mono text-xs text-muted-foreground tabular-nums">
 					{index + 1} / {total}

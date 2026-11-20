@@ -26,8 +26,9 @@ import { useRecordPanelSwap } from "#/components/record-panel-swap";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
+import { ViewMenu } from "#/components/view-menu";
 import { useWallPage } from "#/components/wall/use-wall-page";
-import { WallCorners } from "#/components/wall/wall-corners";
+import { WallCursor } from "#/components/wall/wall-cursor";
 import { WallPlaque } from "#/components/wall/wall-plaque";
 import {
 	type CollectionFilters,
@@ -40,6 +41,7 @@ import { DEFAULT_FILTER_SETTINGS } from "#/lib/filter-settings";
 import { recordIdParam } from "#/lib/records-path";
 import { publicRecordsQueryOptions } from "#/lib/records-queries";
 import { filterSettingsQueryOptions } from "#/lib/settings-queries";
+import { cn } from "#/lib/utils";
 
 // charliegleason.com's emoji generator, rendering the 🎵 (musical note) glyph.
 const HERO_EMOJI = emojiSrc("%F0%9F%8E%B5");
@@ -265,7 +267,7 @@ export function CollectionView({
 				: "No records match those filters.";
 
 	// What both layouts share: the floating search pill, the bottom bar (the
-	// filters, then the links), and the record panel. Each layout below is only the page
+	// filters, then the "…" menu), and the record panel. Each layout below is only the page
 	// around them. Delays are inline `style`, not a Tailwind arbitrary
 	// `[animation-delay:…]` class — `.rise-in`/`.fade-in` are plain unlayered
 	// CSS (not `@layer utilities`), so they'd always beat a layered Tailwind
@@ -315,7 +317,7 @@ export function CollectionView({
 						settings={filterSettings}
 						onChange={setFilters}
 					/>
-					<WallCorners layout={layout} />
+					<ViewMenu layout={layout} />
 				</div>
 			</div>
 
@@ -331,7 +333,13 @@ export function CollectionView({
 					// A floating card in the top right, inset from the window's edges
 					// and only as tall as it needs to be (full screen on phones) —
 					// see `.record-sheet` in styles.css.
-					className="record-sheet p-0 sm:top-6 sm:right-6 sm:bottom-auto sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:overflow-hidden sm:rounded-2xl sm:border lg:top-16 lg:right-16 lg:max-h-[calc(100dvh-8rem)]"
+					// On the table, it runs the window's full height instead.
+					className={cn(
+						"record-sheet p-0 sm:top-6 sm:right-6 sm:overflow-hidden sm:rounded-2xl sm:border lg:top-16 lg:right-16",
+						wallMode
+							? "sm:bottom-auto sm:h-auto sm:max-h-[calc(100dvh-3rem)] lg:max-h-[calc(100dvh-8rem)]"
+							: "sm:bottom-6 sm:h-auto lg:bottom-16",
+					)}
 					enterAnimation={enterAnimation}
 					// Start keyboard focus on the close button rather than the
 					// first control in the panel (the previous-record arrow).
@@ -355,6 +363,7 @@ export function CollectionView({
 							record={shown.record}
 							index={shown.index}
 							total={filtered.length}
+							paging={wallMode ? "horizontal" : "vertical"}
 							onPrev={() => {
 								const prev = filtered[shown.index - 1];
 								if (prev) openRecord(prev, { replace: true });
@@ -419,6 +428,13 @@ export function CollectionView({
 			<div
 				className="fade-in min-h-[70vh]"
 				style={{ animationDelay: `${revealMs + 150}ms` }}
+				// `animation-fill-mode: both` holds the finished keyframe for
+				// good, which keeps this wrapper a stacking context — and the
+				// open record's row couldn't then rise above the panel's
+				// dimming overlay (see `.collection-table`). Drop it once done.
+				onAnimationEnd={(e) => {
+					e.currentTarget.style.animation = "none";
+				}}
 			>
 				{hasRecords ? (
 					<CollectionTable
@@ -430,6 +446,9 @@ export function CollectionView({
 					<p className="text-muted-foreground">{emptyMessage}</p>
 				)}
 			</div>
+
+			{/* The wall's cursor here too (mouse only — it waits for one). */}
+			<WallCursor record={null} page />
 
 			<footer className="mt-16 border-t border-border pt-32 text-xs text-muted-foreground">
 				<div>

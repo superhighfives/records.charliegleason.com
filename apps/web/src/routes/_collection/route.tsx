@@ -15,10 +15,10 @@ import { filterSettingsQueryOptions } from "#/lib/settings-queries";
  * Pathless layout shared by the collection's routes: the 3D wall at `/` and
  * `/records/$id`, and the table at `/table` and `/table/records/$id`. It
  * renders the one
- * `CollectionView` instance, so navigating between the grid and an open record
+ * `CollectionView` instance, so navigating between the table and an open record
  * only changes this layout's `selectedId` — it does **not** unmount/remount the
- * grid. The old sibling-routes setup remounted the whole view (and every
- * `FadeImage`) on open, which read as the grid flickering. The child routes
+ * table. The old sibling-routes setup remounted the whole view (and every
+ * `FadeImage`) on open, which read as the page flickering. The child routes
  * (`index`, `records.$id`) now only carry loaders/redirects and render nothing.
  *
  * Owns its own `ensureQueryData` (redundant with — but a cheap cache hit

@@ -145,11 +145,9 @@ function Group({
 	children: React.ReactNode;
 }) {
 	return (
+		// The heading's only for screen readers: the chips speak for themselves.
 		// biome-ignore lint/a11y/useSemanticElements: a labelled group of toggles, not a form fieldset
 		<div role="group" aria-label={label} className="filter-group">
-			<span className="kicker-muted shrink-0" aria-hidden="true">
-				{label}
-			</span>
 			{children}
 		</div>
 	);
