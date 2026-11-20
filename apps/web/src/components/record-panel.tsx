@@ -242,23 +242,90 @@ function CoverZoom({
 }
 
 /**
+ * Paging through the collection, top left across from the close button —
+ * fixed in place, so it doesn't move with the panel's height from one record
+ * to the next. On a translucent pill of the panel's own colour, so it reads
+ * over any cover's backdrop. A sibling of the panel, not part of it: the
+ * panel remounts on every page, which would swap these buttons out from
+ * under the pointer and drop their hover.
+ */
+export function RecordPager({
+	index,
+	total,
+	onPrev,
+	onNext,
+	paging,
+}: {
+	index: number;
+	total: number;
+	onPrev: () => void;
+	onNext: () => void;
+	/** See `RecordPanel`. */
+	paging?: "horizontal" | "vertical";
+}) {
+	// A page lights its arrow for a moment, so the arrow keys show on the
+	// buttons too. A filter change that moves the index doesn't.
+	const [lit, setLit] = useState<"prev" | "next" | null>(null);
+	const last = useRef({ index, total });
+	useEffect(() => {
+		const was = last.current;
+		last.current = { index, total };
+		if (total !== was.total || Math.abs(index - was.index) !== 1) {
+			setLit(null);
+			return;
+		}
+		setLit(index > was.index ? "next" : "prev");
+		const t = setTimeout(() => setLit(null), 300);
+		return () => clearTimeout(t);
+	}, [index, total]);
+
+	const button =
+		"size-7 rounded-full data-[lit]:scale-90 data-[lit]:bg-foreground/25";
+	return (
+		<div className="absolute top-2.5 left-3 z-20 flex items-center rounded-full bg-background/60 p-0.5 pr-3 backdrop-blur-sm">
+			<Button
+				type="button"
+				variant="ghost"
+				className={button}
+				data-lit={lit === "prev" ? "" : undefined}
+				disabled={index <= 0}
+				onClick={onPrev}
+				aria-label="Previous record"
+			>
+				{paging === "vertical" ? <ChevronUp /> : <ChevronLeft />}
+			</Button>
+			<Button
+				type="button"
+				variant="ghost"
+				className={button}
+				data-lit={lit === "next" ? "" : undefined}
+				disabled={index >= total - 1}
+				onClick={onNext}
+				aria-label="Next record"
+			>
+				{paging === "vertical" ? <ChevronDown /> : <ChevronRight />}
+			</Button>
+			<span className="ml-1.5 font-mono text-xs text-foreground/80 tabular-nums">
+				{index + 1} / {total}
+			</span>
+		</div>
+	);
+}
+
+/**
  * The record detail drawer body — a title header with the cover floating at its
  * right edge, a grid of headline facts, a specifications list, notes, and
- * prev/next paging through the current (filtered) collection. Rendered inside a
- * `<SheetContent>`.
+ * arrow keys that page through the current (filtered) collection. Rendered
+ * inside a `<SheetContent>`, next to a `RecordPager`.
  */
 export function RecordPanel({
 	record,
-	index,
-	total,
 	onPrev,
 	onNext,
 	paging,
 	admin = false,
 }: {
 	record: PanelRecord;
-	index: number;
-	total: number;
 	onPrev: () => void;
 	onNext: () => void;
 	/**
@@ -438,35 +505,6 @@ export function RecordPanel({
 
 	return (
 		<>
-			{/* Paging through the collection, top left across from the close
-			    button — fixed in place, so it doesn't move with the panel's
-			    height from one record to the next. On a translucent pill of the
-			    panel's own colour, so it reads over any cover's backdrop. */}
-			<div className="absolute top-2.5 left-3 z-20 flex items-center gap-0.5 rounded-full bg-background/60 pr-3 backdrop-blur-sm">
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon-sm"
-					disabled={index <= 0}
-					onClick={onPrev}
-					aria-label="Previous record"
-				>
-					{paging === "vertical" ? <ChevronUp /> : <ChevronLeft />}
-				</Button>
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon-sm"
-					disabled={index >= total - 1}
-					onClick={onNext}
-					aria-label="Next record"
-				>
-					{paging === "vertical" ? <ChevronDown /> : <ChevronRight />}
-				</Button>
-				<span className="ml-1 font-mono text-xs text-foreground/80 tabular-nums">
-					{index + 1} / {total}
-				</span>
-			</div>
 			{/* Admin-only jump to the full editor. Clerk's `SignedIn` renders nothing
 			    for signed-out visitors, so this never shows on the public site. `pr-12`
 			    keeps the row clear of the Sheet's top-right close button. */}
