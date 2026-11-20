@@ -53,14 +53,29 @@ export function isImageDecoded(src: string | undefined) {
  * the record panel's neighbours, so paging never shows a blank cover.
  */
 export function preloadImage(src: string) {
-	if (decodedSrcs.has(src)) return;
+	if (decodedSrcs.has(src) || preloaded.has(src)) return;
 	const img = new Image();
 	img.src = src;
+	// Held (the most recent few), so the browser keeps the decoded image
+	// while a `FadeImage` may still mount on it — an image nothing refers
+	// to is the first it drops. Holding it also means a src already on its
+	// way isn't fetched and decoded again (the panel asks for its
+	// neighbours on every search keystroke).
+	preloaded.set(src, img);
+	if (preloaded.size > PRELOAD_KEEP) {
+		const oldest = preloaded.keys().next().value;
+		if (oldest !== undefined) preloaded.delete(oldest);
+	}
 	img
 		.decode()
 		.then(() => decodedSrcs.add(src))
-		.catch(() => {});
+		.catch(() => preloaded.delete(src));
 }
+
+/** Preloaded images, oldest first — see `preloadImage`. */
+const preloaded = new Map<string, HTMLImageElement>();
+/** How many preloaded images to hold: a few records either side, and some. */
+const PRELOAD_KEEP = 12;
 
 export function FadeImage({
 	alt,

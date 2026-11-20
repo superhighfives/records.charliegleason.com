@@ -191,7 +191,10 @@ function meshArrived(
 	// old layer's alone to the new one's alone. Fading only the new one in
 	// over the copy, the two together covered more than the new one alone,
 	// so removing the copy at the end dropped the colour back with a jump.
-	const to = Number(getComputedStyle(el).opacity);
+	// Below 1: at full opacity nothing shows through the new layer, and the
+	// copy's opacity below would divide by zero. The layer tops out at 0.6
+	// today (record-panel.tsx), so this only guards a later change.
+	const to = Math.min(0.99, Number(getComputedStyle(el).opacity));
 	const from = Number(getComputedStyle(under).opacity);
 	const fadeIn: Keyframe[] = [];
 	const fadeOut: Keyframe[] = [];
