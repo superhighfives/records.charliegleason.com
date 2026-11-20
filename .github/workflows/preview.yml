@@ -90,6 +90,18 @@ jobs:
             echo "::error::Failed to create the per-PR analyze queue for an unexpected reason (see output above)."
             exit 1
           fi
+          # Wait until the queue list shows the new queue. `wrangler deploy`
+          # searches the same list for each queue binding, and tries to create
+          # a queue it can't find, which then fails as "already taken". A new
+          # queue can be missing from the list for a short time after it's made.
+          for i in $(seq 1 12); do
+            output=$(bunx wrangler queues info records-analyze-pr-${PR} 2>&1) && exit 0
+            sleep 5
+          done
+          # The last attempt's output, so an auth or rate-limit error shows.
+          echo "$output"
+          echo "::error::The per-PR analyze queue was created but did not show in the queue list after 60s."
+          exit 1
 
       # Rewrite wrangler.jsonc in place (ephemeral CI checkout, never committed):
       # unique Worker name, per-PR queue, prod D1/R2 kept, and everything a per-PR
