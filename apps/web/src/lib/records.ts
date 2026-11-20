@@ -49,8 +49,7 @@ import {
 	searchParamsSchema,
 	searchReleases,
 } from "#/lib/discogs";
-import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
-import { sourceCoverFromDiscogs, storeUploadedCover } from "#/lib/images";
+import { sourceCoverFromDiscogs } from "#/lib/images";
 import {
 	type LinkHealthResult,
 	MANUAL_CHECK_BATCH,
@@ -60,10 +59,8 @@ import { withPresizedKeys } from "#/lib/photo-variants";
 import { detectCaptureCorners } from "#/lib/professional";
 import {
 	enqueueAnalyze,
-	enqueueAnalyzeBatch,
 	enqueueProfessional,
 	enqueueProfessionalBatch,
-	enqueueRefreshBatch,
 	enqueueResolveAsinBatch,
 	fetchValueForRecord,
 	refreshRecordById,
@@ -1090,39 +1087,6 @@ export const reframeRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Approve (promote) or unapprove the generated professional photo. Only
- * `approved` makes it the displayed cover (see displayCoverKey); unapproving
- * drops it back to `ready` — kept in R2, just not shown — so the site falls back
- * to the Discogs cover. No-op (returns null) if nothing's been generated yet.
- */
-export const setProfessionalApproved = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((input: { id: number; approved: boolean }) => ({
-		id: input.id,
-		approved: Boolean(input.approved),
-	}))
-	.handler(({ data: { id, approved } }) =>
-		Sentry.startSpan({ name: "setProfessionalApproved" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record?.professionalImageKey) return null;
-			const [row] = await db
-				.update(records)
-				.set({
-					professionalStatus: approved ? "approved" : "ready",
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, id))
-				.returning();
-			return row ?? null;
-		}),
-	);
-
-/**
  * Remove the professional photo entirely — the "Remove cover" action. Deletes the
  * stored image from R2 and resets the record's whole professional* state to zero:
  * no key, status `idle`, not enhanced, and the crop corners + tone knobs cleared back
@@ -1202,24 +1166,6 @@ export const previewReleaseValue = createServerFn({ method: "POST" })
 		Sentry.startSpan({ name: "previewReleaseValue" }, () =>
 			getReleaseValue(discogsId),
 		),
-	);
-
-export const updateRecord = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((input: { id: number; data: unknown }) => ({
-		id: input.id,
-		data: recordInputSchema.parse(input.data),
-	}))
-	.handler(({ data: { id, data } }) =>
-		Sentry.startSpan({ name: "updateRecord" }, async () => {
-			const db = getDb(env.DB);
-			const [row] = await db
-				.update(records)
-				.set({ ...data, updatedAt: new Date() })
-				.where(eq(records.id, id))
-				.returning();
-			return row ?? null;
-		}),
 	);
 
 /**
@@ -1564,25 +1510,6 @@ export const enqueueAmazonResolve = createServerFn({ method: "POST" })
 		}),
 	);
 
-/**
- * Store a user-uploaded cover image (base64 data URL) in R2 and return its key,
- * so the review page can override the auto-sourced Discogs artwork on publish.
- */
-export const uploadCover = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((data: unknown) => {
-		const d = (data ?? {}) as Record<string, unknown>;
-		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
-			throw new Error("imageBase64 must be a non-empty string");
-		}
-		return { imageBase64: d.imageBase64 };
-	})
-	.handler(({ data }) =>
-		Sentry.startSpan({ name: "uploadCover" }, () =>
-			storeUploadedCover(base64ToBytes(stripDataUrl(data.imageBase64))),
-		),
-	);
-
 export const deleteRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator((id: number) => id)
@@ -1657,41 +1584,6 @@ export const deleteRecords = createServerFn({ method: "POST" })
 					.where(inArray(records.copyOf, batch));
 			}
 			return { count: ids.length };
-		}),
-	);
-
-/**
- * Bulk retry. Resets the selected rows to `pending` in a single statement, then
- * fans the (cheap) queue writes out concurrently — the actual analysis happens
- * in the consumer. Returns how many rows were re-queued.
- */
-export const retryRecords = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(idList)
-	.handler(({ data: ids }) =>
-		Sentry.startSpan({ name: "retryRecords" }, async () => {
-			if (ids.length === 0) return { count: 0 };
-			const db = getDb(env.DB);
-			// Single retry timestamp shared across chunks, so callers reading
-			// `updatedAt` as "when this batch was retried" get one consistent value.
-			const now = new Date();
-			const updated: number[] = [];
-			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
-				const rows = await db
-					.update(records)
-					// Fresh manual retry → reset the reaper's auto-retry budget.
-					.set({
-						status: "pending",
-						error: null,
-						analyzeRetryCount: 0,
-						updatedAt: now,
-					})
-					.where(inArray(records.id, batch))
-					.returning({ id: records.id });
-				updated.push(...rows.map(({ id }) => id));
-			}
-			await enqueueAnalyzeBatch(updated);
-			return { count: updated.length };
 		}),
 	);
 
@@ -1849,38 +1741,5 @@ export const reapplyAllProfessional = createServerFn({ method: "POST" })
 			const ids = rows.map(({ id }) => id);
 			await enqueueProfessionalBatch(ids);
 			return { count: ids.length };
-		}),
-	);
-
-/**
- * Bulk refresh. Enqueues a Discogs re-pull for each selected record through the
- * queue (so it respects Discogs' rate limit rather than firing N synchronous
- * fetches). Per record, the consumer re-pulls the pinned release, refreshes the
- * album from its master, or — when neither is set — guesses a master from the
- * record's artist/title. Every real record has an artist/title, so all selected
- * rows are enqueued; only rows with neither Discogs link nor artist/title no-op.
- * Returns how many refreshes were queued.
- */
-export const refreshRecords = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(idList)
-	.handler(({ data: ids }) =>
-		Sentry.startSpan({ name: "refreshRecords" }, async () => {
-			if (ids.length === 0) return { count: 0 };
-			const db = getDb(env.DB);
-			// Every record has something to refresh or guess a master from (artist is
-			// NOT NULL), so enqueue all selected rows that still exist. The select just
-			// drops ids deleted between selection and now; the consumer no-ops on any
-			// row it can't act on.
-			const existing: number[] = [];
-			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
-				const rows = await db
-					.select({ id: records.id })
-					.from(records)
-					.where(inArray(records.id, batch));
-				existing.push(...rows.map(({ id }) => id));
-			}
-			await enqueueRefreshBatch(existing);
-			return { count: existing.length };
 		}),
 	);

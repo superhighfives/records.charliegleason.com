@@ -16,11 +16,6 @@ export function effectiveValue(record: Valued): number | null {
 	return record.manualValue ?? record.discogsValue ?? null;
 }
 
-/** Whether the effective value is the hand-entered (confirmed) one, not the guess. */
-export function isManualValue(record: Valued): boolean {
-	return record.manualValue != null;
-}
-
 /**
  * Format a money amount for display. Uses the currency's own symbol via Intl
  * (so USD → `$45.00`), falling back to a plain number + code if the currency is

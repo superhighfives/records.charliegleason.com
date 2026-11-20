@@ -105,12 +105,12 @@ describe("toQueueBatches", () => {
 		}
 	});
 
-	it("stamps the refresh mode onto every message when asked", () => {
-		const mode: AnalyzeMessage["mode"] = "refresh";
+	it("stamps the given mode onto every message", () => {
+		const mode: AnalyzeMessage["mode"] = "professional";
 		const bodies = toQueueBatches(range(150), mode).flat();
 		expect(bodies).toHaveLength(150);
 		for (const message of bodies) {
-			expect(message.body.mode).toBe("refresh");
+			expect(message.body.mode).toBe("professional");
 		}
 	});
 });

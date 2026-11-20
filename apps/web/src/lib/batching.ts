@@ -28,17 +28,11 @@ export const LEGACY_RECORD_MODES: ReadonlySet<string> =
 /** A `records`-keyed message for the analyze consumer. See {@link AnalyzeMessage}. */
 export interface AnalyzeRecordMessage {
 	recordId: number;
-	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls the
-	// Discogs release for an already-identified record. "professional" is the admin's
+	// "analyze" (default) runs the full capture pipeline. "professional" is the admin's
 	// Apply: re-warp the square from the stored corners + tone and promote it live.
 	// "capture-first-pass" is the free on-capture seed (detect + warp), split out of the
 	// capture POST after the inline pass OOM'd the request isolate.
-	mode?:
-		| "analyze"
-		| "refresh"
-		| "capture-first-pass"
-		| "professional"
-		| LegacyRecordMode;
+	mode?: "analyze" | "capture-first-pass" | "professional" | LegacyRecordMode;
 }
 
 /**

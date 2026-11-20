@@ -212,19 +212,10 @@ export async function enqueueDeletePhotos(keys: string[]): Promise<void> {
 }
 
 /**
- * Bulk variant of {@link enqueueProfessional}, in chunked `sendBatch` calls rather than
- * one `send` per id, so a bulk "Retry generation" over a large selection doesn't fan out
- * into hundreds of individual queue writes.
- */
-export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
-	return enqueueBatch(recordIds, "professional");
-}
-
-/**
  * Enqueue many ids as `sendBatch` calls rather than one `send` per id — a bulk
- * "Match"/"Refresh"/"Rescan" over a large selection would otherwise fan out into
- * hundreds of individual queue writes (one subrequest each). {@link toQueueBatches}
- * chunks to the per-batch cap; `mode` picks the analyze (default) vs refresh pipeline.
+ * action over a large selection would otherwise fan out into hundreds of
+ * individual queue writes (one subrequest each). {@link toQueueBatches} chunks to
+ * the per-batch cap.
  */
 async function enqueueBatch(
 	recordIds: number[],
@@ -235,14 +226,13 @@ async function enqueueBatch(
 	}
 }
 
-/** Enqueue many captured records for background analysis. */
-export function enqueueAnalyzeBatch(recordIds: number[]): Promise<void> {
-	return enqueueBatch(recordIds);
-}
-
-/** Enqueue many published records to be re-pulled from their Discogs releases. */
-export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
-	return enqueueBatch(recordIds, "refresh");
+/**
+ * Bulk variant of {@link enqueueProfessional}, in chunked `sendBatch` calls rather than
+ * one `send` per id, so a bulk "Retry generation" over a large selection doesn't fan out
+ * into hundreds of individual queue writes.
+ */
+export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
+	return enqueueBatch(recordIds, "professional");
 }
 
 /**
@@ -662,23 +652,6 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	// throws — always ack.
 	if (mode === "capture-first-pass") {
 		await runCaptureFirstPass(recordId);
-		message.ack();
-		return;
-	}
-
-	// Lightweight path: just re-pull the stored Discogs release. Best-effort —
-	// a refresh failure shouldn't retry-storm or touch the record's status.
-	if (mode === "refresh") {
-		try {
-			await refreshRecordById(recordId);
-		} catch (err) {
-			console.error(
-				`[queue] refresh failed for record ${recordId}: ${
-					err instanceof Error ? err.message : String(err)
-				}`,
-			);
-			Sentry.captureException(err);
-		}
 		message.ack();
 		return;
 	}
