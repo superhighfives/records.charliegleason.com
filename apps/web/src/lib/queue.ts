@@ -10,7 +10,6 @@ import {
 	type AnalyzeMessage,
 	type AnalyzeRecordMessage,
 	chunk,
-	LEGACY_RECORD_MODES,
 	toQueueBatches,
 } from "#/lib/batching";
 import { runCaptureFirstPass } from "#/lib/capture-first-pass";
@@ -99,17 +98,12 @@ function analyzeQueue(): Queue<AnalyzeMessage> {
 
 /**
  * The capture-only queue (see wrangler.jsonc `queues`). New-upload analysis rides its
- * own queue so a bulk Apply/enhance batch churning on `records-analyze` can't starve a
- * fresh capture; both feed the same consumer, which dispatches by message mode. Falls
- * back to the analyze queue where the binding isn't deployed yet (one deploy's worth of
- * config skew — the message is identical either way, this only picks the lane).
+ * own queue so a bulk Apply batch churning on `records-analyze` can't starve a fresh
+ * capture; both feed the same consumer, which dispatches by message mode.
  */
 function captureQueue(): Queue<AnalyzeMessage> {
-	const bindings = env as unknown as {
-		CAPTURE_QUEUE?: Queue<AnalyzeMessage>;
-		ANALYZE_QUEUE: Queue<AnalyzeMessage>;
-	};
-	return bindings.CAPTURE_QUEUE ?? bindings.ANALYZE_QUEUE;
+	return (env as unknown as { CAPTURE_QUEUE: Queue<AnalyzeMessage> })
+		.CAPTURE_QUEUE;
 }
 
 /** Enqueue a captured record for background analysis (its own queue — see {@link captureQueue}). */
@@ -631,21 +625,8 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
-	// Retired with the matte audit — a sweep message still queued at deploy is a no-op.
-	if (message.body.mode === "audit-mattes") {
-		message.ack();
-		return;
-	}
-
 	const { recordId, mode } = message.body;
 	const db = getDb(env.DB);
-
-	// Matte-era messages still queued at deploy — ack rather than let them fall
-	// through to the analyze pipeline below.
-	if (mode && LEGACY_RECORD_MODES.has(mode)) {
-		message.ack();
-		return;
-	}
 
 	// The free on-capture professional seed (see `capture-first-pass.ts` for why it
 	// can't run inline in the capture POST). Records its own failure and never

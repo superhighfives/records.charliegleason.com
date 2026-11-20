@@ -8,23 +8,6 @@
  *  - Cloudflare Queues accept at most 100 messages per `sendBatch` call.
  */
 
-/**
- * Modes retired with the alpha matte. Messages already on the queue at deploy time can
- * still carry them, so the consumer acks them as no-ops instead of letting them fall
- * through to the analyze pipeline. Safe to delete once a deploy has drained the queue.
- */
-export type LegacyRecordMode =
-	| "capture-first-pass-matte"
-	| "professional-matte"
-	| "professional-matte-fallback";
-
-export const LEGACY_RECORD_MODES: ReadonlySet<string> =
-	new Set<LegacyRecordMode>([
-		"capture-first-pass-matte",
-		"professional-matte",
-		"professional-matte-fallback",
-	]);
-
 /** A `records`-keyed message for the analyze consumer. See {@link AnalyzeMessage}. */
 export interface AnalyzeRecordMessage {
 	recordId: number;
@@ -32,7 +15,7 @@ export interface AnalyzeRecordMessage {
 	// Apply: re-warp the square from the stored corners + tone and promote it live.
 	// "capture-first-pass" is the free on-capture seed (detect + warp), split out of the
 	// capture POST after the inline pass OOM'd the request isolate.
-	mode?: "analyze" | "capture-first-pass" | "professional" | LegacyRecordMode;
+	mode?: "analyze" | "capture-first-pass" | "professional";
 }
 
 /**
@@ -72,11 +55,6 @@ export interface ResolveAsinMessage {
 	country: string | null;
 }
 
-/** Retired with the matte audit — acked as a no-op if one is still queued at deploy. */
-export interface AuditMattesMessage {
-	mode: "audit-mattes";
-}
-
 /**
  * Deletes R2 objects later rather than now — sent with a delay by Apply for the cover
  * it just replaced, so a page still holding the old key (an open collection while
@@ -93,7 +71,6 @@ export type AnalyzeMessage =
 	| ColorTextureMessage
 	| ColorPaletteMessage
 	| ResolveAsinMessage
-	| AuditMattesMessage
 	| DeletePhotosMessage;
 
 /**
