@@ -42,4 +42,3 @@ Each pull request gets its own preview Worker at `records-pr-<number>.<subdomain
 - Capture: a photo is uploaded to R2 and processed on a queue. The app makes a square cover from the full frame; I crop it by hand in the corner editor, and the app perspective-corrects the result. Claude, through Workers AI and AI Gateway, reads the sleeve, then the app matches it against Discogs and The Fork for Pitchfork scores.
 - Cron jobs send a daily "record of the day" email (replying to it saves the reply as that record's notes), a weekly "records to buy" digest built from my Last.fm listening, and a daily check that Discogs links still resolve.
 - `rec/` is firmware for a Waveshare ESP32-S3 touch screen that shows the collection, and `mac/` is a small macOS app that plays an album in Apple Music when you tap it on the board.
-- `fly/discogs-proxy` is an optional proxy on Fly.io that gives Discogs requests a dedicated IP, because Discogs rate-limits Cloudflare's shared ones.
