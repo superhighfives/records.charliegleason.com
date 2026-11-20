@@ -179,3 +179,46 @@ export function facetCounts(
 	}
 	return { colors, sizes, decades, notes };
 }
+
+export type SortColumn = "title" | "artist" | "year" | "size";
+
+export interface TableSort {
+	column: SortColumn;
+	direction: "asc" | "desc";
+}
+
+interface SortableRecord {
+	title: string;
+	artist: string;
+	year: number | null;
+	size: string | null;
+}
+
+/**
+ * The table's records in column order. Ties keep the order they came in (the
+ * newest first), and records with no year or size go last either way.
+ */
+export function sortRecords<T extends SortableRecord>(
+	records: T[],
+	{ column, direction }: TableSort,
+): T[] {
+	const sign = direction === "asc" ? 1 : -1;
+	if (column === "title" || column === "artist")
+		return [...records].sort(
+			(a, b) => sign * collator.compare(a[column], b[column]),
+		);
+	const rank = (r: T) =>
+		column === "year" ? r.year : r.size ? sizeRank(r.size) : null;
+	return [...records].sort((a, b) => {
+		const x = rank(a);
+		const y = rank(b);
+		if (x == null || y == null)
+			return (x == null ? 1 : 0) - (y == null ? 1 : 0);
+		return sign * (x - y);
+	});
+}
+
+const collator = new Intl.Collator(undefined, {
+	numeric: true,
+	sensitivity: "base",
+});

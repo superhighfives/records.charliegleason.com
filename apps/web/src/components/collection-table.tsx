@@ -1,8 +1,10 @@
+import { ArrowDown, ArrowUp } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
 import { FadeImage } from "#/components/fade-image";
 import { SleevePlaceholder } from "#/components/sleeve-placeholder";
 import { hasNotes } from "#/components/wall/tiles";
+import type { SortColumn, TableSort } from "#/lib/collection-filters";
 import { displayCoverKey, photoUrl } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 
@@ -10,17 +12,22 @@ import type { PublicRecord } from "#/lib/records";
  * The collection as a table, one record a row: the plain alternative to the
  * wall. A row opens its record in the panel. The title is the row's button,
  * stretched over the whole row (see `.collection-table` in styles.css), so
- * the row is one click target and one tab stop.
+ * the row is one click target and one tab stop. The column headings sort it.
  */
 export function CollectionTable({
 	records,
 	onOpen,
 	focusedRecordId,
+	sort,
+	onSort,
 }: {
+	/** Already in `sort` order (see `CollectionView`). */
 	records: PublicRecord[];
 	onOpen: (record: PublicRecord) => void;
 	/** The record the panel has open, marked in the table. */
 	focusedRecordId: number | null;
+	sort: TableSort | null;
+	onSort: (sort: TableSort | null) => void;
 }) {
 	const body = useRef<HTMLTableSectionElement>(null);
 	// Paging through the panel keeps the open record's row in view: it
@@ -44,10 +51,15 @@ export function CollectionTable({
 					<th scope="col">
 						<span className="sr-only">Cover</span>
 					</th>
-					<th scope="col">Title</th>
-					<th scope="col">Artist</th>
-					<th scope="col">Year</th>
-					<th scope="col">Size</th>
+					{SORT_COLUMNS.map(({ column, label }) => (
+						<SortHeading
+							key={column}
+							column={column}
+							label={label}
+							sort={sort}
+							onSort={onSort}
+						/>
+					))}
 					<th scope="col">
 						<span className="sr-only">Notes</span>
 					</th>
@@ -64,6 +76,62 @@ export function CollectionTable({
 				))}
 			</tbody>
 		</table>
+	);
+}
+
+const SORT_COLUMNS: { column: SortColumn; label: string }[] = [
+	{ column: "title", label: "Title" },
+	{ column: "artist", label: "Artist" },
+	{ column: "year", label: "Year" },
+	{ column: "size", label: "Size" },
+];
+
+/**
+ * A column heading that sorts the table. Clicks go ascending, descending,
+ * then back to the collection's own order.
+ */
+function SortHeading({
+	column,
+	label,
+	sort,
+	onSort,
+}: {
+	column: SortColumn;
+	label: string;
+	sort: TableSort | null;
+	onSort: (sort: TableSort | null) => void;
+}) {
+	const direction = sort?.column === column ? sort.direction : null;
+	const Arrow = direction === "desc" ? ArrowDown : ArrowUp;
+	return (
+		<th
+			scope="col"
+			aria-sort={
+				direction === "asc"
+					? "ascending"
+					: direction === "desc"
+						? "descending"
+						: undefined
+			}
+		>
+			<button
+				type="button"
+				className="collection-table-sort"
+				data-sorted={direction ? "" : undefined}
+				onClick={() =>
+					onSort(
+						direction === "asc"
+							? { column, direction: "desc" }
+							: direction === "desc"
+								? null
+								: { column, direction: "asc" },
+					)
+				}
+			>
+				{label}
+				<Arrow aria-hidden className="size-3" />
+			</button>
+		</th>
 	);
 }
 
