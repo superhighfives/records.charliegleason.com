@@ -12,13 +12,13 @@ import {
 	useState,
 } from "react";
 
-import { CollectionGrid } from "#/components/collection-grid";
 import { CollectionHero, heroDurationMs } from "#/components/collection-hero";
 import {
 	CollectionSkeleton,
 	WallLoading,
 } from "#/components/collection-skeleton";
 import { CollectionStatsSentence } from "#/components/collection-stats-sentence";
+import { CollectionTable } from "#/components/collection-table";
 import { useCollectionUI } from "#/components/collection-ui";
 import { FilterStrip } from "#/components/filter-strip";
 import { RecordPanel } from "#/components/record-panel";
@@ -100,7 +100,7 @@ function useFontsReady(): boolean {
 
 /**
  * The 3D record wall, split out so three.js and friends are their own chunk:
- * loaded after the page, and never by the plain grid at `/grid`.
+ * loaded after the page, and never by the table at `/table`.
  */
 const WallGrid = lazy(() =>
 	import("#/components/wall/wall-grid").then((m) => ({ default: m.WallGrid })),
@@ -108,7 +108,7 @@ const WallGrid = lazy(() =>
 
 /**
  * The public collection — the 3D record wall (`layout: "wall"`, at `/`) or the
- * plain grid (`"grid"`, at `/grid`) — with a record drawer overlaid on top.
+ * table (`"table"`, at `/table`) — with a record drawer overlaid on top.
  * The open record is driven by `selectedId`, which comes from the route —
  * `null` on the collection, the path id on `…/records/<id>-<slug>`. Every
  * route renders this one component so the collection (and the text filter,
@@ -119,7 +119,7 @@ export function CollectionView({
 	layout,
 }: {
 	selectedId: number | null;
-	layout: "wall" | "grid";
+	layout: "wall" | "table";
 }) {
 	const { data } = useSuspenseQuery(publicRecordsQueryOptions);
 	// Prefetched by the layout's loader; the defaults only cover a failed fetch.
@@ -144,15 +144,15 @@ export function CollectionView({
 		) => {
 			animateOpenRef.current = r != null;
 			// Records open and close within the layout they were opened from.
-			const grid = layout === "grid";
+			const table = layout === "table";
 			return r
 				? navigate({
-						to: grid ? "/grid/records/$id" : "/records/$id",
+						to: table ? "/table/records/$id" : "/records/$id",
 						params: { id: recordIdParam(r) },
 						replace,
 						resetScroll: false,
 					})
-				: navigate({ to: grid ? "/grid" : "/", replace, resetScroll: false });
+				: navigate({ to: table ? "/table" : "/", replace, resetScroll: false });
 		},
 		[navigate, animateOpenRef, layout],
 	);
@@ -208,7 +208,7 @@ export function CollectionView({
 	);
 
 	// If the open record is filtered out (e.g. the search no longer matches it) or
-	// the id in the URL isn't a real record, drop back to the grid.
+	// the id in the URL isn't a real record, drop back to the collection.
 	useEffect(() => {
 		if (selectedId != null && selectedIndex === -1)
 			openRecord(null, { replace: true });
@@ -248,7 +248,7 @@ export function CollectionView({
 
 	// Reuse the route's own loading skeleton as the font-loading gate too —
 	// see `useFontsReady`. The data-loading and font-loading phases then read
-	// as one continuous skeleton, and the real hero/grid only ever mounts (and
+	// as one continuous skeleton, and the real hero/table only ever mounts (and
 	// starts its own staged `rise-in`/`fade-in`, below) once every custom font
 	// is actually ready to paint with, instead of racing it.
 	if (!fontsReady) return <CollectionSkeleton />;
@@ -264,8 +264,8 @@ export function CollectionView({
 				? `No records match “${search}”.`
 				: "No records match those filters.";
 
-	// What both layouts share: the floating search pill, the filter strip, the
-	// record panel and the corner links. Each layout below is only the page
+	// What both layouts share: the floating search pill, the bottom bar (the
+	// filters, then the links), and the record panel. Each layout below is only the page
 	// around them. Delays are inline `style`, not a Tailwind arbitrary
 	// `[animation-delay:…]` class — `.rise-in`/`.fade-in` are plain unlayered
 	// CSS (not `@layer utilities`), so they'd always beat a layered Tailwind
@@ -277,7 +277,7 @@ export function CollectionView({
 			    link, search and the theme toggle live in one small floating pill
 			    in the corner instead, so they're always within reach without a
 			    bar across the page. Opaque rather than backdrop-blurred — it sits
-			    over the grid for the whole scroll, and a blur under it would be
+			    over the table for the whole scroll, and a blur under it would be
 			    recomposited every scroll frame. */}
 			<div
 				className="floating-controls rise-in"
@@ -315,6 +315,7 @@ export function CollectionView({
 						settings={filterSettings}
 						onChange={setFilters}
 					/>
+					<WallCorners layout={layout} />
 				</div>
 			</div>
 
@@ -366,16 +367,14 @@ export function CollectionView({
 					)}
 				</SheetContent>
 			</Sheet>
-
-			<WallCorners layout={layout} />
 		</>
 	);
 
 	const hasRecords = filtered.length > 0;
 
-	// The wall and the grid are separate pages around the same chrome, which
+	// The wall and the table are separate pages around the same chrome, which
 	// stays mounted (and its entrance played) across a switch between them —
-	// `/` and `/grid` share this one `CollectionView`, so `layout` flips live.
+	// `/` and `/table` share this one `CollectionView`, so `layout` flips live.
 	const page = wallMode ? (
 		<Fragment key="wall">
 			{hasRecords ? (
@@ -408,43 +407,27 @@ export function CollectionView({
 			)}
 		</Fragment>
 	) : (
-		// Staged reveal on first paint: hero copy, then the grid, then the
+		// Staged reveal on first paint: hero copy, then the table, then the
 		// chrome — see the `rise-in`/`fade-in` utilities in styles.css. Each is
 		// a CSS `animation ... both`, so it only ever plays once per mount (a
 		// search keystroke re-rendering this component doesn't retrigger it)
 		// and holds `opacity: 0` for its own delay rather than flashing in at
-		// full opacity before its turn. The grid wrapper uses `fade-in`
-		// (opacity only), not `rise-in` (which also animates `transform`) — see
-		// the comment on `.fade-in` for why a `transform` on an ancestor of
-		// `CollectionGrid` would break its own fixed-position children.
-		<Fragment key="grid">
+		// full opacity before its turn.
+		<Fragment key="table">
 			{!search.trim() && <CollectionHero count={data.length} />}
 
 			<div
 				className="fade-in min-h-[70vh]"
 				style={{ animationDelay: `${revealMs + 150}ms` }}
-				// `animation-fill-mode: both` (see `.fade-in`) never really "ends" —
-				// it holds the finished keyframe indefinitely rather than the
-				// animation being removed — which keeps Chrome compositing this
-				// wrapper into its own layer forever. That layer boundary clips
-				// what CollectionGrid's fixed, backdrop-blurred child
-				// (`NowShowing`) can see behind it to just this
-				// subtree, so the blur silently stops reaching sibling content
-				// (e.g. the hero text above) once composited this way. Explicitly
-				// canceling the animation once it visually completes releases the
-				// layer and restores the correct backdrop-filter reach.
-				onAnimationEnd={(e) => {
-					e.currentTarget.style.animation = "none";
-				}}
 			>
-				{filtered.length === 0 ? (
-					<p className="text-muted-foreground">{emptyMessage}</p>
-				) : (
-					<CollectionGrid
+				{hasRecords ? (
+					<CollectionTable
 						records={filtered}
 						onOpen={openRecord}
 						focusedRecordId={selected?.id ?? null}
 					/>
+				) : (
+					<p className="text-muted-foreground">{emptyMessage}</p>
 				)}
 			</div>
 
@@ -477,7 +460,9 @@ export function CollectionView({
 
 	return (
 		<div
-			className={wallMode ? "w-full" : "w-full px-4 py-10 sm:px-6"}
+			// The table's page starts below the search pill and ends above the
+			// bottom bar, so neither covers it.
+			className={wallMode ? "w-full" : "w-full px-4 pt-24 pb-28 sm:px-6"}
 			// On the wall with records, the page is the surface it's dragged
 			// across (see `[data-wall-surface]` in styles.css).
 			data-wall-surface={wallMode && hasRecords ? "" : undefined}

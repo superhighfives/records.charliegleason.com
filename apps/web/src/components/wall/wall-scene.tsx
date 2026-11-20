@@ -12,11 +12,6 @@ import {
 	useState,
 } from "react";
 import * as THREE from "three";
-import {
-	computeSpanningIds,
-	hasNotes,
-	TILE_MIN_PX,
-} from "#/components/collection-grid";
 import { CollectionHero, heroDurationMs } from "#/components/collection-hero";
 import { CollectionStatsSentence } from "#/components/collection-stats-sentence";
 import { SceneStatsProbe } from "#/components/three/scene-stats-probe";
@@ -26,6 +21,11 @@ import {
 	type StreamTarget,
 	useTextureStream,
 } from "#/components/three/texture-stream";
+import {
+	computeSpanningIds,
+	hasNotes,
+	TILE_MIN_PX,
+} from "#/components/wall/tiles";
 import { displayCoverKey } from "#/lib/cover";
 import type { PublicRecord } from "#/lib/records";
 import {

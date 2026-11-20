@@ -49,10 +49,10 @@ export function parseRecordIdParam(param: string): number | null {
 }
 
 /**
- * Whether a path is the plain grid (`/grid`, `/grid/records/…`) rather than
- * the wall. Shared by the collection's layout and its loading fallback, so
- * they never disagree about which one's showing.
+ * Whether a path is the table (`/table`, `/table/records/…`) rather than the
+ * wall. Shared by the collection's layout and its loading fallback, so they
+ * never disagree about which one's showing.
  */
-export function isGridPath(pathname: string): boolean {
-	return pathname === "/grid" || pathname.startsWith("/grid/");
+export function isTablePath(pathname: string): boolean {
+	return pathname === "/table" || pathname.startsWith("/table/");
 }
