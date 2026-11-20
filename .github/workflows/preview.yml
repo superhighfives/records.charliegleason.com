@@ -95,9 +95,11 @@ jobs:
           # a queue it can't find, which then fails as "already taken". A new
           # queue can be missing from the list for a short time after it's made.
           for i in $(seq 1 12); do
-            bunx wrangler queues info records-analyze-pr-${PR} >/dev/null 2>&1 && exit 0
+            output=$(bunx wrangler queues info records-analyze-pr-${PR} 2>&1) && exit 0
             sleep 5
           done
+          # The last attempt's output, so an auth or rate-limit error shows.
+          echo "$output"
           echo "::error::The per-PR analyze queue was created but did not show in the queue list after 60s."
           exit 1
 
