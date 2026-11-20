@@ -72,6 +72,7 @@ import {
 	deleteRecord,
 	deleteRecords,
 	publishRecords,
+	queueMissingValues,
 	reapplyAllProfessional,
 	retryProfessionalGenerations,
 	unpublishRecords,
@@ -767,19 +768,37 @@ function AdminRecords() {
 	// Collection value totals (USD). `total` sums every record's effective value
 	// (manual if set, else the Discogs guess); `confirmedTotal` counts only records
 	// with a hand-entered value. Drives the header summary.
+	// `unfetched` counts pinned pressings Discogs hasn't been asked about yet (the
+	// "Fetch values" action); `needsPressing` counts records Discogs can't price
+	// until a pressing is pinned (the Catalog page).
 	const totals = useMemo(() => {
 		let total = 0;
 		let confirmedTotal = 0;
 		let valued = 0;
+		let unfetched = 0;
+		let needsPressing = 0;
 		for (const r of data) {
+			if (r.discogsId == null) needsPressing += 1;
+			else if (r.discogsValueFetchedAt == null) unfetched += 1;
 			const v = effectiveValue(r);
 			if (v == null) continue;
 			total += v;
 			valued += 1;
 			if (r.manualValue != null) confirmedTotal += v;
 		}
-		return { total, confirmedTotal, valued };
+		return { total, confirmedTotal, valued, unfetched, needsPressing };
 	}, [data]);
+	const fetchValuesMutation = useMutation({
+		mutationFn: () => queueMissingValues(),
+		onSuccess: ({ count }) => {
+			toast.success(
+				count > 0
+					? `Fetching ${count} value${count === 1 ? "" : "s"} from Discogs. Reload in a minute or two to see the new total.`
+					: "Every pinned pressing already has a value.",
+			);
+		},
+		onError: () => toast.error("Couldn't start fetching values. Try again."),
+	});
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
 	useEffect(() => {
@@ -1207,6 +1226,33 @@ function AdminRecords() {
 									{formatMoney(totals.confirmedTotal, "USD")}
 								</span>{" "}
 								confirmed
+							</>
+						)}
+						{totals.needsPressing > 0 && (
+							<>
+								{" "}
+								·{" "}
+								<Link
+									to="/admin/catalog"
+									className="underline underline-offset-4 hover:text-foreground"
+								>
+									{totals.needsPressing} need a pressing
+								</Link>
+							</>
+						)}
+						{totals.unfetched > 0 && (
+							<>
+								{" "}
+								·{" "}
+								<button
+									type="button"
+									className="underline underline-offset-4 hover:text-foreground disabled:opacity-50"
+									disabled={fetchValuesMutation.isPending}
+									onClick={() => fetchValuesMutation.mutate()}
+								>
+									Fetch {totals.unfetched} value
+									{totals.unfetched === 1 ? "" : "s"}
+								</button>
 							</>
 						)}
 					</p>

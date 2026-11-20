@@ -20,6 +20,7 @@ import { Route as ApiRecordsRouteImport } from './routes/api/records'
 import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
 import { Route as AdminFiltersRouteImport } from './routes/admin/filters'
 import { Route as AdminColorsRouteImport } from './routes/admin/colors'
+import { Route as AdminCatalogRouteImport } from './routes/admin/catalog'
 import { Route as AdminCaptureRouteImport } from './routes/admin/capture'
 import { Route as CollectionTableIndexRouteImport } from './routes/_collection/table.index'
 import { Route as GridRecordsIdRouteImport } from './routes/grid/records.$id'
@@ -89,6 +90,11 @@ const AdminFiltersRoute = AdminFiltersRouteImport.update({
 const AdminColorsRoute = AdminColorsRouteImport.update({
   id: '/colors',
   path: '/colors',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminCatalogRoute = AdminCatalogRouteImport.update({
+  id: '/catalog',
+  path: '/catalog',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminCaptureRoute = AdminCaptureRouteImport.update({
@@ -179,6 +185,7 @@ export interface FileRoutesByFullPath {
   '/404': typeof R404Route
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
+  '/admin/catalog': typeof AdminCatalogRoute
   '/admin/colors': typeof AdminColorsRoute
   '/admin/filters': typeof AdminFiltersRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -205,6 +212,7 @@ export interface FileRoutesByTo {
   '/404': typeof R404Route
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
+  '/admin/catalog': typeof AdminCatalogRoute
   '/admin/colors': typeof AdminColorsRoute
   '/admin/filters': typeof AdminFiltersRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -235,6 +243,7 @@ export interface FileRoutesById {
   '/404': typeof R404Route
   '/500': typeof R500Route
   '/admin/capture': typeof AdminCaptureRoute
+  '/admin/catalog': typeof AdminCatalogRoute
   '/admin/colors': typeof AdminColorsRoute
   '/admin/filters': typeof AdminFiltersRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -266,6 +275,7 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/admin/capture'
+    | '/admin/catalog'
     | '/admin/colors'
     | '/admin/filters'
     | '/admin/settings'
@@ -292,6 +302,7 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/admin/capture'
+    | '/admin/catalog'
     | '/admin/colors'
     | '/admin/filters'
     | '/admin/settings'
@@ -321,6 +332,7 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/admin/capture'
+    | '/admin/catalog'
     | '/admin/colors'
     | '/admin/filters'
     | '/admin/settings'
@@ -440,6 +452,13 @@ declare module '@tanstack/react-router' {
       path: '/colors'
       fullPath: '/admin/colors'
       preLoaderRoute: typeof AdminColorsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/catalog': {
+      id: '/admin/catalog'
+      path: '/catalog'
+      fullPath: '/admin/catalog'
+      preLoaderRoute: typeof AdminCatalogRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/admin/capture': {
@@ -577,6 +596,7 @@ const CollectionRouteRouteWithChildren = CollectionRouteRoute._addFileChildren(
 
 interface AdminRouteRouteChildren {
   AdminCaptureRoute: typeof AdminCaptureRoute
+  AdminCatalogRoute: typeof AdminCatalogRoute
   AdminColorsRoute: typeof AdminColorsRoute
   AdminFiltersRoute: typeof AdminFiltersRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
@@ -587,6 +607,7 @@ interface AdminRouteRouteChildren {
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminCaptureRoute: AdminCaptureRoute,
+  AdminCatalogRoute: AdminCatalogRoute,
   AdminColorsRoute: AdminColorsRoute,
   AdminFiltersRoute: AdminFiltersRoute,
   AdminSettingsRoute: AdminSettingsRoute,

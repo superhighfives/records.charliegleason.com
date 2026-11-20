@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
@@ -191,6 +191,25 @@ export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
 }
 
 /**
+ * Queue a Discogs value fetch for a record's pinned pressing. Best-effort and never
+ * throws: callers fire it after an identity write, and a failed send must not undo
+ * that write. A miss leaves the record for the bulk "fetch missing values" action.
+ */
+export async function enqueueValue(recordId: number): Promise<void> {
+	try {
+		await analyzeQueue().send({ recordId, mode: "value" });
+	} catch (err) {
+		console.error(`[queue] could not queue a value fetch for ${recordId}`, err);
+		Sentry.captureException(err);
+	}
+}
+
+/** Bulk variant of {@link enqueueValue}, in chunked `sendBatch` calls. */
+export function enqueueValueBatch(recordIds: number[]): Promise<void> {
+	return enqueueBatch(recordIds, "value");
+}
+
+/**
  * Re-pull a record from Discogs. Three paths by what's set:
  *  - pinned release → refresh enrichment (year, label, genre, format, size, catno,
  *    country) + a fresh value, and backfill the master link;
@@ -220,10 +239,6 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 		const detail = await getReleaseDetail(record.discogsId);
 		if (!detail) return record;
 
-		// Value is best-effort — a missing/failed price lookup shouldn't block the
-		// metadata refresh, so fetch it separately and keep the previous figure on miss.
-		const value = await getReleaseValue(record.discogsId).catch(() => null);
-
 		const [row] = await db
 			.update(records)
 			.set({
@@ -237,11 +252,12 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 				discCount: detail.discCount ?? record.discCount,
 				catno: detail.catno ?? record.catno,
 				country: detail.country ?? record.country,
-				...valueColumns(value),
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, id))
 			.returning();
+		// Refresh the value in the background, where a rate limit gets retried.
+		await enqueueValue(id);
 		return row ?? record;
 	}
 
@@ -331,6 +347,7 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 			})
 			.where(eq(records.id, id))
 			.returning();
+		await enqueueValue(id);
 		return row ?? record;
 	}
 
@@ -339,27 +356,24 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 }
 
 /**
- * The value-related column updates for a fetched Discogs value. A miss (no
- * usable figure) returns no changes, so a transient failure leaves any
- * previously-fetched value untouched rather than wiping it. Shared by the
- * refresh path and the standalone value fetch.
+ * The value columns to clear when a record's pressing changes: the stored figure
+ * priced a different release, so it must not count toward the collection total.
  */
-function valueColumns(value: Awaited<ReturnType<typeof getReleaseValue>>) {
-	if (!value || value.value == null) return {};
-	return {
-		discogsValue: value.value,
-		discogsValueCurrency: value.currency,
-		discogsValueJson: value.suggestions
-			? JSON.stringify(value.suggestions)
-			: null,
-		discogsValueFetchedAt: new Date(),
-	};
-}
+export const CLEARED_VALUE = {
+	discogsValue: null,
+	discogsValueCurrency: null,
+	discogsValueJson: null,
+	discogsValueFetchedAt: null,
+} as const;
 
 /**
- * Fetch just the Discogs value estimate for a record and store it, leaving all
- * other metadata untouched. Returns the updated row, or null if the record is
- * gone or has no Discogs id to value.
+ * Fetch the Discogs value estimate for a record's pinned pressing and store it,
+ * leaving all other metadata untouched. Returns the updated row, or null if the
+ * record is gone or has no pressing to value. A release with nothing to price
+ * (no suggestions, nothing for sale) still stamps `discogsValueFetchedAt`, so the
+ * bulk "fetch missing values" action doesn't re-queue it forever; any previous
+ * figure stays. Discogs failures (rate limit, auth, network) throw, so the queue
+ * can retry them and the editor can show them.
  */
 export async function fetchValueForRecord(id: number): Promise<Record | null> {
 	const db = getDb(env.DB);
@@ -370,16 +384,26 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 		.limit(1);
 	if (!record?.discogsId) return null;
 
-	const value = await getReleaseValue(record.discogsId).catch(() => null);
-	const cols = valueColumns(value);
-	// Nothing usable came back — leave the record (and its `updatedAt`) untouched so
-	// a failed fetch doesn't masquerade as a successful edit.
-	if (Object.keys(cols).length === 0) return record;
-
+	const value = await getReleaseValue(record.discogsId);
+	const now = new Date();
 	const [row] = await db
 		.update(records)
-		.set({ ...cols, updatedAt: new Date() })
-		.where(eq(records.id, id))
+		.set(
+			value?.value != null
+				? {
+						discogsValue: value.value,
+						discogsValueCurrency: value.currency,
+						discogsValueJson: value.suggestions
+							? JSON.stringify(value.suggestions)
+							: null,
+						discogsValueFetchedAt: now,
+						updatedAt: now,
+					}
+				: { discogsValueFetchedAt: now },
+		)
+		// The pressing could change while the request was in flight; a figure for
+		// the old one must not land on the new one.
+		.where(and(eq(records.id, id), eq(records.discogsId, record.discogsId)))
 		.returning();
 	return row ?? record;
 }
@@ -446,6 +470,29 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	if (mode === "capture-first-pass") {
 		await runCaptureFirstPass(recordId);
 		message.ack();
+		return;
+	}
+
+	// Discogs value fetch. Retried with backoff (a burst of these can trip Discogs'
+	// 60 req/min limit), and never touches the record's status on failure.
+	if (mode === "value") {
+		try {
+			await fetchValueForRecord(recordId);
+			message.ack();
+		} catch (err) {
+			const willRetry = message.attempts <= MAX_RETRIES;
+			console.error(
+				`[queue] value failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+			if (willRetry) {
+				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
+			} else {
+				Sentry.captureException(err);
+				message.ack();
+			}
+		}
 		return;
 	}
 
@@ -554,6 +601,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				masterUrl: result.masterUrl,
 				discogsId: result.discogsId,
 				discogsUrl: result.discogsUrl,
+				...(result.discogsId !== record.discogsId ? CLEARED_VALUE : {}),
 				coverImageKey: result.coverImageKey,
 				confidence: result.confidence,
 				candidatesJson: JSON.stringify(result.candidates),
@@ -565,6 +613,9 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, recordId));
+		if (result.discogsId && result.discogsId !== record.discogsId) {
+			await enqueueValue(recordId);
+		}
 
 		message.ack();
 	} catch (err) {

@@ -55,9 +55,12 @@ import {
 } from "#/lib/master-health";
 import { withPresizedKeys } from "#/lib/photo-variants";
 import {
+	CLEARED_VALUE,
 	enqueueAnalyze,
 	enqueueProfessional,
 	enqueueProfessionalBatch,
+	enqueueValue,
+	enqueueValueBatch,
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
@@ -773,8 +776,10 @@ export const publishRecord = createServerFn({ method: "POST" })
 						// actual change of the id — an unrelated save (e.g. editing notes)
 						// leaves the flag as the link-check set it.
 						...(masterId !== current.masterId ? { masterMissing: false } : {}),
+						// A new pressing invalidates the old one's value; the fetch below
+						// replaces it.
 						...(discogsId !== current.discogsId
-							? { releaseMissing: false }
+							? { releaseMissing: false, ...CLEARED_VALUE }
 							: {}),
 						coverImageKey,
 						coverIsUpload,
@@ -787,6 +792,9 @@ export const publishRecord = createServerFn({ method: "POST" })
 					})
 					.where(eq(records.id, id))
 					.returning();
+				if (row && discogsId && discogsId !== current.discogsId) {
+					await enqueueValue(id);
+				}
 				return row
 					? {
 							record: row,
@@ -997,6 +1005,102 @@ export const previewReleaseValue = createServerFn({ method: "POST" })
 	);
 
 /**
+ * Queue a Discogs value fetch for every pinned record that has never been
+ * valued — the admin list's "Fetch values" action. Each fetch runs on the queue
+ * (throttled, with retries), so this returns at once with how many it queued.
+ * Album-only records are skipped: Discogs only prices a specific pressing.
+ */
+export const queueMissingValues = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.handler(() =>
+		Sentry.startSpan({ name: "queueMissingValues" }, async () => {
+			const db = getDb(env.DB);
+			const rows = await db
+				.select({ id: records.id })
+				.from(records)
+				.where(
+					and(
+						isNotNull(records.discogsId),
+						isNull(records.discogsValueFetchedAt),
+					),
+				);
+			const ids = rows.map((r) => r.id);
+			await enqueueValueBatch(ids);
+			return { count: ids.length };
+		}),
+	);
+
+/**
+ * Pin a record to a specific pressing — the Catalog page's one-click pick. Fetches
+ * the release (which also proves it exists) and stores only its pressing-specific
+ * fields: catalog number, country, format, size and disc count. Album-level fields
+ * (year, label, genre, the master link) stay as they are, because a reissue's year
+ * is not the album's. Clears any old value and queues a fetch for the new pressing.
+ * Returns the updated row, or null if the record is gone.
+ */
+export const pinPressing = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((input: { id: number; discogsId: string }) => {
+		const discogsId = String(input.discogsId);
+		if (!/^\d+$/.test(discogsId)) throw new Error("Invalid Discogs release id");
+		return { id: input.id, discogsId };
+	})
+	.handler(({ data: { id, discogsId } }) =>
+		Sentry.startSpan({ name: "pinPressing" }, async () => {
+			const detail = await getReleaseDetail(discogsId);
+			if (!detail) throw new Error(`Discogs release ${discogsId} not found`);
+			const db = getDb(env.DB);
+			const now = new Date();
+			const [row] = await db
+				.update(records)
+				.set({
+					discogsId,
+					discogsUrl: `https://www.discogs.com/release/${discogsId}`,
+					releaseMissing: false,
+					releaseCheckedAt: now,
+					catno: detail.catno,
+					country: detail.country,
+					...(detail.type ? { format: detail.type } : {}),
+					...(detail.size ? { size: detail.size } : {}),
+					discCount: detail.discCount,
+					...CLEARED_VALUE,
+					updatedAt: now,
+				})
+				.where(eq(records.id, id))
+				.returning();
+			if (row) await enqueueValue(id);
+			return row ?? null;
+		}),
+	);
+
+/**
+ * Set or clear a record's hand-entered ("confirmed") value, which overrides the
+ * Discogs estimate in the collection total. A null or negative amount clears it.
+ */
+export const setManualValue = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((input: { id: number; value: number | null }) => ({
+		id: input.id,
+		value:
+			typeof input.value === "number" &&
+			Number.isFinite(input.value) &&
+			input.value >= 0
+				? input.value
+				: null,
+	}))
+	.handler(({ data: { id, value } }) =>
+		Sentry.startSpan({ name: "setManualValue" }, async () => {
+			const db = getDb(env.DB);
+			const [row] = await db
+				.update(records)
+				.set({ manualValue: value, updatedAt: new Date() })
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
+		}),
+	);
+
+/**
  * Set a record's Discogs identity — a master (album) and/or a release (pressing) —
  * directly, without the full editor form. Backs the bulk "assign masters" / "fix
  * broken links" flow, which now offers both masters and releases per row: picking
@@ -1040,6 +1144,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 						title: records.title,
 						pitchforkScore: records.pitchforkScore,
 						pitchforkUrl: records.pitchforkUrl,
+						discogsId: records.discogsId,
 					})
 					.from(records)
 					.where(eq(records.id, id))
@@ -1049,6 +1154,8 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 					artist: meta.artist || current.artist,
 					title: meta.title || current.title,
 				});
+				const pressingChanged =
+					discogsId !== undefined && discogsId !== current.discogsId;
 				const [row] = await db
 					.update(records)
 					.set({
@@ -1074,6 +1181,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 									releaseCheckedAt: now,
 								}
 							: {}),
+						...(pressingChanged ? CLEARED_VALUE : {}),
 						// Sync album-level metadata; skip blanks so a real value isn't
 						// clobbered with "".
 						...(meta.artist ? { artist: meta.artist } : {}),
@@ -1084,6 +1192,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 					})
 					.where(eq(records.id, id))
 					.returning();
+				if (row && pressingChanged && discogsId) await enqueueValue(id);
 				return row ?? null;
 			}),
 	);

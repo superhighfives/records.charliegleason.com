@@ -28,6 +28,7 @@ export const Route = createFileRoute("/admin")({ component: AdminLayout });
 /** The admin's pages, linked from the header. */
 const ADMIN_PAGES = [
 	{ to: "/admin", label: "List" },
+	{ to: "/admin/catalog", label: "Catalog" },
 	{ to: "/admin/colors", label: "Colors" },
 	{ to: "/admin/filters", label: "Filters" },
 	{ to: "/admin/settings", label: "Settings" },

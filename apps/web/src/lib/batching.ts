@@ -14,8 +14,9 @@ export interface AnalyzeRecordMessage {
 	// "analyze" (default) runs the full capture pipeline. "professional" is the admin's
 	// Apply: re-warp the square from the stored corners + tone and promote it live.
 	// "capture-first-pass" is the free on-capture seed (detect + warp), split out of the
-	// capture POST after the inline pass OOM'd the request isolate.
-	mode?: "analyze" | "capture-first-pass" | "professional";
+	// capture POST after the inline pass OOM'd the request isolate. "value" fetches the
+	// Discogs value estimate for the record's pinned pressing.
+	mode?: "analyze" | "capture-first-pass" | "professional" | "value";
 }
 
 /**

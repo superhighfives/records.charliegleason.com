@@ -423,8 +423,9 @@ export function pickSuggestedValue(raw: PriceSuggestions): {
  * Estimate a release's value. Tries Discogs' seller price suggestions first (a
  * per-grade median that needs a Seller account) and falls back to marketplace
  * stats (the lowest copy currently listed) so the feature still returns a number
- * for tokens without seller access. Returns null only when neither endpoint
- * yields a usable figure. `curr` is the currency for the stats fallback; price
+ * for tokens without seller access. Returns null when the release is gone; a
+ * result with a null `value` means nothing is for sale. Throws on any other
+ * Discogs failure. `curr` is the currency for the stats fallback; price
  * suggestions come back in the authenticated account's own currency.
  */
 export async function getReleaseValue(
@@ -463,7 +464,12 @@ export async function getReleaseValue(
 	);
 	if (!statsRes.ok) {
 		await statsRes.body?.cancel().catch(() => {});
-		return null;
+		// A missing release has no value; anything else (rate limit, auth, an
+		// upstream blip) is a failure the caller should retry or surface.
+		if (statsRes.status === 404) return null;
+		throw new Error(
+			`Discogs ${statsRes.status} for marketplace stats on release ${id}`,
+		);
 	}
 	const stats = (await statsRes.json()) as {
 		lowest_price?: { value?: unknown; currency?: unknown } | null;
