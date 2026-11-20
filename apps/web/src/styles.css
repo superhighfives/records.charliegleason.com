@@ -696,8 +696,8 @@ a {
   text-transform: uppercase;
   color: var(--muted-foreground);
 }
-/* The arrow keeps its space when hidden, so sorting doesn't shift the
-   heading, and it shows faintly on hover to say the column sorts. */
+/* The sorted column shows an arrow. An unsorted one shows a dot on hover,
+   to say it sorts. Both sit in the same space, so the heading doesn't shift. */
 .collection-table-sort {
   display: inline-flex;
   align-items: center;
@@ -706,18 +706,15 @@ a {
   letter-spacing: inherit;
   transition: color 150ms ease-out;
 }
-.collection-table-sort > svg {
-  opacity: 0;
-  transition: opacity 150ms ease-out;
-}
-.collection-table-sort:hover > svg {
-  opacity: 0.5;
-}
 .collection-table-sort:hover,
 .collection-table-sort[data-sorted] {
   color: var(--foreground);
 }
-.collection-table-sort[data-sorted] > svg {
+.collection-table-sort:not([data-sorted]) > svg {
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+.collection-table-sort:not([data-sorted]):hover > svg {
   opacity: 1;
 }
 .collection-table td {

@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Dot } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
 import { FadeImage } from "#/components/fade-image";
@@ -102,7 +102,8 @@ function SortHeading({
 	onSort: (sort: TableSort | null) => void;
 }) {
 	const direction = sort?.column === column ? sort.direction : null;
-	const Arrow = direction === "desc" ? ArrowDown : ArrowUp;
+	// A dot on hover until the column sorts (see `.collection-table-sort`).
+	const Icon = direction === "desc" ? ArrowDown : direction ? ArrowUp : Dot;
 	return (
 		<th
 			scope="col"
@@ -129,7 +130,7 @@ function SortHeading({
 				}
 			>
 				{label}
-				<Arrow aria-hidden className="size-3" />
+				<Icon aria-hidden className="size-3" />
 			</button>
 		</th>
 	);
