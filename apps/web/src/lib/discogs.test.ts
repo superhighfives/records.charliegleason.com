@@ -6,6 +6,7 @@ import {
 	checkMasterLiveness,
 	checkReleaseLiveness,
 	getMasterVersions,
+	getMostOwnedVinylRelease,
 	getReleaseValue,
 	parseMasterId,
 	parseReleaseId,
@@ -601,5 +602,41 @@ describe("getMasterVersions", () => {
 		await expect(getMasterVersions("1")).rejects.toThrow(
 			"Discogs 401 for versions of master 1",
 		);
+	});
+});
+
+describe("getMostOwnedVinylRelease", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const version = (id: number, format: string, have: number) => ({
+		id,
+		major_formats: [format],
+		stats: { community: { in_collection: have } },
+	});
+
+	it("picks the vinyl pressing the most people own", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					versions: [
+						version(1, "Vinyl", 20),
+						version(2, "CD", 900),
+						version(3, "Vinyl", 300),
+					],
+				}),
+			),
+		);
+		await expect(getMostOwnedVinylRelease("9")).resolves.toBe("3");
+	});
+
+	it("returns null for a missing album", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, { status: 404 })),
+		);
+		await expect(getMostOwnedVinylRelease("9")).resolves.toBeNull();
 	});
 });

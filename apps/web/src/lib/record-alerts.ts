@@ -40,9 +40,7 @@ export interface RecordAlertCounts {
 	unmatched: number;
 	analysisFailed: number;
 	imageFailed: number;
-	/** An album is linked, but no pressing, so Discogs can't price it. */
-	needsPressing: number;
-	/** A pressing is pinned, but its value was never fetched or queued. */
+	/** Linked to Discogs, but its value was never fetched or queued. */
 	valuesToFetch: number;
 }
 
@@ -53,7 +51,6 @@ export function countRecordAlerts(rows: readonly Record[]): RecordAlertCounts {
 		unmatched: 0,
 		analysisFailed: 0,
 		imageFailed: 0,
-		needsPressing: 0,
 		valuesToFetch: 0,
 	};
 	for (const r of rows) {
@@ -61,9 +58,8 @@ export function countRecordAlerts(rows: readonly Record[]): RecordAlertCounts {
 		if (isUnmatched(r)) counts.unmatched += 1;
 		if (r.status === "failed") counts.analysisFailed += 1;
 		if (r.professionalJobStatus === "failed") counts.imageFailed += 1;
-		if (r.masterId != null && r.discogsId == null) counts.needsPressing += 1;
 		if (
-			r.discogsId != null &&
+			(r.discogsId != null || r.masterId != null) &&
 			r.discogsValueFetchedAt == null &&
 			!isValueQueued(r)
 		) {

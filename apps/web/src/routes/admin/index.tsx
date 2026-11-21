@@ -745,19 +745,22 @@ function AdminRecords() {
 
 	// Collection value totals (USD). `total` sums every record's effective value
 	// (manual if set, else the Discogs guess); `confirmedTotal` counts only records
-	// with a hand-entered value. Drives the header summary.
+	// with a hand-entered value; `estimated` counts values priced from the album's
+	// most-owned pressing rather than a pinned one. Drives the header summary.
 	const totals = useMemo(() => {
 		let total = 0;
 		let confirmedTotal = 0;
 		let valued = 0;
+		let estimated = 0;
 		for (const r of data) {
 			const v = effectiveValue(r);
 			if (v == null) continue;
 			total += v;
 			valued += 1;
 			if (r.manualValue != null) confirmedTotal += v;
+			else if (r.discogsId == null) estimated += 1;
 		}
-		return { total, confirmedTotal, valued };
+		return { total, confirmedTotal, valued, estimated };
 	}, [data]);
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
@@ -1191,6 +1194,13 @@ function AdminRecords() {
 									{formatMoney(totals.confirmedTotal, "USD")}
 								</span>{" "}
 								confirmed
+							</>
+						)}
+						{totals.estimated > 0 && (
+							<>
+								{" "}
+								· <span className="tabular-nums">{totals.estimated}</span>{" "}
+								estimated from the album
 							</>
 						)}
 					</p>

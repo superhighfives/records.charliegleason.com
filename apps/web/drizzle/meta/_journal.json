@@ -232,6 +232,13 @@
       "when": 1795231135162,
       "tag": "0032_real_killmonger",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1795232092711,
+      "tag": "0033_lying_quasar",
+      "breakpoints": true
     }
   ]
 }

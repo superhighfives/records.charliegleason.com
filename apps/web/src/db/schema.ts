@@ -119,6 +119,9 @@ export const records = sqliteTable("records", {
 	discogsValueFetchedAt: integer("discogs_value_fetched_at", {
 		mode: "timestamp",
 	}),
+	// The release the Discogs value was priced from: the pinned pressing, or, with
+	// none pinned, the album's most-owned vinyl pressing (an estimate).
+	discogsValueReleaseId: text("discogs_value_release_id"),
 	// Set when a value fetch is queued, cleared when it finishes or gives up. The
 	// queue menu counts these to show fetches in progress.
 	discogsValueQueuedAt: integer("discogs_value_queued_at", {

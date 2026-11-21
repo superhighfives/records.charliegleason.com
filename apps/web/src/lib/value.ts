@@ -11,6 +11,19 @@ type Valued = {
 	discogsValue?: number | null;
 };
 
+/**
+ * What a record's Discogs value is priced from: its pinned pressing, else its
+ * album (master), else nothing. When this changes, the stored value is stale.
+ */
+export function valuationKey(record: {
+	masterId: string | null;
+	discogsId: string | null;
+}): string | null {
+	if (record.discogsId) return `release:${record.discogsId}`;
+	if (record.masterId) return `master:${record.masterId}`;
+	return null;
+}
+
 /** The value we count for a record: manual (confirmed) if set, else the Discogs guess. */
 export function effectiveValue(record: Valued): number | null {
 	return record.manualValue ?? record.discogsValue ?? null;

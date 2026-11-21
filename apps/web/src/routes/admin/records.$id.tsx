@@ -1530,17 +1530,36 @@ function RecordDetail() {
 						)}
 					</div>
 
-					{/* Value is per-pressing, so it only appears once an album is linked AND
-					    a specific release is pinned (a release without a master is a stale
-					    leftover — don't surface its value). The headline is the manual
-					    (confirmed) value if set, else the Discogs guess. */}
-					{effectiveMasterId != null && activeDiscogsId != null && (
+					{/* Any Discogs-linked record has a value: its pinned pressing's price,
+					    or without one, an estimate from the album's most-owned vinyl
+					    pressing. The headline is the manual (confirmed) value if set,
+					    else the Discogs figure. */}
+					{(effectiveMasterId != null || activeDiscogsId != null) && (
 						<div className="space-y-3 rounded-lg border p-3">
 							<div>
 								<h2 className="text-sm font-semibold">Value</h2>
 								<p className="text-xs text-muted-foreground">
-									The pinned pressing’s Discogs price — or a confirmed price you
-									set. Edit it in the form below.
+									{record.discogsId ? (
+										"The pinned pressing’s Discogs price"
+									) : (
+										<>
+											Estimated from{" "}
+											{record.discogsValueReleaseId ? (
+												<a
+													href={`https://www.discogs.com/release/${record.discogsValueReleaseId}`}
+													target="_blank"
+													rel="noreferrer"
+													className="underline underline-offset-4"
+												>
+													the album’s most-owned vinyl pressing
+												</a>
+											) : (
+												"the album’s most-owned vinyl pressing"
+											)}
+											. Pin your pressing for an exact price
+										</>
+									)}
+									, or set a confirmed price in the form below.
 								</p>
 							</div>
 							<div className="flex items-start justify-between gap-3">
@@ -1551,7 +1570,11 @@ function RecordDetail() {
 											record.discogsValueCurrency ?? "USD",
 										)}
 										<span className="ml-2 align-middle text-xs font-normal text-muted-foreground">
-											{record.manualValue != null ? "confirmed" : "estimated"}
+											{record.manualValue != null
+												? "confirmed"
+												: record.discogsId
+													? "pressing"
+													: "estimated"}
 										</span>
 									</p>
 									<p className="mt-1 text-xs text-muted-foreground">

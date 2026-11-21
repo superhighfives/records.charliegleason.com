@@ -294,6 +294,39 @@ function isVinylVersion(v: any): boolean {
 }
 
 /**
+ * The vinyl pressing of an album that the most Discogs users own, as a release
+ * id: the best guess at the pressing in hand when none is pinned. Reads the first
+ * page (100) of vinyl versions only, so a master with hundreds of pressings may
+ * miss a later one. Null when the album has no vinyl version or is gone; throws
+ * on any other Discogs failure.
+ */
+export async function getMostOwnedVinylRelease(
+	masterId: string,
+): Promise<string | null> {
+	const res = await discogsFetch(
+		`${BASE}/masters/${masterId}/versions?format=Vinyl&per_page=${MAX_PER_PAGE}`,
+	);
+	if (!res.ok) {
+		await res.body?.cancel().catch(() => {});
+		if (res.status === 404) return null;
+		throw new Error(`Discogs ${res.status} for versions of master ${masterId}`);
+	}
+	const data = (await res.json()) as {
+		versions?: Array<{
+			id?: number;
+			stats?: { community?: { in_collection?: number } };
+		}>;
+	};
+	let best: { id: number; have: number } | null = null;
+	for (const v of data.versions ?? []) {
+		if (v.id == null || !isVinylVersion(v)) continue;
+		const have = v.stats?.community?.in_collection ?? 0;
+		if (!best || have > best.have) best = { id: v.id, have };
+	}
+	return best ? String(best.id) : null;
+}
+
+/**
  * List a master's releases (pressings) as `DiscogsCandidate`s so the editor can
  * offer "pick a specific pressing" once an album is chosen — vinyl only, since
  * that's the collection. The versions endpoint carries per-pressing fields but not

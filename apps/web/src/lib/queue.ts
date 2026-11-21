@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
@@ -16,6 +16,7 @@ import { runCaptureFirstPass } from "#/lib/capture-first-pass";
 import { generateColorTexture } from "#/lib/color-texture";
 import {
 	getMasterDetail,
+	getMostOwnedVinylRelease,
 	getReleaseDetail,
 	getReleaseValue,
 	searchMasters,
@@ -23,7 +24,7 @@ import {
 } from "#/lib/discogs";
 import { logJobEvent } from "#/lib/job-events";
 import { applyProfessional } from "#/lib/professional-pipeline";
-import { formatMoney } from "#/lib/value";
+import { formatMoney, valuationKey } from "#/lib/value";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -369,12 +370,14 @@ export const CLEARED_VALUE = {
 	discogsValueJson: null,
 	discogsValueFetchedAt: null,
 	discogsValueQueuedAt: null,
+	discogsValueReleaseId: null,
 } as const;
 
 /**
- * Fetch the Discogs value estimate for a record's pinned pressing and store it,
- * leaving all other metadata untouched. Returns the updated row, or null if the
- * record is gone or has no pressing to value. A release with nothing to price
+ * Fetch the Discogs value for a record and store it, leaving all other metadata
+ * untouched. Prices the pinned pressing, or with none pinned, the album's
+ * most-owned vinyl pressing (see `discogsValueReleaseId`). Returns the updated
+ * row, or null if the record is gone or has no Discogs link. A release with nothing to price
  * (no suggestions, nothing for sale) still stamps `discogsValueFetchedAt`, so the
  * bulk "fetch missing values" action doesn't re-queue it forever; any previous
  * figure stays. Discogs failures (rate limit, auth, network) throw, so the queue
@@ -387,12 +390,19 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 		.from(records)
 		.where(eq(records.id, id))
 		.limit(1);
-	if (!record?.discogsId) {
-		if (record) await clearValueQueued(id);
+	if (!record) return null;
+	if (!valuationKey(record)) {
+		await clearValueQueued(id);
 		return null;
 	}
 
-	const value = await getReleaseValue(record.discogsId);
+	// The pinned pressing when there is one; otherwise estimate from the album's
+	// most-owned vinyl pressing.
+	const releaseId =
+		record.discogsId ??
+		(record.masterId ? await getMostOwnedVinylRelease(record.masterId) : null);
+
+	const value = releaseId ? await getReleaseValue(releaseId) : null;
 	const now = new Date();
 	const [row] = await db
 		.update(records)
@@ -404,15 +414,26 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 						discogsValueJson: value.suggestions
 							? JSON.stringify(value.suggestions)
 							: null,
+						discogsValueReleaseId: releaseId,
 						discogsValueFetchedAt: now,
 						discogsValueQueuedAt: null,
 						updatedAt: now,
 					}
 				: { discogsValueFetchedAt: now, discogsValueQueuedAt: null },
 		)
-		// The pressing could change while the request was in flight; a figure for
-		// the old one must not land on the new one.
-		.where(and(eq(records.id, id), eq(records.discogsId, record.discogsId)))
+		// The pressing or album could change while the request was in flight; a
+		// figure for the old one must not land on the new one.
+		.where(
+			and(
+				eq(records.id, id),
+				record.discogsId
+					? eq(records.discogsId, record.discogsId)
+					: isNull(records.discogsId),
+				record.masterId
+					? eq(records.masterId, record.masterId)
+					: isNull(records.masterId),
+			),
+		)
 		.returning();
 	return row ?? record;
 }
@@ -515,9 +536,11 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 					"value",
 					"info",
 					recordId,
-					row.discogsValue != null
-						? `${formatMoney(row.discogsValue, row.discogsValueCurrency ?? "USD")} on Discogs`
-						: "Nothing for sale on Discogs",
+					row.discogsValue == null
+						? "Nothing for sale on Discogs"
+						: row.discogsId
+							? `${formatMoney(row.discogsValue, row.discogsValueCurrency ?? "USD")} for the pinned pressing`
+							: `${formatMoney(row.discogsValue, row.discogsValueCurrency ?? "USD")} estimated from release ${row.discogsValueReleaseId}`,
 				);
 			}
 			message.ack();
@@ -636,6 +659,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			});
 		}
 
+		const valueStale = valuationKey(record) !== valuationKey(result);
 		await db
 			.update(records)
 			.set({
@@ -655,7 +679,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				masterUrl: result.masterUrl,
 				discogsId: result.discogsId,
 				discogsUrl: result.discogsUrl,
-				...(result.discogsId !== record.discogsId ? CLEARED_VALUE : {}),
+				...(valueStale ? CLEARED_VALUE : {}),
 				coverImageKey: result.coverImageKey,
 				confidence: result.confidence,
 				candidatesJson: JSON.stringify(result.candidates),
@@ -667,9 +691,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, recordId));
-		if (result.discogsId && result.discogsId !== record.discogsId) {
-			await enqueueValue(recordId);
-		}
+		if (valueStale && valuationKey(result)) await enqueueValue(recordId);
 		await logJobEvent(
 			"analyze",
 			result.masterId || result.discogsId ? "info" : "error",

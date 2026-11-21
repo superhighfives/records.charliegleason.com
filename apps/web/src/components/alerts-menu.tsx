@@ -33,7 +33,7 @@ export function AlertsMenu() {
 			toast.success(
 				count > 0
 					? `Fetching ${plural(count, "value", "values")} from Discogs. Follow them in the queue menu.`
-					: "Every pinned pressing already has a value.",
+					: "Every linked record already has a value.",
 			);
 			await queryClient.invalidateQueries({ queryKey: ["records"] });
 		},
@@ -45,7 +45,6 @@ export function AlertsMenu() {
 		counts.analysisFailed +
 		counts.imageFailed +
 		counts.unmatched +
-		counts.needsPressing +
 		counts.valuesToFetch;
 	if (total === 0) return null;
 
@@ -97,13 +96,6 @@ export function AlertsMenu() {
 						search={{ assign: "unmatched" }}
 						text={`${plural(counts.unmatched, "record has", "records have")} no album`}
 						action="Assign"
-					/>
-				)}
-				{counts.needsPressing > 0 && (
-					<AlertLink
-						search={{ f: "matched,albumOnly" }}
-						text={`${plural(counts.needsPressing, "record needs", "records need")} a pressing`}
-						action="Show"
 					/>
 				)}
 				{counts.valuesToFetch > 0 && (

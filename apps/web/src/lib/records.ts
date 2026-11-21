@@ -78,6 +78,7 @@ import {
 	serializeCornerBand,
 } from "#/lib/sleeve-corners";
 import { pitchforkAfterRematch } from "#/lib/the-fork";
+import { valuationKey } from "#/lib/value";
 
 /**
  * Server-side data access for the records collection.
@@ -763,6 +764,8 @@ export const publishRecord = createServerFn({ method: "POST" })
 					data.pitchforkScore,
 				);
 
+				const valueStale =
+					valuationKey(current) !== valuationKey({ masterId, discogsId });
 				const [row] = await db
 					.update(records)
 					.set({
@@ -778,11 +781,12 @@ export const publishRecord = createServerFn({ method: "POST" })
 						// actual change of the id — an unrelated save (e.g. editing notes)
 						// leaves the flag as the link-check set it.
 						...(masterId !== current.masterId ? { masterMissing: false } : {}),
-						// A new pressing invalidates the old one's value; the fetch below
-						// replaces it.
 						...(discogsId !== current.discogsId
-							? { releaseMissing: false, ...CLEARED_VALUE }
+							? { releaseMissing: false }
 							: {}),
+						// A new pressing or album invalidates the old value; the fetch
+						// below replaces it.
+						...(valueStale ? CLEARED_VALUE : {}),
 						coverImageKey,
 						coverIsUpload,
 						// A record is only publishable once it has an identity (master
@@ -794,9 +798,7 @@ export const publishRecord = createServerFn({ method: "POST" })
 					})
 					.where(eq(records.id, id))
 					.returning();
-				if (row && discogsId && discogsId !== current.discogsId) {
-					await enqueueValue(id);
-				}
+				if (row && valueStale && valuationKey(row)) await enqueueValue(id);
 				return row
 					? {
 							record: row,
@@ -1022,7 +1024,7 @@ export const queueMissingValues = createServerFn({ method: "POST" })
 				.from(records)
 				.where(
 					and(
-						isNotNull(records.discogsId),
+						or(isNotNull(records.discogsId), isNotNull(records.masterId)),
 						isNull(records.discogsValueFetchedAt),
 						// Skip fetches already queued, so a second click doesn't double them.
 						or(
@@ -1084,6 +1086,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 						title: records.title,
 						pitchforkScore: records.pitchforkScore,
 						pitchforkUrl: records.pitchforkUrl,
+						masterId: records.masterId,
 						discogsId: records.discogsId,
 					})
 					.from(records)
@@ -1094,8 +1097,12 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 					artist: meta.artist || current.artist,
 					title: meta.title || current.title,
 				});
-				const pressingChanged =
-					discogsId !== undefined && discogsId !== current.discogsId;
+				const valueStale =
+					valuationKey(current) !==
+					valuationKey({
+						masterId: masterId !== undefined ? masterId : current.masterId,
+						discogsId: discogsId !== undefined ? discogsId : current.discogsId,
+					});
 				const [row] = await db
 					.update(records)
 					.set({
@@ -1121,7 +1128,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 									releaseCheckedAt: now,
 								}
 							: {}),
-						...(pressingChanged ? CLEARED_VALUE : {}),
+						...(valueStale ? CLEARED_VALUE : {}),
 						// Sync album-level metadata; skip blanks so a real value isn't
 						// clobbered with "".
 						...(meta.artist ? { artist: meta.artist } : {}),
@@ -1132,7 +1139,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 					})
 					.where(eq(records.id, id))
 					.returning();
-				if (row && pressingChanged && discogsId) await enqueueValue(id);
+				if (row && valueStale && valuationKey(row)) await enqueueValue(id);
 				return row ?? null;
 			}),
 	);

@@ -34,8 +34,7 @@ describe("countRecordAlerts", () => {
 			unmatched: 2,
 			analysisFailed: 1,
 			imageFailed: 0,
-			needsPressing: 2,
-			valuesToFetch: 1,
+			valuesToFetch: 3,
 		});
 	});
 
