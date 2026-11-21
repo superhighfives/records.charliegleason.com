@@ -11,11 +11,26 @@ export const Route = createFileRoute("/admin/activity")({
 	component: ActivityPage,
 });
 
-const KIND_LABELS: { [K in ActivityEvent["kind"]]: string } = {
-	analyze: "Analyze",
-	professional: "Apply",
-	value: "Value",
-	color: "Color",
+// Each job type gets its own pill colour, so a long log scans by type at a glance.
+const KINDS: {
+	[K in ActivityEvent["kind"]]: { label: string; className: string };
+} = {
+	analyze: {
+		label: "Analyze",
+		className: "border-sky-500/40 text-sky-600 dark:text-sky-400",
+	},
+	professional: {
+		label: "Apply",
+		className: "border-violet-500/40 text-violet-600 dark:text-violet-400",
+	},
+	value: {
+		label: "Value",
+		className: "border-emerald-500/40 text-emerald-600 dark:text-emerald-400",
+	},
+	color: {
+		label: "Color",
+		className: "border-amber-500/40 text-amber-600 dark:text-amber-400",
+	},
 };
 
 const timeFormat = new Intl.DateTimeFormat(undefined, {
@@ -65,9 +80,14 @@ function ActivityPage() {
 				<ul className="divide-y divide-border rounded-md border border-border">
 					{shown.map((e) => (
 						<li key={e.id} className="space-y-0.5 px-3 py-2.5 text-sm">
-							<div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-								<span className="font-medium text-foreground">
-									{KIND_LABELS[e.kind]}
+							<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+								<span
+									className={cn(
+										"inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 font-medium",
+										KINDS[e.kind].className,
+									)}
+								>
+									{KINDS[e.kind].label}
 								</span>
 								{e.recordId != null && (
 									<Link
