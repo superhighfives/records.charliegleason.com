@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { valuationKey } from "./value";
+import { isMonthlyRefreshDay, valuationKey } from "./value";
 
 describe("valuationKey", () => {
 	it("prices from the pinned pressing over the album", () => {
@@ -16,5 +16,13 @@ describe("valuationKey", () => {
 		expect(valuationKey({ masterId: "1", discogsId: null })).not.toBe(
 			valuationKey({ masterId: "3", discogsId: null }),
 		);
+	});
+});
+
+describe("isMonthlyRefreshDay", () => {
+	it("is true on the 1st in UTC, whatever the local zone", () => {
+		expect(isMonthlyRefreshDay(Date.parse("2026-12-01T13:00:00Z"))).toBe(true);
+		expect(isMonthlyRefreshDay(Date.parse("2026-11-30T23:59:59Z"))).toBe(false);
+		expect(isMonthlyRefreshDay(Date.parse("2026-12-02T00:00:00Z"))).toBe(false);
 	});
 });

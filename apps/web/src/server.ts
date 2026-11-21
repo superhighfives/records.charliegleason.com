@@ -5,11 +5,16 @@ import { runDailyRecordPick } from "#/lib/daily-record";
 import { runWeeklyDigest } from "#/lib/digest";
 import { pruneJobEvents } from "#/lib/job-events";
 import { runLinkHealthCheck } from "#/lib/master-health";
+import { isMonthlyRefreshDay } from "#/lib/value";
 
 const LINK_CHECK_CRON = "0 9 * * *";
 const DAILY_RECORD_CRON = "0 13 * * *";
 
-import { type AnalyzeMessage, handleAnalyzeBatch } from "#/lib/queue";
+import {
+	type AnalyzeMessage,
+	handleAnalyzeBatch,
+	refreshAllValues,
+} from "#/lib/queue";
 
 /**
  * Worker entry. Wraps TanStack Start's default fetch handler, adds a `scheduled`
@@ -26,13 +31,22 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 	// Three crons share this handler (see wrangler.jsonc `triggers.crons`) — dispatch
 	// by the cron expression that fired. The daily link-check validates Discogs
 	// master + release links and prunes the Activity log; the daily record-pick
-	// emails one notes-empty record
-	// (see src/lib/daily-record.ts); the weekly slot runs the buy digest.
+	// emails one notes-empty record (see src/lib/daily-record.ts) and, on the first
+	// of the month, re-prices the collection; the weekly slot runs the buy digest.
+	// The re-pricing rides on the record-pick slot because that one makes no
+	// Discogs calls, so the two don't share the rate limit.
 	scheduled(controller, _env, ctx) {
 		if (controller.cron === LINK_CHECK_CRON) {
 			ctx.waitUntil(Promise.all([runLinkHealthCheck(), pruneJobEvents()]));
 		} else if (controller.cron === DAILY_RECORD_CRON) {
-			ctx.waitUntil(runDailyRecordPick());
+			ctx.waitUntil(
+				Promise.all([
+					runDailyRecordPick(),
+					...(isMonthlyRefreshDay(controller.scheduledTime)
+						? [refreshAllValues()]
+						: []),
+				]),
+			);
 		} else {
 			ctx.waitUntil(runWeeklyDigest());
 		}

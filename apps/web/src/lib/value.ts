@@ -24,6 +24,11 @@ export function valuationKey(record: {
 	return null;
 }
 
+/** Whether a cron run at `scheduledTime` (ms) is the monthly re-price: the 1st, in UTC. */
+export function isMonthlyRefreshDay(scheduledTime: number): boolean {
+	return new Date(scheduledTime).getUTCDate() === 1;
+}
+
 /** The value we count for a record: manual (confirmed) if set, else the Discogs guess. */
 export function effectiveValue(record: Valued): number | null {
 	return record.manualValue ?? record.discogsValue ?? null;
