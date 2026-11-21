@@ -77,10 +77,10 @@ import {
 	type ReframeParams,
 } from "#/lib/reframe-params";
 import {
-	type CornerBand,
-	isBandValid,
-	parseCornerBand,
-	serializeCornerBand,
+	isCropValid,
+	type NormalizedCorners,
+	parseCrop,
+	serializeCrop,
 } from "#/lib/sleeve-corners";
 import { sameAlbum } from "#/lib/the-fork";
 import { cn } from "#/lib/utils";
@@ -1861,9 +1861,9 @@ function RecordEditorHost() {
 						/>
 					</div>
 					<DialogDescription>
-						Drag the outer frame onto the background and the inner one onto the
-						sleeve (or auto-detect), then tune the tone — the preview updates
-						live. Apply re-warps the square and makes it the live cover.
+						Drag the corners to just inside the sleeve's edge (or snap them to
+						it), then tune the tone — the preview updates live. Apply re-warps
+						the square and makes it the live cover.
 					</DialogDescription>
 				</DialogHeader>
 				{record?.capturePhotoKey && (
@@ -1880,7 +1880,7 @@ function RecordEditorHost() {
 }
 
 // The crop/tone editor body — everything inside the Dialog below the header. Keyed by
-// id + capture key in the host, so it remounts (re-seeding band/tone from the record)
+// id + capture key in the host, so it remounts (re-seeding crop/tone from the record)
 // when you page to another record or replace the capture, but NOT on an ordinary poll
 // while a job runs — so an open editor keeps its unsaved edits.
 function RecordEditorBody({
@@ -1907,27 +1907,26 @@ function RecordEditorBody({
 	const [params, setParams] = useState<ReframeParams>(() =>
 		parseReframeParams(record.professionalParamsJson),
 	);
-	// Working copy of the corner band the crop editor drives, seeded from the row
-	// (full-frame default if it's never been cropped; legacy single-quad rows are
-	// synthesised into a band). "Apply" warps the capture to this.
-	const [band, setBand] = useState<CornerBand>(() =>
-		parseCornerBand(record.sleeveCornersJson),
+	// Working copy of the crop the editor drives, seeded from the row (full-frame
+	// default if it's never been cropped). "Apply" warps the capture to this.
+	const [crop, setCrop] = useState<NormalizedCorners>(() =>
+		parseCrop(record.sleeveCornersJson),
 	);
 	// A capture replace opens this editor before the background first-pass has
 	// re-detected the corners (the row's are nulled, so the seed above is the
-	// full-frame default). Adopt the detected band when the poll delivers it —
+	// full-frame default). Adopt the first pass's crop when the poll delivers it —
 	// but only while the crop is untouched, so it never moves handles under an
 	// admin who has already started dragging.
-	const bandTouched = useRef(false);
+	const cropTouched = useRef(false);
 	const adoptedCorners = useRef(record.sleeveCornersJson);
 	useEffect(() => {
-		if (bandTouched.current) return;
+		if (cropTouched.current) return;
 		if (
 			record.sleeveCornersJson &&
 			record.sleeveCornersJson !== adoptedCorners.current
 		) {
 			adoptedCorners.current = record.sleeveCornersJson;
-			setBand(parseCornerBand(record.sleeveCornersJson));
+			setCrop(parseCrop(record.sleeveCornersJson));
 		}
 	}, [record.sleeveCornersJson]);
 	// Which panel below the crop/preview shows — the tone knobs ("Edit") or the links to
@@ -1951,12 +1950,12 @@ function RecordEditorBody({
 		wasGeneratingRef.current = generating;
 	}, [record.professionalJobStatus]);
 
-	// Apply the edit: persist the current corner band + tone and enqueue the re-warp, which
+	// Apply the edit: persist the current crop + tone and enqueue the re-warp, which
 	// runs in the background. Returns immediately; the editor stays open showing the
 	// regenerating state, and the record view polls and swaps in the new cover in place
 	// when it lands.
 	const applyPro = useMutation({
-		mutationFn: () => reframeRecord({ data: { id: recordId, band, params } }),
+		mutationFn: () => reframeRecord({ data: { id: recordId, crop, params } }),
 		onSuccess: async (row) => {
 			if (row)
 				queryClient.setQueryData(recordQueryOptions(recordId).queryKey, row);
@@ -1993,7 +1992,7 @@ function RecordEditorBody({
 	// defaults so the sliders always have a concrete value.
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
 
-	// Does the working copy (band + tone) differ from what's saved on the row? Both
+	// Does the working copy (crop + tone) differ from what's saved on the row? Both
 	// signatures normalise (round corners / merge tone defaults + sort keys) so a
 	// reopened-but-untouched editor reads clean.
 	const paramSig = (v: ReframeParams) =>
@@ -2003,8 +2002,8 @@ function RecordEditorBody({
 			),
 		);
 	const isDirty =
-		serializeCornerBand(band) !==
-			serializeCornerBand(parseCornerBand(record.sleeveCornersJson)) ||
+		serializeCrop(crop) !==
+			serializeCrop(parseCrop(record.sleeveCornersJson)) ||
 		paramSig(params) !==
 			paramSig(parseReframeParams(record.professionalParamsJson));
 	// The photo's relationship to the shown cover drives the button states:
@@ -2040,10 +2039,10 @@ function RecordEditorBody({
 					<p className="text-xs font-medium text-muted-foreground">Crop</p>
 					<CornerEditor
 						src={`/api/photos/${record.capturePhotoKey}`}
-						value={band}
+						value={crop}
 						onChange={(next) => {
-							bandTouched.current = true;
-							setBand(next);
+							cropTouched.current = true;
+							setCrop(next);
 						}}
 						disabled={editorBusy}
 					/>
@@ -2091,10 +2090,10 @@ function RecordEditorBody({
 							})()
 						) : (
 							// Editing (never applied, or dirty): the live client-side cover
-							// preview, updating as band/knobs change.
+							// preview, updating as the crop/knobs change.
 							<ProPreview
 								src={`/api/photos/${record.capturePhotoKey}`}
-								band={band}
+								crop={crop}
 								params={params}
 							/>
 						))}
@@ -2252,7 +2251,7 @@ function RecordEditorBody({
 						variant="ghost"
 						disabled={!isDirty || editorBusy}
 						onClick={() => {
-							setBand(parseCornerBand(record.sleeveCornersJson));
+							setCrop(parseCrop(record.sleeveCornersJson));
 							setParams(parseReframeParams(record.professionalParamsJson));
 						}}
 					>
@@ -2268,12 +2267,10 @@ function RecordEditorBody({
 						variant={proIsLive && !jobFailed ? "outline" : "default"}
 						// Disabled while a job runs (editorBusy) — including the
 						// "Generating…" state — so a second Apply can't stack, and
-						// while the band is invalid (inner corners outside the outer
-						// frame, or a too-thin band) so a self-contradictory or
-						// clamp-colliding trimap can't be applied. When live + idle it's
-						// a plain Close, which is always allowed.
+						// while two corners have crossed, since that warp is garbage.
+						// When live + idle it's a plain Close, which is always allowed.
 						disabled={
-							editorBusy || (!(proIsLive && !jobFailed) && !isBandValid(band))
+							editorBusy || (!(proIsLive && !jobFailed) && !isCropValid(crop))
 						}
 						onClick={() =>
 							proIsLive && !jobFailed ? onClose() : applyPro.mutate()

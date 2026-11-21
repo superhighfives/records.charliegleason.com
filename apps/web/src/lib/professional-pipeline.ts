@@ -6,7 +6,7 @@ import { type Record, records } from "#/db/schema";
 import { withPresizedKeys } from "#/lib/photo-variants";
 import { reframeFromCapture } from "#/lib/professional";
 import { parseReframeParams } from "#/lib/reframe-params";
-import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
+import { parseCrop, serializeCrop } from "#/lib/sleeve-corners";
 
 /**
  * The admin's "Apply": re-warp the square cover from the record's stored corners + tone
@@ -25,11 +25,11 @@ export async function applyProfessional(
 	if (!record.capturePhotoKey) {
 		throw new Error("This record has no capture photo to generate from.");
 	}
-	const band = parseCornerBand(record.sleeveCornersJson);
+	const crop = parseCrop(record.sleeveCornersJson);
 	const params = parseReframeParams(record.professionalParamsJson);
 	const { key: coverKey } = await reframeFromCapture(
 		record.capturePhotoKey,
-		band,
+		crop,
 		params,
 	);
 
@@ -37,9 +37,10 @@ export async function applyProfessional(
 	await db
 		.update(records)
 		.set({
-			// Persist the SAME (normalised) band + params the cover was built from, so the
-			// stored inputs match the stored image.
-			sleeveCornersJson: serializeCornerBand(band),
+			// Persist the SAME (normalised) crop + params the cover was built from, so the
+			// stored inputs match the stored image. This also converts an older stored band
+			// to a bare quad.
+			sleeveCornersJson: serializeCrop(crop),
 			professionalImageKey: coverKey,
 			professionalParamsJson: JSON.stringify(params),
 			professionalStatus: "approved",

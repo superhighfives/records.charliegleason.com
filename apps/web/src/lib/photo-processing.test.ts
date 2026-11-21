@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	autoTone,
 	type Corners,
-	edgeDistances,
 	homography,
-	midQuad,
 	offsetQuad,
 	padToCanvas,
 	type RgbaImage,
@@ -441,27 +439,5 @@ describe("offsetQuad", () => {
 		expect(out[2][0]).toBeCloseTo(130, 5); // BR pulled left
 		expect(out[0][0]).toBeCloseTo(50, 5); // TL untouched
 		expect(out[1][1]).toBeCloseTo(50, 5); // top edge untouched
-	});
-});
-
-describe("midQuad / edgeDistances", () => {
-	it("midQuad is the corner-wise midpoint; edgeDistances measure the band per edge", () => {
-		const quad: Corners = [
-			[60, 60],
-			[140, 60],
-			[140, 140],
-			[60, 140],
-		];
-		const inner = offsetQuad(quad, -10);
-		const outer = offsetQuad(quad, 10);
-		const mid = midQuad(inner, outer);
-		// For an axis-aligned square, the midpoints land back on the original quad.
-		for (let i = 0; i < 4; i++) {
-			expect(mid[i][0]).toBeCloseTo(quad[i][0], 5);
-			expect(mid[i][1]).toBeCloseTo(quad[i][1], 5);
-		}
-		// Each edge sits 10 px from either side of the band.
-		for (const d of edgeDistances(mid, outer)) expect(d).toBeCloseTo(10, 5);
-		for (const d of edgeDistances(mid, inner)) expect(d).toBeCloseTo(10, 5);
 	});
 });

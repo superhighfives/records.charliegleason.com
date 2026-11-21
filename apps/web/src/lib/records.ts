@@ -72,10 +72,11 @@ import {
 	sanitizeReframeParams,
 } from "#/lib/reframe-params";
 import {
-	type CornerBand,
-	parseCornerBand,
-	parseNormalizedCornerBand,
-	serializeCornerBand,
+	isCropValid,
+	type NormalizedCorners,
+	parseCrop,
+	parseNormalizedCorners,
+	serializeCrop,
 } from "#/lib/sleeve-corners";
 import { pitchforkAfterRematch } from "#/lib/the-fork";
 import { valuationKey } from "#/lib/value";
@@ -854,16 +855,31 @@ export const refreshRecord = createServerFn({ method: "POST" })
 export const reframeRecord = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
 	.validator(
-		(input: { id: number; band?: CornerBand; params?: ReframeParams }) => ({
-			id: input.id,
-			// Runtime-sanitise untrusted input before it's persisted and later drives the
-			// homography/tone math in the consumer: drop a malformed band (out of 0..1 or
-			// non-finite → fall back to the stored crop) and keep only well-typed knobs.
-			band: parseNormalizedCornerBand(input.band) ?? undefined,
-			params: sanitizeReframeParams(input.params),
-		}),
+		(input: {
+			id: number;
+			crop?: NormalizedCorners;
+			params?: ReframeParams;
+		}) => {
+			// Runtime-check untrusted input before it's persisted and later drives the
+			// homography/tone math in the consumer. A supplied crop must be four points in
+			// 0..1 that don't cross; anything else is an error rather than a silent
+			// re-warp of the stored crop. Knobs are sanitised to well-typed values.
+			let crop: NormalizedCorners | undefined;
+			if (input.crop !== undefined) {
+				const parsed = parseNormalizedCorners(input.crop);
+				if (!parsed || !isCropValid(parsed)) {
+					throw new Error("The crop is invalid: its corners must not cross.");
+				}
+				crop = parsed;
+			}
+			return {
+				id: input.id,
+				crop,
+				params: sanitizeReframeParams(input.params),
+			};
+		},
 	)
-	.handler(({ data: { id, band, params } }) =>
+	.handler(({ data: { id, crop, params } }) =>
 		Sentry.startSpan({ name: "reframeRecord" }, async () => {
 			const db = getDb(env.DB);
 			const [record] = await db
@@ -875,15 +891,15 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			if (!record.capturePhotoKey) {
 				throw new Error("This record has no capture photo to reframe.");
 			}
-			// Use the edited band if supplied, else whatever's stored (or the
+			// Use the edited crop if supplied, else whatever's stored (or the
 			// full-frame default for a record that's never been cropped).
-			const effectiveBand = band ?? parseCornerBand(record.sleeveCornersJson);
+			const effectiveCrop = crop ?? parseCrop(record.sleeveCornersJson);
 			// Persist the crop + knobs so the consumer can pick them up, mark the job
 			// queued, and hand off. `professionalStatus` is deliberately left as-is.
 			const [row] = await db
 				.update(records)
 				.set({
-					sleeveCornersJson: serializeCornerBand(effectiveBand),
+					sleeveCornersJson: serializeCrop(effectiveCrop),
 					professionalParamsJson: JSON.stringify(params),
 					professionalJobStatus: "queued",
 					professionalError: null,

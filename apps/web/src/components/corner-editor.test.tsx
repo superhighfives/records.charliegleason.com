@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CornerEditor } from "#/components/corner-editor";
-import type { CornerBand } from "#/lib/sleeve-corners";
+import type { NormalizedCorners } from "#/lib/sleeve-corners";
 
 // jsdom never lays out elements, so clientWidth/clientHeight (which the loupe's
 // "is the box measured yet" gate depends on) are always 0 — stub them so the
@@ -50,20 +50,12 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-const BAND: CornerBand = {
-	outer: [
-		[0.1, 0.1],
-		[0.9, 0.1],
-		[0.9, 0.9],
-		[0.1, 0.9],
-	],
-	inner: [
-		[0.2, 0.2],
-		[0.8, 0.2],
-		[0.8, 0.8],
-		[0.2, 0.8],
-	],
-};
+const CROP: NormalizedCorners = [
+	[0.2, 0.2],
+	[0.8, 0.2],
+	[0.8, 0.8],
+	[0.2, 0.8],
+];
 
 function loupe(container: HTMLElement) {
 	return container.querySelector('[aria-hidden="true"].border-brand');
@@ -72,9 +64,9 @@ function loupe(container: HTMLElement) {
 describe("CornerEditor keyboard loupe", () => {
 	it("surfaces the loupe over the nudged handle on an arrow-key press", () => {
 		const { container, getByLabelText } = render(
-			<CornerEditor src="/api/photos/a" value={BAND} onChange={() => {}} />,
+			<CornerEditor src="/api/photos/a" value={CROP} onChange={() => {}} />,
 		);
-		const handle = getByLabelText("Top-left outer corner");
+		const handle = getByLabelText("Top-left corner");
 
 		// A real Tab focus selects the handle without moving it — no loupe yet,
 		// only a nudge should surface it.
@@ -91,10 +83,10 @@ describe("CornerEditor keyboard loupe", () => {
 
 	it("clears a stale loupe when focus moves to a different handle without nudging it", () => {
 		const { container, getByLabelText } = render(
-			<CornerEditor src="/api/photos/a" value={BAND} onChange={() => {}} />,
+			<CornerEditor src="/api/photos/a" value={CROP} onChange={() => {}} />,
 		);
-		const handle = getByLabelText("Top-left outer corner");
-		const otherHandle = getByLabelText("Bottom-right outer corner");
+		const handle = getByLabelText("Top-left corner");
+		const otherHandle = getByLabelText("Bottom-right corner");
 		const gridContainer = container.querySelector(
 			".cursor-crosshair",
 		) as HTMLElement;
@@ -111,10 +103,10 @@ describe("CornerEditor keyboard loupe", () => {
 
 	it("clears a stale loupe when a different handle is click-selected with the mouse", () => {
 		const { container, getByLabelText } = render(
-			<CornerEditor src="/api/photos/a" value={BAND} onChange={() => {}} />,
+			<CornerEditor src="/api/photos/a" value={CROP} onChange={() => {}} />,
 		);
-		const handle = getByLabelText("Top-left outer corner");
-		const otherHandle = getByLabelText("Bottom-right outer corner");
+		const handle = getByLabelText("Top-left corner");
+		const otherHandle = getByLabelText("Bottom-right corner");
 		const gridContainer = container.querySelector(
 			".cursor-crosshair",
 		) as HTMLElement;

@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "#/db";
 import { records } from "#/db/schema";
 import { professionalPipeline } from "#/lib/professional";
-import { serializeCornerBand } from "#/lib/sleeve-corners";
+import { serializeCrop } from "#/lib/sleeve-corners";
 
 /**
  * The free first-pass professional photo for a fresh (or replaced) capture:
@@ -43,13 +43,13 @@ export async function runCaptureFirstPass(recordId: number): Promise<void> {
 	);
 
 	try {
-		const { professionalKey, band } = await professionalPipeline(record);
+		const { professionalKey, crop } = await professionalPipeline(record);
 		await db
 			.update(records)
 			.set({
 				professionalImageKey: professionalKey,
-				// A later Apply overwrites this with the admin's band.
-				sleeveCornersJson: serializeCornerBand(band),
+				// A later Apply overwrites this with the admin's crop.
+				sleeveCornersJson: serializeCrop(crop),
 				// Generated, but not shown on the site until an admin approves it.
 				professionalStatus: "ready",
 				professionalError: null,

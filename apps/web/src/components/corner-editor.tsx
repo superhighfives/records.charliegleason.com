@@ -12,15 +12,15 @@ import {
 	type Corners,
 	EDGE_CONFIDENCE_MIN,
 	type EdgeConfidence,
-	edgeDistances,
-	midQuad,
 	type RgbaImage,
 	refineQuadEdgesDetailed,
 } from "#/lib/photo-processing";
 import {
-	bandFromQuad,
-	bandInvalidReason,
-	type CornerBand,
+	cropFromEdge,
+	EDGE_SEARCH_FRAC,
+	edgeFromCrop,
+	isCropValid,
+	meanSide,
 	type NormalizedCorner,
 	type NormalizedCorners,
 } from "#/lib/sleeve-corners";
@@ -34,12 +34,6 @@ const EDGES: Array<[number, number]> = [
 	[2, 3],
 	[3, 0],
 ];
-// The two quads of the corner band, with their editor affordances. The OUTER quad is
-// drawn wholly on the background (everything beyond it is certified background); the
-// INNER quad wholly on the sleeve (everything within it is certified sleeve). The true
-// edge lies in the band between — the dashed overlay shows where the cut will find it.
-const QUADS = ["outer", "inner"] as const;
-type QuadKey = (typeof QUADS)[number];
 const NUDGE = 0.0005; // arrow-key step, as a fraction of the image (~1px at 2048px)
 const COARSE_NUDGE_MULTIPLIER = 10; // Shift+arrow jumps ~10px instead of ~1px
 const CORNER_GRAB_PX = 14; // press within this of a corner → grab just that corner
@@ -77,18 +71,7 @@ async function decodeDownscaled(src: string, max: number): Promise<RgbaImage> {
 	return { data, width: w, height: h };
 }
 
-// Key identifying one of the eight corner handles (four per quad), for selection.
-const cornerKey = (quad: QuadKey, index: number) => `${quad}:${index}`;
-const isQuadKey = (value: string): value is QuadKey =>
-	(QUADS as readonly string[]).includes(value);
-const parseCornerKey = (key: string): { quad: QuadKey; index: number } => {
-	const [quad, index] = key.split(":");
-	if (!isQuadKey(quad)) throw new Error(`invalid corner key: ${key}`);
-	return { quad, index: Number(index) };
-};
-
 type DragState = {
-	quad: QuadKey;
 	index: number;
 	startClientX: number;
 	startClientY: number;
@@ -144,14 +127,12 @@ function Loupe({
 }
 
 /**
- * A draggable corner-BAND editor over the capture: two nested quads bracketing the
- * sleeve's true edge. The admin drags the OUTER quad (brand-coloured) so it sits wholly
- * on the background just past the sleeve, and the INNER quad (sky-coloured) so it sits
- * wholly on the sleeve just inside the edge — the band between is the matting trimap's
- * unknown region, and the dashed overlay shows where the edge search will actually cut
- * inside it. Controlled: `value` is the current {@link CornerBand} and `onChange`
- * reports every move. Ways to adjust:
- *  - drag a corner handle (either quad) to move it precisely;
+ * A draggable crop editor over the capture: one quad, placed just inside the sleeve's
+ * edge. The cover is warped from exactly this quad. The dashed overlay shows where the
+ * edge search finds the sleeve's edge, and Snap to edges moves the crop to just inside
+ * it. Controlled: `value` is the current crop and `onChange` reports every move. Ways to
+ * adjust:
+ *  - drag a corner handle to move it precisely;
  *  - click anywhere else to jump the nearest corner to that spot (then keep dragging it);
  *  - click a handle (without moving) to select it, shift-click to add/remove from the
  *    selection, then nudge every selected handle with the arrow keys; Escape deselects.
@@ -163,8 +144,8 @@ export function CornerEditor({
 	disabled,
 }: {
 	src: string;
-	value: CornerBand;
-	onChange: (band: CornerBand) => void;
+	value: NormalizedCorners;
+	onChange: (crop: NormalizedCorners) => void;
 	disabled?: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -173,21 +154,16 @@ export function CornerEditor({
 	// shift-click logic runs against it.
 	const pointerInteractionRef = useRef(false);
 	const [drag, setDrag] = useState<DragState | null>(null);
-	// The set of handles selected for keyboard nudging, keyed by `${quad}:${index}`.
-	const [selected, setSelected] = useState<Set<string>>(new Set());
+	// The corner indexes selected for keyboard nudging.
+	const [selected, setSelected] = useState<Set<number>>(new Set());
 	// Which handle the loupe magnifies — the hovered/focused one, or the one being
 	// dragged. The rendered image box size, tracked so the magnifier can map
 	// normalised corner coords to background pixels.
-	const [hover, setHover] = useState<{ quad: QuadKey; index: number } | null>(
-		null,
-	);
+	const [hover, setHover] = useState<number | null>(null);
 	// Shows the loupe over the last arrow-key-nudged handle for a couple of seconds
 	// after the keys stop, so it stays up even once the mouse (which isn't over the
 	// handle during keyboard nudging) is what would otherwise clear `hover`.
-	const [keyboardLoupe, setKeyboardLoupe] = useState<{
-		quad: QuadKey;
-		index: number;
-	} | null>(null);
+	const [keyboardLoupe, setKeyboardLoupe] = useState<number | null>(null);
 	const keyboardLoupeTimeoutRef = useRef<number | null>(null);
 	useEffect(() => {
 		return () => {
@@ -205,9 +181,9 @@ export function CornerEditor({
 		}
 	};
 	const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-	// The refined-edge overlay: where the server's edge search will snap each edge
-	// inside the band, and how confident it is per edge — so a disagreement (or an
-	// amber no-boundary edge) is visible *before* Apply, not a minute after.
+	// The refined-edge overlay: where the edge search finds each of the sleeve's edges,
+	// and how confident it is per edge — so a disagreement (or an amber no-boundary
+	// edge) is visible before snapping or applying.
 	const [refineSource, setRefineSource] = useState<RgbaImage | null>(null);
 	const [refined, setRefined] = useState<{
 		corners: NormalizedCorners;
@@ -215,8 +191,7 @@ export function CornerEditor({
 	} | null>(null);
 	const refineRafRef = useRef<number | null>(null);
 
-	const bandProblem = bandInvalidReason(value);
-	const bandValid = bandProblem === null;
+	const cropValid = isCropValid(value);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -232,17 +207,16 @@ export function CornerEditor({
 		};
 	}, [src]);
 
-	// Re-run the edge search whenever the band moves — coalesced to one animation
-	// frame so a fast drag doesn't queue a search per pointer event. The search runs
-	// from the band midline, bounded per edge by the inner/outer quads — exactly the
-	// server's cut. `value` is safe as a whole-object dependency here: the caller
-	// holds it in `useState` and only replaces it (via `onChange`) when the band
-	// actually moves, so its identity doesn't change on unrelated re-renders —
-	// unlike a prop rebuilt as a fresh literal every render, which would need
-	// narrowing to primitive fields to avoid spurious re-runs.
+	// Re-run the edge search whenever the crop moves — coalesced to one animation
+	// frame so a fast drag doesn't queue a search per pointer event. The search starts
+	// where the edge should be for this crop (the crop pushed out by the edge inset) and
+	// looks EDGE_SEARCH_FRAC of a side either way. `value` is safe as a whole-object
+	// dependency here: the caller holds it in `useState` and only replaces it (via
+	// `onChange`) when the crop actually moves, so its identity doesn't change on
+	// unrelated re-renders.
 	useEffect(() => {
-		if (!refineSource || !bandValid) {
-			if (!bandValid) setRefined(null);
+		if (!refineSource || !cropValid) {
+			if (!cropValid) setRefined(null);
 			return;
 		}
 		if (refineRafRef.current) cancelAnimationFrame(refineRafRef.current);
@@ -250,12 +224,12 @@ export function CornerEditor({
 			const { width, height } = refineSource;
 			const toPx = (quad: NormalizedCorners) =>
 				quad.map(([x, y]) => [x * (width - 1), y * (height - 1)]) as Corners;
-			const innerPx = toPx(value.inner);
-			const outerPx = toPx(value.outer);
-			const mid = midQuad(innerPx, outerPx);
-			const result = refineQuadEdgesDetailed(refineSource, mid, {
-				outward: edgeDistances(mid, outerPx),
-				inward: edgeDistances(mid, innerPx),
+			const edge = edgeFromCrop(value);
+			const search =
+				meanSide(edge) * EDGE_SEARCH_FRAC * Math.min(width, height);
+			const result = refineQuadEdgesDetailed(refineSource, toPx(edge), {
+				outward: search,
+				inward: search,
 				minConfidence: EDGE_CONFIDENCE_MIN,
 			});
 			setRefined({
@@ -269,7 +243,7 @@ export function CornerEditor({
 		return () => {
 			if (refineRafRef.current) cancelAnimationFrame(refineRafRef.current);
 		};
-	}, [refineSource, value, bandValid]);
+	}, [refineSource, value, cropValid]);
 
 	useEffect(() => {
 		const el = containerRef.current;
@@ -281,24 +255,21 @@ export function CornerEditor({
 		return () => ro.disconnect();
 	}, []);
 
-	// Commit the live edge-refinement (the dashed overlay) as the band: drag the handles
-	// roughly onto the sleeve, then snap the whole band to where the edge search actually
-	// found the boundary. Only the edges the search was confident about move — an amber
-	// (no-boundary) edge keeps the admin's line — so this never yanks a hand-placed edge
-	// off a genuinely ambiguous boundary.
+	// Commit the live edge-refinement (the dashed overlay): drag the corners roughly onto
+	// the sleeve, then snap the crop to just inside where the edge search found it. Only
+	// the edges the search was confident about move — an amber (no-boundary) edge stays
+	// where the admin put it — so this never yanks a hand-placed edge off an ambiguous
+	// boundary.
 	const snapToEdges = () => {
 		if (disabled || !refined) return;
-		onChange(bandFromQuad(refined.corners));
-		toast.success("Snapped the band to the detected edges.");
+		onChange(cropFromEdge(refined.corners));
+		toast.success("Snapped the crop to the detected edges.");
 	};
 
-	const setCorner = (quad: QuadKey, index: number, point: NormalizedCorner) => {
-		onChange({
-			...value,
-			[quad]: value[quad].map((c, i) =>
-				i === index ? point : c,
-			) as NormalizedCorners,
-		});
+	const setCorner = (index: number, point: NormalizedCorner) => {
+		onChange(
+			value.map((c, i) => (i === index ? point : c)) as NormalizedCorners,
+		);
 	};
 
 	const pointerToNorm = (
@@ -316,22 +287,20 @@ export function CornerEditor({
 	// Nudge every selected handle by the same delta, clamped per-corner to the frame.
 	const moveSelected = (dx: number, dy: number) => {
 		if (disabled || selected.size === 0) return;
-		const next = { ...value };
-		for (const quad of QUADS) {
-			next[quad] = value[quad].map((c, i) =>
-				selected.has(cornerKey(quad, i))
+		onChange(
+			value.map((c, i) =>
+				selected.has(i)
 					? ([clamp01(c[0] + dx), clamp01(c[1] + dy)] as NormalizedCorner)
 					: c,
-			) as NormalizedCorners;
-		}
-		onChange(next);
+			) as NormalizedCorners,
+		);
 
 		// Surface the loupe over one of the just-nudged handles for a couple of
 		// seconds, refreshed on every keypress, so the admin can see where the
 		// corner landed without having to hover it.
-		const firstKey = selected.values().next().value;
-		if (firstKey) {
-			setKeyboardLoupe(parseCornerKey(firstKey));
+		const first = selected.values().next().value;
+		if (first !== undefined) {
+			setKeyboardLoupe(first);
 			if (keyboardLoupeTimeoutRef.current != null)
 				window.clearTimeout(keyboardLoupeTimeoutRef.current);
 			keyboardLoupeTimeoutRef.current = window.setTimeout(() => {
@@ -341,7 +310,7 @@ export function CornerEditor({
 	};
 
 	// Press anywhere on the image: decide whether the intent is a corner drag or a
-	// click-to-move (nearest corner across BOTH quads wins), then grab that corner
+	// click-to-move (the nearest corner wins), then grab that corner
 	// (all pointer moves flow to the container via pointer capture, so a fast drag never
 	// outruns the handles). Whether this turns into a selection or a drag is decided on
 	// release, based on how far the pointer actually travelled.
@@ -352,32 +321,25 @@ export function CornerEditor({
 		pointerInteractionRef.current = true;
 		const px = e.clientX - rect.left;
 		const py = e.clientY - rect.top;
-		const pts = (quad: QuadKey) =>
-			value[quad].map(([x, y]) => [x * rect.width, y * rect.height] as const);
-
-		// Nearest corner across both quads.
-		let corner: { quad: QuadKey; index: number } = { quad: "outer", index: 0 };
+		let corner = 0;
 		let cornerDist = Number.POSITIVE_INFINITY;
-		for (const quad of QUADS) {
-			pts(quad).forEach(([x, y], i) => {
-				const d = Math.hypot(px - x, py - y);
-				if (d < cornerDist) {
-					cornerDist = d;
-					corner = { quad, index: i };
-				}
-			});
-		}
+		value.forEach(([x, y], i) => {
+			const d = Math.hypot(px - x * rect.width, py - y * rect.height);
+			if (d < cornerDist) {
+				cornerDist = d;
+				corner = i;
+			}
+		});
 
 		e.preventDefault();
 		containerRef.current?.setPointerCapture(e.pointerId);
 
 		if (cornerDist > CORNER_GRAB_PX) {
 			// Open space: jump the nearest corner here, then keep dragging it.
-			setCorner(corner.quad, corner.index, pointerToNorm(e.clientX, e.clientY));
+			setCorner(corner, pointerToNorm(e.clientX, e.clientY));
 		}
 		setDrag({
-			quad: corner.quad,
-			index: corner.index,
+			index: corner,
 			startClientX: e.clientX,
 			startClientY: e.clientY,
 		});
@@ -385,13 +347,13 @@ export function CornerEditor({
 
 	const onPointerMove = (e: React.PointerEvent) => {
 		if (!drag) return;
-		setCorner(drag.quad, drag.index, pointerToNorm(e.clientX, e.clientY));
+		setCorner(drag.index, pointerToNorm(e.clientX, e.clientY));
 	};
 
 	const endDrag = (e: React.PointerEvent) => {
 		containerRef.current?.releasePointerCapture?.(e.pointerId);
 		if (drag) {
-			const key = cornerKey(drag.quad, drag.index);
+			const key = drag.index;
 			const moved =
 				Math.hypot(
 					e.clientX - drag.startClientX,
@@ -448,20 +410,17 @@ export function CornerEditor({
 		moveSelected(delta[0], delta[1]);
 	};
 
-	const isActive = (quad: QuadKey, i: number) =>
-		drag?.quad === quad && drag.index === i;
-	const isSelected = (quad: QuadKey, i: number) =>
-		selected.has(cornerKey(quad, i));
+	const isActive = (i: number) => drag?.index === i;
+	const isSelected = (i: number) => selected.has(i);
 
 	// SVG polygon points in a 0..100 viewBox (preserveAspectRatio none → stretches to
-	// the image box); a non-scaling stroke keeps the outlines crisp despite the stretch.
-	const polyPoints = (quad: QuadKey) =>
-		value[quad].map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
+	// the image box); a non-scaling stroke keeps the outline crisp despite the stretch.
+	const polyPoints = value.map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
 
 	// Show the magnifier for the corner being dragged, else the hovered/focused
 	// one, else a just-nudged handle (kept up briefly so it survives the mouse
 	// not being over the handle during keyboard nudging).
-	const loupe = drag ?? hover ?? keyboardLoupe;
+	const loupe = drag?.index ?? hover ?? keyboardLoupe;
 
 	return (
 		<div className="space-y-2">
@@ -497,33 +456,19 @@ export function CornerEditor({
 						preserveAspectRatio="none"
 						aria-hidden="true"
 					>
-						{/* Outer quad: wholly on the background — everything beyond it is
-						    certified background. */}
+						{/* The crop: exactly what becomes the cover. */}
 						<polygon
-							points={polyPoints("outer")}
+							points={polyPoints}
 							className={cn(
 								"fill-brand/10",
-								bandValid ? "stroke-brand" : "stroke-red-500",
+								cropValid ? "stroke-brand" : "stroke-red-500",
 							)}
 							strokeWidth={2}
 							vectorEffect="non-scaling-stroke"
 						/>
-						{/* Inner quad: wholly on the sleeve — everything within it is
-						    certified sleeve. The band between the two is the unknown region
-						    the cut is resolved in. */}
-						<polygon
-							points={polyPoints("inner")}
-							className={cn(
-								"fill-transparent",
-								bandValid ? "stroke-sky-400" : "stroke-red-500",
-							)}
-							strokeWidth={1.5}
-							vectorEffect="non-scaling-stroke"
-						/>
-						{/* Where the edge search will actually cut, inside the band: dashed,
-						    per edge. Emerald = a clear boundary was found; amber = no clear
-						    boundary (that edge will cut straight along the band midline —
-						    tighten the band around the true edge there). */}
+						{/* Where the edge search finds the sleeve's edge: dashed, per edge.
+						    Emerald = a clear boundary was found; amber = no clear boundary,
+						    so Snap leaves that edge where it is. */}
 						{refined &&
 							!disabled &&
 							EDGES.map(([a, b], e) => (
@@ -545,88 +490,68 @@ export function CornerEditor({
 								/>
 							))}
 					</svg>
-					{QUADS.map((quad) =>
-						value[quad].map(([x, y], i) => (
-							<button
-								key={`${quad}-${CORNER_LABELS[i]}`}
-								type="button"
-								aria-label={`${CORNER_LABELS[i]} ${quad} corner`}
-								aria-pressed={isSelected(quad, i)}
-								disabled={disabled}
-								className={cn(
-									"absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-background shadow",
-									"focus-visible:outline-none focus-visible:ring-2",
-									quad === "outer"
-										? "size-3.5 border-brand focus-visible:ring-brand"
-										: "size-3 border-sky-400 focus-visible:ring-sky-400",
-									(isActive(quad, i) || isSelected(quad, i)) &&
-										(quad === "outer"
-											? "border-brand bg-brand ring-2 ring-brand ring-offset-1"
-											: "border-sky-400 bg-sky-400 ring-2 ring-sky-400 ring-offset-1"),
-									disabled ? "cursor-not-allowed opacity-50" : "cursor-grab",
-								)}
-								style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
-								onPointerEnter={() => setHover({ quad, index: i })}
-								onPointerLeave={() =>
-									setHover((h) =>
-										h?.quad === quad && h.index === i ? null : h,
-									)
-								}
-								onFocus={() => {
-									// Skip focus from a pointer interaction — endDrag's shift-click
-									// logic owns selection for that case; only a real Tab focus
-									// (no pointer in flight) should select on its own.
-									if (pointerInteractionRef.current) return;
-									setSelected(new Set([cornerKey(quad, i)]));
-									// Tabbing to a different handle without nudging it should drop
-									// the previous handle's just-nudged loupe, not leave it pointing
-									// at a corner that's no longer selected.
-									clearKeyboardLoupe();
-								}}
-							/>
-						)),
-					)}
+					{value.map(([x, y], i) => (
+						<button
+							key={CORNER_LABELS[i]}
+							type="button"
+							aria-label={`${CORNER_LABELS[i]} corner`}
+							aria-pressed={isSelected(i)}
+							disabled={disabled}
+							className={cn(
+								"absolute size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-brand bg-background shadow",
+								"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+								(isActive(i) || isSelected(i)) &&
+									"bg-brand ring-2 ring-brand ring-offset-1",
+								disabled ? "cursor-not-allowed opacity-50" : "cursor-grab",
+							)}
+							style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
+							onPointerEnter={() => setHover(i)}
+							onPointerLeave={() => setHover((h) => (h === i ? null : h))}
+							onFocus={() => {
+								// Skip focus from a pointer interaction — endDrag's shift-click
+								// logic owns selection for that case; only a real Tab focus
+								// (no pointer in flight) should select on its own.
+								if (pointerInteractionRef.current) return;
+								setSelected(new Set([i]));
+								// Tabbing to a different handle without nudging it should drop
+								// the previous handle's just-nudged loupe, not leave it pointing
+								// at a corner that's no longer selected.
+								clearKeyboardLoupe();
+							}}
+						/>
+					))}
 				</div>
 				{/* Magnifier: a 3× loupe of the capture centred on the active corner, with a
 			    crosshair marking the exact point — so a corner can be placed precisely
 			    even though the handle itself sits under the finger/cursor. Purely visual
 			    (pointer-events-none); the handle beneath still drives the drag. */}
 				{loupe != null && box.w > 0 && !disabled && (
-					<Loupe src={src} point={value[loupe.quad][loupe.index]} box={box} />
+					<Loupe src={src} point={value[loupe]} box={box} />
 				)}
 			</div>
-			{bandProblem === "crossed" && (
+			{!cropValid && (
 				<p className="text-xs text-red-600 dark:text-red-400" role="alert">
-					The inner (blue) corners must all sit inside the outer frame — fix the
-					crossed handles before applying.
-				</p>
-			)}
-			{bandProblem === "narrow" && (
-				<p className="text-xs text-red-600 dark:text-red-400" role="alert">
-					The band is too thin — widen the gap between the inner and outer
-					frames before applying.
+					Two corners have crossed — uncross them before applying.
 				</p>
 			)}
 			<div className="flex items-center justify-between gap-2">
 				<p className="text-xs text-muted-foreground">
-					Outer handles on the background, inner on the sleeve.
+					Place the corners just inside the sleeve's edge.
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="ml-1 inline-flex cursor-help align-middle text-muted-foreground hover:text-foreground">
 								<Info
 									className="size-3.5"
-									aria-label="About the corner band and detected-edge overlay"
+									aria-label="About the crop and detected-edge overlay"
 								/>
 							</span>
 						</TooltipTrigger>
 						<TooltipContent align="start" className="max-w-xs text-xs">
-							Two frames bracket the sleeve's true edge: the outer sits wholly
-							on the background, the inner wholly on the sleeve (it's also the
-							exact crop the square cover uses). The dashed line is the detected
-							edge in between — <span className="text-emerald-500">green</span>{" "}
-							found a clear boundary,{" "}
-							<span className="text-amber-500">amber</span> didn't (that edge
-							cuts straight midway through the band).
+							The frame is the exact crop the square cover uses. The dashed line
+							is the detected edge of the sleeve —{" "}
+							<span className="text-emerald-500">green</span> found a clear
+							boundary, <span className="text-amber-500">amber</span> didn't
+							(Snap leaves that edge where you put it).
 						</TooltipContent>
 					</Tooltip>
 				</p>
@@ -637,7 +562,7 @@ export function CornerEditor({
 						variant="outline"
 						disabled={disabled || !refined}
 						onClick={snapToEdges}
-						title="Snap the band to the detected edges"
+						title="Snap the crop to just inside the detected edges"
 					>
 						<Magnet className="size-4" />
 						Snap to edges
