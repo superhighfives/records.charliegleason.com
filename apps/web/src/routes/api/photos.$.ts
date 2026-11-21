@@ -16,7 +16,7 @@ const ALLOWED_WIDTHS = [350, 500, 800, 1600];
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
 /**
- * Serve a vinyl cover/matte photo from R2 by key (e.g. /api/photos/covers/abc.jpg).
+ * Serve a cover photo from R2 by key (e.g. /api/photos/covers/abc.jpg).
  * Public read — cover art isn't sensitive.
  *
  * An optional `?w=` resizes + re-encodes on the way out via the Cloudflare Images
