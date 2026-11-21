@@ -370,3 +370,75 @@ export function serializeCornerBand(band: CornerBand): string {
 		quad.map(([x, y]) => [round(x), round(y)]);
 	return JSON.stringify({ inner: q(band.inner), outer: q(band.outer) });
 }
+
+/** A pixel rectangle within an image: the region a capture is cropped to before decode. */
+export interface CropBox {
+	left: number;
+	top: number;
+	width: number;
+	height: number;
+}
+
+/**
+ * The pixel box around `quad` in a `width` × `height` image, padded by `margin` (a
+ * fraction of each side) and clamped to the image. Whole pixels, at least 1px.
+ */
+export function cropBoxFor(
+	quad: NormalizedCorners,
+	width: number,
+	height: number,
+	margin: number,
+): CropBox {
+	const xs = quad.map(([x]) => x);
+	const ys = quad.map(([, y]) => y);
+	// Round off float noise first (0.8 + 0.05 is 0.8500000000000001), so an exact
+	// pixel edge doesn't ceil to the next pixel.
+	const px = (n: number, size: number) =>
+		Math.round(Math.min(1, Math.max(0, n)) * size * 1e6) / 1e6;
+	const x0 = Math.floor(px(Math.min(...xs) - margin, width));
+	const y0 = Math.floor(px(Math.min(...ys) - margin, height));
+	const x1 = Math.ceil(px(Math.max(...xs) + margin, width));
+	const y1 = Math.ceil(px(Math.max(...ys) + margin, height));
+	return {
+		left: x0,
+		top: y0,
+		width: Math.max(1, x1 - x0),
+		height: Math.max(1, y1 - y0),
+	};
+}
+
+/**
+ * The Images binding `trim` that crops a `width` × `height` image to `box`. `trim`
+ * takes pixels to cut off each side, applied before any resize (see `trim` in
+ * worker-configuration.d.ts). Only the four side cuts are used: the docs don't say
+ * which side `trim.width`/`height` cut from when combined with `left`/`top`.
+ */
+export function trimFor(
+	box: CropBox,
+	width: number,
+	height: number,
+): { left: number; top: number; right: number; bottom: number } {
+	return {
+		left: box.left,
+		top: box.top,
+		right: width - (box.left + box.width),
+		bottom: height - (box.top + box.height),
+	};
+}
+
+/**
+ * Re-express `quad`, normalised to a `width` × `height` image, as normalised to the
+ * `box` cropped out of it. Scaling the crop afterwards keeps these the same.
+ */
+export function toCropCorners(
+	quad: NormalizedCorners,
+	box: CropBox,
+	width: number,
+	height: number,
+): NormalizedCorners {
+	const local = ([x, y]: NormalizedCorner): NormalizedCorner => [
+		(x * width - box.left) / box.width,
+		(y * height - box.top) / box.height,
+	];
+	return [local(quad[0]), local(quad[1]), local(quad[2]), local(quad[3])];
+}

@@ -21,8 +21,11 @@ import {
 } from "#/lib/reframe-params";
 import {
 	type CornerBand,
+	cropBoxFor,
 	type NormalizedCorners,
 	parseCornerBand,
+	toCropCorners,
+	trimFor,
 } from "#/lib/sleeve-corners";
 
 /**
@@ -102,32 +105,51 @@ export function encodePng(image: RgbaImage): Uint8Array {
 	}
 }
 
-// A normalised capture is a ~2048² webp, comfortably under ~2 MB. Anything materially
-// larger is the raw-original storage fallback (`storeCapturePhotoFromR2`, when Image
-// Transformations are unavailable) — a straight-off-the-phone HEIC/JPEG that would decode
-// to a 40+ MB RGBA buffer and, stacked with the warp's other buffers, OOM the
-// generation isolate outright. Route only those through the Images binding first (it
-// decodes off the JS heap) to bound the decode to CAPTURE_DECODE_MAX; the normal path
-// decodes the stored bytes directly with zero added latency.
+// The most of a capture ever decoded into the isolate, on the longest side. Photon holds
+// an image twice while decoding (its WASM buffer and the JS copy) and WASM memory never
+// shrinks, so this bounds the generation isolate's peak whatever the capture size: a
+// 3072px capture decoded whole would be ~38 MB a copy, against 128 MB.
 const CAPTURE_DECODE_MAX = 2048;
-const CAPTURE_RAW_BYTES_MAX = 2_500_000;
+// Padding around the sleeve's bounding box when cropping, as a fraction of the image.
+const CROP_MARGIN = 0.02;
 
-/** Load + decode a capture from R2 to an {@link RgbaImage} (throws if it's missing). */
-export async function loadCapture(capturePhotoKey: string): Promise<RgbaImage> {
-	const object = await env.PHOTOS.get(capturePhotoKey);
-	if (!object)
-		throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);
-	if (object.size > CAPTURE_RAW_BYTES_MAX) {
-		const out = await env.IMAGES.input(object.body)
-			.transform({
-				width: CAPTURE_DECODE_MAX,
-				height: CAPTURE_DECODE_MAX,
-				fit: "scale-down",
-			})
-			.output({ format: "image/webp", quality: 92 });
-		return decodeRgba(new Uint8Array(await out.response().arrayBuffer()));
+/**
+ * Load the part of a capture around the band's inner quad, decoded at up to
+ * {@link CAPTURE_DECODE_MAX}. The Images binding crops and scales off the JS heap, so
+ * the sleeve gets the full decode budget and a large capture never decodes in full.
+ * Returns the decoded crop and the band re-expressed in the crop's coordinates; the
+ * caller's band (full-image coordinates) is what gets stored.
+ */
+export async function loadCaptureRegion(
+	capturePhotoKey: string,
+	band: CornerBand,
+): Promise<{ capture: RgbaImage; band: CornerBand }> {
+	const read = async () => {
+		const object = await env.PHOTOS.get(capturePhotoKey);
+		if (!object)
+			throw new Error(`capture photo missing in R2: ${capturePhotoKey}`);
+		return object.body;
+	};
+	const info = await env.IMAGES.info(await read());
+	if (!("width" in info)) {
+		throw new Error(`capture is not a raster image: ${capturePhotoKey}`);
 	}
-	return decodeRgba(new Uint8Array(await object.arrayBuffer()));
+	const box = cropBoxFor(band.inner, info.width, info.height, CROP_MARGIN);
+	const out = await env.IMAGES.input(await read())
+		.transform({
+			trim: trimFor(box, info.width, info.height),
+			width: CAPTURE_DECODE_MAX,
+			height: CAPTURE_DECODE_MAX,
+			fit: "scale-down",
+		})
+		.output({ format: "image/webp", quality: 92 });
+	return {
+		capture: decodeRgba(new Uint8Array(await out.response().arrayBuffer())),
+		band: {
+			inner: toCropCorners(band.inner, box, info.width, info.height),
+			outer: toCropCorners(band.outer, box, info.width, info.height),
+		},
+	};
 }
 
 /**
@@ -223,7 +245,8 @@ export async function reframeFromCapture(
 	band: CornerBand,
 	params: ReframeParams = {},
 ): Promise<{ key: string }> {
-	return warpEncodeStore(await loadCapture(capturePhotoKey), band, params);
+	const region = await loadCaptureRegion(capturePhotoKey, band);
+	return warpEncodeStore(region.capture, region.band, params);
 }
 
 /**
@@ -243,9 +266,10 @@ export async function professionalPipeline(
 		throw new Error("record has no capture photo to work from");
 	}
 	const band = parseCornerBand(record.sleeveCornersJson);
+	const region = await loadCaptureRegion(record.capturePhotoKey, band);
 	const { key: professionalKey } = await warpEncodeStore(
-		await loadCapture(record.capturePhotoKey),
-		band,
+		region.capture,
+		region.band,
 		parseReframeParams(record.professionalParamsJson),
 	);
 	return { professionalKey, band };

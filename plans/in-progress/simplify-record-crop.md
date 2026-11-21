@@ -218,10 +218,6 @@ Later PRs:
 
 ## Open questions
 
-- **Phase 4 data:** migrate `sleeveCornersJson` in place, or read both shapes and migrate
-  lazily on the next edit?
-- **The shape of the branch:** one big PR or one per phase? Phases 1–2 together make a
-  natural first PR. Phase 3 should probably follow after a soak period.
 - **Clear and plastic sleeves (future, separate plan):** transparency done right is the
   one thing the cut-out promised and never really delivered. Ideas, none of them
   AI-dependent:
@@ -232,6 +228,24 @@ Later PRs:
   - a hand-authored mask for the few records that need it
 
   Out of scope here. Write it up in `backlog/` once this ships.
+
+## Phase 4 design (2026-11-20)
+
+The cover warps from the band's inner quad only (`warpEncodeStore`). The outer quad
+does one job: Snap to edges searches between the two (`midQuad` in
+`corner-editor.tsx`). One quad is enough for both.
+
+- **Data:** migrate lazily, with no SQL migration. `parseCornerBand` already reads a
+  bare quad. Change the reader to return a single quad: the `inner` of a stored band,
+  or the stored quad as is. Writers save a bare quad. Each record converts the next time
+  it is applied, and `Re-apply all` converts the rest in one pass.
+- **Snap to edges:** search a fixed margin around the quad (the band's default
+  half-width, now a constant) instead of the gap to the outer quad.
+- **Editor:** one set of four handles. Remove the outer handles, the band drawing and
+  the band-synthesis helpers in `sleeve-corners.ts`.
+- **Order:** after sharper captures (`sharper-captures.md`), because both touch the
+  warp's input.
+- **Branch shape:** resolved. Phases 1 to 3 shipped as #222 and #223.
 
 ## Decisions (2026-10-25)
 

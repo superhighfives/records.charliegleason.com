@@ -14,6 +14,10 @@ import { getReleaseImageUrl } from "#/lib/discogs";
 
 const UA = "RecordsCharlieGleasonCom/1.0 +https://records.charliegleason.com";
 
+// A stored capture's side, matching the browser downscale (`image-resize.ts`). Apply
+// crops the sleeve out of it before decoding, so this size doesn't raise memory.
+const CAPTURE_SIZE = 3072;
+
 export async function storeResizedCover(
 	imageUrl: string,
 ): Promise<string | null> {
@@ -85,9 +89,10 @@ export async function storeCapturePhotoFromR2(
 		const raw = await env.PHOTOS.get(rawKey);
 		if (!raw) throw new Error(`raw capture missing from R2: ${rawKey}`);
 		const out = await env.IMAGES.input(raw.body)
-			.transform({ width: 2048, height: 2048, fit: "cover" })
+			.transform({ width: CAPTURE_SIZE, height: CAPTURE_SIZE, fit: "cover" })
 			.output({ format: "image/webp", quality: 90 });
-		// The transformed webp is ~1 MB, so buffering it (unlike the original) is fine.
+		// The transformed webp is a few MB at most, so buffering it (unlike the
+		// original) is fine.
 		const buffer = await out.response().arrayBuffer();
 		const key = `captures/${crypto.randomUUID()}.webp`;
 		await env.PHOTOS.put(key, buffer, {
