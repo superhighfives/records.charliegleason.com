@@ -80,12 +80,13 @@ export const queueOutcomesQueryOptions = (ids: number[]) =>
 		enabled: ids.length > 0,
 	});
 
-/** The Activity page's job log. Polls while the page is open. */
-export const jobEventsQueryOptions = queryOptions({
-	queryKey: ["records", "job-events"] as const,
-	queryFn: () => listJobEvents(),
-	refetchInterval: 5000,
-});
+/** The Activity page's job log, optionally errors only. Polls while the page is open. */
+export const jobEventsQueryOptions = (errorsOnly: boolean) =>
+	queryOptions({
+		queryKey: ["records", "job-events", { errorsOnly }] as const,
+		queryFn: () => listJobEvents({ data: errorsOnly }),
+		refetchInterval: 5000,
+	});
 
 /**
  * Value fetches still in progress, for the queue menu. Polls only while some are

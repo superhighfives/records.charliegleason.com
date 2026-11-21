@@ -254,7 +254,18 @@ export async function refreshAllValues(): Promise<void> {
 		.select({ id: records.id })
 		.from(records)
 		.where(or(isNotNull(records.discogsId), isNotNull(records.masterId)));
-	await enqueueValueBatch(rows.map((r) => r.id));
+	try {
+		await enqueueValueBatch(rows.map((r) => r.id));
+	} catch (err) {
+		// Batches sent before the failure still run; say the refresh is partial.
+		await logJobEvent(
+			"value",
+			"error",
+			null,
+			`Monthly refresh failed to queue every value: ${errorText(err)}`,
+		);
+		throw err;
+	}
 	await logJobEvent(
 		"value",
 		"info",

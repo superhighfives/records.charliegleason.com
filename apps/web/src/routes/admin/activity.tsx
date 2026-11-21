@@ -31,10 +31,9 @@ const timeFormat = new Intl.DateTimeFormat(undefined, {
  * and color texture, and every failed attempt with its error. Refreshes while open.
  */
 function ActivityPage() {
-	const { data: events, isPending } = useQuery(jobEventsQueryOptions);
 	const [errorsOnly, setErrorsOnly] = useState(false);
-	const shown = (events ?? []).filter(
-		(e) => !errorsOnly || e.level === "error",
+	const { data: shown = [], isPending } = useQuery(
+		jobEventsQueryOptions(errorsOnly),
 	);
 
 	return (
@@ -108,7 +107,7 @@ function ActivityPage() {
 
 /** A job message, with each "release 123" linked to that release on Discogs. */
 function MessageText({ text }: { text: string }) {
-	return text.split(/(release \d+)/).map((part, i) => {
+	return text.split(/(\brelease \d+\b)/).map((part, i) => {
 		const id = /^release (\d+)$/.exec(part)?.[1];
 		return id ? (
 			<a
