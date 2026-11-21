@@ -30,6 +30,18 @@ export function hasBrokenLink(r: Record): boolean {
 	);
 }
 
+/**
+ * Discogs was asked and had no price (nothing for sale, no suggestions), and no
+ * manual value is set. These need a value entered by hand.
+ */
+export function hasNoPrice(r: Record): boolean {
+	return (
+		r.discogsValueFetchedAt != null &&
+		r.discogsValue == null &&
+		r.manualValue == null
+	);
+}
+
 /** A record with no Discogs identity at all: no album and no pressing. */
 export function isUnmatched(r: Record): boolean {
 	return r.masterId == null && r.discogsId == null;
@@ -42,6 +54,8 @@ export interface RecordAlertCounts {
 	imageFailed: number;
 	/** Linked to Discogs, but its value was never fetched or queued. */
 	valuesToFetch: number;
+	/** Fetched, but Discogs had no price and no manual value is set. */
+	noPrice: number;
 }
 
 /** What needs attention across the collection, for the header's alerts menu. */
@@ -52,9 +66,11 @@ export function countRecordAlerts(rows: readonly Record[]): RecordAlertCounts {
 		analysisFailed: 0,
 		imageFailed: 0,
 		valuesToFetch: 0,
+		noPrice: 0,
 	};
 	for (const r of rows) {
 		if (hasBrokenLink(r)) counts.brokenLinks += 1;
+		if (hasNoPrice(r)) counts.noPrice += 1;
 		if (isUnmatched(r)) counts.unmatched += 1;
 		if (r.status === "failed") counts.analysisFailed += 1;
 		if (r.professionalJobStatus === "failed") counts.imageFailed += 1;

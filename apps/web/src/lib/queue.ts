@@ -637,7 +637,6 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				.update(records)
 				.set({
 					professionalJobStatus: "processing",
-					professionalStage: "cover",
 					jobStep: "reframe",
 					professionalError: null,
 					updatedAt: new Date(),

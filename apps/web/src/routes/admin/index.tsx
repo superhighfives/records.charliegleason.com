@@ -62,7 +62,7 @@ import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
-import { hasBrokenLink, isUnmatched } from "#/lib/record-alerts";
+import { hasBrokenLink, hasNoPrice, isUnmatched } from "#/lib/record-alerts";
 import { orderRecordsForReview, savePagerOrder } from "#/lib/record-order";
 import {
 	checkLinkHealth,
@@ -242,6 +242,8 @@ const FLAG_FACETS: FacetOption[] = [
 		label: "Duplicate",
 		test: (r, duplicateIds) => duplicateIds.has(r.id),
 	},
+	// Discogs had nothing to price; these need a value entered by hand.
+	{ token: "noPrice", label: "No price", test: hasNoPrice },
 ];
 
 // Per-flag accent colours (failed = red, duplicate = orange), for both the active
@@ -259,6 +261,10 @@ const FLAG_COLORS: globalThis.Record<string, { active: string; idle: string }> =
 		duplicate: {
 			active: "border-orange-600 bg-orange-600 text-white",
 			idle: "border-orange-500/40 text-orange-600 hover:bg-orange-500/10 dark:text-orange-400",
+		},
+		noPrice: {
+			active: "border-amber-600 bg-amber-600 text-white",
+			idle: "border-amber-500/40 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400",
 		},
 	};
 

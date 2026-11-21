@@ -154,18 +154,13 @@ export const records = sqliteTable("records", {
 	professionalJobStatus: text("professional_job_status", {
 		enum: ["idle", "queued", "processing", "failed"],
 	}).default("idle"),
-	// The Apply stage that is running. Apply has one stage now, so this is "cover" while
-	// a job runs and null otherwise.
-	professionalStage: text("professional_stage", {
-		enum: ["cover"],
-	}),
 	// A finer-grained, DISPLAY-ONLY sub-step within whichever pipeline is running, so the
-	// header "in flight" menu can show real progress ("(2/4) Enhancing", "(1/4) Reading
-	// cover") rather than just the coarse `professionalStage`. Shared across both pipelines —
+	// header "in flight" menu can show real progress ("(1/4) Reading cover", "Reframing
+	// sleeve") rather than just the job's name. Shared across both pipelines —
 	// a record is only ever in one at a time. Written by the consumer as each sub-step begins
 	// and cleared to null on every terminal state (so a finished/failed row shows no stale
 	// step); NOT load-bearing — nothing but the menu label reads it, so the reaper and editor
-	// stay keyed on `professionalStage`/`status`. Null on legacy rows and between jobs.
+	// stay keyed on `professionalJobStatus`/`status`. Null on legacy rows and between jobs.
 	//   analyze: reading → matching (→ web-search) → scoring → artwork
 	//   apply:   reframe → finishing
 	jobStep: text("job_step", {

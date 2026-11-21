@@ -2,7 +2,7 @@
 title: Simplify record creation to a standard square crop
 status: In Progress
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-11-20
 ---
 
 # Simplify record creation to a standard square crop
@@ -185,9 +185,10 @@ PR 1 (branch `simplify-record-crop`): Phases 1 and 2, plus dropping ESRGAN.
       `capture-first-pass-matte`, `audit-mattes`) are acked as no-ops.
 - [ ] Review the prototype on iOS with `?perf`. Tune the inset, the edge amplitude and the
       shadow.
-- [ ] After deploy: check the matte container application is gone from the Cloudflare
-      dashboard. If it lingers, delete it with `wrangler containers delete`. Archive the
-      `superhighfives/vitmatte-trimap` model on Replicate.
+- [x] After deploy: check the matte container application is gone from the Cloudflare
+      dashboard. It lingered (`records-mattecontainer`, 0 instances) and was deleted on
+      2026-11-20.
+- [ ] Archive the `superhighfives/vitmatte-trimap` model on Replicate.
 - [x] Cover load time. A cold `?w=500` resize of the old ESRGAN masters measured
       0.83 s median across all 310 covers, against 0.19 s once edge-cached. Scroll FPS
       matched production, and turning `?noclip` / `?noshadow` on made no consistent
@@ -205,13 +206,15 @@ PR 1 (branch `simplify-record-crop`): Phases 1 and 2, plus dropping ESRGAN.
 
 Later PRs:
 
-- [ ] Phase 3: migration to drop the matte columns and the `matte_audit_state` table. Drop
-      the legacy queue-mode no-ops at the same time.
-- [ ] Phase 3: delete the `alpha/` R2 objects (after confirming).
+- [x] Phase 3: migration to drop the matte columns and the `matte_audit_state` table
+      (#223, migration `0034`). The legacy queue-mode no-ops went in #222: the consumer
+      now acks any mode it doesn't handle.
+- [x] Phase 3: delete the `alpha/` R2 objects. All 636 were deleted on 2026-11-20,
+      before #223 merged.
 - [ ] Phase 4: collapse the band to a single quad, with a data migration and a simplified
       corner editor.
-- [ ] Rescope `learned-sleeve-corner-detection.md`: crop only, single quad, no matte
-      premise.
+- [x] ~~Rescope `learned-sleeve-corner-detection.md`.~~ Dropped: #222 removed corner
+      detection and its plan, and captures now start full-frame.
 
 ## Open questions
 

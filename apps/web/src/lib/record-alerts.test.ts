@@ -16,6 +16,8 @@ function record(overrides: Partial<Record>): Record {
 		professionalJobStatus: "idle",
 		discogsValueFetchedAt: null,
 		discogsValueQueuedAt: null,
+		discogsValue: null,
+		manualValue: null,
 		...overrides,
 	} as Record;
 }
@@ -35,7 +37,28 @@ describe("countRecordAlerts", () => {
 			analysisFailed: 1,
 			imageFailed: 0,
 			valuesToFetch: 3,
+			noPrice: 0,
 		});
+	});
+
+	it("counts a fetched record with no price, unless it has a manual value", () => {
+		const fetched = new Date(0);
+		const counts = countRecordAlerts([
+			record({ id: 1, masterId: "1", discogsValueFetchedAt: fetched }),
+			record({
+				id: 2,
+				masterId: "2",
+				discogsValueFetchedAt: fetched,
+				manualValue: 40,
+			}),
+			record({
+				id: 3,
+				masterId: "3",
+				discogsValueFetchedAt: fetched,
+				discogsValue: 20,
+			}),
+		]);
+		expect(counts.noPrice).toBe(1);
 	});
 
 	it("leaves out a value fetch that is queued, but not one queued long ago", () => {

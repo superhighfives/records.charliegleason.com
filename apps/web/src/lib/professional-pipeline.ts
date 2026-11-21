@@ -44,7 +44,6 @@ export async function applyProfessional(
 			professionalParamsJson: JSON.stringify(params),
 			professionalStatus: "approved",
 			professionalJobStatus: "idle",
-			professionalStage: null,
 			jobStep: null,
 			// Generation reached a committed cover — clear the reaper's auto-retry budget.
 			professionalRetryCount: 0,

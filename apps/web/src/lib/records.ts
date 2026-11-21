@@ -345,11 +345,6 @@ export interface InFlightItem {
 	/** The finer-grained state (all actively running — the menu shows a spinner). */
 	state: "pending" | "processing" | "queued";
 	/**
-	 * For a processing `professional` job, the Apply stage it's in ("cover"). Null for
-	 * analyze jobs, queued professional jobs, and legacy rows with no stage recorded.
-	 */
-	stage: "cover" | null;
-	/**
 	 * The fine-grained sub-step within whichever pipeline is running (see `records.jobStep`),
 	 * so the menu can show "Reframing" / "(1/4) Reading cover". Null for a queued job
 	 * not yet started, a freshly re-enqueued one, and legacy rows — the menu falls back to
@@ -364,7 +359,7 @@ export interface InFlightItem {
  * the row stays `processing`, and the reaper keeps re-enqueuing it). Flags both pipelines
  * failed so the reaper stops touching them and each becomes a manual-retry-able row —
  * `professionalStatus` / analysis fields are left intact, so an already-live cover or a
- * prior analysis survives. Clears the progress markers (`professionalStage`, `jobStep`).
+ * prior analysis survives. Clears the progress marker (`jobStep`).
  * This flips the DB-tracked state so the UI/reaper stop treating them as running; it
  * can't cancel an already-sent queue message (Cloudflare Queues has no cancel API), so a
  * genuinely in-flight message still runs to completion and may overwrite the stopped
@@ -383,7 +378,6 @@ export const failAllInFlight = createServerFn({ method: "POST" })
 					.update(records)
 					.set({
 						professionalJobStatus: "failed",
-						professionalStage: null,
 						jobStep: null,
 						professionalError: note,
 						updatedAt: new Date(),
@@ -432,7 +426,6 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 				title: records.title,
 				status: records.status,
 				professionalJobStatus: records.professionalJobStatus,
-				professionalStage: records.professionalStage,
 				jobStep: records.jobStep,
 				professionalStatus: records.professionalStatus,
 				professionalImageKey: records.professionalImageKey,
@@ -604,11 +597,8 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 							: retried
 								? "queued"
 								: (row.professionalJobStatus as "queued" | "processing"),
-						// Only meaningful for a processing professional job; a freshly re-enqueued
-						// one hasn't entered a stage yet, so null.
-						stage: analyzing || retried ? null : row.professionalStage,
 						// A re-enqueued job restarts from its first sub-step — the pre-reap
-						// snapshot's `jobStep` is stale, so null it (mirrors `stage` above).
+						// snapshot's `jobStep` is stale, so null it.
 						step: retried ? null : row.jobStep,
 					};
 				}),
@@ -896,7 +886,6 @@ export const reframeRecord = createServerFn({ method: "POST" })
 					sleeveCornersJson: serializeCornerBand(effectiveBand),
 					professionalParamsJson: JSON.stringify(params),
 					professionalJobStatus: "queued",
-					professionalStage: "cover",
 					professionalError: null,
 					// Fresh manual Apply → reset the reaper's auto-retry budget.
 					professionalRetryCount: 0,
@@ -1509,7 +1498,6 @@ export const retryProfessionalGenerations = createServerFn({ method: "POST" })
 					.update(records)
 					.set({
 						professionalJobStatus: "queued",
-						professionalStage: "cover",
 						professionalError: null,
 						professionalRetryCount: 0,
 						updatedAt: now,
@@ -1549,7 +1537,6 @@ export const reapplyAllProfessional = createServerFn({ method: "POST" })
 				.update(records)
 				.set({
 					professionalJobStatus: "queued",
-					professionalStage: "cover",
 					professionalError: null,
 					professionalRetryCount: 0,
 					updatedAt: new Date(),

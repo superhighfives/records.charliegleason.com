@@ -45,6 +45,7 @@ export function AlertsMenu() {
 		counts.analysisFailed +
 		counts.imageFailed +
 		counts.unmatched +
+		counts.noPrice +
 		counts.valuesToFetch;
 	if (total === 0) return null;
 
@@ -96,6 +97,13 @@ export function AlertsMenu() {
 						search={{ assign: "unmatched" }}
 						text={`${plural(counts.unmatched, "record has", "records have")} no album`}
 						action="Assign"
+					/>
+				)}
+				{counts.noPrice > 0 && (
+					<AlertLink
+						search={{ f: "noPrice" }}
+						text={`${plural(counts.noPrice, "record has", "records have")} no Discogs price`}
+						action="Show"
 					/>
 				)}
 				{counts.valuesToFetch > 0 && (
