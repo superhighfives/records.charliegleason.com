@@ -37,10 +37,6 @@ const STEP_LABELS: Record<JobStep, string> = {
 	artwork: "(4/4) Fetching artwork",
 	// apply
 	reframe: "Reframing sleeve",
-	// Retired with the enhance + matte stages; only matte-era rows still carry these.
-	enhance: "Generating photo",
-	"matte-ai": "Generating photo",
-	"matte-fallback": "Generating photo",
 	finishing: "Generating photo",
 };
 

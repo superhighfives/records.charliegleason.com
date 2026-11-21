@@ -17,8 +17,7 @@ import { parseCornerBand, serializeCornerBand } from "#/lib/sleeve-corners";
  * The new cover is written to a fresh key and swapped in with one DB write, so an
  * already-live cover only changes at the very end (no public gap). Returns the
  * superseded cover + its pre-sized copies for the caller to bin — later, not now (see
- * `enqueueDeletePhotos`), so pages still holding the old key don't 404. Any alpha matte left over from before the
- * cut-out was retired is left alone (keys and R2 objects) until it's cleaned up in bulk.
+ * `enqueueDeletePhotos`), so pages still holding the old key don't 404.
  */
 export async function applyProfessional(
 	record: Record,
@@ -43,7 +42,6 @@ export async function applyProfessional(
 			sleeveCornersJson: serializeCornerBand(band),
 			professionalImageKey: coverKey,
 			professionalParamsJson: JSON.stringify(params),
-			professionalEnhanced: false,
 			professionalStatus: "approved",
 			professionalJobStatus: "idle",
 			professionalStage: null,

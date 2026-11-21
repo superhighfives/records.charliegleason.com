@@ -94,20 +94,6 @@ export const records = sqliteTable("records", {
 	catno: text("catno"), // Discogs catalog number, e.g. "WIGLP450" — release-specific
 	country: text("country"), // pressing country — release-specific
 
-	// The background-job lifecycle for an Amazon ASIN→pressing resolution (the
-	// importer's "Queue lookups" — see enqueueResolveAsinBatch/resolveAsinForRecord in
-	// queue.ts): `idle` = nothing queued (or a prior job finished); `queued` = enqueued,
-	// awaiting the consumer. There's no `processing` state — a single message either
-	// pins a release or gives up, both fast, so `queued` alone covers "in flight" for
-	// the header's queue menu. `failed` means it ran and couldn't pin a pressing
-	// (no barcode, no matching release, or a master conflict) — best-effort and NOT
-	// auto-retried, so `amazonResolveError` explains why and the importer's matching
-	// filter still excludes it from being re-offered as a fresh "unmatched" purchase.
-	amazonResolveStatus: text("amazon_resolve_status", {
-		enum: ["idle", "queued", "failed"],
-	}).default("idle"),
-	amazonResolveError: text("amazon_resolve_error"),
-
 	// Valuation (admin only — never exposed on the public homepage / API).
 	// The "guessed" value comes from Discogs' seller price suggestions (VG+ grade,
 	// stored in `discogsValue`, full per-condition breakdown in `discogsValueJson`);
@@ -155,38 +141,23 @@ export const records = sqliteTable("records", {
 	// are kept in the enum only for historical rows. Crucially this is NOT downgraded while
 	// a re-generation runs, so an approved cover stays live until the new one swaps in.
 	sleeveCornersJson: text("sleeve_corners_json"), // normalised sleeve corners (JSON), admin-picked
-	// Confidence in the *auto-seeded* corners, from the detection reconciliation
-	// (`detectSleeveCornersBest` — see src/lib/sleeve-detect-wasm.ts). `detectionConfidence` is
-	// 0..1 (null = never detected); `detectionSource` is which detector won (net / segmentation /
-	// segmentation-override / band-scan). Surfaced as the editor's on-open confidence badge and
-	// used to rank the admin "needs review" queue (lowest confidence first — the highest-value
-	// labels for the next retrain). `cornersReviewed` flips to true once the admin saves the band,
-	// so a human-approved crop is never treated as an uncertain auto-seed.
-	detectionConfidence: real("detection_confidence"),
-	detectionSource: text("detection_source"),
-	cornersReviewed: integer("corners_reviewed", { mode: "boolean" }).default(
-		false,
-	),
 	professionalImageKey: text("professional_image_key"), // R2 key — pro photo (public once approved)
 	professionalParamsJson: text("professional_params_json"), // last reframe knob settings (JSON)
 	professionalStatus: text("professional_status", {
 		enum: ["idle", "pending", "processing", "ready", "approved", "failed"],
 	}).default("idle"),
-	// The background-job lifecycle for the (queued) Apply pipeline — reframe + Real-ESRGAN
-	// enhance + Magic matte, run in the queue consumer. `idle` = nothing running; `queued` =
+	// The background-job lifecycle for the (queued) Apply pipeline — the reframe, run in
+	// the queue consumer. `idle` = nothing running; `queued` =
 	// enqueued, awaiting the consumer; `processing` = the consumer is running it; `failed`
 	// = it errored after retries. Powers the header "in flight" menu and the editor's
 	// generating state, independently of the display `professionalStatus` above.
 	professionalJobStatus: text("professional_job_status", {
 		enum: ["idle", "queued", "processing", "failed"],
 	}).default("idle"),
-	// Which stage of the two-step Apply pipeline is currently running, so the header
-	// "in flight" menu can show progress as "(1/2)" (cover: reframe + enhance) →
-	// "(2/2)" (matte + commit). Set by the consumer as each stage starts and cleared
-	// on commit; `professionalJobStatus` stays `processing` across both. Null on legacy
-	// rows and whenever no job is running (the menu falls back to the plain label).
+	// The Apply stage that is running. Apply has one stage now, so this is "cover" while
+	// a job runs and null otherwise.
 	professionalStage: text("professional_stage", {
-		enum: ["cover", "matte"],
+		enum: ["cover"],
 	}),
 	// A finer-grained, DISPLAY-ONLY sub-step within whichever pipeline is running, so the
 	// header "in flight" menu can show real progress ("(2/4) Enhancing", "(1/4) Reading
@@ -196,7 +167,7 @@ export const records = sqliteTable("records", {
 	// step); NOT load-bearing — nothing but the menu label reads it, so the reaper and editor
 	// stay keyed on `professionalStage`/`status`. Null on legacy rows and between jobs.
 	//   analyze: reading → matching (→ web-search) → scoring → artwork
-	//   apply:   reframe → enhance → matte-ai | matte-fallback → finishing
+	//   apply:   reframe → finishing
 	jobStep: text("job_step", {
 		enum: [
 			"reading",
@@ -205,59 +176,17 @@ export const records = sqliteTable("records", {
 			"scoring",
 			"artwork",
 			"reframe",
-			"enhance",
-			"matte-ai",
-			"matte-fallback",
 			"finishing",
 		],
 	}),
-	// Whether `professionalImageKey` is a Real-ESRGAN-upscaled master vs a plain reframe
-	// of the capture. Reset to false whenever the photo is regenerated from the capture;
-	// Apply now always enhances (a failed enhance fails the job rather than degrading), so
-	// on a committed Apply this is true — it's false only for a fresh reframe pre-Apply.
-	professionalEnhanced: integer("professional_enhanced", {
-		mode: "boolean",
-	}).default(false),
 	professionalError: text("professional_error"), // last generation error, surfaced in admin
-	// The "alpha matte": a second render — a transparent, true-edged sleeve floating on
-	// a margin with a soft contact shadow — generated alongside the square from the same
-	// corners on Apply. `professionalAlphaKey` is the shadow variant (used on the homepage
-	// grid; public once the square is `approved`); `…CutoutKey` is the shadowless pure
-	// cutout for compositing onto any background. `professionalAlphaSource` records whether
-	// a matting model (`ai`) or the free deterministic edge-snap (`deterministic`) cut it
-	// out. Both are stored under `alpha/` and cleared/rebuilt in lockstep with the square.
-	professionalAlphaKey: text("professional_alpha_key"),
-	professionalAlphaCutoutKey: text("professional_alpha_cutout_key"),
-	professionalAlphaSource: text("professional_alpha_source", {
-		enum: ["ai", "deterministic"],
-	}),
-	// The on-demand admin "Audit covers" sweep (src/lib/matte-audit.ts): a cheap,
-	// non-AI pixel scan of the stored `professionalAlphaCutoutKey` webp that flags
-	// likely-bad renders (a colour cast invented on a dark cover, or the matte's alpha
-	// bleeding into the transparent shadow margin) — both regression classes the matte
-	// pipeline has quietly produced in the past. `CheckedAt` null = never audited (or
-	// invalidated by a fresh matte, see professional-pipeline.ts); the sweep validates
-	// stalest-first, same pattern as the Discogs link-health check. `Reason` is a
-	// comma-joined list of what tripped ("tint", "edge", "tint,edge") or null when the
-	// last check came back clean.
-	professionalMatteAuditCheckedAt: integer(
-		"professional_matte_audit_checked_at",
-		{
-			mode: "timestamp",
-		},
-	),
-	professionalMatteAuditReason: text("professional_matte_audit_reason"),
-	// Vestigial — the pipeline no longer makes any Replicate call. Kept as a nullable
-	// column (not dropped) so a migration never has to remove something the currently
-	// deployed production code still selects; a later migration can drop it post-merge.
-	professionalPredictionId: text("professional_prediction_id"),
 	// Bounded auto-retry budgets for the self-heal reaper (see listInFlight): when a
 	// background job is found dead ("worker terminated mid-job" — an uncatchable OOM /
 	// eviction the queue's own retries can't recover), the reaper re-enqueues a FRESH job
 	// (clean isolate) up to MAX_AUTO_RETRIES times before flagging it terminally failed for
 	// manual action, rather than failing on the first interruption. Counts fresh re-enqueues
 	// only (the queue's per-message `attempts` retries are separate); reset to 0 on success
-	// and on any manual re-trigger (Apply / Reprocess / Replace capture / Retry Magic matte).
+	// and on any manual re-trigger (Apply / Reprocess / Replace capture).
 	analyzeRetryCount: integer("analyze_retry_count").default(0),
 	professionalRetryCount: integer("professional_retry_count").default(0),
 
@@ -302,29 +231,6 @@ export const records = sqliteTable("records", {
 
 export type Record = typeof records.$inferSelect;
 export type NewRecord = typeof records.$inferInsert;
-
-/**
- * Singleton row (always `id = 1`) tracking the background "Audit covers" sweep — see
- * `runMatteAudit`/the `audit-mattes` queue mode in matte-audit.ts/queue.ts. Unlike every
- * other queue job, an audit pass isn't keyed to one `records` row (it sweeps a batch of
- * up to `MATTE_AUDIT_BATCH` at once), so there's nowhere on `records` to park "a sweep is
- * currently running" — this table is that one piece of global state, upserted on
- * `id = 1` rather than modeled as a growing job history (there's only ever one sweep
- * running at a time). `checked`/`suspects` accumulate across every self-chained batch in
- * the current sweep so the queue menu can show live progress; both reset to 0 when a
- * fresh sweep starts. `running` flips back to false on the first pass that comes back
- * short of a full batch (nothing left to check).
- */
-export const matteAuditState = sqliteTable("matte_audit_state", {
-	id: integer("id").primaryKey(),
-	running: integer("running", { mode: "boolean" }).default(false),
-	checked: integer("checked").default(0),
-	suspects: integer("suspects").default(0),
-	startedAt: integer("started_at", { mode: "timestamp" }),
-	updatedAt: integer("updated_at", { mode: "timestamp" }),
-});
-
-export type MatteAuditState = typeof matteAuditState.$inferSelect;
 
 /** A fine-grained display-only sub-step of a running pipeline (see `records.jobStep`). */
 export type JobStep = NonNullable<Record["jobStep"]>;
