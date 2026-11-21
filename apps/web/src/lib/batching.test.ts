@@ -133,6 +133,11 @@ describe("staleThresholdMs", () => {
 		expect(staleThresholdMs(2)).toBe(20 * 60 * 1000);
 	});
 
+	it("gives a job still waiting in the queue an hour, whatever its retries", () => {
+		expect(staleThresholdMs(0, true)).toBe(60 * 60 * 1000);
+		expect(staleThresholdMs(2, true)).toBe(60 * 60 * 1000);
+	});
+
 	it("starts at the base staleness window", () => {
 		expect(staleThresholdMs(0)).toBe(STALE_JOB_MS);
 	});

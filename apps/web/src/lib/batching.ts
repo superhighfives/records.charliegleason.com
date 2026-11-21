@@ -120,13 +120,24 @@ export const STALE_JOB_MS = 5 * 60 * 1000;
 export const MAX_AUTO_RETRIES = 3;
 
 /**
- * Staleness threshold for a job that's already been reaped `retryCount` times: 5m,
- * then 10m, then 20m. A first interruption is usually transient and worth a prompt
+ * How long a job may sit WAITING (`queued` / `pending`, not yet picked up) before the
+ * reaper treats its message as lost. A waiting job isn't updated until the consumer
+ * starts it, and a bulk action (Re-apply all, a capture session) can leave jobs in line
+ * for many minutes at two at a time — so the running-job window would re-send healthy
+ * jobs and run them twice. This only has to catch a message that never arrives.
+ */
+export const WAITING_STALE_MS = 60 * 60 * 1000;
+
+/**
+ * Staleness threshold for a job: {@link WAITING_STALE_MS} while it's waiting in the
+ * queue, else, for a running job already reaped `retryCount` times, 5m, then 10m, then
+ * 20m. A first interruption is usually transient and worth a prompt
  * re-run, but a job the reaper has ALREADY re-enqueued twice is likely dying to a
  * shared cause (a container roll, a crash-looping instance) — doubling the window
  * each time keeps a wedged batch from hammering the container in lockstep every
  * 5 minutes while it recovers, and spreads the retries across its recovery instead.
  */
-export function staleThresholdMs(retryCount: number): number {
+export function staleThresholdMs(retryCount: number, waiting = false): number {
+	if (waiting) return WAITING_STALE_MS;
 	return STALE_JOB_MS * 2 ** Math.min(retryCount, MAX_AUTO_RETRIES - 1);
 }

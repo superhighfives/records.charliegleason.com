@@ -459,9 +459,12 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 			const analyzing = row.status === "pending" || row.status === "processing";
 			const retryCount =
 				(analyzing ? row.analyzeRetryCount : row.professionalRetryCount) ?? 0;
+			const waiting = analyzing
+				? row.status === "pending"
+				: row.professionalJobStatus === "queued";
 			if (
 				!row.updatedAt ||
-				now - row.updatedAt.getTime() <= staleThresholdMs(retryCount)
+				now - row.updatedAt.getTime() <= staleThresholdMs(retryCount, waiting)
 			) {
 				continue;
 			}
