@@ -222,6 +222,39 @@ async function identifyWithWebSearch(
 }
 
 /**
+ * The capture as base64 for the vision call. Captures are stored at up to 3072px;
+ * 2048 is plenty to read a cover and keeps the request well under Claude's image
+ * size limit. If the Images binding fails (see `storeCapturePhotoFromR2`, which
+ * allows for that), send the stored bytes as they are, as before.
+ */
+async function readCaptureForVision(
+	key: string,
+): Promise<{ data: string; mediaType: string }> {
+	const read = async () => {
+		const object = await env.PHOTOS.get(key);
+		if (!object) throw new Error(`capture photo missing in R2: ${key}`);
+		return object;
+	};
+	try {
+		const scaled = await env.IMAGES.input((await read()).body)
+			.transform({ width: 2048, height: 2048, fit: "scale-down" })
+			.output({ format: "image/webp", quality: 90 });
+		const bytes = new Uint8Array(await scaled.response().arrayBuffer());
+		return { data: bytesToBase64(bytes), mediaType: "image/webp" };
+	} catch (err) {
+		console.error(
+			`[analyze] could not scale capture ${key}; sending it as stored`,
+			err,
+		);
+		const object = await read();
+		return {
+			data: bytesToBase64(new Uint8Array(await object.arrayBuffer())),
+			mediaType: object.httpMetadata?.contentType || "image/jpeg",
+		};
+	}
+}
+
+/**
  * The full background pipeline for one captured record: read the stored capture
  * photo from R2, identify it (vision → Discogs → web-search escalation), score it
  * on Pitchfork, and source a resized cover. Never stores anything on the record —
@@ -238,19 +271,9 @@ export async function analyzeCapture(
 		throw new Error("record has no capture photo to analyze");
 	}
 
-	const object = await env.PHOTOS.get(record.capturePhotoKey);
-	if (!object) {
-		throw new Error(`capture photo missing in R2: ${record.capturePhotoKey}`);
-	}
-	// Captures are stored at up to 3072px; 2048 is plenty to read a cover and keeps
-	// the request well under Claude's image size limit.
-	const scaled = await env.IMAGES.input(object.body)
-		.transform({ width: 2048, height: 2048, fit: "scale-down" })
-		.output({ format: "image/webp", quality: 90 });
-	const data = bytesToBase64(
-		new Uint8Array(await scaled.response().arrayBuffer()),
+	const { data, mediaType } = await readCaptureForVision(
+		record.capturePhotoKey,
 	);
-	const mediaType = "image/webp";
 	const context = record.captureContext?.trim() || undefined;
 
 	// 1. Vision read.

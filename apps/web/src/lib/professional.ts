@@ -25,6 +25,7 @@ import {
 	type NormalizedCorners,
 	parseCornerBand,
 	toCropCorners,
+	trimFor,
 } from "#/lib/sleeve-corners";
 
 /**
@@ -136,7 +137,7 @@ export async function loadCaptureRegion(
 	const box = cropBoxFor(band.inner, info.width, info.height, CROP_MARGIN);
 	const out = await env.IMAGES.input(await read())
 		.transform({
-			trim: box,
+			trim: trimFor(box, info.width, info.height),
 			width: CAPTURE_DECODE_MAX,
 			height: CAPTURE_DECODE_MAX,
 			fit: "scale-down",

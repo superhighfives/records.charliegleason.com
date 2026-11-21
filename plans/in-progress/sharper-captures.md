@@ -48,8 +48,10 @@ memory. Covers are 2000px, but the sleeve inside a 2048px capture is often only 
 - [ ] On the PR preview: capture a few new records on the phone, Apply each one, and
       compare against an old capture. Check Activity for failed Applies (an out-of-memory
       kill shows as "worker terminated" and a retry).
-- [ ] Confirm that `trim` crops before it scales. If it scales first, the corners will
-      land in the wrong place and the cover will be visibly off.
+- [x] Confirm that `trim` crops before it scales. The binding's docs say it "is performed
+      before resizing or rotation" (`worker-configuration.d.ts`, `trim`). The code passes
+      only the four side cuts (`trimFor`), since the docs don't say how `width`/`height`
+      combine with `left`/`top`. Still check the covers look right on the preview.
 
 ## Open questions
 

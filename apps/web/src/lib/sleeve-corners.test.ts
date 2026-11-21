@@ -13,6 +13,7 @@ import {
 	parseCorners,
 	serializeCornerBand,
 	toCropCorners,
+	trimFor,
 } from "./sleeve-corners";
 
 const PICK: NormalizedCorners = [
@@ -190,6 +191,17 @@ describe("cropBoxFor / toCropCorners", () => {
 			top: 0,
 			width: 1000,
 			height: 1000,
+		});
+	});
+
+	it("turns the box into the pixels to cut off each side", () => {
+		const box = cropBoxFor(quad, 1000, 800, 0);
+		expect(box).toEqual({ left: 250, top: 160, width: 500, height: 480 });
+		expect(trimFor(box, 1000, 800)).toEqual({
+			left: 250,
+			top: 160,
+			right: 250,
+			bottom: 160,
 		});
 	});
 

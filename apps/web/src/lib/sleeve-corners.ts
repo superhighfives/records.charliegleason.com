@@ -408,6 +408,25 @@ export function cropBoxFor(
 }
 
 /**
+ * The Images binding `trim` that crops a `width` × `height` image to `box`. `trim`
+ * takes pixels to cut off each side, applied before any resize (see `trim` in
+ * worker-configuration.d.ts). Only the four side cuts are used: the docs don't say
+ * which side `trim.width`/`height` cut from when combined with `left`/`top`.
+ */
+export function trimFor(
+	box: CropBox,
+	width: number,
+	height: number,
+): { left: number; top: number; right: number; bottom: number } {
+	return {
+		left: box.left,
+		top: box.top,
+		right: width - (box.left + box.width),
+		bottom: height - (box.top + box.height),
+	};
+}
+
+/**
  * Re-express `quad`, normalised to a `width` × `height` image, as normalised to the
  * `box` cropped out of it. Scaling the crop afterwards keeps these the same.
  */
