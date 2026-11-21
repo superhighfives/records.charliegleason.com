@@ -37,17 +37,16 @@ npx @tanstack/intent@latest list      # 13 intent-enabled packages, 51 skills
 ```
 
 Always run `intent list` / `intent load <pkg>#<skill>` before making library-specific
-changes (TanStack AI, DB, Start, Router all ship skills) instead of guessing patterns.
+changes (Start, Router and Query ship skills) instead of guessing patterns.
 
 ## Stack & integrations
 
 | Concern            | Choice                                                            |
 | ------------------ | ---------------------------------------------------------------- |
 | Framework          | TanStack Start (SSR) + TanStack Router (file-based routes)       |
-| Data fetching      | TanStack Query + Router loaders; TanStack DB collections         |
+| Data fetching      | TanStack Query + Router loaders                                  |
 | Tables / filters   | TanStack Table                                                   |
 | Forms              | TanStack Form                                                    |
-| State              | TanStack Store                                                   |
 | AI                 | Claude via Cloudflare Workers AI partner models + AI Gateway (`runClaude` in `apps/web/src/lib/ai.ts`); vinyl colour swatches via Replicate |
 | Auth               | Clerk (`@clerk/clerk-react`), admin gated at `/admin`           |
 | Error monitoring   | Sentry — Worker via `@sentry/cloudflare` `withSentry` (`apps/web/src/server.ts`), browser via `init` in `apps/web/src/client.tsx`, source maps via `sentryTanstackStart` Vite plugin |
@@ -59,8 +58,7 @@ changes (TanStack AI, DB, Start, Router all ship skills) instead of guessing pat
 
 ### Required TanStack libraries (brief)
 
-Present: Start, Router, CLI, Intent (via npx), Query, Table, Form, Store, DB, AI.
-**Still to add & demonstrate: TanStack Hotkeys, TanStack Pacer, TanStack Virtual.**
+Present: Start, Router, CLI, Intent (via npx), Query, Table, Form, Hotkeys, Pacer.
 
 ### External data sources
 
@@ -187,18 +185,6 @@ production and live in `.env.local` for dev. See `.env.example`.
 - **`recordCreateSchema` vs `recordInputSchema`**: create accepts enrichment fields
   (discogs/pitchfork/cover/source); the edit form uses the narrower input schema so it
   can't null those out on update.
-- TanStack DB live-query collections are **client-only** (no SSR) — disable SSR on
-  routes that preload collections (see `db#meta-framework` skill).
-- Re-run `bunx wrangler types` after editing `apps/web/wrangler.jsonc` (regenerates
-  `apps/web/worker-configuration.d.ts`).
-
-## Next steps
-
-See **PLAN.md** for the full phased build plan. Immediate items:
-
-1. Apply the migration to D1: `bunx wrangler d1 migrations apply records --remote`.
-2. Phase 1 — CRUD: `create/update/deleteRecord` server fns + TanStack Form pages.
-3. Phase 1.5 — server-side Clerk auth on `/admin` and write server fns.
-4. Phase 2 — AI photo capture → Workers AI extraction → R2 storage.
-5. Phase 3+ — Discogs / The Fork / Last.fm enrichment, public API expansion, daily
-   email via Cron + Cloudflare Email.
+- `apps/web/worker-configuration.d.ts` is hand-maintained. After editing
+  `apps/web/wrangler.jsonc`, update both env interfaces in it by hand. Do not run
+  `wrangler types`.

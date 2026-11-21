@@ -1,8 +1,8 @@
 ---
 title: Rebuild the touch ambient scroll effect (grayscale reveal + vinyl peek)
-status: In Progress
+status: Complete
 created: 2026-08-12
-updated: 2026-08-12
+updated: 2026-11-20
 ---
 
 # Rebuild the touch ambient scroll effect

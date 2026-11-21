@@ -1,7 +1,7 @@
 # Setup
 
 Everything you need to take this repo from clone → working dev → production. See
-[AGENTS.md](./AGENTS.md) for architecture and [PLAN.md](./PLAN.md) for the build plan.
+[AGENTS.md](./AGENTS.md) for architecture.
 
 - **Package manager:** bun
 - **Host:** Cloudflare Workers (records.charliegleason.com)
