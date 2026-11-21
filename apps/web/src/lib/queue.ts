@@ -396,6 +396,17 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 	return row ?? record;
 }
 
+// Every record mode this consumer handles. The mapped type makes a new mode fail
+// typecheck until it is listed here.
+const RECORD_MODES: {
+	[M in NonNullable<AnalyzeRecordMessage["mode"]>]: true;
+} = {
+	analyze: true,
+	"capture-first-pass": true,
+	professional: true,
+	value: true,
+};
+
 async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	// Colors-keyed job — handled entirely separately from the records pipeline below.
 	if (message.body.mode === "color-texture") {
@@ -433,6 +444,13 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	}
 
 	const { recordId, mode } = message.body;
+	// A retired mode (still queued at deploy time, or replayed from the DLQ) must not
+	// fall through to a full re-analysis of a published record.
+	if (mode !== undefined && !Object.hasOwn(RECORD_MODES, mode)) {
+		console.warn(`[queue] dropped unknown mode ${mode} for record ${recordId}`);
+		message.ack();
+		return;
+	}
 	const db = getDb(env.DB);
 
 	// The free on-capture professional seed (see `capture-first-pass.ts` for why it
