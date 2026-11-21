@@ -185,20 +185,42 @@ export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
 }
 
 /**
- * Queue a Discogs value fetch for a record's pinned pressing. Best-effort and never
- * throws: callers fire it after an identity write, and a failed send must not undo
- * that write. A miss leaves the record for the bulk "fetch missing values" action.
+ * Mark records as having a value fetch queued, or clear the mark with `null`.
+ * The mark goes on before the send: set after it, it could land after a fast
+ * fetch had already cleared it, and hide the record as "queued" for an hour.
+ */
+async function markValueQueued(recordIds: number[], at: Date | null) {
+	const db = getDb(env.DB);
+	for (const ids of chunk(recordIds, D1_PARAM_CHUNK)) {
+		await db
+			.update(records)
+			.set({ discogsValueQueuedAt: at })
+			.where(inArray(records.id, ids));
+	}
+}
+
+/** Clear the queued mark after a failed send, so the bulk action offers the record again. */
+async function unmarkAfterFailedSend(recordIds: number[]) {
+	await markValueQueued(recordIds, null).catch((err) => {
+		console.error("[queue] could not clear the value-queued mark", err);
+		Sentry.captureException(err);
+	});
+}
+
+/**
+ * Queue a Discogs value fetch for a record (its pinned pressing, or its album).
+ * Best-effort and never throws: callers fire it after an identity write, and a
+ * failed send must not undo that write. A miss leaves the record for the bulk
+ * "fetch missing values" action.
  */
 export async function enqueueValue(recordId: number): Promise<void> {
 	try {
-		await getDb(env.DB)
-			.update(records)
-			.set({ discogsValueQueuedAt: new Date() })
-			.where(eq(records.id, recordId));
+		await markValueQueued([recordId], new Date());
 		await analyzeQueue().send({ recordId, mode: "value" });
 	} catch (err) {
 		console.error(`[queue] could not queue a value fetch for ${recordId}`, err);
 		Sentry.captureException(err);
+		await unmarkAfterFailedSend([recordId]);
 	}
 }
 
@@ -207,17 +229,20 @@ export async function enqueueValue(recordId: number): Promise<void> {
 // so retries are for blips, not a rate limit the batch itself causes.
 const VALUE_SPACING_SECONDS = 4;
 
-/** Bulk variant of {@link enqueueValue}, in chunked `sendBatch` calls. */
+/**
+ * Bulk variant of {@link enqueueValue}, in chunked `sendBatch` calls, paced by
+ * {@link VALUE_SPACING_SECONDS}. Throws on a failed send, so the caller can say
+ * so; the queued marks are cleared first. Messages from batches sent before the
+ * failure still run.
+ */
 export async function enqueueValueBatch(recordIds: number[]): Promise<void> {
-	const db = getDb(env.DB);
-	const now = new Date();
-	for (const ids of chunk(recordIds, D1_PARAM_CHUNK)) {
-		await db
-			.update(records)
-			.set({ discogsValueQueuedAt: now })
-			.where(inArray(records.id, ids));
+	await markValueQueued(recordIds, new Date());
+	try {
+		await enqueueBatch(recordIds, "value", VALUE_SPACING_SECONDS);
+	} catch (err) {
+		await unmarkAfterFailedSend(recordIds);
+		throw err;
 	}
-	await enqueueBatch(recordIds, "value", VALUE_SPACING_SECONDS);
 }
 
 /**
@@ -398,7 +423,7 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 		.limit(1);
 	if (!record) return null;
 	if (!valuationKey(record)) {
-		await clearValueQueued(id);
+		await markValueQueued([id], null);
 		return null;
 	}
 
@@ -442,13 +467,6 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 		)
 		.returning();
 	return row ?? record;
-}
-
-function clearValueQueued(id: number) {
-	return getDb(env.DB)
-		.update(records)
-		.set({ discogsValueQueuedAt: null })
-		.where(eq(records.id, id));
 }
 
 const errorText = (err: unknown) =>
@@ -565,7 +583,15 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
 			} else {
 				Sentry.captureException(err);
-				await clearValueQueued(recordId).catch(() => {});
+				// If this fails, the record stays marked as queued and drops out of
+				// "Fetch values" until the mark is an hour old. Report it.
+				await markValueQueued([recordId], null).catch((clearErr) => {
+					console.error(
+						`[queue] could not clear the value-queued mark for ${recordId}`,
+						clearErr,
+					);
+					Sentry.captureException(clearErr);
+				});
 				message.ack();
 			}
 		}

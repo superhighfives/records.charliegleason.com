@@ -53,6 +53,9 @@ export type AnalyzeMessage =
  */
 export const D1_PARAM_CHUNK = 90;
 
+/** Cloudflare Queues reject a message delay over 12 hours. */
+const MAX_DELAY_SECONDS = 12 * 60 * 60;
+
 /** Cloudflare Queues accept at most 100 messages per `sendBatch` call. */
 export const QUEUE_BATCH_SIZE = 100;
 
@@ -88,7 +91,10 @@ export function toQueueBatches(
 			return spacingSeconds > 0
 				? {
 						body: { recordId, mode },
-						delaySeconds: Math.round(index * spacingSeconds),
+						delaySeconds: Math.min(
+							Math.round(index * spacingSeconds),
+							MAX_DELAY_SECONDS,
+						),
 					}
 				: { body: { recordId, mode } };
 		}),
