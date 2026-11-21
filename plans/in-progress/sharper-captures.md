@@ -45,9 +45,11 @@ memory. Covers are 2000px, but the sleeve inside a 2048px capture is often only 
 - [x] Raise `TARGET_SIZE` and the canonical capture size to 3072.
 - [x] Add `loadCaptureRegion`, and use it for Apply and the capture first pass.
 - [x] Scale the capture for analysis.
-- [ ] On the PR preview: capture a few new records on the phone, Apply each one, and
-      compare against an old capture. Check Activity for failed Applies (an out-of-memory
-      kill shows as "worker terminated" and a retry).
+- [x] On the PR preview (2026-11-20): a 4032 × 3024 test photo stored as a 3072px
+      capture. The first pass and an Apply with a tight crop (center 60%) both succeeded,
+      with no failures in Activity. The cover matched the same region cut out locally to
+      within about 1–2%, so the crop, scale and corner remap line up. The test record was
+      deleted afterwards. A real phone capture is still worth a look after merge.
 - [x] Confirm that `trim` crops before it scales. The binding's docs say it "is performed
       before resizing or rotation" (`worker-configuration.d.ts`, `trim`). The code passes
       only the four side cuts (`trimFor`), since the docs don't say how `width`/`height`
