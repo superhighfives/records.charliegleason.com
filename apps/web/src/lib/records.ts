@@ -111,19 +111,10 @@ const ADMIN_ONLY_FIELDS = [
 	"discogsValueJson",
 	"discogsValueFetchedAt",
 	// Internal professional-photo job bookkeeping — the last error, the admin-picked
-	// sleeve corners, the reframe knob settings and the vestigial prediction id are
-	// never public.
+	// sleeve corners and the reframe knob settings are never public.
 	"professionalError",
-	"professionalEnhanced",
 	"sleeveCornersJson",
 	"professionalParamsJson",
-	"professionalPredictionId",
-	// The retired alpha matte (and its audit) — never shown publicly any more.
-	"professionalAlphaKey",
-	"professionalAlphaCutoutKey",
-	"professionalAlphaSource",
-	"professionalMatteAuditCheckedAt",
-	"professionalMatteAuditReason",
 ] as const;
 
 /** A `records` row joined with its `colors` chip — see `listPublicRecords`. */
@@ -166,15 +157,8 @@ export function toPublicRecord(
 		discogsValueJson: _valueJson,
 		discogsValueFetchedAt: _fetchedAt,
 		professionalError: _proError,
-		professionalEnhanced: _proEnhanced,
 		sleeveCornersJson: _corners,
 		professionalParamsJson: _proParams,
-		professionalPredictionId: _proPrediction,
-		professionalAlphaKey: _alphaKey,
-		professionalAlphaCutoutKey: _alphaCutoutKey,
-		professionalAlphaSource: _alphaSource,
-		professionalMatteAuditCheckedAt: _auditCheckedAt,
-		professionalMatteAuditReason: _auditReason,
 		...rest
 	} = row;
 	const approved = rest.professionalStatus === "approved";
@@ -361,11 +345,10 @@ export interface InFlightItem {
 	/** The finer-grained state (all actively running — the menu shows a spinner). */
 	state: "pending" | "processing" | "queued";
 	/**
-	 * For a processing `professional` job, the Apply stage it's in (now only ever
-	 * "cover"; "matte" survives on rows from before the matte was retired). Null for
+	 * For a processing `professional` job, the Apply stage it's in ("cover"). Null for
 	 * analyze jobs, queued professional jobs, and legacy rows with no stage recorded.
 	 */
-	stage: "cover" | "matte" | null;
+	stage: "cover" | null;
 	/**
 	 * The fine-grained sub-step within whichever pipeline is running (see `records.jobStep`),
 	 * so the menu can show "Reframing" / "(1/4) Reading cover". Null for a queued job
@@ -946,24 +929,15 @@ export const clearProfessional = createServerFn({ method: "POST" })
 				.where(eq(records.id, id))
 				.limit(1);
 			if (!record) return null;
-			const stale = [
-				...(record.professionalImageKey
-					? withPresizedKeys(record.professionalImageKey)
-					: []),
-				record.professionalAlphaKey,
-				record.professionalAlphaCutoutKey,
-			].filter((k): k is string => Boolean(k));
+			const stale = record.professionalImageKey
+				? withPresizedKeys(record.professionalImageKey)
+				: [];
 			const [row] = await db
 				.update(records)
 				.set({
 					professionalImageKey: null,
 					professionalStatus: "idle",
-					professionalEnhanced: false,
 					professionalError: null,
-					// Drop any leftover matte from before it was retired.
-					professionalAlphaKey: null,
-					professionalAlphaCutoutKey: null,
-					professionalAlphaSource: null,
 					// Zero-state: drop the saved crop + tone so the editor reopens clean.
 					sleeveCornersJson: null,
 					professionalParamsJson: null,
@@ -1386,8 +1360,6 @@ export const deleteRecord = createServerFn({ method: "POST" })
 					capturePhotoKey: records.capturePhotoKey,
 					coverImageKey: records.coverImageKey,
 					professionalImageKey: records.professionalImageKey,
-					professionalAlphaKey: records.professionalAlphaKey,
-					professionalAlphaCutoutKey: records.professionalAlphaCutoutKey,
 				})
 				.from(records)
 				.where(eq(records.id, id))
@@ -1402,8 +1374,6 @@ export const deleteRecord = createServerFn({ method: "POST" })
 					...(row.professionalImageKey
 						? withPresizedKeys(row.professionalImageKey)
 						: []),
-					row.professionalAlphaKey,
-					row.professionalAlphaCutoutKey,
 				].filter((key): key is string => Boolean(key));
 				if (keys.length > 0) await env.PHOTOS.delete(keys);
 			}
@@ -1539,8 +1509,6 @@ export const retryProfessionalGenerations = createServerFn({ method: "POST" })
 					.update(records)
 					.set({
 						professionalJobStatus: "queued",
-						// Mirrors the per-record reframeRecord, so a matte-era row doesn't
-						// carry a stale "matte" marker.
 						professionalStage: "cover",
 						professionalError: null,
 						professionalRetryCount: 0,

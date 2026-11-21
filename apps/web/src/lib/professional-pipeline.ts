@@ -43,7 +43,6 @@ export async function applyProfessional(
 			sleeveCornersJson: serializeCornerBand(band),
 			professionalImageKey: coverKey,
 			professionalParamsJson: JSON.stringify(params),
-			professionalEnhanced: false,
 			professionalStatus: "approved",
 			professionalJobStatus: "idle",
 			professionalStage: null,

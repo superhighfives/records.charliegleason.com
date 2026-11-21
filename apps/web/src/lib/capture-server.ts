@@ -132,19 +132,14 @@ export function replaceCaptureRecord(
 			.update(records)
 			.set({
 				capturePhotoKey,
-				// The old professional cover (and any leftover matte) was cut from the old capture (and
-				// their objects are deleted below) — clear them so nothing points at a
+				// The old professional cover was cut from the old capture (and its
+				// objects are deleted below) — clear it so nothing points at a
 				// deleted R2 object while the first-pass regenerates.
 				professionalImageKey: null,
-				professionalAlphaKey: null,
-				professionalAlphaCutoutKey: null,
-				professionalAlphaSource: null,
 				professionalStatus: null,
 				professionalError: null,
 				// Stored corners were for the old image — clear so the pass re-detects.
 				sleeveCornersJson: null,
-				// A new capture regenerates from scratch — no longer an upscale.
-				professionalEnhanced: false,
 				// Fresh source image → reset the reaper's auto-retry budget.
 				professionalRetryCount: 0,
 				updatedAt: new Date(),
@@ -159,8 +154,6 @@ export function replaceCaptureRecord(
 			...(record.professionalImageKey
 				? withPresizedKeys(record.professionalImageKey)
 				: []),
-			record.professionalAlphaKey,
-			record.professionalAlphaCutoutKey,
 		]) {
 			if (staleKey && staleKey !== capturePhotoKey) {
 				await env.PHOTOS.delete(staleKey).catch(() => {});
