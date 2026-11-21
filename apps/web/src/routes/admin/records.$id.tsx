@@ -53,7 +53,7 @@ import type {
 } from "#/lib/discogs";
 import { groupCandidates } from "#/lib/discogs-candidate";
 import { likelyDuplicateOf } from "#/lib/duplicates";
-import { orderRecordsForReview } from "#/lib/record-order";
+import { pagerRecords, readPagerOrder } from "#/lib/record-order";
 import type { RecordFormValues } from "#/lib/record-schema";
 import {
 	clearProfessional,
@@ -168,6 +168,22 @@ function parseCandidates(json: string | null): Array<DiscogsCandidate> {
 }
 
 /**
+ * The records the pager steps through, in the order the admin list last showed
+ * them. The saved order is read after mount, because the server can't see it.
+ */
+function usePagerRecords(
+	allRecords: Record[] | undefined,
+	recordId: number,
+): Record[] {
+	const [savedIds, setSavedIds] = useState<number[] | null>(null);
+	useEffect(() => setSavedIds(readPagerOrder()), []);
+	return useMemo(
+		() => pagerRecords(allRecords ?? [], savedIds, recordId),
+		[allRecords, savedIds, recordId],
+	);
+}
+
+/**
  * Build form defaults from the record, overlaying a freshly picked Discogs
  * release (most specific — it carries pressing fields) or, failing that, a picked
  * master (album-level fields only). A release pick wins over a master pick.
@@ -178,26 +194,33 @@ function toForm(
 	pickedMaster: DiscogsMasterCandidate | null,
 ): RecordFormValues {
 	// Album-level fields fall back release → master → record; pressing-specific
-	// fields (label, format, size, catno, country) only come from a release.
+	// fields (label, format, size, catno, country) only come from a release. A
+	// pressing of the album already linked keeps the album's fields: a reissue's
+	// year is not the album's.
+	const albumPick =
+		picked && record.masterId != null && picked.masterId === record.masterId
+			? null
+			: picked;
 	return {
-		artist: picked?.artist || pickedMaster?.artist || record.artist,
-		title: picked?.title || pickedMaster?.title || record.title,
-		year: (picked?.year ?? pickedMaster?.year ?? record.year)?.toString() ?? "",
+		artist: albumPick?.artist || pickedMaster?.artist || record.artist,
+		title: albumPick?.title || pickedMaster?.title || record.title,
+		year:
+			(albumPick?.year ?? pickedMaster?.year ?? record.year)?.toString() ?? "",
 		label: picked?.label ?? record.label ?? "",
 		format: picked?.type ?? record.format ?? "LP",
 		size: picked?.size ?? record.size ?? "",
 		discCount: (picked?.discCount ?? record.discCount ?? 1).toString(),
 		catno: picked?.catno ?? record.catno ?? "",
 		country: picked?.country ?? record.country ?? "",
-		genre: picked?.genre ?? pickedMaster?.genre ?? record.genre ?? "",
+		genre: albumPick?.genre ?? pickedMaster?.genre ?? record.genre ?? "",
 		colorId: record.colorId?.toString() ?? "",
 		// A pick that renames the album blanks the old score (it was for the
 		// wrong album); saving looks the new one up — see `pitchforkRematchAction`.
 		pitchforkScore:
-			(picked || pickedMaster) &&
+			(albumPick || pickedMaster) &&
 			!sameAlbum(record, {
-				artist: picked?.artist || pickedMaster?.artist || record.artist,
-				title: picked?.title || pickedMaster?.title || record.title,
+				artist: albumPick?.artist || pickedMaster?.artist || record.artist,
+				title: albumPick?.title || pickedMaster?.title || record.title,
 			})
 				? ""
 				: (record.pitchforkScore?.toString() ?? ""),
@@ -591,14 +614,10 @@ function RecordDetail() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 
-	// Back/next paging through the collection, in the same order the admin list
-	// shows (attention-needing first, then newest). Tracked by id so it never
-	// jumps to the wrong record if the list re-sorts under it.
+	// Back/next paging through the rows the admin list showed. Tracked by id so it
+	// never jumps to the wrong record if the list re-sorts under it.
 	const { data: allRecords } = useQuery(recordsQueryOptions);
-	const ordered = useMemo(
-		() => orderRecordsForReview(allRecords ?? []),
-		[allRecords],
-	);
+	const ordered = usePagerRecords(allRecords, recordId);
 	const pagerIndex = ordered.findIndex((r) => r.id === recordId);
 	const prevRecord = pagerIndex > 0 ? ordered[pagerIndex - 1] : null;
 	const nextRecord =
@@ -1721,13 +1740,10 @@ function RecordEditorHost() {
 	const { edit: editParam } = Route.useSearch();
 	const navigate = useNavigate();
 
-	// Back/next paging through the collection, in the same order the admin list shows —
-	// used by the pager in the editor header and the ← / → keyboard nav below.
+	// Back/next paging through the rows the admin list showed — used by the pager in
+	// the editor header and the ← / → keyboard nav below.
 	const { data: allRecords } = useQuery(recordsQueryOptions);
-	const ordered = useMemo(
-		() => orderRecordsForReview(allRecords ?? []),
-		[allRecords],
-	);
+	const ordered = usePagerRecords(allRecords, recordId);
 	const pagerIndex = ordered.findIndex((r) => r.id === recordId);
 	const prevRecord = pagerIndex > 0 ? ordered[pagerIndex - 1] : null;
 	const nextRecord =

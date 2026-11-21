@@ -10,6 +10,7 @@ import {
 	inArray,
 	isNotNull,
 	isNull,
+	lt,
 	notInArray,
 	or,
 } from "drizzle-orm";
@@ -64,6 +65,7 @@ import {
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
+import { VALUE_QUEUE_WINDOW_MS } from "#/lib/record-alerts";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 import {
 	type ReframeParams,
@@ -1022,81 +1024,19 @@ export const queueMissingValues = createServerFn({ method: "POST" })
 					and(
 						isNotNull(records.discogsId),
 						isNull(records.discogsValueFetchedAt),
+						// Skip fetches already queued, so a second click doesn't double them.
+						or(
+							isNull(records.discogsValueQueuedAt),
+							lt(
+								records.discogsValueQueuedAt,
+								new Date(Date.now() - VALUE_QUEUE_WINDOW_MS),
+							),
+						),
 					),
 				);
 			const ids = rows.map((r) => r.id);
 			await enqueueValueBatch(ids);
 			return { count: ids.length };
-		}),
-	);
-
-/**
- * Pin a record to a specific pressing — the Catalog page's one-click pick. Fetches
- * the release (which also proves it exists) and stores only its pressing-specific
- * fields: catalog number, country, format, size and disc count. Album-level fields
- * (year, label, genre, the master link) stay as they are, because a reissue's year
- * is not the album's. Clears any old value and queues a fetch for the new pressing.
- * Returns the updated row, or null if the record is gone.
- */
-export const pinPressing = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((input: { id: number; discogsId: string }) => {
-		const discogsId = String(input.discogsId);
-		if (!/^\d+$/.test(discogsId)) throw new Error("Invalid Discogs release id");
-		return { id: input.id, discogsId };
-	})
-	.handler(({ data: { id, discogsId } }) =>
-		Sentry.startSpan({ name: "pinPressing" }, async () => {
-			const detail = await getReleaseDetail(discogsId);
-			if (!detail) throw new Error(`Discogs release ${discogsId} not found`);
-			const db = getDb(env.DB);
-			const now = new Date();
-			const [row] = await db
-				.update(records)
-				.set({
-					discogsId,
-					discogsUrl: `https://www.discogs.com/release/${discogsId}`,
-					releaseMissing: false,
-					releaseCheckedAt: now,
-					catno: detail.catno,
-					country: detail.country,
-					...(detail.type ? { format: detail.type } : {}),
-					...(detail.size ? { size: detail.size } : {}),
-					discCount: detail.discCount,
-					...CLEARED_VALUE,
-					updatedAt: now,
-				})
-				.where(eq(records.id, id))
-				.returning();
-			if (row) await enqueueValue(id);
-			return row ?? null;
-		}),
-	);
-
-/**
- * Set or clear a record's hand-entered ("confirmed") value, which overrides the
- * Discogs estimate in the collection total. A null or negative amount clears it.
- */
-export const setManualValue = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((input: { id: number; value: number | null }) => ({
-		id: input.id,
-		value:
-			typeof input.value === "number" &&
-			Number.isFinite(input.value) &&
-			input.value >= 0
-				? input.value
-				: null,
-	}))
-	.handler(({ data: { id, value } }) =>
-		Sentry.startSpan({ name: "setManualValue" }, async () => {
-			const db = getDb(env.DB);
-			const [row] = await db
-				.update(records)
-				.set({ manualValue: value, updatedAt: new Date() })
-				.where(eq(records.id, id))
-				.returning();
-			return row ?? null;
 		}),
 	);
 

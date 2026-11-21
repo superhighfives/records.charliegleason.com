@@ -17,6 +17,7 @@ import type { InFlightItem, QueueOutcome } from "#/lib/records";
 import { failAllInFlight } from "#/lib/records";
 import {
 	inFlightQueryOptions,
+	queuedValuesQueryOptions,
 	queueOutcomesQueryOptions,
 } from "#/lib/records-queries";
 import { cn } from "#/lib/utils";
@@ -299,6 +300,8 @@ export function QueueMenu() {
 	const { data } = useQuery(inFlightQueryOptions);
 	const live = data ?? [];
 	const { finished, clear } = useQueueHistory(live);
+	// Value fetches are counted, not listed: a bulk fetch can queue dozens.
+	const { data: queuedValues = 0 } = useQuery(queuedValuesQueryOptions);
 	const queryClient = useQueryClient();
 
 	// Resolve each finished row's terminal outcome (failed / ok) — the in-flight diff loses it when the item departs, so we look it up by id here.
@@ -353,10 +356,12 @@ export function QueueMenu() {
 		},
 	});
 
-	if (live.length === 0 && finished.length === 0) return null;
+	if (live.length === 0 && finished.length === 0 && queuedValues === 0) {
+		return null;
+	}
 
-	const busy = live.length > 0;
-	const count = busy ? live.length : finished.length;
+	const busy = live.length > 0 || queuedValues > 0;
+	const count = busy ? live.length + queuedValues : finished.length;
 
 	return (
 		<DropdownMenu
@@ -367,7 +372,7 @@ export function QueueMenu() {
 			<DropdownMenuTrigger
 				aria-label={
 					busy
-						? `${live.length} job${live.length === 1 ? "" : "s"} in flight`
+						? `${count} job${count === 1 ? "" : "s"} in flight`
 						: `${finished.length} finished job${finished.length === 1 ? "" : "s"}`
 				}
 				className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -383,6 +388,15 @@ export function QueueMenu() {
 				{/* The list can get long (a whole capture session), so it scrolls; the
 				    "Clear finished" action stays pinned below as a non-scrolling sibling. */}
 				<div className="max-h-[400px] overflow-y-auto overflow-x-hidden">
+					{queuedValues > 0 && (
+						<DropdownMenuItem asChild className="min-h-9 gap-2 text-sm">
+							<Link to="/admin/activity">
+								<Loader2 className="size-4 animate-spin text-muted-foreground" />
+								Fetching {queuedValues} value{queuedValues === 1 ? "" : "s"}{" "}
+								from Discogs
+							</Link>
+						</DropdownMenuItem>
+					)}
 					{live.map((item) => {
 						const step = stepLabel(item);
 						return (
@@ -435,7 +449,7 @@ export function QueueMenu() {
 				    Two-step so a stray click can't nuke a live capture session: the first
 				    select arms it (keeping the menu open via preventDefault), the second
 				    fires. Only shown while something is actually running. */}
-				{busy && (
+				{live.length > 0 && (
 					<>
 						<DropdownMenuSeparator />
 						{confirmingFailAll ? (
@@ -487,6 +501,13 @@ export function QueueMenu() {
 						</DropdownMenuItem>
 					</>
 				)}
+				<DropdownMenuSeparator />
+				<DropdownMenuItem
+					asChild
+					className="min-h-9 justify-center text-xs text-muted-foreground"
+				>
+					<Link to="/admin/activity">View activity</Link>
+				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

@@ -225,6 +225,13 @@
       "when": 1792945620905,
       "tag": "0031_jittery_yellowjacket",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1795231135162,
+      "tag": "0032_real_killmonger",
+      "breakpoints": true
     }
   ]
 }

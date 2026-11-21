@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
@@ -8,6 +8,8 @@ import { analyzeCapture } from "#/lib/analyze";
 import {
 	type AnalyzeMessage,
 	type AnalyzeRecordMessage,
+	chunk,
+	D1_PARAM_CHUNK,
 	toQueueBatches,
 } from "#/lib/batching";
 import { runCaptureFirstPass } from "#/lib/capture-first-pass";
@@ -19,7 +21,9 @@ import {
 	searchMasters,
 	searchReleases,
 } from "#/lib/discogs";
+import { logJobEvent } from "#/lib/job-events";
 import { applyProfessional } from "#/lib/professional-pipeline";
+import { formatMoney } from "#/lib/value";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -185,6 +189,10 @@ export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
  */
 export async function enqueueValue(recordId: number): Promise<void> {
 	try {
+		await getDb(env.DB)
+			.update(records)
+			.set({ discogsValueQueuedAt: new Date() })
+			.where(eq(records.id, recordId));
 		await analyzeQueue().send({ recordId, mode: "value" });
 	} catch (err) {
 		console.error(`[queue] could not queue a value fetch for ${recordId}`, err);
@@ -193,8 +201,16 @@ export async function enqueueValue(recordId: number): Promise<void> {
 }
 
 /** Bulk variant of {@link enqueueValue}, in chunked `sendBatch` calls. */
-export function enqueueValueBatch(recordIds: number[]): Promise<void> {
-	return enqueueBatch(recordIds, "value");
+export async function enqueueValueBatch(recordIds: number[]): Promise<void> {
+	const db = getDb(env.DB);
+	const now = new Date();
+	for (const ids of chunk(recordIds, D1_PARAM_CHUNK)) {
+		await db
+			.update(records)
+			.set({ discogsValueQueuedAt: now })
+			.where(inArray(records.id, ids));
+	}
+	await enqueueBatch(recordIds, "value");
 }
 
 /**
@@ -352,6 +368,7 @@ export const CLEARED_VALUE = {
 	discogsValueCurrency: null,
 	discogsValueJson: null,
 	discogsValueFetchedAt: null,
+	discogsValueQueuedAt: null,
 } as const;
 
 /**
@@ -370,7 +387,10 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 		.from(records)
 		.where(eq(records.id, id))
 		.limit(1);
-	if (!record?.discogsId) return null;
+	if (!record?.discogsId) {
+		if (record) await clearValueQueued(id);
+		return null;
+	}
 
 	const value = await getReleaseValue(record.discogsId);
 	const now = new Date();
@@ -385,9 +405,10 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 							? JSON.stringify(value.suggestions)
 							: null,
 						discogsValueFetchedAt: now,
+						discogsValueQueuedAt: null,
 						updatedAt: now,
 					}
-				: { discogsValueFetchedAt: now },
+				: { discogsValueFetchedAt: now, discogsValueQueuedAt: null },
 		)
 		// The pressing could change while the request was in flight; a figure for
 		// the old one must not land on the new one.
@@ -395,6 +416,16 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 		.returning();
 	return row ?? record;
 }
+
+function clearValueQueued(id: number) {
+	return getDb(env.DB)
+		.update(records)
+		.set({ discogsValueQueuedAt: null })
+		.where(eq(records.id, id));
+}
+
+const errorText = (err: unknown) =>
+	err instanceof Error ? err.message : String(err);
 
 // Every record mode this consumer handles. The mapped type makes a new mode fail
 // typecheck until it is listed here.
@@ -413,7 +444,19 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		const { colorId } = message.body;
 		try {
 			await generateColorTexture(colorId);
+			await logJobEvent(
+				"color",
+				"info",
+				null,
+				`Made the texture for color ${colorId}`,
+			);
 		} catch (err) {
+			await logJobEvent(
+				"color",
+				"error",
+				null,
+				`Texture for color ${colorId} failed: ${errorText(err)}`,
+			);
 			console.error(
 				`[queue] color-texture failed for color ${colorId}: ${
 					err instanceof Error ? err.message : String(err)
@@ -466,19 +509,34 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	// 60 req/min limit), and never touches the record's status on failure.
 	if (mode === "value") {
 		try {
-			await fetchValueForRecord(recordId);
+			const row = await fetchValueForRecord(recordId);
+			if (row) {
+				await logJobEvent(
+					"value",
+					"info",
+					recordId,
+					row.discogsValue != null
+						? `${formatMoney(row.discogsValue, row.discogsValueCurrency ?? "USD")} on Discogs`
+						: "Nothing for sale on Discogs",
+				);
+			}
 			message.ack();
 		} catch (err) {
 			const willRetry = message.attempts <= MAX_RETRIES;
 			console.error(
-				`[queue] value failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${
-					err instanceof Error ? err.message : String(err)
-				}`,
+				`[queue] value failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${errorText(err)}`,
+			);
+			await logJobEvent(
+				"value",
+				"error",
+				recordId,
+				`${errorText(err)} (attempt ${message.attempts}, ${willRetry ? "will retry" : "gave up"})`,
 			);
 			if (willRetry) {
 				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
 			} else {
 				Sentry.captureException(err);
+				await clearValueQueued(recordId).catch(() => {});
 				message.ack();
 			}
 		}
@@ -510,6 +568,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 
 			const { staleKeys } = await applyProfessional(record);
 			await enqueueDeletePhotos(staleKeys);
+			await logJobEvent("professional", "info", recordId, "Applied the cover");
 			message.ack();
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
@@ -518,6 +577,12 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				`[queue] professional failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
 			);
 			Sentry.captureException(err);
+			await logJobEvent(
+				"professional",
+				"error",
+				recordId,
+				`Apply failed: ${detail} (attempt ${message.attempts}, ${willRetry ? "will retry" : "gave up"})`,
+			);
 			await markProfessionalFailed(db, recordId, willRetry, detail);
 			if (willRetry) {
 				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
@@ -605,6 +670,14 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		if (result.discogsId && result.discogsId !== record.discogsId) {
 			await enqueueValue(recordId);
 		}
+		await logJobEvent(
+			"analyze",
+			result.masterId || result.discogsId ? "info" : "error",
+			recordId,
+			result.masterId || result.discogsId
+				? `Read as ${result.artist} — ${result.title}`
+				: `Read as ${result.artist} — ${result.title}, but found no Discogs match`,
+		);
 
 		message.ack();
 	} catch (err) {
@@ -616,6 +689,12 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			`[queue] analyze failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
 		);
 		Sentry.captureException(err);
+		await logJobEvent(
+			"analyze",
+			"error",
+			recordId,
+			`Analysis failed: ${detail} (attempt ${message.attempts}, ${willRetry ? "will retry" : "gave up"})`,
+		);
 
 		await db
 			.update(records)

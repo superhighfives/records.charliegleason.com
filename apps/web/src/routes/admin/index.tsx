@@ -23,7 +23,6 @@ import {
 	ChevronDownIcon,
 	EllipsisVertical,
 	SearchIcon,
-	TriangleAlertIcon,
 } from "lucide-react";
 import {
 	Fragment,
@@ -63,13 +62,13 @@ import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
-import { orderRecordsForReview } from "#/lib/record-order";
+import { hasBrokenLink, isUnmatched } from "#/lib/record-alerts";
+import { orderRecordsForReview, savePagerOrder } from "#/lib/record-order";
 import {
 	checkLinkHealth,
 	deleteRecord,
 	deleteRecords,
 	publishRecords,
-	queueMissingValues,
 	reapplyAllProfessional,
 	retryProfessionalGenerations,
 	unpublishRecords,
@@ -625,11 +624,17 @@ function SegmentedFilter({
 export const Route = createFileRoute("/admin/")({
 	// Deep-link the active facets (a comma list in `f`) so back/forward and shared URLs
 	// restore the filter; an empty selection drops the param to keep the URL clean.
+	// `assign` opens the bulk-assign modal on load (the alerts menu links here).
 	validateSearch: (
 		search: globalThis.Record<string, unknown>,
-	): { f?: string } => {
+	): { f?: string; assign?: "unmatched" | "broken" } => {
 		const tokens = parseFacetTokens(search.f);
-		return tokens.length ? { f: tokens.join(",") } : {};
+		return {
+			...(tokens.length ? { f: tokens.join(",") } : {}),
+			...(search.assign === "unmatched" || search.assign === "broken"
+				? { assign: search.assign }
+				: {}),
+		};
 	},
 	loader: ({ context }) =>
 		context.queryClient.ensureQueryData(recordsQueryOptions),
@@ -659,7 +664,7 @@ function AdminRecords() {
 	// a record and pressing back, and can be shared/bookmarked. If the URL arrives with
 	// no `f` (e.g. clicking "Admin" from the nav rather than pressing back), fall back to
 	// the last selection remembered in localStorage.
-	const { f: rawFacets } = Route.useSearch();
+	const { f: rawFacets, assign: assignParam } = Route.useSearch();
 	const activeFacets = useMemo(() => parseFacetTokens(rawFacets), [rawFacets]);
 	const setFacets = (tokens: string[]) => {
 		writeStoredFilters({ ...readStoredFilters(), f: tokens.join(",") });
@@ -711,68 +716,49 @@ function AdminRecords() {
 	// at all yet — neither an album (master) nor a pinned release. A record
 	// matched to a standalone release (no Discogs master exists for it) is
 	// already handled and must not keep reappearing here.
-	const unmatchedRecords = useMemo(
-		() => data.filter((r) => r.masterId == null && r.discogsId == null),
-		[data],
-	);
+	const unmatchedRecords = useMemo(() => data.filter(isUnmatched), [data]);
 	// Records whose Discogs identity is broken: they have a link (master and/or
 	// release), but every link they have 404'd on the last scheduled health check
 	// (src/lib/master-health.ts) — so nothing live identifies them anymore. Distinct
 	// from "unmatched" (never had a link): a broken link is a data-integrity problem.
 	// A record with at least one *live* link (e.g. dead pinned release but live
 	// master) is still publishable and stays out of this set.
-	const brokenRecords = useMemo(() => {
-		const hasLiveMaster = (r: Record) => r.masterId != null && !r.masterMissing;
-		const hasLiveRelease = (r: Record) =>
-			r.discogsId != null && !r.releaseMissing;
-		return data.filter(
-			(r) =>
-				(r.masterId != null || r.discogsId != null) &&
-				!hasLiveMaster(r) &&
-				!hasLiveRelease(r),
-		);
-	}, [data]);
+	const brokenRecords = useMemo(() => data.filter(hasBrokenLink), [data]);
 	const bulkAssignRecords =
 		assignScope === "broken" ? brokenRecords : unmatchedRecords;
 	const openBulkAssign = (scope: "unmatched" | "broken") => {
 		setAssignScope(scope);
 		setBulkAssignOpen(true);
 	};
+	// Open the modal for an `?assign=` link, then drop the param so closing the
+	// modal (or a reload) doesn't reopen it.
+	useEffect(() => {
+		if (!assignParam) return;
+		setAssignScope(assignParam);
+		setBulkAssignOpen(true);
+		navigate({
+			to: "/admin",
+			search: (prev) => ({ ...prev, assign: undefined }),
+			replace: true,
+		});
+	}, [assignParam, navigate]);
 
 	// Collection value totals (USD). `total` sums every record's effective value
 	// (manual if set, else the Discogs guess); `confirmedTotal` counts only records
 	// with a hand-entered value. Drives the header summary.
-	// `unfetched` counts pinned pressings Discogs hasn't been asked about yet (the
-	// "Fetch values" action); `needsPressing` counts records Discogs can't price
-	// until a pressing is pinned (the Catalog page).
 	const totals = useMemo(() => {
 		let total = 0;
 		let confirmedTotal = 0;
 		let valued = 0;
-		let unfetched = 0;
-		let needsPressing = 0;
 		for (const r of data) {
-			if (r.discogsId == null) needsPressing += 1;
-			else if (r.discogsValueFetchedAt == null) unfetched += 1;
 			const v = effectiveValue(r);
 			if (v == null) continue;
 			total += v;
 			valued += 1;
 			if (r.manualValue != null) confirmedTotal += v;
 		}
-		return { total, confirmedTotal, valued, unfetched, needsPressing };
+		return { total, confirmedTotal, valued };
 	}, [data]);
-	const fetchValuesMutation = useMutation({
-		mutationFn: () => queueMissingValues(),
-		onSuccess: ({ count }) => {
-			toast.success(
-				count > 0
-					? `Fetching ${count} value${count === 1 ? "" : "s"} from Discogs. Reload in a minute or two to see the new total.`
-					: "Every pinned pressing already has a value.",
-			);
-		},
-		onError: () => toast.error("Couldn't start fetching values. Try again."),
-	});
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
 	useEffect(() => {
@@ -1128,6 +1114,11 @@ function AdminRecords() {
 	// Quick-view drawer: page through exactly what's on screen (the table's sorted +
 	// filtered rows), tracked by id so re-sorting never jumps to the wrong record.
 	const previewRecords = table.getRowModel().rows.map((r) => r.original);
+	// The record pager follows these rows; see `savePagerOrder`.
+	const previewIdsKey = previewRecords.map((r) => r.id).join(",");
+	useEffect(() => {
+		savePagerOrder(previewIdsKey ? previewIdsKey.split(",").map(Number) : []);
+	}, [previewIdsKey]);
 	const previewIndex =
 		previewId == null
 			? -1
@@ -1200,33 +1191,6 @@ function AdminRecords() {
 									{formatMoney(totals.confirmedTotal, "USD")}
 								</span>{" "}
 								confirmed
-							</>
-						)}
-						{totals.needsPressing > 0 && (
-							<>
-								{" "}
-								·{" "}
-								<Link
-									to="/admin/catalog"
-									className="underline underline-offset-4 hover:text-foreground"
-								>
-									{totals.needsPressing} need a pressing
-								</Link>
-							</>
-						)}
-						{totals.unfetched > 0 && (
-							<>
-								{" "}
-								·{" "}
-								<button
-									type="button"
-									className="underline underline-offset-4 hover:text-foreground disabled:opacity-50"
-									disabled={fetchValuesMutation.isPending}
-									onClick={() => fetchValuesMutation.mutate()}
-								>
-									Fetch {totals.unfetched} value
-									{totals.unfetched === 1 ? "" : "s"}
-								</button>
 							</>
 						)}
 					</p>
@@ -1392,41 +1356,6 @@ function AdminRecords() {
 					</div>
 				</div>
 			</div>
-
-			{/* Broken-link banner. The scheduled health check (src/lib/master-health.ts)
-			    flags records whose Discogs master OR release was deleted/merged; these
-			    are the ones with no live link left. Surface them loudly — a broken link
-			    is a data-integrity problem, not the routine "not assigned yet" case the
-			    amber Unmatched badge covers. Fix reuses the bulk-assign modal (assigning
-			    a live master restores identity), scoped to just these rows. */}
-			{brokenRecords.length > 0 && (
-				<div
-					role="alert"
-					className="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm"
-				>
-					<TriangleAlertIcon className="size-5 shrink-0 text-red-600 dark:text-red-400" />
-					<div className="min-w-0 flex-1">
-						<p className="font-medium text-red-700 dark:text-red-300">
-							{brokenRecords.length === 1
-								? "1 record has a broken Discogs link"
-								: `${brokenRecords.length} records have a broken Discogs link`}
-						</p>
-						<p className="text-red-700/80 dark:text-red-300/80">
-							The album or release they point at was deleted or merged — re-link
-							each to a current one.
-						</p>
-					</div>
-					<Button
-						type="button"
-						variant="destructive"
-						size="sm"
-						className="shrink-0"
-						onClick={() => openBulkAssign("broken")}
-					>
-						Fix
-					</Button>
-				</div>
-			)}
 
 			{/* Bulk actions. The bar stays put whenever there are rows to act on (so
 			    ticking the first row doesn't shift the table down), but the action

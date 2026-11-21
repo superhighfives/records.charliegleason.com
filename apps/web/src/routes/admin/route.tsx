@@ -8,6 +8,7 @@ import {
 import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 
+import { AlertsMenu } from "#/components/alerts-menu";
 import { QueueMenu } from "#/components/queue-menu";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { isAdmin } from "#/lib/roles";
@@ -28,9 +29,9 @@ export const Route = createFileRoute("/admin")({ component: AdminLayout });
 /** The admin's pages, linked from the header. */
 const ADMIN_PAGES = [
 	{ to: "/admin", label: "List" },
-	{ to: "/admin/catalog", label: "Catalog" },
 	{ to: "/admin/colors", label: "Colors" },
 	{ to: "/admin/filters", label: "Filters" },
+	{ to: "/admin/activity", label: "Activity" },
 	{ to: "/admin/settings", label: "Settings" },
 ] as const;
 
@@ -107,6 +108,7 @@ function AdminGate() {
 						))}
 					</nav>
 					<div className="flex items-center gap-3">
+						<AlertsMenu />
 						<QueueMenu />
 						<ThemeToggle />
 						<UserButton />

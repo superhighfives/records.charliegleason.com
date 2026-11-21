@@ -28,3 +28,41 @@ export function orderRecordsForReview<
 		return (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
 	});
 }
+
+// The admin list saves the ids it shows (filtered, searched and sorted) so the
+// record pager steps through the same rows. Per tab, so two tabs can walk two lists.
+const PAGER_ORDER_KEY = "admin-pager-order";
+
+export function savePagerOrder(ids: readonly number[]): void {
+	try {
+		window.sessionStorage.setItem(PAGER_ORDER_KEY, JSON.stringify(ids));
+	} catch {
+		// Storage full or blocked: the pager falls back to the default order.
+	}
+}
+
+export function readPagerOrder(): number[] | null {
+	try {
+		const parsed: unknown = JSON.parse(
+			window.sessionStorage.getItem(PAGER_ORDER_KEY) ?? "null",
+		);
+		return Array.isArray(parsed) && parsed.every(Number.isInteger)
+			? parsed
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The record pager's order: the list's saved rows when they include `id` (the
+ * record was opened from that list), else every record in the default order.
+ * Deleted records drop out.
+ */
+export function pagerRecords<
+	T extends Pick<Record, "id" | "status" | "createdAt">,
+>(rows: readonly T[], savedIds: readonly number[] | null, id: number): T[] {
+	if (!savedIds?.includes(id)) return orderRecordsForReview(rows);
+	const byId = new Map(rows.map((r) => [r.id, r]));
+	return savedIds.flatMap((i) => byId.get(i) ?? []);
+}
