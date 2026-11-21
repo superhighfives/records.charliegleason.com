@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import type { Record } from "#/db/schema";
-
 /**
  * Canonical, validated record input (numbers are numbers, optionals are null).
  * Server functions parse against this before touching D1.
@@ -153,24 +151,5 @@ export function formValuesToInput(v: RecordFormValues): RecordInput {
 		pitchforkScore: optionalNumber(v.pitchforkScore),
 		notes: optional(v.notes),
 		manualValue: optionalNumber(v.manualValue),
-	};
-}
-
-export function recordToFormValues(r: Record): RecordFormValues {
-	return {
-		artist: r.artist,
-		title: r.title,
-		year: r.year?.toString() ?? "",
-		label: r.label ?? "",
-		format: r.format ?? "LP",
-		size: r.size ?? "",
-		discCount: (r.discCount ?? 1).toString(),
-		catno: r.catno ?? "",
-		country: r.country ?? "",
-		genre: r.genre ?? "",
-		colorId: r.colorId?.toString() ?? "",
-		pitchforkScore: r.pitchforkScore?.toString() ?? "",
-		notes: r.notes ?? "",
-		manualValue: r.manualValue?.toString() ?? "",
 	};
 }

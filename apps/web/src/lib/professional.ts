@@ -20,16 +20,10 @@ import {
 	type ReframeParams,
 } from "#/lib/reframe-params";
 import {
-	bandFromQuad,
 	type CornerBand,
-	DEFAULT_BAND,
 	type NormalizedCorners,
 	parseCornerBand,
 } from "#/lib/sleeve-corners";
-import {
-	detectSleeveCornersBest,
-	type SleeveDetection,
-} from "#/lib/sleeve-detect-wasm";
 
 /**
  * Turn a rough iPhone capture into a clean, straight-on studio shot of the physical
@@ -43,8 +37,8 @@ import {
  * locked onto the artwork's subject (a figure, a building), never the flat rectangle.
  *
  * So the sleeve's four corners are picked deterministically instead: by hand in the
- * admin corner editor (auto-seeded by the {@link detectSleeveCornersBest} pass), stored on
- * the row as {@link NormalizedCorners}. Given those corners this module:
+ * admin corner editor (a fresh capture starts from the full frame), stored on the row
+ * as {@link NormalizedCorners}. Given those corners this module:
  *
  *   1. perspective-warps the real capture pixels onto a square — cropping, squaring and
  *      de-keystoning in one step (a classic "document scanner" homography);
@@ -233,56 +227,26 @@ export async function reframeFromCapture(
 }
 
 /**
- * Run the {@link detectSleeveCornersBest} seed against a stored capture on demand — the
- * corner editor's "Detect corners" button. Returns the detected corners plus a confidence
- * score and which detector won (so the editor can tell the admin how hard to scrutinise the
- * seed), or `null` when neither detector can separate the sleeve from the background (the
- * caller leaves the handles put).
- */
-export async function detectCaptureCorners(
-	capturePhotoKey: string,
-): Promise<SleeveDetection | null> {
-	return detectSleeveCornersBest(await loadCapture(capturePhotoKey));
-}
-
-/**
  * Reframe a record end-to-end for the queue (auto-on-capture + bulk). Decodes the capture
- * once, then picks the corner band: the admin's stored band if there is one (legacy
- * single-quad rows are synthesised into a band at parse time), otherwise a band seeded
- * from a best-effort {@link detectSleeveCornersBest} pass (full-frame default when
- * detection can't find the sleeve). Returns the new professional R2 key AND the band used,
- * so the consumer can persist it — that seed is what the corner editor opens pre-cropped
- * to. Does NOT touch the DB itself.
+ * once, then uses the admin's stored corner band, or the full frame when there is none
+ * (legacy single-quad rows are synthesised into a band at parse time). Returns the new
+ * professional R2 key AND the band used, so the consumer can persist it. Does NOT touch
+ * the DB itself.
  */
 export async function professionalPipeline(
 	record: Pick<
 		Record,
 		"capturePhotoKey" | "sleeveCornersJson" | "professionalParamsJson"
 	>,
-): Promise<{
-	professionalKey: string;
-	band: CornerBand;
-	detection: SleeveDetection | null;
-}> {
+): Promise<{ professionalKey: string; band: CornerBand }> {
 	if (!record.capturePhotoKey) {
 		throw new Error("record has no capture photo to work from");
 	}
-	const capture = await loadCapture(record.capturePhotoKey);
-	// Respect a stored band; otherwise seed by detecting the sleeve (full-frame fallback).
-	// `detection` is non-null only when we actually ran the detector (no stored band), so the
-	// caller can persist its confidence/source for the on-open badge and the review queue.
-	let band: CornerBand;
-	let detection: SleeveDetection | null = null;
-	if (record.sleeveCornersJson) {
-		band = parseCornerBand(record.sleeveCornersJson);
-	} else {
-		detection = await detectSleeveCornersBest(capture);
-		band = detection ? bandFromQuad(detection.corners) : DEFAULT_BAND;
-	}
+	const band = parseCornerBand(record.sleeveCornersJson);
 	const { key: professionalKey } = await warpEncodeStore(
-		capture,
+		await loadCapture(record.capturePhotoKey),
 		band,
 		parseReframeParams(record.professionalParamsJson),
 	);
-	return { professionalKey, band, detection };
+	return { professionalKey, band };
 }

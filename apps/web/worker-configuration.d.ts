@@ -5,9 +5,7 @@ interface __BaseEnv_Env {
 	PHOTOS: R2Bucket;
 	DB: D1Database;
 	ANALYZE_QUEUE: Queue;
-	// Optional for one deploy's worth of config skew: enqueueAnalyze falls back to
-	// ANALYZE_QUEUE when the binding isn't live yet (see queue.ts#captureQueue).
-	CAPTURE_QUEUE?: Queue;
+	CAPTURE_QUEUE: Queue;
 	AI: Ai;
 	IMAGES: ImagesBinding;
 	ENVIRONMENT: "preview" | "production";
@@ -25,10 +23,6 @@ interface __BaseEnv_Env {
 	// api.discogs.com directly.
 	DISCOGS_PROXY_URL?: string;
 	DISCOGS_PROXY_SECRET?: string;
-	// Fine-grained GitHub PAT (Actions: write, Contents: read, Pull requests: read) used
-	// to dispatch retrain-corners.yml on-demand from reframeRecord (see retrain-dispatch.ts).
-	// Unset in preview/dev: maybeTriggerRetrain no-ops without it.
-	GITHUB_DISPATCH_TOKEN?: string;
 	SERPAPI_KEY: string;
 	REPLICATE_API_KEY: string;
 	LASTFM_API_KEY: string;
@@ -48,7 +42,7 @@ declare namespace Cloudflare {
 		PHOTOS: R2Bucket;
 		DB: D1Database;
 		ANALYZE_QUEUE: Queue;
-		CAPTURE_QUEUE?: Queue;
+		CAPTURE_QUEUE: Queue;
 		AI: Ai;
 		IMAGES: ImagesBinding;
 		ENVIRONMENT: "preview";

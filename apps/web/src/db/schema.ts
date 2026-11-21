@@ -119,6 +119,14 @@ export const records = sqliteTable("records", {
 	discogsValueFetchedAt: integer("discogs_value_fetched_at", {
 		mode: "timestamp",
 	}),
+	// The release the Discogs value was priced from: the pinned pressing, or, with
+	// none pinned, the album's most-owned vinyl pressing (an estimate).
+	discogsValueReleaseId: text("discogs_value_release_id"),
+	// Set when a value fetch is queued, cleared when it finishes or gives up. The
+	// queue menu counts these to show fetches in progress.
+	discogsValueQueuedAt: integer("discogs_value_queued_at", {
+		mode: "timestamp",
+	}),
 
 	// Storage / provenance
 	coverImageKey: text("cover_image_key"), // R2 key — good cover, sourced + resized (public)
@@ -320,6 +328,25 @@ export type MatteAuditState = typeof matteAuditState.$inferSelect;
 
 /** A fine-grained display-only sub-step of a running pipeline (see `records.jobStep`). */
 export type JobStep = NonNullable<Record["jobStep"]>;
+
+/**
+ * What the background jobs did, newest last, for the admin Activity page: one
+ * row per job outcome or failed attempt. The daily cron prunes old rows.
+ */
+export const jobEvents = sqliteTable("job_events", {
+	id: integer("id").primaryKey({ autoIncrement: true }),
+	createdAt: integer("created_at", { mode: "timestamp" }).default(
+		sql`(unixepoch())`,
+	),
+	kind: text("kind", {
+		enum: ["analyze", "professional", "value", "color"],
+	}).notNull(),
+	level: text("level", { enum: ["info", "error"] }).notNull(),
+	recordId: integer("record_id"),
+	message: text("message").notNull(),
+});
+
+export type JobEvent = typeof jobEvents.$inferSelect;
 
 /**
  * Small site-wide settings the admin edits, one JSON blob per `key` — e.g.

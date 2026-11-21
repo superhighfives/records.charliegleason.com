@@ -7,7 +7,7 @@ import { serializeCornerBand } from "#/lib/sleeve-corners";
 
 /**
  * The free first-pass professional photo for a fresh (or replaced) capture:
- * detect the sleeve's corners and warp to a straight square. Ran inline in the
+ * a full-frame square, which the admin then crops in the corner editor. Ran inline in the
  * capture POST until that OOM'd: the photon pass allocates several 2048² RGBA
  * buffers, and stacked with whatever else the isolate is doing (the analyze
  * consumer chewing through the previous capture, the request's own transform
@@ -43,21 +43,13 @@ export async function runCaptureFirstPass(recordId: number): Promise<void> {
 	);
 
 	try {
-		const { professionalKey, band, detection } =
-			await professionalPipeline(record);
+		const { professionalKey, band } = await professionalPipeline(record);
 		await db
 			.update(records)
 			.set({
 				professionalImageKey: professionalKey,
-				// Persist the detected seed so the editor opens pre-cropped; a later
-				// Apply overwrites it with the admin's band.
+				// A later Apply overwrites this with the admin's band.
 				sleeveCornersJson: serializeCornerBand(band),
-				// The seed's confidence/source drive the editor's on-open badge and the
-				// review queue. It's an unreviewed auto-seed until the admin saves the band,
-				// so reset `cornersReviewed` (a re-capture must re-enter the queue).
-				detectionConfidence: detection?.confidence ?? null,
-				detectionSource: detection?.source ?? null,
-				cornersReviewed: false,
 				// Generated, but not shown on the site until an admin approves it.
 				professionalStatus: "ready",
 				professionalError: null,

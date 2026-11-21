@@ -294,11 +294,45 @@ function isVinylVersion(v: any): boolean {
 }
 
 /**
+ * The vinyl pressing of an album that the most Discogs users own, as a release
+ * id: the best guess at the pressing in hand when none is pinned. Reads the first
+ * page (100) of vinyl versions only, so a master with hundreds of pressings may
+ * miss a later one. Null when the album has no vinyl version or is gone; throws
+ * on any other Discogs failure.
+ */
+export async function getMostOwnedVinylRelease(
+	masterId: string,
+): Promise<string | null> {
+	const res = await discogsFetch(
+		`${BASE}/masters/${masterId}/versions?format=Vinyl&per_page=${MAX_PER_PAGE}`,
+	);
+	if (!res.ok) {
+		await res.body?.cancel().catch(() => {});
+		if (res.status === 404) return null;
+		throw new Error(`Discogs ${res.status} for versions of master ${masterId}`);
+	}
+	const data = (await res.json()) as {
+		versions?: Array<{
+			id?: number;
+			stats?: { community?: { in_collection?: number } };
+		}>;
+	};
+	let best: { id: number; have: number } | null = null;
+	for (const v of data.versions ?? []) {
+		if (v.id == null || !isVinylVersion(v)) continue;
+		const have = v.stats?.community?.in_collection ?? 0;
+		if (!best || have > best.have) best = { id: v.id, have };
+	}
+	return best ? String(best.id) : null;
+}
+
+/**
  * List a master's releases (pressings) as `DiscogsCandidate`s so the editor can
  * offer "pick a specific pressing" once an album is chosen — vinyl only, since
  * that's the collection. The versions endpoint carries per-pressing fields but not
  * the artist/genre, so those come from the master (one extra fetch, cached). Each
- * candidate's `masterId` is the parent master. Returns [] on any failure.
+ * candidate's `masterId` is the parent master. Returns [] for a missing master
+ * and throws on any other Discogs failure.
  */
 export async function getMasterVersions(
 	masterId: string,
@@ -312,7 +346,10 @@ export async function getMasterVersions(
 	);
 	if (!res.ok) {
 		await res.body?.cancel().catch(() => {});
-		return [];
+		// A missing master has no versions. Anything else (rate limit, auth, an
+		// upstream blip) must not look like "no pressings".
+		if (res.status === 404) return [];
+		throw new Error(`Discogs ${res.status} for versions of master ${masterId}`);
 	}
 	const data = (await res.json()) as {
 		versions?: Array<Record<string, unknown>>;
@@ -442,8 +479,9 @@ export function pickSuggestedValue(raw: PriceSuggestions): {
  * Estimate a release's value. Tries Discogs' seller price suggestions first (a
  * per-grade median that needs a Seller account) and falls back to marketplace
  * stats (the lowest copy currently listed) so the feature still returns a number
- * for tokens without seller access. Returns null only when neither endpoint
- * yields a usable figure. `curr` is the currency for the stats fallback; price
+ * for tokens without seller access. Returns null when the release is gone; a
+ * result with a null `value` means nothing is for sale. Throws on any other
+ * Discogs failure. `curr` is the currency for the stats fallback; price
  * suggestions come back in the authenticated account's own currency.
  */
 export async function getReleaseValue(
@@ -482,7 +520,12 @@ export async function getReleaseValue(
 	);
 	if (!statsRes.ok) {
 		await statsRes.body?.cancel().catch(() => {});
-		return null;
+		// A missing release has no value; anything else (rate limit, auth, an
+		// upstream blip) is a failure the caller should retry or surface.
+		if (statsRes.status === 404) return null;
+		throw new Error(
+			`Discogs ${statsRes.status} for marketplace stats on release ${id}`,
+		);
 	}
 	const stats = (await statsRes.json()) as {
 		lowest_price?: { value?: unknown; currency?: unknown } | null;

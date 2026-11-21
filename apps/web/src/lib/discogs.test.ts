@@ -5,6 +5,9 @@ import {
 	buildSearchUrl,
 	checkMasterLiveness,
 	checkReleaseLiveness,
+	getMasterVersions,
+	getMostOwnedVinylRelease,
+	getReleaseValue,
 	parseMasterId,
 	parseReleaseId,
 	parseSizeAndType,
@@ -498,5 +501,142 @@ describe("searchMasters", () => {
 	it("throws — not [] — on a 401 so a bad token surfaces", async () => {
 		respond({ status: 401 }, { message: "You must authenticate…" });
 		await expect(searchMasters(noParams)).rejects.toThrow(/DISCOGS_TOKEN/);
+	});
+});
+
+describe("getReleaseValue", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	/** Answer the price-suggestions call, then the marketplace-stats fallback. */
+	function stubDiscogs(suggestions: Response, stats?: Response) {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string | URL) =>
+				String(url).includes("/price_suggestions/")
+					? suggestions
+					: (stats ?? new Response(null, { status: 500 })),
+			),
+		);
+	}
+
+	it("uses the seller price suggestion when the token has seller access", async () => {
+		stubDiscogs(
+			Response.json({
+				"Very Good Plus (VG+)": { value: 28.5, currency: "USD" },
+			}),
+		);
+		await expect(getReleaseValue("1")).resolves.toMatchObject({
+			value: 28.5,
+			source: "suggestions",
+		});
+	});
+
+	it("falls back to the lowest listing without seller access", async () => {
+		stubDiscogs(
+			new Response(null, { status: 403 }),
+			Response.json({
+				lowest_price: { value: 34, currency: "USD" },
+				num_for_sale: 30,
+			}),
+		);
+		await expect(getReleaseValue("1")).resolves.toMatchObject({
+			value: 34,
+			source: "stats",
+			numForSale: 30,
+		});
+	});
+
+	it("reports a null value when nothing is for sale", async () => {
+		stubDiscogs(
+			new Response(null, { status: 403 }),
+			Response.json({ lowest_price: null, num_for_sale: 0 }),
+		);
+		await expect(getReleaseValue("1")).resolves.toMatchObject({
+			value: null,
+		});
+	});
+
+	it("returns null for a release Discogs no longer has", async () => {
+		stubDiscogs(
+			new Response(null, { status: 404 }),
+			new Response(null, { status: 404 }),
+		);
+		await expect(getReleaseValue("1")).resolves.toBeNull();
+	});
+
+	it("throws on a failure the caller should retry or surface", async () => {
+		stubDiscogs(
+			new Response(null, { status: 403 }),
+			new Response(null, { status: 401 }),
+		);
+		await expect(getReleaseValue("1")).rejects.toThrow("Discogs 401");
+	});
+});
+
+describe("getMasterVersions", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	/** Answer the versions call with `versions`; the master lookup always 404s. */
+	function stubVersions(versions: Response) {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string | URL) =>
+				String(url).includes("/versions")
+					? versions
+					: new Response(null, { status: 404 }),
+			),
+		);
+	}
+
+	it("returns no pressings for a missing master", async () => {
+		stubVersions(new Response(null, { status: 404 }));
+		await expect(getMasterVersions("1")).resolves.toEqual([]);
+	});
+
+	it("throws on a Discogs failure instead of reporting no pressings", async () => {
+		stubVersions(new Response(null, { status: 401 }));
+		await expect(getMasterVersions("1")).rejects.toThrow(
+			"Discogs 401 for versions of master 1",
+		);
+	});
+});
+
+describe("getMostOwnedVinylRelease", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const version = (id: number, format: string, have: number) => ({
+		id,
+		major_formats: [format],
+		stats: { community: { in_collection: have } },
+	});
+
+	it("picks the vinyl pressing the most people own", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					versions: [
+						version(1, "Vinyl", 20),
+						version(2, "CD", 900),
+						version(3, "Vinyl", 300),
+					],
+				}),
+			),
+		);
+		await expect(getMostOwnedVinylRelease("9")).resolves.toBe("3");
+	});
+
+	it("returns null for a missing album", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, { status: 404 })),
+		);
+		await expect(getMostOwnedVinylRelease("9")).resolves.toBeNull();
 	});
 });

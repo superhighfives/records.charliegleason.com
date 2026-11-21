@@ -8,6 +8,7 @@ import {
 import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 
+import { AlertsMenu } from "#/components/alerts-menu";
 import { QueueMenu } from "#/components/queue-menu";
 import { ThemeToggle } from "#/components/theme-toggle";
 import { isAdmin } from "#/lib/roles";
@@ -30,7 +31,7 @@ const ADMIN_PAGES = [
 	{ to: "/admin", label: "List" },
 	{ to: "/admin/colors", label: "Colors" },
 	{ to: "/admin/filters", label: "Filters" },
-	{ to: "/admin/review", label: "Review" },
+	{ to: "/admin/activity", label: "Activity" },
 	{ to: "/admin/settings", label: "Settings" },
 ] as const;
 
@@ -86,7 +87,9 @@ function AdminGate() {
 					</nav>
 					<nav
 						aria-label="Admin pages"
-						className="-my-2 flex min-w-0 items-center gap-1 overflow-x-auto"
+						// The scroll area clips on both axes, so pad it inside its negative
+						// margin to leave room for the focus ring.
+						className="-my-2 flex min-w-0 items-center gap-1 overflow-x-auto px-1 py-2"
 					>
 						{ADMIN_PAGES.map((page) => (
 							<Link
@@ -105,6 +108,7 @@ function AdminGate() {
 						))}
 					</nav>
 					<div className="flex items-center gap-3">
+						<AlertsMenu />
 						<QueueMenu />
 						<ThemeToggle />
 						<UserButton />

@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
-import { and, asc, count, eq, isNotNull, isNull } from "drizzle-orm";
+import { asc, count, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 
 import { getDb } from "#/db";
@@ -11,7 +11,7 @@ import { renameColorRefusal } from "#/lib/color-rename";
 import { storeColorTextureUpload } from "#/lib/color-texture-upload";
 import { DEFAULT_COLOR_NAME } from "#/lib/default-color";
 import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
-import { enqueueColorPalette, enqueueColorTexture } from "#/lib/queue";
+import { enqueueColorTexture } from "#/lib/queue";
 
 export { DEFAULT_COLOR_NAME };
 
@@ -243,31 +243,6 @@ export const uploadColorTexture = createServerFn({ method: "POST" })
 				base64ToBytes(stripDataUrl(imageBase64)),
 			),
 		),
-	);
-
-/**
- * One-off backfill: enqueue a palette re-extraction (from the existing texture, no
- * Replicate call — see `extractStoredColorPalette`) for every `ready` color that's
- * still missing a `palette`. Idempotent and safe to re-run; returns how many jobs
- * it queued so the caller knows the backlog size. Newly-created/regenerated colors
- * get their palette inline, so this only exists to catch up pre-column rows.
- */
-export const backfillColorPalettes = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.handler(() =>
-		Sentry.startSpan({ name: "backfillColorPalettes" }, async () => {
-			const db = getDb(env.DB);
-			const pending = await db
-				.select({ id: colors.id })
-				.from(colors)
-				.where(and(eq(colors.textureStatus, "ready"), isNull(colors.palette)));
-			for (const { id } of pending) {
-				await enqueueColorPalette(id).catch((err) => {
-					Sentry.captureException(err);
-				});
-			}
-			return { queued: pending.length };
-		}),
 	);
 
 /**

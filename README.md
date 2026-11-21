@@ -25,7 +25,6 @@ bun run test         # Vitest
 bun run check        # Biome lint and format
 bun run db:generate  # new Drizzle migration after editing apps/web/src/db/schema.ts
 bun run db:migrate   # apply migrations to the remote D1 database
-bun run build:wasm   # rebuild the Rust sleeve detectors in crates/
 ```
 
 ## Deploying
@@ -38,9 +37,9 @@ Each pull request gets its own preview Worker at `records-pr-<number>.<subdomain
 
 ## How it works
 
-- TanStack Start on Cloudflare Workers, with TanStack Router, Query, DB, Table and Form, Tailwind and shadcn/ui. The Worker entry is `apps/web/src/server.ts`, which adds cron and queue handlers around the TanStack Start fetch handler.
+- TanStack Start on Cloudflare Workers, with TanStack Router, Query, Table and Form, Tailwind and shadcn/ui. The Worker entry is `apps/web/src/server.ts`, which adds cron and queue handlers around the TanStack Start fetch handler.
 - Data lives in D1 through Drizzle, and photos live in R2. The read endpoints under `/api` are public. Everything under `/admin` sits behind Clerk.
-- Capture: a photo is uploaded to R2 and processed on a queue. A learned corner detector (Rust compiled to WebAssembly, in `crates/`, trained by the pipeline in `ml/`) finds the sleeve, and the app perspective-corrects and crops it. Claude, through Workers AI and AI Gateway, reads the sleeve, then the app matches it against Discogs and The Fork for Pitchfork scores.
+- Capture: a photo is uploaded to R2 and processed on a queue. The app makes a square cover from the full frame; I crop it by hand in the corner editor, and the app perspective-corrects the result. Claude, through Workers AI and AI Gateway, reads the sleeve, then the app matches it against Discogs and The Fork for Pitchfork scores.
 - Cron jobs send a daily "record of the day" email (replying to it saves the reply as that record's notes), a weekly "records to buy" digest built from my Last.fm listening, and a daily check that Discogs links still resolve.
 - `rec/` is firmware for a Waveshare ESP32-S3 touch screen that shows the collection, and `mac/` is a small macOS app that plays an album in Apple Music when you tap it on the board.
 - `fly/discogs-proxy` is an optional proxy on Fly.io that gives Discogs requests a dedicated IP, because Discogs rate-limits Cloudflare's shared ones.

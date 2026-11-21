@@ -1,32 +1,30 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
 import { analyzeCapture } from "#/lib/analyze";
-import { identifyFromAsin } from "#/lib/asin";
 import {
 	type AnalyzeMessage,
 	type AnalyzeRecordMessage,
 	chunk,
-	LEGACY_RECORD_MODES,
+	D1_PARAM_CHUNK,
 	toQueueBatches,
 } from "#/lib/batching";
 import { runCaptureFirstPass } from "#/lib/capture-first-pass";
-import {
-	extractStoredColorPalette,
-	generateColorTexture,
-} from "#/lib/color-texture";
+import { generateColorTexture } from "#/lib/color-texture";
 import {
 	getMasterDetail,
+	getMostOwnedVinylRelease,
 	getReleaseDetail,
 	getReleaseValue,
-	searchByBarcode,
 	searchMasters,
 	searchReleases,
 } from "#/lib/discogs";
+import { logJobEvent } from "#/lib/job-events";
 import { applyProfessional } from "#/lib/professional-pipeline";
+import { formatMoney, valuationKey } from "#/lib/value";
 
 /**
  * Background analysis via a Cloudflare Queue. Capturing a record inserts a
@@ -99,17 +97,12 @@ function analyzeQueue(): Queue<AnalyzeMessage> {
 
 /**
  * The capture-only queue (see wrangler.jsonc `queues`). New-upload analysis rides its
- * own queue so a bulk Apply/enhance batch churning on `records-analyze` can't starve a
- * fresh capture; both feed the same consumer, which dispatches by message mode. Falls
- * back to the analyze queue where the binding isn't deployed yet (one deploy's worth of
- * config skew — the message is identical either way, this only picks the lane).
+ * own queue so a bulk Apply batch churning on `records-analyze` can't starve a fresh
+ * capture; both feed the same consumer, which dispatches by message mode.
  */
 function captureQueue(): Queue<AnalyzeMessage> {
-	const bindings = env as unknown as {
-		CAPTURE_QUEUE?: Queue<AnalyzeMessage>;
-		ANALYZE_QUEUE: Queue<AnalyzeMessage>;
-	};
-	return bindings.CAPTURE_QUEUE ?? bindings.ANALYZE_QUEUE;
+	return (env as unknown as { CAPTURE_QUEUE: Queue<AnalyzeMessage> })
+		.CAPTURE_QUEUE;
 }
 
 /** Enqueue a captured record for background analysis (its own queue — see {@link captureQueue}). */
@@ -128,42 +121,6 @@ export async function enqueueCaptureFirstPass(recordId: number): Promise<void> {
 }
 
 /**
- * Enqueue Amazon ASIN→pressing resolutions in bulk (the importer's "queue
- * lookups"). Each message barcode-resolves one ASIN and pins the exact pressing on
- * its record in the background. Sent in batches (Cloudflare caps `sendBatch` at
- * 100) so hundreds of lookups don't need hundreds of round-trips.
- */
-export async function enqueueResolveAsinBatch(
-	jobs: Array<{ recordId: number; asin: string; country: string | null }>,
-): Promise<void> {
-	const db = getDb(env.DB);
-	const queue = analyzeQueue();
-	for (const slice of chunk(jobs, 100)) {
-		await queue.sendBatch(
-			slice.map((job) => ({ body: { mode: "resolve-asin", ...job } })),
-		);
-		// Mark queued only after the send confirms — so a failed sendBatch doesn't
-		// leave a row flagged "queued" with nothing actually in flight (the importer's
-		// matching filter would then wrongly hide it forever). This is also what lets
-		// the header queue menu show these jobs, and what stops a re-uploaded CSV from
-		// re-offering a purchase that's already in flight.
-		await db
-			.update(records)
-			.set({
-				amazonResolveStatus: "queued",
-				amazonResolveError: null,
-				updatedAt: new Date(),
-			})
-			.where(
-				inArray(
-					records.id,
-					slice.map((job) => job.recordId),
-				),
-			);
-	}
-}
-
-/**
  * Enqueue a color for its reference vinyl texture to be (re)generated via Replicate.
  * Fired automatically on genuinely-new colors (see `getOrCreateColor`, used by
  * `createColor`, `createRecord`, and `captureRecord`), and manually from the
@@ -171,15 +128,6 @@ export async function enqueueResolveAsinBatch(
  */
 export async function enqueueColorTexture(colorId: number): Promise<void> {
 	await analyzeQueue().send({ mode: "color-texture", colorId });
-}
-
-/**
- * Enqueue a palette-only re-extraction from a color's existing texture — no
- * Replicate call (see `extractStoredColorPalette`). Used by `backfillColorPalettes`
- * to fill in palettes for colors whose texture predates the `palette` column.
- */
-export async function enqueueColorPalette(colorId: number): Promise<void> {
-	await analyzeQueue().send({ mode: "color-palette", colorId });
 }
 
 /** Enqueue a record for Apply — re-warp its square from the stored corners and go live. */
@@ -212,6 +160,22 @@ export async function enqueueDeletePhotos(keys: string[]): Promise<void> {
 }
 
 /**
+ * Enqueue many ids as `sendBatch` calls rather than one `send` per id — a bulk
+ * action over a large selection would otherwise fan out into hundreds of
+ * individual queue writes (one subrequest each). {@link toQueueBatches} chunks to
+ * the per-batch cap.
+ */
+async function enqueueBatch(
+	recordIds: number[],
+	mode?: AnalyzeRecordMessage["mode"],
+	spacingSeconds = 0,
+): Promise<void> {
+	for (const batch of toQueueBatches(recordIds, mode, spacingSeconds)) {
+		await analyzeQueue().sendBatch(batch);
+	}
+}
+
+/**
  * Bulk variant of {@link enqueueProfessional}, in chunked `sendBatch` calls rather than
  * one `send` per id, so a bulk "Retry generation" over a large selection doesn't fan out
  * into hundreds of individual queue writes.
@@ -221,28 +185,64 @@ export function enqueueProfessionalBatch(recordIds: number[]): Promise<void> {
 }
 
 /**
- * Enqueue many ids as `sendBatch` calls rather than one `send` per id — a bulk
- * "Match"/"Refresh"/"Rescan" over a large selection would otherwise fan out into
- * hundreds of individual queue writes (one subrequest each). {@link toQueueBatches}
- * chunks to the per-batch cap; `mode` picks the analyze (default) vs refresh pipeline.
+ * Mark records as having a value fetch queued, or clear the mark with `null`.
+ * The mark goes on before the send: set after it, it could land after a fast
+ * fetch had already cleared it, and hide the record as "queued" for an hour.
  */
-async function enqueueBatch(
-	recordIds: number[],
-	mode?: AnalyzeRecordMessage["mode"],
-): Promise<void> {
-	for (const batch of toQueueBatches(recordIds, mode)) {
-		await analyzeQueue().sendBatch(batch);
+async function markValueQueued(recordIds: number[], at: Date | null) {
+	const db = getDb(env.DB);
+	for (const ids of chunk(recordIds, D1_PARAM_CHUNK)) {
+		await db
+			.update(records)
+			.set({ discogsValueQueuedAt: at })
+			.where(inArray(records.id, ids));
 	}
 }
 
-/** Enqueue many captured records for background analysis. */
-export function enqueueAnalyzeBatch(recordIds: number[]): Promise<void> {
-	return enqueueBatch(recordIds);
+/** Clear the queued mark after a failed send, so the bulk action offers the record again. */
+async function unmarkAfterFailedSend(recordIds: number[]) {
+	await markValueQueued(recordIds, null).catch((err) => {
+		console.error("[queue] could not clear the value-queued mark", err);
+		Sentry.captureException(err);
+	});
 }
 
-/** Enqueue many published records to be re-pulled from their Discogs releases. */
-export function enqueueRefreshBatch(recordIds: number[]): Promise<void> {
-	return enqueueBatch(recordIds, "refresh");
+/**
+ * Queue a Discogs value fetch for a record (its pinned pressing, or its album).
+ * Best-effort and never throws: callers fire it after an identity write, and a
+ * failed send must not undo that write. A miss leaves the record for the bulk
+ * "fetch missing values" action.
+ */
+export async function enqueueValue(recordId: number): Promise<void> {
+	try {
+		await markValueQueued([recordId], new Date());
+		await analyzeQueue().send({ recordId, mode: "value" });
+	} catch (err) {
+		console.error(`[queue] could not queue a value fetch for ${recordId}`, err);
+		Sentry.captureException(err);
+		await unmarkAfterFailedSend([recordId]);
+	}
+}
+
+// A value fetch makes up to three Discogs calls, and Discogs allows 60 a minute.
+// Spacing a bulk fetch at one record every 4 seconds keeps it near 45 a minute,
+// so retries are for blips, not a rate limit the batch itself causes.
+const VALUE_SPACING_SECONDS = 4;
+
+/**
+ * Bulk variant of {@link enqueueValue}, in chunked `sendBatch` calls, paced by
+ * {@link VALUE_SPACING_SECONDS}. Throws on a failed send, so the caller can say
+ * so; the queued marks are cleared first. Messages from batches sent before the
+ * failure still run.
+ */
+export async function enqueueValueBatch(recordIds: number[]): Promise<void> {
+	await markValueQueued(recordIds, new Date());
+	try {
+		await enqueueBatch(recordIds, "value", VALUE_SPACING_SECONDS);
+	} catch (err) {
+		await unmarkAfterFailedSend(recordIds);
+		throw err;
+	}
 }
 
 /**
@@ -275,10 +275,6 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 		const detail = await getReleaseDetail(record.discogsId);
 		if (!detail) return record;
 
-		// Value is best-effort — a missing/failed price lookup shouldn't block the
-		// metadata refresh, so fetch it separately and keep the previous figure on miss.
-		const value = await getReleaseValue(record.discogsId).catch(() => null);
-
 		const [row] = await db
 			.update(records)
 			.set({
@@ -292,11 +288,12 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 				discCount: detail.discCount ?? record.discCount,
 				catno: detail.catno ?? record.catno,
 				country: detail.country ?? record.country,
-				...valueColumns(value),
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, id))
 			.returning();
+		// Refresh the value in the background, where a rate limit gets retried.
+		await enqueueValue(id);
 		return row ?? record;
 	}
 
@@ -386,6 +383,7 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 			})
 			.where(eq(records.id, id))
 			.returning();
+		await enqueueValue(id);
 		return row ?? record;
 	}
 
@@ -394,27 +392,27 @@ export async function refreshRecordById(id: number): Promise<Record | null> {
 }
 
 /**
- * The value-related column updates for a fetched Discogs value. A miss (no
- * usable figure) returns no changes, so a transient failure leaves any
- * previously-fetched value untouched rather than wiping it. Shared by the
- * refresh path and the standalone value fetch.
+ * The value columns to clear when a record's pressing changes: the stored figure
+ * priced a different release, so it must not count toward the collection total.
  */
-function valueColumns(value: Awaited<ReturnType<typeof getReleaseValue>>) {
-	if (!value || value.value == null) return {};
-	return {
-		discogsValue: value.value,
-		discogsValueCurrency: value.currency,
-		discogsValueJson: value.suggestions
-			? JSON.stringify(value.suggestions)
-			: null,
-		discogsValueFetchedAt: new Date(),
-	};
-}
+export const CLEARED_VALUE = {
+	discogsValue: null,
+	discogsValueCurrency: null,
+	discogsValueJson: null,
+	discogsValueFetchedAt: null,
+	discogsValueQueuedAt: null,
+	discogsValueReleaseId: null,
+} as const;
 
 /**
- * Fetch just the Discogs value estimate for a record and store it, leaving all
- * other metadata untouched. Returns the updated row, or null if the record is
- * gone or has no Discogs id to value.
+ * Fetch the Discogs value for a record and store it, leaving all other metadata
+ * untouched. Prices the pinned pressing, or with none pinned, the album's
+ * most-owned vinyl pressing (see `discogsValueReleaseId`). Returns the updated
+ * row, or null if the record is gone or has no Discogs link. A release with nothing to price
+ * (no suggestions, nothing for sale) still stamps `discogsValueFetchedAt`, so the
+ * bulk "fetch missing values" action doesn't re-queue it forever; any previous
+ * figure stays. Discogs failures (rate limit, auth, network) throw, so the queue
+ * can retry them and the editor can show them.
  */
 export async function fetchValueForRecord(id: number): Promise<Record | null> {
 	const db = getDb(env.DB);
@@ -423,134 +421,67 @@ export async function fetchValueForRecord(id: number): Promise<Record | null> {
 		.from(records)
 		.where(eq(records.id, id))
 		.limit(1);
-	if (!record?.discogsId) return null;
+	if (!record) return null;
+	if (!valuationKey(record)) {
+		await markValueQueued([id], null);
+		return null;
+	}
 
-	const value = await getReleaseValue(record.discogsId).catch(() => null);
-	const cols = valueColumns(value);
-	// Nothing usable came back — leave the record (and its `updatedAt`) untouched so
-	// a failed fetch doesn't masquerade as a successful edit.
-	if (Object.keys(cols).length === 0) return record;
+	// The pinned pressing when there is one; otherwise estimate from the album's
+	// most-owned vinyl pressing.
+	const releaseId =
+		record.discogsId ??
+		(record.masterId ? await getMostOwnedVinylRelease(record.masterId) : null);
 
+	const value = releaseId ? await getReleaseValue(releaseId) : null;
+	const now = new Date();
 	const [row] = await db
 		.update(records)
-		.set({ ...cols, updatedAt: new Date() })
-		.where(eq(records.id, id))
+		.set(
+			value?.value != null
+				? {
+						discogsValue: value.value,
+						discogsValueCurrency: value.currency,
+						discogsValueJson: value.suggestions
+							? JSON.stringify(value.suggestions)
+							: null,
+						discogsValueReleaseId: releaseId,
+						discogsValueFetchedAt: now,
+						discogsValueQueuedAt: null,
+						updatedAt: now,
+					}
+				: { discogsValueFetchedAt: now, discogsValueQueuedAt: null },
+		)
+		// The pressing or album could change while the request was in flight; a
+		// figure for the old one must not land on the new one.
+		.where(
+			and(
+				eq(records.id, id),
+				record.discogsId
+					? eq(records.discogsId, record.discogsId)
+					: isNull(records.discogsId),
+				record.masterId
+					? eq(records.masterId, record.masterId)
+					: isNull(records.masterId),
+			),
+		)
 		.returning();
 	return row ?? record;
 }
 
-/**
- * Resolve an Amazon ASIN to its exact Discogs pressing and pin it on the record.
- * Reads the barcode off the product page (web search), looks it up on Discogs, and
- * pins the best-matching release — preferring one that belongs to the record's
- * existing master, then the marketplace country. Conservative on purpose: never
- * overwrites an already-pinned release, and never pins a release from a *different*
- * master than the record already has (that would leave an inconsistent state) —
- * those are left for a human. Best-effort; logs and returns on any miss.
- */
-async function resolveAsinForRecord(
-	recordId: number,
-	asin: string,
-	preferCountry: string | null,
-): Promise<void> {
-	const db = getDb(env.DB);
-	const [record] = await db
-		.select()
-		.from(records)
-		.where(eq(records.id, recordId))
-		.limit(1);
-	if (!record) return;
-	// Already pinned — don't clobber a pressing a human (or a prior job) chose. Clear
-	// the queued flag regardless, so a stale "queued" doesn't linger on an already-done
-	// record (e.g. a human pinned it manually while this job was in flight).
-	if (record.discogsId) {
-		console.info(
-			`[queue] resolve-asin ${asin}: record ${recordId} already has a release`,
-		);
-		await db
-			.update(records)
-			.set({ amazonResolveStatus: "idle", amazonResolveError: null })
-			.where(eq(records.id, recordId));
-		return;
-	}
+const errorText = (err: unknown) =>
+	err instanceof Error ? err.message : String(err);
 
-	const fail = async (reason: string) => {
-		console.info(`[queue] resolve-asin ${asin}: ${reason}`);
-		await db
-			.update(records)
-			.set({ amazonResolveStatus: "failed", amazonResolveError: reason })
-			.where(eq(records.id, recordId));
-	};
-
-	const identity = await identifyFromAsin(asin);
-	if (!identity?.barcode) {
-		await fail("no barcode found on the Amazon listing");
-		return;
-	}
-	const releases = await searchByBarcode(identity.barcode).catch(() => []);
-	if (releases.length === 0) {
-		await fail(`barcode ${identity.barcode} matched no Discogs release`);
-		return;
-	}
-
-	// Only pin a release consistent with the record's identity: if it already has a
-	// master, the pressing must belong to that master; otherwise adopt the pressing's.
-	const consistent = record.masterId
-		? releases.filter((r) => r.masterId === record.masterId)
-		: releases;
-	if (consistent.length === 0) {
-		await fail(
-			`barcode ${identity.barcode} matched a release, but not this record's album — leaving for manual review`,
-		);
-		return;
-	}
-	// Prefer the pressing from the marketplace's country, else the first hit.
-	const chosen =
-		(preferCountry &&
-			consistent.find(
-				(r) => r.country?.toLowerCase() === preferCountry.toLowerCase(),
-			)) ||
-		consistent[0];
-	const format = chosen.type ?? chosen.format;
-
-	const now = new Date();
-	await db
-		.update(records)
-		.set({
-			discogsId: chosen.discogsId,
-			discogsUrl: chosen.discogsUrl,
-			releaseMissing: false,
-			releaseCheckedAt: now,
-			amazonResolveStatus: "idle",
-			amazonResolveError: null,
-			// The exact pressing is authoritative for the album too — adopt its master
-			// only when the record had none, keeping health flags fresh.
-			...(chosen.masterId && !record.masterId
-				? {
-						masterId: chosen.masterId,
-						masterUrl: chosen.masterUrl,
-						masterMissing: false,
-						masterCheckedAt: now,
-					}
-				: {}),
-			// Pressing-specific caches from the matched release.
-			...(chosen.catno ? { catno: chosen.catno } : {}),
-			...(chosen.country ? { country: chosen.country } : {}),
-			...(chosen.label ? { label: chosen.label } : {}),
-			...(format ? { format } : {}),
-			...(chosen.size ? { size: chosen.size } : {}),
-			...(chosen.year ? { year: chosen.year } : {}),
-			...(chosen.genre ? { genre: chosen.genre } : {}),
-			discCount: chosen.discCount,
-			updatedAt: now,
-		})
-		.where(eq(records.id, recordId));
-	console.info(
-		`[queue] resolve-asin ${asin}: pinned release ${chosen.discogsId} (${
-			chosen.country ?? "?"
-		}) on record ${recordId}`,
-	);
-}
+// Every record mode this consumer handles. The mapped type makes a new mode fail
+// typecheck until it is listed here.
+const RECORD_MODES: {
+	[M in NonNullable<AnalyzeRecordMessage["mode"]>]: true;
+} = {
+	analyze: true,
+	"capture-first-pass": true,
+	professional: true,
+	value: true,
+};
 
 async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 	// Colors-keyed job — handled entirely separately from the records pipeline below.
@@ -558,66 +489,25 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		const { colorId } = message.body;
 		try {
 			await generateColorTexture(colorId);
+			await logJobEvent(
+				"color",
+				"info",
+				null,
+				`Made the texture for color ${colorId}`,
+			);
 		} catch (err) {
+			await logJobEvent(
+				"color",
+				"error",
+				null,
+				`Texture for color ${colorId} failed: ${errorText(err)}`,
+			);
 			console.error(
 				`[queue] color-texture failed for color ${colorId}: ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);
 			Sentry.captureException(err);
-		}
-		message.ack();
-		return;
-	}
-
-	// Palette-only backfill from an existing texture — no Replicate call.
-	if (message.body.mode === "color-palette") {
-		const { colorId } = message.body;
-		try {
-			await extractStoredColorPalette(colorId);
-		} catch (err) {
-			console.error(
-				`[queue] color-palette failed for color ${colorId}: ${
-					err instanceof Error ? err.message : String(err)
-				}`,
-			);
-			Sentry.captureException(err);
-		}
-		message.ack();
-		return;
-	}
-
-	// Amazon ASIN → exact pressing (via barcode), pinned in the background. Its own
-	// branch (not a record `mode`) so it never touches the capture-pipeline fields.
-	if (message.body.mode === "resolve-asin") {
-		const { recordId, asin, country } = message.body;
-		try {
-			await resolveAsinForRecord(recordId, asin, country);
-		} catch (err) {
-			const reason = err instanceof Error ? err.message : String(err);
-			console.error(
-				`[queue] resolve-asin failed for record ${recordId} (${asin}): ${reason}`,
-			);
-			Sentry.captureException(err);
-			// resolveAsinForRecord clears "queued" on every path it completes, but an
-			// uncaught throw (e.g. identifyFromAsin itself erroring, not just missing a
-			// barcode) skips that — without this the row would stay "queued" forever,
-			// permanently hidden from re-import with nothing left to ever clear it.
-			// Best-effort recovery write: if THIS also fails (a second D1 blip right after
-			// the first), the row is left "queued" — an already-known, narrow gap the
-			// staleness reap in listInFlight now catches, so log rather than silently
-			// swallow instead of leaving zero trace of a double failure.
-			await getDb(env.DB)
-				.update(records)
-				.set({ amazonResolveStatus: "failed", amazonResolveError: reason })
-				.where(eq(records.id, recordId))
-				.catch((cleanupErr) => {
-					console.error(
-						`[queue] resolve-asin: failed to flag record ${recordId} as failed`,
-						cleanupErr,
-					);
-					Sentry.captureException(cleanupErr);
-				});
 		}
 		message.ack();
 		return;
@@ -641,21 +531,15 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
-	// Retired with the matte audit — a sweep message still queued at deploy is a no-op.
-	if (message.body.mode === "audit-mattes") {
-		message.ack();
-		return;
-	}
-
 	const { recordId, mode } = message.body;
-	const db = getDb(env.DB);
-
-	// Matte-era messages still queued at deploy — ack rather than let them fall
-	// through to the analyze pipeline below.
-	if (mode && LEGACY_RECORD_MODES.has(mode)) {
+	// A retired mode (still queued at deploy time, or replayed from the DLQ) must not
+	// fall through to a full re-analysis of a published record.
+	if (mode !== undefined && !Object.hasOwn(RECORD_MODES, mode)) {
+		console.warn(`[queue] dropped unknown mode ${mode} for record ${recordId}`);
 		message.ack();
 		return;
 	}
+	const db = getDb(env.DB);
 
 	// The free on-capture professional seed (see `capture-first-pass.ts` for why it
 	// can't run inline in the capture POST). Records its own failure and never
@@ -666,20 +550,51 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		return;
 	}
 
-	// Lightweight path: just re-pull the stored Discogs release. Best-effort —
-	// a refresh failure shouldn't retry-storm or touch the record's status.
-	if (mode === "refresh") {
+	// Discogs value fetch. Retried with backoff (a burst of these can trip Discogs'
+	// 60 req/min limit), and never touches the record's status on failure.
+	if (mode === "value") {
 		try {
-			await refreshRecordById(recordId);
+			const row = await fetchValueForRecord(recordId);
+			if (row) {
+				await logJobEvent(
+					"value",
+					"info",
+					recordId,
+					row.discogsValue == null
+						? "Nothing for sale on Discogs"
+						: row.discogsId
+							? `${formatMoney(row.discogsValue, row.discogsValueCurrency ?? "USD")} for the pinned pressing`
+							: `${formatMoney(row.discogsValue, row.discogsValueCurrency ?? "USD")} estimated from release ${row.discogsValueReleaseId}`,
+				);
+			}
+			message.ack();
 		} catch (err) {
+			const willRetry = message.attempts <= MAX_RETRIES;
 			console.error(
-				`[queue] refresh failed for record ${recordId}: ${
-					err instanceof Error ? err.message : String(err)
-				}`,
+				`[queue] value failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${errorText(err)}`,
 			);
-			Sentry.captureException(err);
+			await logJobEvent(
+				"value",
+				"error",
+				recordId,
+				`${errorText(err)} (attempt ${message.attempts}, ${willRetry ? "will retry" : "gave up"})`,
+			);
+			if (willRetry) {
+				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
+			} else {
+				Sentry.captureException(err);
+				// If this fails, the record stays marked as queued and drops out of
+				// "Fetch values" until the mark is an hour old. Report it.
+				await markValueQueued([recordId], null).catch((clearErr) => {
+					console.error(
+						`[queue] could not clear the value-queued mark for ${recordId}`,
+						clearErr,
+					);
+					Sentry.captureException(clearErr);
+				});
+				message.ack();
+			}
 		}
-		message.ack();
 		return;
 	}
 
@@ -708,6 +623,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 
 			const { staleKeys } = await applyProfessional(record);
 			await enqueueDeletePhotos(staleKeys);
+			await logJobEvent("professional", "info", recordId, "Applied the cover");
 			message.ack();
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
@@ -716,6 +632,12 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				`[queue] professional failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
 			);
 			Sentry.captureException(err);
+			await logJobEvent(
+				"professional",
+				"error",
+				recordId,
+				`Apply failed: ${detail} (attempt ${message.attempts}, ${willRetry ? "will retry" : "gave up"})`,
+			);
 			await markProfessionalFailed(db, recordId, willRetry, detail);
 			if (willRetry) {
 				message.retry({ delaySeconds: backoffSeconds(message.attempts) });
@@ -769,6 +691,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			});
 		}
 
+		const valueStale = valuationKey(record) !== valuationKey(result);
 		await db
 			.update(records)
 			.set({
@@ -788,6 +711,7 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				masterUrl: result.masterUrl,
 				discogsId: result.discogsId,
 				discogsUrl: result.discogsUrl,
+				...(valueStale ? CLEARED_VALUE : {}),
 				coverImageKey: result.coverImageKey,
 				confidence: result.confidence,
 				candidatesJson: JSON.stringify(result.candidates),
@@ -799,6 +723,15 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 				updatedAt: new Date(),
 			})
 			.where(eq(records.id, recordId));
+		if (valueStale && valuationKey(result)) await enqueueValue(recordId);
+		await logJobEvent(
+			"analyze",
+			result.masterId || result.discogsId ? "info" : "error",
+			recordId,
+			result.masterId || result.discogsId
+				? `Read as ${result.artist} — ${result.title}`
+				: `Read as ${result.artist} — ${result.title}, but found no Discogs match`,
+		);
 
 		message.ack();
 	} catch (err) {
@@ -810,6 +743,12 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 			`[queue] analyze failed for record ${recordId} (attempt ${message.attempts}, willRetry=${willRetry}): ${detail}`,
 		);
 		Sentry.captureException(err);
+		await logJobEvent(
+			"analyze",
+			"error",
+			recordId,
+			`Analysis failed: ${detail} (attempt ${message.attempts}, ${willRetry ? "will retry" : "gave up"})`,
+		);
 
 		await db
 			.update(records)

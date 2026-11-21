@@ -1,0 +1,1 @@
+ALTER TABLE `records` ADD `discogs_value_release_id` text;

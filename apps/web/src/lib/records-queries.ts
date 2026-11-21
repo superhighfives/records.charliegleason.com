@@ -1,8 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
 
+import { countQueuedValues, listJobEvents } from "#/lib/activity";
 import {
 	getRecord,
-	listCornerReviewQueue,
 	listInFlight,
 	listPublicRecords,
 	listQueueOutcomes,
@@ -19,12 +19,6 @@ export const recordsQueryOptions = queryOptions({
 export const publicRecordsQueryOptions = queryOptions({
 	queryKey: ["records", "public"] as const,
 	queryFn: () => listPublicRecords(),
-});
-
-/** Corner-review queue: unreviewed auto-seeded crops, lowest-confidence first. */
-export const cornerReviewQueueQueryOptions = queryOptions({
-	queryKey: ["records", "corner-review"] as const,
-	queryFn: () => listCornerReviewQueue(),
 });
 
 export const recordQueryOptions = (id: number) =>
@@ -85,3 +79,20 @@ export const queueOutcomesQueryOptions = (ids: number[]) =>
 		queryFn: () => listQueueOutcomes({ data: ids }),
 		enabled: ids.length > 0,
 	});
+
+/** The Activity page's job log. Polls while the page is open. */
+export const jobEventsQueryOptions = queryOptions({
+	queryKey: ["records", "job-events"] as const,
+	queryFn: () => listJobEvents(),
+	refetchInterval: 5000,
+});
+
+/**
+ * Value fetches still in progress, for the queue menu. Polls only while some are
+ * queued; queuing more invalidates `["records"]`, which re-arms it.
+ */
+export const queuedValuesQueryOptions = queryOptions({
+	queryKey: ["records", "queued-values"] as const,
+	queryFn: () => countQueuedValues(),
+	refetchInterval: (query) => ((query.state.data ?? 0) > 0 ? 4000 : false),
+});

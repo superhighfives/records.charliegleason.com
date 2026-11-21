@@ -8,37 +8,15 @@
  *  - Cloudflare Queues accept at most 100 messages per `sendBatch` call.
  */
 
-/**
- * Modes retired with the alpha matte. Messages already on the queue at deploy time can
- * still carry them, so the consumer acks them as no-ops instead of letting them fall
- * through to the analyze pipeline. Safe to delete once a deploy has drained the queue.
- */
-export type LegacyRecordMode =
-	| "capture-first-pass-matte"
-	| "professional-matte"
-	| "professional-matte-fallback";
-
-export const LEGACY_RECORD_MODES: ReadonlySet<string> =
-	new Set<LegacyRecordMode>([
-		"capture-first-pass-matte",
-		"professional-matte",
-		"professional-matte-fallback",
-	]);
-
 /** A `records`-keyed message for the analyze consumer. See {@link AnalyzeMessage}. */
 export interface AnalyzeRecordMessage {
 	recordId: number;
-	// "analyze" (default) runs the full capture pipeline; "refresh" only re-pulls the
-	// Discogs release for an already-identified record. "professional" is the admin's
+	// "analyze" (default) runs the full capture pipeline. "professional" is the admin's
 	// Apply: re-warp the square from the stored corners + tone and promote it live.
 	// "capture-first-pass" is the free on-capture seed (detect + warp), split out of the
-	// capture POST after the inline pass OOM'd the request isolate.
-	mode?:
-		| "analyze"
-		| "refresh"
-		| "capture-first-pass"
-		| "professional"
-		| LegacyRecordMode;
+	// capture POST after the inline pass OOM'd the request isolate. "value" fetches the
+	// Discogs value estimate for the record's pinned pressing.
+	mode?: "analyze" | "capture-first-pass" | "professional" | "value";
 }
 
 /**
@@ -50,37 +28,6 @@ export interface AnalyzeRecordMessage {
 export interface ColorTextureMessage {
 	mode: "color-texture";
 	colorId: number;
-}
-
-/**
- * A `colors`-keyed message that re-extracts a color's title-gradient palette from
- * its *existing* stored texture — no Replicate call. Backfills palettes onto
- * colors whose texture predates the palette column (see `backfillColorPalettes`).
- */
-export interface ColorPaletteMessage {
-	mode: "color-palette";
-	colorId: number;
-}
-
-/**
- * A `records`-keyed message that resolves an Amazon ASIN to its exact Discogs
- * *pressing* (via the barcode a web-search reads off the product page) and pins it
- * on the record. Its own variant — like the color jobs — so it never touches the
- * capture-pipeline fields. `country` is the marketplace-implied pressing country
- * (Amazon.co.uk → "UK"), a tiebreaker among barcode hits. Enqueued in bulk by the
- * Amazon importer so the slow per-ASIN web-search runs in the background instead of
- * blocking the modal.
- */
-export interface ResolveAsinMessage {
-	mode: "resolve-asin";
-	recordId: number;
-	asin: string;
-	country: string | null;
-}
-
-/** Retired with the matte audit — acked as a no-op if one is still queued at deploy. */
-export interface AuditMattesMessage {
-	mode: "audit-mattes";
 }
 
 /**
@@ -97,9 +44,6 @@ export interface DeletePhotosMessage {
 export type AnalyzeMessage =
 	| AnalyzeRecordMessage
 	| ColorTextureMessage
-	| ColorPaletteMessage
-	| ResolveAsinMessage
-	| AuditMattesMessage
 	| DeletePhotosMessage;
 
 /**
@@ -108,6 +52,9 @@ export type AnalyzeMessage =
  * bind parameters) can't tip an otherwise-legal batch over the limit.
  */
 export const D1_PARAM_CHUNK = 90;
+
+/** Cloudflare Queues reject a message delay over 12 hours. */
+const MAX_DELAY_SECONDS = 12 * 60 * 60;
 
 /** Cloudflare Queues accept at most 100 messages per `sendBatch` call. */
 export const QUEUE_BATCH_SIZE = 100;
@@ -130,14 +77,27 @@ export function chunk<T>(items: T[], size: number): T[][] {
  * Build the chunked `sendBatch` payloads for a bulk enqueue: one inner array per
  * queue write, each holding at most {@link QUEUE_BATCH_SIZE} messages in input
  * order. Pure — the caller hands each returned batch to `queue.sendBatch`. An
- * empty id list yields no batches (so no queue write happens at all).
+ * empty id list yields no batches (so no queue write happens at all). With
+ * `spacingSeconds`, message n is delayed n × spacing seconds, to pace the work.
  */
 export function toQueueBatches(
 	recordIds: number[],
 	mode?: AnalyzeRecordMessage["mode"],
-): Array<Array<{ body: AnalyzeRecordMessage }>> {
-	return chunk(recordIds, QUEUE_BATCH_SIZE).map((slice) =>
-		slice.map((recordId) => ({ body: { recordId, mode } })),
+	spacingSeconds = 0,
+): Array<Array<{ body: AnalyzeRecordMessage; delaySeconds?: number }>> {
+	return chunk(recordIds, QUEUE_BATCH_SIZE).map((slice, batch) =>
+		slice.map((recordId, i) => {
+			const index = batch * QUEUE_BATCH_SIZE + i;
+			return spacingSeconds > 0
+				? {
+						body: { recordId, mode },
+						delaySeconds: Math.min(
+							Math.round(index * spacingSeconds),
+							MAX_DELAY_SECONDS,
+						),
+					}
+				: { body: { recordId, mode } };
+		}),
 	);
 }
 

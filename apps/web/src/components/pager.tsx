@@ -6,9 +6,9 @@ import { cn } from "#/lib/utils";
 /**
  * Back/next paging control: two arrow buttons around an "index / total"
  * counter. Shared by anything that steps through a list one item at a time —
- * the admin record pager and image editor, and the Amazon import comparison
- * modal. `noun` customises the button labels/titles (e.g. "record", "pairing")
- * for screen readers and the hover tooltip.
+ * the admin record pager and the image editor. `noun`
+ * customises the button labels/titles (e.g. "record") for screen readers and
+ * the hover tooltip.
  */
 export function Pager({
 	index,

@@ -3,7 +3,6 @@ import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn } from "@tanstack/react-start";
 import {
 	and,
-	asc,
 	count,
 	desc,
 	eq,
@@ -11,6 +10,7 @@ import {
 	inArray,
 	isNotNull,
 	isNull,
+	lt,
 	notInArray,
 	or,
 } from "drizzle-orm";
@@ -28,7 +28,6 @@ import {
 	chunk,
 	D1_PARAM_CHUNK,
 	MAX_AUTO_RETRIES,
-	STALE_JOB_MS,
 	staleThresholdMs,
 } from "#/lib/batching";
 import { DEFAULT_COLOR_NAME, getOrCreateColor } from "#/lib/colors";
@@ -49,31 +48,29 @@ import {
 	searchParamsSchema,
 	searchReleases,
 } from "#/lib/discogs";
-import { base64ToBytes, stripDataUrl } from "#/lib/image-data";
-import { sourceCoverFromDiscogs, storeUploadedCover } from "#/lib/images";
+import { sourceCoverFromDiscogs } from "#/lib/images";
 import {
 	type LinkHealthResult,
 	MANUAL_CHECK_BATCH,
 	runLinkHealthCheck,
 } from "#/lib/master-health";
 import { withPresizedKeys } from "#/lib/photo-variants";
-import { detectCaptureCorners } from "#/lib/professional";
 import {
+	CLEARED_VALUE,
 	enqueueAnalyze,
-	enqueueAnalyzeBatch,
 	enqueueProfessional,
 	enqueueProfessionalBatch,
-	enqueueRefreshBatch,
-	enqueueResolveAsinBatch,
+	enqueueValue,
+	enqueueValueBatch,
 	fetchValueForRecord,
 	refreshRecordById,
 } from "#/lib/queue";
+import { VALUE_QUEUE_WINDOW_MS } from "#/lib/record-alerts";
 import { recordCreateSchema, recordInputSchema } from "#/lib/record-schema";
 import {
 	type ReframeParams,
 	sanitizeReframeParams,
 } from "#/lib/reframe-params";
-import { maybeTriggerRetrain } from "#/lib/retrain-dispatch";
 import {
 	type CornerBand,
 	parseCornerBand,
@@ -81,6 +78,7 @@ import {
 	serializeCornerBand,
 } from "#/lib/sleeve-corners";
 import { pitchforkAfterRematch } from "#/lib/the-fork";
+import { valuationKey } from "#/lib/value";
 
 /**
  * Server-side data access for the records collection.
@@ -206,41 +204,6 @@ export const listRecords = createServerFn({ method: "GET" }).handler(() =>
 );
 
 /**
- * The corner-review queue: auto-seeded crops the admin hasn't approved yet, **worst first**.
- * This is the active-learning list — the lowest-confidence detections are both the ones most
- * likely to need a nudge *and* the highest-value labels for the next retrain (a corrected hard
- * case teaches the model more than an easy one). Only records the current detector actually
- * scored (`detectionConfidence` not null) and that aren't reviewed are included; ordered by
- * confidence ascending. Admin-only (returns capture keys). Capped so a big backlog stays cheap.
- */
-export const listCornerReviewQueue = createServerFn({ method: "GET" }).handler(
-	() =>
-		Sentry.startSpan({ name: "listCornerReviewQueue" }, async () => {
-			if (!(await getAdminSession())) throw new AdminSessionError();
-			const db = getDb(env.DB);
-			return db
-				.select({
-					id: records.id,
-					artist: records.artist,
-					title: records.title,
-					capturePhotoKey: records.capturePhotoKey,
-					detectionConfidence: records.detectionConfidence,
-					detectionSource: records.detectionSource,
-				})
-				.from(records)
-				.where(
-					and(
-						isNotNull(records.detectionConfidence),
-						isNotNull(records.capturePhotoKey),
-						eq(records.cornersReviewed, false),
-					),
-				)
-				.orderBy(asc(records.detectionConfidence))
-				.limit(200);
-		}),
-);
-
-/**
  * Public list for the homepage — only published (`complete`) records, and omits
  * the admin-only iPhone capture key. In-flight / failed captures stay private.
  * Also the single source for the `/api/records` JSON route, which just calls this
@@ -358,7 +321,6 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 					professionalStatus: records.professionalStatus,
 					professionalImageKey: records.professionalImageKey,
 					capturePhotoKey: records.capturePhotoKey,
-					amazonResolveStatus: records.amazonResolveStatus,
 				})
 				.from(records)
 				// Bounded to the client's history size; clamp defensively so a tampered
@@ -369,14 +331,8 @@ export const listQueueOutcomes = createServerFn({ method: "GET" })
 				// Current cover so the finished row shows a live thumbnail, not the client's
 				// frozen (possibly-since-deleted) key. Admin surface, so include the capture.
 				const coverKey = displayCoverKey(row, { includeCapture: true });
-				// A hard failure on either pipeline (or a failed Amazon resolve — the "amazon"
-				// InFlightItem kind departs into this same finished-history flow) reads red;
-				// anything else is a clean finish.
-				if (
-					row.status === "failed" ||
-					row.professionalJobStatus === "failed" ||
-					row.amazonResolveStatus === "failed"
-				)
+				// A hard failure on either pipeline reads red; anything else is a clean finish.
+				if (row.status === "failed" || row.professionalJobStatus === "failed")
 					return { id: row.id, outcome: "failed", coverKey };
 				return { id: row.id, outcome: "ok", coverKey };
 			});
@@ -401,7 +357,7 @@ export interface InFlightItem {
 	title: string;
 	thumbKey: string | null;
 	/** What's running, for the menu label. */
-	kind: "analyze" | "professional" | "amazon";
+	kind: "analyze" | "professional";
 	/** The finer-grained state (all actively running — the menu shows a spinner). */
 	state: "pending" | "processing" | "queued";
 	/**
@@ -426,12 +382,10 @@ export interface InFlightItem {
  * failed so the reaper stops touching them and each becomes a manual-retry-able row —
  * `professionalStatus` / analysis fields are left intact, so an already-live cover or a
  * prior analysis survives. Clears the progress markers (`professionalStage`, `jobStep`).
- * Also stops the non-record job kind the queue menu can show (`amazonResolveStatus`
- * queued rows) — like the record pipelines above, this
- * flips the DB-tracked state so the UI/reaper stop treating them as running; it can't
- * cancel an already-sent queue message (Cloudflare Queues has no cancel API), so a
+ * This flips the DB-tracked state so the UI/reaper stop treating them as running; it
+ * can't cancel an already-sent queue message (Cloudflare Queues has no cancel API), so a
  * genuinely in-flight message still runs to completion and may overwrite the stopped
- * state on its own success/failure path, same as the existing record pipelines. Admin-only.
+ * state on its own success/failure path. Admin-only.
  * Returns how many rows it stopped.
  */
 export const failAllInFlight = createServerFn({ method: "POST" })
@@ -441,7 +395,7 @@ export const failAllInFlight = createServerFn({ method: "POST" })
 			const db = getDb(env.DB);
 			const note = "Stopped from the queue — Apply / retry to run it again.";
 
-			const [pro, analyze, amazon] = await Promise.all([
+			const [pro, analyze] = await Promise.all([
 				db
 					.update(records)
 					.set({
@@ -465,19 +419,10 @@ export const failAllInFlight = createServerFn({ method: "POST" })
 					})
 					.where(inArray(records.status, ["pending", "processing"]))
 					.returning({ id: records.id }),
-				db
-					.update(records)
-					.set({
-						amazonResolveStatus: "failed",
-						amazonResolveError: note,
-						updatedAt: new Date(),
-					})
-					.where(eq(records.amazonResolveStatus, "queued"))
-					.returning({ id: records.id }),
 			]);
 
 			// A record with both a running analyze and pro job is one stopped row, not two.
-			const ids = new Set([...pro, ...analyze, ...amazon].map((r) => r.id));
+			const ids = new Set([...pro, ...analyze].map((r) => r.id));
 			return { count: ids.size };
 		}),
 	);
@@ -496,53 +441,31 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 		const db = getDb(env.DB);
 		// Projected to only the columns InFlightItem + displayCoverKey need — this is
 		// polled on a short interval, so pulling the whole row (incl. large JSON/text
-		// columns) every few seconds would be wasted D1 work as the table grows. The two
-		// selects are independent (none depends on another's result), so they run
-		// concurrently rather than adding up their round-trip latencies on a path that's
-		// polled every few seconds while anything is in flight.
-		const [rows, amazonRows] = await Promise.all([
-			db
-				.select({
-					id: records.id,
-					artist: records.artist,
-					title: records.title,
-					status: records.status,
-					professionalJobStatus: records.professionalJobStatus,
-					professionalStage: records.professionalStage,
-					jobStep: records.jobStep,
-					professionalStatus: records.professionalStatus,
-					professionalImageKey: records.professionalImageKey,
-					capturePhotoKey: records.capturePhotoKey,
-					analyzeRetryCount: records.analyzeRetryCount,
-					professionalRetryCount: records.professionalRetryCount,
-					updatedAt: records.updatedAt,
-				})
-				.from(records)
-				.where(
-					or(
-						inArray(records.status, ["pending", "processing"]),
-						inArray(records.professionalJobStatus, ["queued", "processing"]),
-					),
-				)
-				.orderBy(desc(records.updatedAt)),
-			// Amazon ASIN→pressing resolutions — a separate, much simpler lifecycle (see
-			// `amazonResolveStatus` in schema.ts): one queue message either pins a release or
-			// gives up, both fast and terminal, so there's normally no "processing" state.
-			// `updatedAt` is still selected so the reap loop below can catch the one failure
-			// mode that isn't self-clearing — a message dropped before the consumer ever runs.
-			db
-				.select({
-					id: records.id,
-					artist: records.artist,
-					title: records.title,
-					capturePhotoKey: records.capturePhotoKey,
-					professionalImageKey: records.professionalImageKey,
-					professionalStatus: records.professionalStatus,
-					updatedAt: records.updatedAt,
-				})
-				.from(records)
-				.where(eq(records.amazonResolveStatus, "queued")),
-		]);
+		// columns) every few seconds would be wasted D1 work as the table grows.
+		const rows = await db
+			.select({
+				id: records.id,
+				artist: records.artist,
+				title: records.title,
+				status: records.status,
+				professionalJobStatus: records.professionalJobStatus,
+				professionalStage: records.professionalStage,
+				jobStep: records.jobStep,
+				professionalStatus: records.professionalStatus,
+				professionalImageKey: records.professionalImageKey,
+				capturePhotoKey: records.capturePhotoKey,
+				analyzeRetryCount: records.analyzeRetryCount,
+				professionalRetryCount: records.professionalRetryCount,
+				updatedAt: records.updatedAt,
+			})
+			.from(records)
+			.where(
+				or(
+					inArray(records.status, ["pending", "processing"]),
+					inArray(records.professionalJobStatus, ["queued", "processing"]),
+				),
+			)
+			.orderBy(desc(records.updatedAt));
 
 		// Reap dead jobs so they don't spin forever. Each is either re-enqueued (a fresh,
 		// clean-isolate run, while its auto-retry budget lasts) or flagged terminally failed
@@ -674,52 +597,6 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 			reaped.filter((r) => r.outcome === "fail").map((r) => r.id),
 		);
 
-		// Stale-reap Amazon resolves too: `resolveAsinForRecord`'s own catch block clears
-		// "queued" on every path it can reach, but a message dropped before the consumer
-		// ever runs (a Queues delivery failure, not a catchable error) would otherwise leave
-		// the row "queued" forever — permanently stuck in this menu and permanently excluded
-		// from re-import (amazon-import-dialog.tsx's `!== "queued"` filter). Not auto-retried
-		// (matching the design elsewhere: these jobs are best-effort, not retried), just
-		// flagged failed so a human can re-run the import.
-		const amazonReaps = amazonRows
-			.filter(
-				(row) => row.updatedAt && now - row.updatedAt.getTime() > STALE_JOB_MS,
-			)
-			.map((row) =>
-				db
-					.update(records)
-					.set({
-						amazonResolveStatus: "failed",
-						amazonResolveError:
-							"Stopped — the lookup never completed. Re-run the Amazon import to retry.",
-						updatedAt: new Date(),
-					})
-					.where(
-						and(
-							eq(records.id, row.id),
-							eq(records.amazonResolveStatus, "queued"),
-						),
-					)
-					.then(() => row.id)
-					.catch(() => null),
-			);
-		const staleAmazonIds = new Set(
-			(await Promise.all(amazonReaps)).filter((id): id is number => id != null),
-		);
-
-		const amazonItems: InFlightItem[] = amazonRows
-			.filter((row) => !staleAmazonIds.has(row.id))
-			.map((row) => ({
-				id: row.id,
-				artist: row.artist,
-				title: row.title,
-				thumbKey: displayCoverKey(row, { includeCapture: true }),
-				kind: "amazon",
-				state: "queued",
-				stage: null,
-				step: null,
-			}));
-
 		return [
 			...rows
 				.filter((row) => !dropped.has(row.id))
@@ -752,7 +629,6 @@ export const listInFlight = createServerFn({ method: "GET" }).handler(() =>
 						step: retried ? null : row.jobStep,
 					};
 				}),
-			...amazonItems,
 		];
 	}),
 );
@@ -888,6 +764,8 @@ export const publishRecord = createServerFn({ method: "POST" })
 					data.pitchforkScore,
 				);
 
+				const valueStale =
+					valuationKey(current) !== valuationKey({ masterId, discogsId });
 				const [row] = await db
 					.update(records)
 					.set({
@@ -906,6 +784,9 @@ export const publishRecord = createServerFn({ method: "POST" })
 						...(discogsId !== current.discogsId
 							? { releaseMissing: false }
 							: {}),
+						// A new pressing or album invalidates the old value; the fetch
+						// below replaces it.
+						...(valueStale ? CLEARED_VALUE : {}),
 						coverImageKey,
 						coverIsUpload,
 						// A record is only publishable once it has an identity (master
@@ -917,6 +798,7 @@ export const publishRecord = createServerFn({ method: "POST" })
 					})
 					.where(eq(records.id, id))
 					.returning();
+				if (row && valueStale && valuationKey(row)) await enqueueValue(id);
 				return row
 					? {
 							record: row,
@@ -987,49 +869,11 @@ export const refreshRecord = createServerFn({ method: "POST" })
 	);
 
 /**
- * Detect the sleeve's corners in a record's capture on demand — the corner editor's
- * "Detect corners" button. Runs the lightweight, free detectors server-side and returns the
- * suggested corners *with a confidence score and which detector won*, so the editor can tell
- * the admin how hard to scrutinise the seed before applying (or null if neither detector can
- * find the sleeve — e.g. a low-contrast cover). Does not persist anything; the follow-up
- * Apply does.
- */
-export const detectCorners = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((id: number) => id)
-	.handler(({ data: id }) =>
-		Sentry.startSpan({ name: "detectCorners" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select({ capturePhotoKey: records.capturePhotoKey })
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record?.capturePhotoKey) {
-				throw new Error("This record has no capture photo to detect.");
-			}
-			const detection = await detectCaptureCorners(record.capturePhotoKey);
-			// Persist the confidence/source so a manual re-detect keeps the on-open badge and
-			// review-queue ranking current. The admin still hasn't committed a band here, so
-			// `cornersReviewed` is untouched (detecting isn't approving).
-			await db
-				.update(records)
-				.set({
-					detectionConfidence: detection?.confidence ?? null,
-					detectionSource: detection?.source ?? null,
-				})
-				.where(eq(records.id, id));
-			return { detection };
-		}),
-	);
-
-/**
  * Kick off "Apply" for a record — re-warp the square from the edited corners + tone and
  * promote it live. The warp runs in the queue consumer ({@link applyProfessional}). This
  * server fn only persists the edited corners + tone knobs, flags
  * `professionalJobStatus: "queued"`, and enqueues the job — returning as soon as that's done
- * so the editor can close and the admin can move on (one exception: it also awaits
- * {@link maybeTriggerRetrain}, a bounded GitHub API dispatch, before returning). Crucially it
+ * so the editor can close and the admin can move on. Crucially it
  * does NOT touch the display `professionalStatus`, so an already-approved cover stays live
  * until the consumer swaps in the new keys. Requires a capture to warp — throws if there's
  * none. Returns the updated row (now `queued`), or null if the record's gone.
@@ -1071,9 +915,6 @@ export const reframeRecord = createServerFn({ method: "POST" })
 					professionalJobStatus: "queued",
 					professionalStage: "cover",
 					professionalError: null,
-					// The admin applied this crop → it's reviewed, so it drops out of the
-					// "needs review" queue and the editor stops badging it as an auto-seed.
-					cornersReviewed: true,
 					// Fresh manual Apply → reset the reaper's auto-retry budget.
 					professionalRetryCount: 0,
 					updatedAt: new Date(),
@@ -1081,43 +922,6 @@ export const reframeRecord = createServerFn({ method: "POST" })
 				.where(eq(records.id, id))
 				.returning();
 			await enqueueProfessional(id);
-			// This save just moved a corner label — if that's enough to cross the
-			// retrain-worthy drift threshold, kick the retrain workflow now instead of
-			// waiting for Monday's cron (see maybeTriggerRetrain for the dedup logic).
-			await maybeTriggerRetrain();
-			return row ?? null;
-		}),
-	);
-
-/**
- * Approve (promote) or unapprove the generated professional photo. Only
- * `approved` makes it the displayed cover (see displayCoverKey); unapproving
- * drops it back to `ready` — kept in R2, just not shown — so the site falls back
- * to the Discogs cover. No-op (returns null) if nothing's been generated yet.
- */
-export const setProfessionalApproved = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((input: { id: number; approved: boolean }) => ({
-		id: input.id,
-		approved: Boolean(input.approved),
-	}))
-	.handler(({ data: { id, approved } }) =>
-		Sentry.startSpan({ name: "setProfessionalApproved" }, async () => {
-			const db = getDb(env.DB);
-			const [record] = await db
-				.select()
-				.from(records)
-				.where(eq(records.id, id))
-				.limit(1);
-			if (!record?.professionalImageKey) return null;
-			const [row] = await db
-				.update(records)
-				.set({
-					professionalStatus: approved ? "approved" : "ready",
-					updatedAt: new Date(),
-				})
-				.where(eq(records.id, id))
-				.returning();
 			return row ?? null;
 		}),
 	);
@@ -1204,21 +1008,37 @@ export const previewReleaseValue = createServerFn({ method: "POST" })
 		),
 	);
 
-export const updateRecord = createServerFn({ method: "POST" })
+/**
+ * Queue a Discogs value fetch for every pinned record that has never been
+ * valued — the admin list's "Fetch values" action. Each fetch runs on the queue
+ * (throttled, with retries), so this returns at once with how many it queued.
+ * Album-only records are skipped: Discogs only prices a specific pressing.
+ */
+export const queueMissingValues = createServerFn({ method: "POST" })
 	.middleware([authMiddleware])
-	.validator((input: { id: number; data: unknown }) => ({
-		id: input.id,
-		data: recordInputSchema.parse(input.data),
-	}))
-	.handler(({ data: { id, data } }) =>
-		Sentry.startSpan({ name: "updateRecord" }, async () => {
+	.handler(() =>
+		Sentry.startSpan({ name: "queueMissingValues" }, async () => {
 			const db = getDb(env.DB);
-			const [row] = await db
-				.update(records)
-				.set({ ...data, updatedAt: new Date() })
-				.where(eq(records.id, id))
-				.returning();
-			return row ?? null;
+			const rows = await db
+				.select({ id: records.id })
+				.from(records)
+				.where(
+					and(
+						or(isNotNull(records.discogsId), isNotNull(records.masterId)),
+						isNull(records.discogsValueFetchedAt),
+						// Skip fetches already queued, so a second click doesn't double them.
+						or(
+							isNull(records.discogsValueQueuedAt),
+							lt(
+								records.discogsValueQueuedAt,
+								new Date(Date.now() - VALUE_QUEUE_WINDOW_MS),
+							),
+						),
+					),
+				);
+			const ids = rows.map((r) => r.id);
+			await enqueueValueBatch(ids);
+			return { count: ids.length };
 		}),
 	);
 
@@ -1266,6 +1086,8 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 						title: records.title,
 						pitchforkScore: records.pitchforkScore,
 						pitchforkUrl: records.pitchforkUrl,
+						masterId: records.masterId,
+						discogsId: records.discogsId,
 					})
 					.from(records)
 					.where(eq(records.id, id))
@@ -1275,6 +1097,12 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 					artist: meta.artist || current.artist,
 					title: meta.title || current.title,
 				});
+				const valueStale =
+					valuationKey(current) !==
+					valuationKey({
+						masterId: masterId !== undefined ? masterId : current.masterId,
+						discogsId: discogsId !== undefined ? discogsId : current.discogsId,
+					});
 				const [row] = await db
 					.update(records)
 					.set({
@@ -1300,6 +1128,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 									releaseCheckedAt: now,
 								}
 							: {}),
+						...(valueStale ? CLEARED_VALUE : {}),
 						// Sync album-level metadata; skip blanks so a real value isn't
 						// clobbered with "".
 						...(meta.artist ? { artist: meta.artist } : {}),
@@ -1310,6 +1139,7 @@ export const assignRecordIdentity = createServerFn({ method: "POST" })
 					})
 					.where(eq(records.id, id))
 					.returning();
+				if (row && valueStale && valuationKey(row)) await enqueueValue(id);
 				return row ?? null;
 			}),
 	);
@@ -1476,7 +1306,7 @@ export const getDiscogsMasterVersions = createServerFn({ method: "GET" })
 	.validator((id: string) => id)
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "getDiscogsMasterVersions" }, () =>
-			getMasterVersions(id).catch(() => []),
+			getMasterVersions(id),
 		),
 	);
 
@@ -1540,47 +1370,6 @@ export const identifyAsin = createServerFn({ method: "POST" })
 			if (!asin) return null;
 			return identifyFromAsin(asin);
 		}),
-	);
-
-/**
- * Queue a batch of Amazon ASIN→pressing resolutions (the importer's "Queue
- * lookups"). Each job barcode-resolves one ASIN in the background and pins the
- * exact pressing on its record, so the slow per-ASIN web search never blocks the
- * modal. Ignores blanks; returns how many were actually enqueued.
- */
-export const enqueueAmazonResolve = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(
-		(data: Array<{ recordId: number; asin: string; country: string | null }>) =>
-			data,
-	)
-	.handler(({ data: jobs }) =>
-		Sentry.startSpan({ name: "enqueueAmazonResolve" }, async () => {
-			const valid = jobs.filter(
-				(j) => Number.isFinite(j.recordId) && parseAsin(j.asin),
-			);
-			if (valid.length > 0) await enqueueResolveAsinBatch(valid);
-			return { queued: valid.length };
-		}),
-	);
-
-/**
- * Store a user-uploaded cover image (base64 data URL) in R2 and return its key,
- * so the review page can override the auto-sourced Discogs artwork on publish.
- */
-export const uploadCover = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator((data: unknown) => {
-		const d = (data ?? {}) as Record<string, unknown>;
-		if (typeof d.imageBase64 !== "string" || d.imageBase64.length === 0) {
-			throw new Error("imageBase64 must be a non-empty string");
-		}
-		return { imageBase64: d.imageBase64 };
-	})
-	.handler(({ data }) =>
-		Sentry.startSpan({ name: "uploadCover" }, () =>
-			storeUploadedCover(base64ToBytes(stripDataUrl(data.imageBase64))),
-		),
 	);
 
 export const deleteRecord = createServerFn({ method: "POST" })
@@ -1657,41 +1446,6 @@ export const deleteRecords = createServerFn({ method: "POST" })
 					.where(inArray(records.copyOf, batch));
 			}
 			return { count: ids.length };
-		}),
-	);
-
-/**
- * Bulk retry. Resets the selected rows to `pending` in a single statement, then
- * fans the (cheap) queue writes out concurrently — the actual analysis happens
- * in the consumer. Returns how many rows were re-queued.
- */
-export const retryRecords = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(idList)
-	.handler(({ data: ids }) =>
-		Sentry.startSpan({ name: "retryRecords" }, async () => {
-			if (ids.length === 0) return { count: 0 };
-			const db = getDb(env.DB);
-			// Single retry timestamp shared across chunks, so callers reading
-			// `updatedAt` as "when this batch was retried" get one consistent value.
-			const now = new Date();
-			const updated: number[] = [];
-			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
-				const rows = await db
-					.update(records)
-					// Fresh manual retry → reset the reaper's auto-retry budget.
-					.set({
-						status: "pending",
-						error: null,
-						analyzeRetryCount: 0,
-						updatedAt: now,
-					})
-					.where(inArray(records.id, batch))
-					.returning({ id: records.id });
-				updated.push(...rows.map(({ id }) => id));
-			}
-			await enqueueAnalyzeBatch(updated);
-			return { count: updated.length };
 		}),
 	);
 
@@ -1849,38 +1603,5 @@ export const reapplyAllProfessional = createServerFn({ method: "POST" })
 			const ids = rows.map(({ id }) => id);
 			await enqueueProfessionalBatch(ids);
 			return { count: ids.length };
-		}),
-	);
-
-/**
- * Bulk refresh. Enqueues a Discogs re-pull for each selected record through the
- * queue (so it respects Discogs' rate limit rather than firing N synchronous
- * fetches). Per record, the consumer re-pulls the pinned release, refreshes the
- * album from its master, or — when neither is set — guesses a master from the
- * record's artist/title. Every real record has an artist/title, so all selected
- * rows are enqueued; only rows with neither Discogs link nor artist/title no-op.
- * Returns how many refreshes were queued.
- */
-export const refreshRecords = createServerFn({ method: "POST" })
-	.middleware([authMiddleware])
-	.validator(idList)
-	.handler(({ data: ids }) =>
-		Sentry.startSpan({ name: "refreshRecords" }, async () => {
-			if (ids.length === 0) return { count: 0 };
-			const db = getDb(env.DB);
-			// Every record has something to refresh or guess a master from (artist is
-			// NOT NULL), so enqueue all selected rows that still exist. The select just
-			// drops ids deleted between selection and now; the consumer no-ops on any
-			// row it can't act on.
-			const existing: number[] = [];
-			for (const batch of chunk(ids, D1_PARAM_CHUNK)) {
-				const rows = await db
-					.select({ id: records.id })
-					.from(records)
-					.where(inArray(records.id, batch));
-				existing.push(...rows.map(({ id }) => id));
-			}
-			await enqueueRefreshBatch(existing);
-			return { count: existing.length };
 		}),
 	);

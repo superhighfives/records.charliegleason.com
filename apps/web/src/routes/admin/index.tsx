@@ -2,7 +2,6 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import {
 	useMutation,
-	useQuery,
 	useQueryClient,
 	useSuspenseQuery,
 } from "@tanstack/react-query";
@@ -24,7 +23,6 @@ import {
 	ChevronDownIcon,
 	EllipsisVertical,
 	SearchIcon,
-	TriangleAlertIcon,
 } from "lucide-react";
 import {
 	Fragment,
@@ -62,11 +60,10 @@ import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { UnmatchedBadge } from "#/components/unmatched-badge";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
-import { backfillColorPalettes } from "#/lib/colors";
-import { colorsQueryOptions } from "#/lib/colors-queries";
 import { displayCoverKey } from "#/lib/cover";
 import { duplicateRecordIds } from "#/lib/duplicates";
-import { orderRecordsForReview } from "#/lib/record-order";
+import { hasBrokenLink, isUnmatched } from "#/lib/record-alerts";
+import { orderRecordsForReview, savePagerOrder } from "#/lib/record-order";
 import {
 	checkLinkHealth,
 	deleteRecord,
@@ -627,11 +624,17 @@ function SegmentedFilter({
 export const Route = createFileRoute("/admin/")({
 	// Deep-link the active facets (a comma list in `f`) so back/forward and shared URLs
 	// restore the filter; an empty selection drops the param to keep the URL clean.
+	// `assign` opens the bulk-assign modal on load (the alerts menu links here).
 	validateSearch: (
 		search: globalThis.Record<string, unknown>,
-	): { f?: string } => {
+	): { f?: string; assign?: "unmatched" | "broken" } => {
 		const tokens = parseFacetTokens(search.f);
-		return tokens.length ? { f: tokens.join(",") } : {};
+		return {
+			...(tokens.length ? { f: tokens.join(",") } : {}),
+			...(search.assign === "unmatched" || search.assign === "broken"
+				? { assign: search.assign }
+				: {}),
+		};
 	},
 	loader: ({ context }) =>
 		context.queryClient.ensureQueryData(recordsQueryOptions),
@@ -661,7 +664,7 @@ function AdminRecords() {
 	// a record and pressing back, and can be shared/bookmarked. If the URL arrives with
 	// no `f` (e.g. clicking "Admin" from the nav rather than pressing back), fall back to
 	// the last selection remembered in localStorage.
-	const { f: rawFacets } = Route.useSearch();
+	const { f: rawFacets, assign: assignParam } = Route.useSearch();
 	const activeFacets = useMemo(() => parseFacetTokens(rawFacets), [rawFacets]);
 	const setFacets = (tokens: string[]) => {
 		writeStoredFilters({ ...readStoredFilters(), f: tokens.join(",") });
@@ -713,72 +716,51 @@ function AdminRecords() {
 	// at all yet — neither an album (master) nor a pinned release. A record
 	// matched to a standalone release (no Discogs master exists for it) is
 	// already handled and must not keep reappearing here.
-	const unmatchedRecords = useMemo(
-		() => data.filter((r) => r.masterId == null && r.discogsId == null),
-		[data],
-	);
+	const unmatchedRecords = useMemo(() => data.filter(isUnmatched), [data]);
 	// Records whose Discogs identity is broken: they have a link (master and/or
 	// release), but every link they have 404'd on the last scheduled health check
 	// (src/lib/master-health.ts) — so nothing live identifies them anymore. Distinct
 	// from "unmatched" (never had a link): a broken link is a data-integrity problem.
 	// A record with at least one *live* link (e.g. dead pinned release but live
 	// master) is still publishable and stays out of this set.
-	const brokenRecords = useMemo(() => {
-		const hasLiveMaster = (r: Record) => r.masterId != null && !r.masterMissing;
-		const hasLiveRelease = (r: Record) =>
-			r.discogsId != null && !r.releaseMissing;
-		return data.filter(
-			(r) =>
-				(r.masterId != null || r.discogsId != null) &&
-				!hasLiveMaster(r) &&
-				!hasLiveRelease(r),
-		);
-	}, [data]);
+	const brokenRecords = useMemo(() => data.filter(hasBrokenLink), [data]);
 	const bulkAssignRecords =
 		assignScope === "broken" ? brokenRecords : unmatchedRecords;
 	const openBulkAssign = (scope: "unmatched" | "broken") => {
 		setAssignScope(scope);
 		setBulkAssignOpen(true);
 	};
-
-	// Color chips with a ready texture but no extracted palette — legacy rows from
-	// before the `palette` column existed (see `backfillColorPalettes`). Harmless
-	// (the title just stays untinted on the public grid/panel), so this loads
-	// alongside the page rather than blocking it on suspense.
-	const { data: colors } = useQuery(colorsQueryOptions);
-	const pendingPaletteColors = useMemo(
-		() =>
-			(colors ?? []).filter((c) => c.textureStatus === "ready" && !c.palette),
-		[colors],
-	);
-	const backfillPaletteMutation = useMutation({
-		mutationFn: () => backfillColorPalettes(),
-		onSuccess: ({ queued }) => {
-			toast.success(
-				queued > 0
-					? `Queued ${queued} palette re-extraction${queued === 1 ? "" : "s"} — watch progress in the queue menu.`
-					: "Nothing to backfill.",
-			);
-			queryClient.invalidateQueries({ queryKey: colorsQueryOptions.queryKey });
-		},
-		onError: () => toast.error("Couldn't start the backfill. Try again."),
-	});
+	// Open the modal for an `?assign=` link, then drop the param so closing the
+	// modal (or a reload) doesn't reopen it.
+	useEffect(() => {
+		if (!assignParam) return;
+		setAssignScope(assignParam);
+		setBulkAssignOpen(true);
+		navigate({
+			to: "/admin",
+			search: (prev) => ({ ...prev, assign: undefined }),
+			replace: true,
+		});
+	}, [assignParam, navigate]);
 
 	// Collection value totals (USD). `total` sums every record's effective value
 	// (manual if set, else the Discogs guess); `confirmedTotal` counts only records
-	// with a hand-entered value. Drives the header summary.
+	// with a hand-entered value; `estimated` counts values priced from the album's
+	// most-owned pressing rather than a pinned one. Drives the header summary.
 	const totals = useMemo(() => {
 		let total = 0;
 		let confirmedTotal = 0;
 		let valued = 0;
+		let estimated = 0;
 		for (const r of data) {
 			const v = effectiveValue(r);
 			if (v == null) continue;
 			total += v;
 			valued += 1;
 			if (r.manualValue != null) confirmedTotal += v;
+			else if (r.discogsId == null) estimated += 1;
 		}
-		return { total, confirmedTotal, valued };
+		return { total, confirmedTotal, valued, estimated };
 	}, [data]);
 	// Pacer: debounce the global filter so typing doesn't re-filter every keystroke.
 	const [debouncedFilter] = useDebouncedValue(filter, { wait: 200 });
@@ -1135,6 +1117,11 @@ function AdminRecords() {
 	// Quick-view drawer: page through exactly what's on screen (the table's sorted +
 	// filtered rows), tracked by id so re-sorting never jumps to the wrong record.
 	const previewRecords = table.getRowModel().rows.map((r) => r.original);
+	// The record pager follows these rows; see `savePagerOrder`.
+	const previewIdsKey = previewRecords.map((r) => r.id).join(",");
+	useEffect(() => {
+		savePagerOrder(previewIdsKey ? previewIdsKey.split(",").map(Number) : []);
+	}, [previewIdsKey]);
 	const previewIndex =
 		previewId == null
 			? -1
@@ -1207,6 +1194,13 @@ function AdminRecords() {
 									{formatMoney(totals.confirmedTotal, "USD")}
 								</span>{" "}
 								confirmed
+							</>
+						)}
+						{totals.estimated > 0 && (
+							<>
+								{" "}
+								· <span className="tabular-nums">{totals.estimated}</span>{" "}
+								estimated from the album
 							</>
 						)}
 					</p>
@@ -1372,75 +1366,6 @@ function AdminRecords() {
 					</div>
 				</div>
 			</div>
-
-			{/* Broken-link banner. The scheduled health check (src/lib/master-health.ts)
-			    flags records whose Discogs master OR release was deleted/merged; these
-			    are the ones with no live link left. Surface them loudly — a broken link
-			    is a data-integrity problem, not the routine "not assigned yet" case the
-			    amber Unmatched badge covers. Fix reuses the bulk-assign modal (assigning
-			    a live master restores identity), scoped to just these rows. */}
-			{brokenRecords.length > 0 && (
-				<div
-					role="alert"
-					className="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm"
-				>
-					<TriangleAlertIcon className="size-5 shrink-0 text-red-600 dark:text-red-400" />
-					<div className="min-w-0 flex-1">
-						<p className="font-medium text-red-700 dark:text-red-300">
-							{brokenRecords.length === 1
-								? "1 record has a broken Discogs link"
-								: `${brokenRecords.length} records have a broken Discogs link`}
-						</p>
-						<p className="text-red-700/80 dark:text-red-300/80">
-							The album or release they point at was deleted or merged — re-link
-							each to a current one.
-						</p>
-					</div>
-					<Button
-						type="button"
-						variant="destructive"
-						size="sm"
-						className="shrink-0"
-						onClick={() => openBulkAssign("broken")}
-					>
-						Fix
-					</Button>
-				</div>
-			)}
-
-			{/* Missing-palette banner. Informational, not a failure — the cover and
-			    disc render fine either way, only the title's on-hover gradient is
-			    missing (see `.title-palette` in styles.css) — so it reads amber like
-			    `UnmatchedBadge`, not red. Fix queues a
-			    palette-only re-extraction from each color's existing texture (no
-			    Replicate call — `extractStoredColorPalette`); results land async via
-			    the queue. */}
-			{pendingPaletteColors.length > 0 && (
-				<output className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
-					<TriangleAlertIcon className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
-					<div className="min-w-0 flex-1">
-						<p className="font-medium text-amber-700 dark:text-amber-300">
-							{pendingPaletteColors.length === 1
-								? "1 color chip is missing its title gradient"
-								: `${pendingPaletteColors.length} color chips are missing their title gradient`}
-						</p>
-						<p className="text-amber-700/80 dark:text-amber-300/80">
-							Their texture predates palette extraction — re-extract from it to
-							light up their titles on the public site.
-						</p>
-					</div>
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						className="shrink-0"
-						disabled={backfillPaletteMutation.isPending}
-						onClick={() => backfillPaletteMutation.mutate()}
-					>
-						{backfillPaletteMutation.isPending ? "Queuing…" : "Fix"}
-					</Button>
-				</output>
-			)}
 
 			{/* Bulk actions. The bar stays put whenever there are rows to act on (so
 			    ticking the first row doesn't shift the table down), but the action

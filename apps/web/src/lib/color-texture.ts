@@ -35,32 +35,6 @@ export function paletteJsonFromTexture(bytes: Uint8Array): string | null {
 }
 
 /**
- * Backfill (or refresh) just the palette for a color that already has a stored
- * texture, WITHOUT re-running Replicate — decode the existing R2 object and
- * re-extract. Drives the `color-palette` queue job (see `queue.ts` /
- * `backfillColorPalettes`); a no-op for a color with no ready texture.
- */
-export async function extractStoredColorPalette(
-	colorId: number,
-): Promise<void> {
-	const db = getDb(env.DB);
-	const [color] = await db
-		.select()
-		.from(colors)
-		.where(eq(colors.id, colorId))
-		.limit(1);
-	if (!color?.textureImageKey) return;
-
-	const object = await env.PHOTOS.get(color.textureImageKey);
-	if (!object) return; // texture object vanished — leave the palette as-is
-	const bytes = new Uint8Array(await object.arrayBuffer());
-	const palette = paletteJsonFromTexture(bytes);
-	if (!palette) return; // extraction failed; don't clobber an existing palette
-
-	await db.update(colors).set({ palette }).where(eq(colors.id, colorId));
-}
-
-/**
  * Generate (or regenerate) a color's reference vinyl texture — a flat material swatch
  * for the given color name — via Replicate, and cache it in R2. Runs in the
  * "color-texture" queue consumer (see `queue.ts`), triggered automatically when a
