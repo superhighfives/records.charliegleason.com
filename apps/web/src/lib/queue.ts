@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/cloudflare";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 
 import { getDb } from "#/db";
 import { type JobStep, type Record, records } from "#/db/schema";
@@ -243,6 +243,24 @@ export async function enqueueValueBatch(recordIds: number[]): Promise<void> {
 		await unmarkAfterFailedSend(recordIds);
 		throw err;
 	}
+}
+
+/**
+ * Re-price every Discogs-linked record, paced like any bulk fetch, so the total
+ * follows the market. The daily cron runs it on the first of the month.
+ */
+export async function refreshAllValues(): Promise<void> {
+	const rows = await getDb(env.DB)
+		.select({ id: records.id })
+		.from(records)
+		.where(or(isNotNull(records.discogsId), isNotNull(records.masterId)));
+	await enqueueValueBatch(rows.map((r) => r.id));
+	await logJobEvent(
+		"value",
+		"info",
+		null,
+		`Monthly refresh: queued ${rows.length} values`,
+	);
 }
 
 /**

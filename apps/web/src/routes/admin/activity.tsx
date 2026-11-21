@@ -96,7 +96,7 @@ function ActivityPage() {
 									e.level === "error" && "text-destructive",
 								)}
 							>
-								{e.message}
+								<MessageText text={e.message} />
 							</p>
 						</li>
 					))}
@@ -104,4 +104,25 @@ function ActivityPage() {
 			)}
 		</div>
 	);
+}
+
+/** A job message, with each "release 123" linked to that release on Discogs. */
+function MessageText({ text }: { text: string }) {
+	return text.split(/(release \d+)/).map((part, i) => {
+		const id = /^release (\d+)$/.exec(part)?.[1];
+		return id ? (
+			<a
+				// biome-ignore lint/suspicious/noArrayIndexKey: parts of one fixed string
+				key={i}
+				href={`https://www.discogs.com/release/${id}`}
+				target="_blank"
+				rel="noreferrer"
+				className="underline underline-offset-4"
+			>
+				{part}
+			</a>
+		) : (
+			part
+		);
+	});
 }
