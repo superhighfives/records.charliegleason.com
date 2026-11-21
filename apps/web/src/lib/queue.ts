@@ -11,10 +11,7 @@ import {
 	toQueueBatches,
 } from "#/lib/batching";
 import { runCaptureFirstPass } from "#/lib/capture-first-pass";
-import {
-	extractStoredColorPalette,
-	generateColorTexture,
-} from "#/lib/color-texture";
+import { generateColorTexture } from "#/lib/color-texture";
 import {
 	getMasterDetail,
 	getReleaseDetail,
@@ -126,15 +123,6 @@ export async function enqueueCaptureFirstPass(recordId: number): Promise<void> {
  */
 export async function enqueueColorTexture(colorId: number): Promise<void> {
 	await analyzeQueue().send({ mode: "color-texture", colorId });
-}
-
-/**
- * Enqueue a palette-only re-extraction from a color's existing texture — no
- * Replicate call (see `extractStoredColorPalette`). Used by `backfillColorPalettes`
- * to fill in palettes for colors whose texture predates the `palette` column.
- */
-export async function enqueueColorPalette(colorId: number): Promise<void> {
-	await analyzeQueue().send({ mode: "color-palette", colorId });
 }
 
 /** Enqueue a record for Apply — re-warp its square from the stored corners and go live. */
@@ -417,23 +405,6 @@ async function processMessage(message: Message<AnalyzeMessage>): Promise<void> {
 		} catch (err) {
 			console.error(
 				`[queue] color-texture failed for color ${colorId}: ${
-					err instanceof Error ? err.message : String(err)
-				}`,
-			);
-			Sentry.captureException(err);
-		}
-		message.ack();
-		return;
-	}
-
-	// Palette-only backfill from an existing texture — no Replicate call.
-	if (message.body.mode === "color-palette") {
-		const { colorId } = message.body;
-		try {
-			await extractStoredColorPalette(colorId);
-		} catch (err) {
-			console.error(
-				`[queue] color-palette failed for color ${colorId}: ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);

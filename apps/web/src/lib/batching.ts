@@ -31,16 +31,6 @@ export interface ColorTextureMessage {
 }
 
 /**
- * A `colors`-keyed message that re-extracts a color's title-gradient palette from
- * its *existing* stored texture — no Replicate call. Backfills palettes onto
- * colors whose texture predates the palette column (see `backfillColorPalettes`).
- */
-export interface ColorPaletteMessage {
-	mode: "color-palette";
-	colorId: number;
-}
-
-/**
  * Deletes R2 objects later rather than now — sent with a delay by Apply for the cover
  * it just replaced, so a page still holding the old key (an open collection while
  * "Re-apply all" runs) keeps loading it instead of 404ing. See `enqueueDeletePhotos`.
@@ -54,7 +44,6 @@ export interface DeletePhotosMessage {
 export type AnalyzeMessage =
 	| AnalyzeRecordMessage
 	| ColorTextureMessage
-	| ColorPaletteMessage
 	| DeletePhotosMessage;
 
 /**
