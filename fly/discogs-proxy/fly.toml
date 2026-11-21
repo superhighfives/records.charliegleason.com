@@ -1,0 +1,37 @@
+# Deploy from this directory: `fly launch --copy-config --name <app>` (first time)
+# then `fly deploy`. Requires two secrets, set with:
+#   fly secrets set DISCOGS_TOKEN=... PROXY_SECRET=...
+# PROXY_SECRET is a random shared secret of your choosing — the Worker sends it
+# back as X-Proxy-Secret and must be set to the same value via
+# `wrangler secret put DISCOGS_PROXY_SECRET`. DISCOGS_PROXY_URL (the Worker
+# secret pointing at this app, e.g. https://<app>.fly.dev) is set the same way.
+#
+# IMPORTANT: a plain Fly Machine has NO static outbound IP by default — it
+# egresses through Fly's shared regional pool, same problem as the Worker.
+# This only fixes the Discogs rate-limit once you allocate a dedicated
+# app-scoped egress IP for the matching region:
+#   fly ips allocate-egress --app <app> -r iad
+# That's a separate $3.60/mo line item (billed hourly), on top of the
+# ~$2/mo shared-cpu-1x machine below.
+app = "records-discogs-proxy"
+primary_region = "iad"
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "5s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
