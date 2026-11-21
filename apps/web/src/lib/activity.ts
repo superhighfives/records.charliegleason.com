@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import * as Sentry from "@sentry/tanstackstart-react";
 import { createServerFn } from "@tanstack/react-start";
 import { count, desc, eq, gt } from "drizzle-orm";
+import { z } from "zod";
 
 import { getDb } from "#/db";
 import { jobEvents, records } from "#/db/schema";
@@ -21,7 +22,7 @@ export type ActivityEvent = Awaited<ReturnType<typeof listJobEvents>>[number];
  * it before Clerk has signed in.
  */
 export const listJobEvents = createServerFn({ method: "GET" })
-	.validator((errorsOnly: boolean) => errorsOnly)
+	.validator((data: unknown) => z.boolean().parse(data))
 	.handler(({ data: errorsOnly }) =>
 		Sentry.startSpan({ name: "listJobEvents" }, async () => {
 			if (!(await getAdminSession())) return [];

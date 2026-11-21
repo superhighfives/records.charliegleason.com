@@ -5,6 +5,7 @@ import { runDailyRecordPick } from "#/lib/daily-record";
 import { runWeeklyDigest } from "#/lib/digest";
 import { pruneJobEvents } from "#/lib/job-events";
 import { runLinkHealthCheck } from "#/lib/master-health";
+import { isMonthlyRefreshDay } from "#/lib/value";
 
 const LINK_CHECK_CRON = "0 9 * * *";
 const DAILY_RECORD_CRON = "0 13 * * *";
@@ -38,12 +39,12 @@ const handler: ExportedHandler<Cloudflare.Env> = {
 		if (controller.cron === LINK_CHECK_CRON) {
 			ctx.waitUntil(Promise.all([runLinkHealthCheck(), pruneJobEvents()]));
 		} else if (controller.cron === DAILY_RECORD_CRON) {
-			const firstOfMonth =
-				new Date(controller.scheduledTime).getUTCDate() === 1;
 			ctx.waitUntil(
 				Promise.all([
 					runDailyRecordPick(),
-					...(firstOfMonth ? [refreshAllValues()] : []),
+					...(isMonthlyRefreshDay(controller.scheduledTime)
+						? [refreshAllValues()]
+						: []),
 				]),
 			);
 		} else {

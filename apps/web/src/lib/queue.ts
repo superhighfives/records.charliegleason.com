@@ -258,6 +258,7 @@ export async function refreshAllValues(): Promise<void> {
 		await enqueueValueBatch(rows.map((r) => r.id));
 	} catch (err) {
 		// Batches sent before the failure still run; say the refresh is partial.
+		Sentry.captureException(err);
 		await logJobEvent(
 			"value",
 			"error",
