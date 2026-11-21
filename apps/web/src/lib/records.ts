@@ -860,13 +860,21 @@ export const reframeRecord = createServerFn({ method: "POST" })
 			crop?: NormalizedCorners;
 			params?: ReframeParams;
 		}) => {
-			// Runtime-sanitise untrusted input before it's persisted and later drives the
-			// homography/tone math in the consumer: drop a malformed or self-crossing crop
-			// (fall back to the stored one) and keep only well-typed knobs.
-			const crop = parseNormalizedCorners(input.crop);
+			// Runtime-check untrusted input before it's persisted and later drives the
+			// homography/tone math in the consumer. A supplied crop must be four points in
+			// 0..1 that don't cross; anything else is an error rather than a silent
+			// re-warp of the stored crop. Knobs are sanitised to well-typed values.
+			let crop: NormalizedCorners | undefined;
+			if (input.crop !== undefined) {
+				const parsed = parseNormalizedCorners(input.crop);
+				if (!parsed || !isCropValid(parsed)) {
+					throw new Error("The crop is invalid: its corners must not cross.");
+				}
+				crop = parsed;
+			}
 			return {
 				id: input.id,
-				crop: crop && isCropValid(crop) ? crop : undefined,
+				crop,
 				params: sanitizeReframeParams(input.params),
 			};
 		},
