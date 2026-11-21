@@ -168,8 +168,9 @@ export async function enqueueDeletePhotos(keys: string[]): Promise<void> {
 async function enqueueBatch(
 	recordIds: number[],
 	mode?: AnalyzeRecordMessage["mode"],
+	spacingSeconds = 0,
 ): Promise<void> {
-	for (const batch of toQueueBatches(recordIds, mode)) {
+	for (const batch of toQueueBatches(recordIds, mode, spacingSeconds)) {
 		await analyzeQueue().sendBatch(batch);
 	}
 }
@@ -201,6 +202,11 @@ export async function enqueueValue(recordId: number): Promise<void> {
 	}
 }
 
+// A value fetch makes up to three Discogs calls, and Discogs allows 60 a minute.
+// Spacing a bulk fetch at one record every 4 seconds keeps it near 45 a minute,
+// so retries are for blips, not a rate limit the batch itself causes.
+const VALUE_SPACING_SECONDS = 4;
+
 /** Bulk variant of {@link enqueueValue}, in chunked `sendBatch` calls. */
 export async function enqueueValueBatch(recordIds: number[]): Promise<void> {
 	const db = getDb(env.DB);
@@ -211,7 +217,7 @@ export async function enqueueValueBatch(recordIds: number[]): Promise<void> {
 			.set({ discogsValueQueuedAt: now })
 			.where(inArray(records.id, ids));
 	}
-	await enqueueBatch(recordIds, "value");
+	await enqueueBatch(recordIds, "value", VALUE_SPACING_SECONDS);
 }
 
 /**

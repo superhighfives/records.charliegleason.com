@@ -74,14 +74,24 @@ export function chunk<T>(items: T[], size: number): T[][] {
  * Build the chunked `sendBatch` payloads for a bulk enqueue: one inner array per
  * queue write, each holding at most {@link QUEUE_BATCH_SIZE} messages in input
  * order. Pure — the caller hands each returned batch to `queue.sendBatch`. An
- * empty id list yields no batches (so no queue write happens at all).
+ * empty id list yields no batches (so no queue write happens at all). With
+ * `spacingSeconds`, message n is delayed n × spacing seconds, to pace the work.
  */
 export function toQueueBatches(
 	recordIds: number[],
 	mode?: AnalyzeRecordMessage["mode"],
-): Array<Array<{ body: AnalyzeRecordMessage }>> {
-	return chunk(recordIds, QUEUE_BATCH_SIZE).map((slice) =>
-		slice.map((recordId) => ({ body: { recordId, mode } })),
+	spacingSeconds = 0,
+): Array<Array<{ body: AnalyzeRecordMessage; delaySeconds?: number }>> {
+	return chunk(recordIds, QUEUE_BATCH_SIZE).map((slice, batch) =>
+		slice.map((recordId, i) => {
+			const index = batch * QUEUE_BATCH_SIZE + i;
+			return spacingSeconds > 0
+				? {
+						body: { recordId, mode },
+						delaySeconds: Math.round(index * spacingSeconds),
+					}
+				: { body: { recordId, mode } };
+		}),
 	);
 }
 

@@ -74,6 +74,17 @@ describe("platform limits", () => {
 });
 
 describe("toQueueBatches", () => {
+	it("delays each message by its position when spaced", () => {
+		const batches = toQueueBatches([7, 8, 9], "value", 4);
+		expect(batches.flat().map((m) => m.delaySeconds)).toEqual([0, 4, 8]);
+	});
+
+	it("keeps counting delays across batches", () => {
+		const ids = Array.from({ length: 101 }, (_, i) => i);
+		const [, second] = toQueueBatches(ids, "value", 4);
+		expect(second[0].delaySeconds).toBe(400);
+	});
+
 	it("produces no batches for an empty id list (so no queue write happens)", () => {
 		expect(toQueueBatches([])).toEqual([]);
 	});
