@@ -242,9 +242,15 @@ export async function analyzeCapture(
 	if (!object) {
 		throw new Error(`capture photo missing in R2: ${record.capturePhotoKey}`);
 	}
-	const bytes = new Uint8Array(await object.arrayBuffer());
-	const data = bytesToBase64(bytes);
-	const mediaType = object.httpMetadata?.contentType || "image/jpeg";
+	// Captures are stored at up to 3072px; 2048 is plenty to read a cover and keeps
+	// the request well under Claude's image size limit.
+	const scaled = await env.IMAGES.input(object.body)
+		.transform({ width: 2048, height: 2048, fit: "scale-down" })
+		.output({ format: "image/webp", quality: 90 });
+	const data = bytesToBase64(
+		new Uint8Array(await scaled.response().arrayBuffer()),
+	);
+	const mediaType = "image/webp";
 	const context = record.captureContext?.trim() || undefined;
 
 	// 1. Vision read.

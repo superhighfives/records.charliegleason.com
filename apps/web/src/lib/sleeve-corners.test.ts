@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	bandFromQuad,
 	bandInvalidReason,
+	cropBoxFor,
 	DEFAULT_BAND,
 	DEFAULT_CORNERS,
 	isBandValid,
@@ -11,6 +12,7 @@ import {
 	parseCornerBand,
 	parseCorners,
 	serializeCornerBand,
+	toCropCorners,
 } from "./sleeve-corners";
 
 const PICK: NormalizedCorners = [
@@ -165,5 +167,39 @@ describe("bandFromQuad — synthesis floor", () => {
 		const band = bandFromQuad(flush);
 		expect(isBandValid(band)).toBe(true);
 		expect(minBandGapFrac(band)).toBeGreaterThanOrEqual(MIN_BAND_FRAC);
+	});
+});
+
+describe("cropBoxFor / toCropCorners", () => {
+	const quad: NormalizedCorners = [
+		[0.25, 0.2],
+		[0.75, 0.2],
+		[0.75, 0.8],
+		[0.25, 0.8],
+	];
+
+	it("pads the quad's box by the margin and clamps it to the image", () => {
+		expect(cropBoxFor(quad, 1000, 1000, 0.05)).toEqual({
+			left: 200,
+			top: 150,
+			width: 600,
+			height: 700,
+		});
+		expect(cropBoxFor(quad, 1000, 1000, 0.5)).toEqual({
+			left: 0,
+			top: 0,
+			width: 1000,
+			height: 1000,
+		});
+	});
+
+	it("maps the quad into the crop, so the warp sees the same sleeve", () => {
+		const box = cropBoxFor(quad, 1000, 1000, 0);
+		expect(toCropCorners(quad, box, 1000, 1000)).toEqual([
+			[0, 0],
+			[1, 0],
+			[1, 1],
+			[0, 1],
+		]);
 	});
 });
