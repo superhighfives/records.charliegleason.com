@@ -7,7 +7,7 @@
   },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
-    "dev": "cd apps/web && dotenv -e ../../.env.local -- vite dev --port 3000",
+    "dev": "cd apps/web && dotenv -e ../../.env.local -v CLOUDFLARE_INCLUDE_PROCESS_ENV=true -- vite dev --port 3000",
     "generate-routes": "cd apps/web && tsr generate",
     "build": "cd apps/web && vite build",
     "preview": "cd apps/web && vite preview",
