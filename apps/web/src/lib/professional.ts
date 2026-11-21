@@ -20,10 +20,9 @@ import {
 	type ReframeParams,
 } from "#/lib/reframe-params";
 import {
-	type CornerBand,
 	cropBoxFor,
 	type NormalizedCorners,
-	parseCornerBand,
+	parseCrop,
 	toCropCorners,
 	trimFor,
 } from "#/lib/sleeve-corners";
@@ -114,16 +113,16 @@ const CAPTURE_DECODE_MAX = 2048;
 const CROP_MARGIN = 0.02;
 
 /**
- * Load the part of a capture around the band's inner quad, decoded at up to
+ * Load the part of a capture around the `crop` quad, decoded at up to
  * {@link CAPTURE_DECODE_MAX}. The Images binding crops and scales off the JS heap, so
  * the sleeve gets the full decode budget and a large capture never decodes in full.
- * Returns the decoded crop and the band re-expressed in the crop's coordinates; the
- * caller's band (full-image coordinates) is what gets stored.
+ * Returns the decoded region and the crop re-expressed in its coordinates; the
+ * caller's crop (full-image coordinates) is what gets stored.
  */
 export async function loadCaptureRegion(
 	capturePhotoKey: string,
-	band: CornerBand,
-): Promise<{ capture: RgbaImage; band: CornerBand }> {
+	crop: NormalizedCorners,
+): Promise<{ capture: RgbaImage; crop: NormalizedCorners }> {
 	const read = async () => {
 		const object = await env.PHOTOS.get(capturePhotoKey);
 		if (!object)
@@ -134,7 +133,7 @@ export async function loadCaptureRegion(
 	if (!("width" in info)) {
 		throw new Error(`capture is not a raster image: ${capturePhotoKey}`);
 	}
-	const box = cropBoxFor(band.inner, info.width, info.height, CROP_MARGIN);
+	const box = cropBoxFor(crop, info.width, info.height, CROP_MARGIN);
 	const out = await env.IMAGES.input(await read())
 		.transform({
 			trim: trimFor(box, info.width, info.height),
@@ -145,10 +144,7 @@ export async function loadCaptureRegion(
 		.output({ format: "image/webp", quality: 92 });
 	return {
 		capture: decodeRgba(new Uint8Array(await out.response().arrayBuffer())),
-		band: {
-			inner: toCropCorners(band.inner, box, info.width, info.height),
-			outer: toCropCorners(band.outer, box, info.width, info.height),
-		},
+		crop: toCropCorners(crop, box, info.width, info.height),
 	};
 }
 
@@ -160,16 +156,15 @@ export async function loadCaptureRegion(
  */
 async function warpEncodeStore(
 	capture: RgbaImage,
-	band: CornerBand,
+	crop: NormalizedCorners,
 	params: ReframeParams,
 ): Promise<{ key: string }> {
 	const p = { ...DEFAULT_REFRAME_PARAMS, ...params };
 	const { image } = reframeFromCorners(
 		capture,
-		// The cover is opaque edge-to-edge, so it warps from the band's INNER quad —
-		// certified wholly on the sleeve, so it can never drag a sliver of background
-		// into its border.
-		toPixelCorners(band.inner, capture.width, capture.height),
+		// The crop sits just inside the sleeve's edge, so the cover can never drag a
+		// sliver of background into its border.
+		toPixelCorners(crop, capture.width, capture.height),
 		{
 			canvasSize: CANVAS_SIZE,
 			// The sleeve fills the whole canvas — no transparent margin.
@@ -242,18 +237,17 @@ async function storePresizedCopies(
  */
 export async function reframeFromCapture(
 	capturePhotoKey: string,
-	band: CornerBand,
+	crop: NormalizedCorners,
 	params: ReframeParams = {},
 ): Promise<{ key: string }> {
-	const region = await loadCaptureRegion(capturePhotoKey, band);
-	return warpEncodeStore(region.capture, region.band, params);
+	const region = await loadCaptureRegion(capturePhotoKey, crop);
+	return warpEncodeStore(region.capture, region.crop, params);
 }
 
 /**
- * Reframe a record end-to-end for the queue (auto-on-capture + bulk). Decodes the capture
- * once, then uses the admin's stored corner band, or the full frame when there is none
- * (legacy single-quad rows are synthesised into a band at parse time). Returns the new
- * professional R2 key AND the band used, so the consumer can persist it. Does NOT touch
+ * Reframe a record end-to-end for the queue (auto-on-capture + bulk), from the admin's
+ * stored crop, or the default full-frame crop when there is none. Returns the new
+ * professional R2 key AND the crop used, so the consumer can persist it. Does NOT touch
  * the DB itself.
  */
 export async function professionalPipeline(
@@ -261,16 +255,16 @@ export async function professionalPipeline(
 		Record,
 		"capturePhotoKey" | "sleeveCornersJson" | "professionalParamsJson"
 	>,
-): Promise<{ professionalKey: string; band: CornerBand }> {
+): Promise<{ professionalKey: string; crop: NormalizedCorners }> {
 	if (!record.capturePhotoKey) {
 		throw new Error("record has no capture photo to work from");
 	}
-	const band = parseCornerBand(record.sleeveCornersJson);
-	const region = await loadCaptureRegion(record.capturePhotoKey, band);
+	const crop = parseCrop(record.sleeveCornersJson);
+	const region = await loadCaptureRegion(record.capturePhotoKey, crop);
 	const { key: professionalKey } = await warpEncodeStore(
 		region.capture,
-		region.band,
+		region.crop,
 		parseReframeParams(record.professionalParamsJson),
 	);
-	return { professionalKey, band };
+	return { professionalKey, crop };
 }

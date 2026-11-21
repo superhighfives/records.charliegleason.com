@@ -11,7 +11,7 @@ import {
 	DEFAULT_REFRAME_PARAMS,
 	type ReframeParams,
 } from "#/lib/reframe-params";
-import type { CornerBand, NormalizedCorners } from "#/lib/sleeve-corners";
+import type { NormalizedCorners } from "#/lib/sleeve-corners";
 import { cn } from "#/lib/utils";
 
 /**
@@ -57,12 +57,12 @@ async function decodeToRgba(src: string): Promise<RgbaImage> {
 
 export function ProPreview({
 	src,
-	band,
+	crop,
 	params,
 	className,
 }: {
 	src: string;
-	band: CornerBand;
+	crop: NormalizedCorners;
 	params: ReframeParams;
 	className?: string;
 }) {
@@ -101,10 +101,9 @@ export function ProPreview({
 			const tone = p.skipTone
 				? false
 				: { wbStrength: p.wbStrength, lowPct: p.lowPct, highPct: p.highPct };
-			// The cover warps from the band's inner quad — certified wholly on the
-			// sleeve — exactly as the server does, so the preview shows the border the
-			// cover will keep.
-			const { image } = reframeFromCorners(source, toPx(band.inner), {
+			// The cover warps from the crop exactly as the server does, so the preview
+			// shows the border the cover will keep.
+			const { image } = reframeFromCorners(source, toPx(crop), {
 				canvasSize: PREVIEW_SIZE,
 				contentSize: PREVIEW_SIZE,
 				tone,
@@ -123,7 +122,7 @@ export function ProPreview({
 		return () => {
 			if (rafRef.current) cancelAnimationFrame(rafRef.current);
 		};
-	}, [source, band, params]);
+	}, [source, crop, params]);
 
 	return (
 		<div

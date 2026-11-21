@@ -487,46 +487,6 @@ export function applyPolish(
 
 // ---------- edge refinement (the corner editor's Snap, and the detector's refine pass) ----------
 
-/** A pixel-space corner band: `outer` wholly on background, `inner` wholly on sleeve. */
-export interface PixelBand {
-	inner: Corners;
-	outer: Corners;
-}
-
-/** The corner-wise midpoint quad of a band — the best single-line guess at the edge. */
-export function midQuad(inner: Corners, outer: Corners): Corners {
-	return inner.map(([x, y], i) => [
-		(x + outer[i][0]) / 2,
-		(y + outer[i][1]) / 2,
-	]) as Corners;
-}
-
-/**
- * Per-edge distance from each of `from`'s edges to the corresponding edge of `to`
- * (edge midpoint to the other quad's edge line) — how much room the band gives on
- * each side of a quad, in px. Edge order matches everywhere else (top, right,
- * bottom, left as TL→TR, TR→BR, BR→BL, BL→TL).
- */
-export function edgeDistances(
-	from: Corners,
-	to: Corners,
-): [number, number, number, number] {
-	const out: number[] = [];
-	for (let e = 0; e < 4; e++) {
-		const [ax, ay] = from[e];
-		const [bx, by] = from[(e + 1) % 4];
-		const mx = (ax + bx) / 2;
-		const my = (ay + by) / 2;
-		const [cx1, cy1] = to[e];
-		const [cx2, cy2] = to[(e + 1) % 4];
-		const ex = cx2 - cx1;
-		const ey = cy2 - cy1;
-		const len = Math.hypot(ex, ey) || 1;
-		out.push(Math.abs(ex * (my - cy1) - ey * (mx - cx1)) / len);
-	}
-	return out as [number, number, number, number];
-}
-
 /** Intersection point of two infinite lines, each given by two points on it. */
 function lineIntersect(a1: Corner, a2: Corner, b1: Corner, b2: Corner): Corner {
 	const d =
@@ -600,10 +560,9 @@ export function refineQuadEdgesDetailed(
 		samples?: number;
 		minConfidence?: number;
 		/**
-		 * Explicit per-edge search bounds (px along the outward normal), overriding the
-		 * `search`-derived defaults. Used with a corner band: `quad` is the band midline
-		 * and these are the per-edge distances to the outer/inner quads, so the search
-		 * can't leave the certified-unknown band.
+		 * Explicit search bounds (px along the outward normal, per edge or one for all),
+		 * overriding the `search`-derived default. The corner editor's Snap uses these to
+		 * search a fixed margin either side of where it expects the edge.
 		 */
 		outward?: EdgeDeltas;
 		inward?: EdgeDeltas;

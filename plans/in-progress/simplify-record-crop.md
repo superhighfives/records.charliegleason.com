@@ -200,9 +200,10 @@ PR 1 (branch `simplify-record-crop`): Phases 1 and 2, plus dropping ESRGAN.
       - The admin menu has a "Re-apply all" action that rebuilds every live cover
         (2000px master + copies).
       - Re-apply leaves the old `alpha/` files and keys alone.
-- [ ] Run "Re-apply all" after deploy.
-- [ ] Raise the capture upload size and quality (`image-resize.ts` `TARGET_SIZE`,
-      `professional.ts` `CAPTURE_DECODE_MAX`). Verify the warp's memory at ~3000px first.
+- [ ] Run "Re-apply all" after Phase 4 deploys. One pass rebuilds every cover and
+      converts every stored band to a bare quad.
+- [x] Raise the capture upload size and quality. Done in #225 (`sharper-captures.md`):
+      captures are stored at up to 3072px, and Apply decodes only the sleeve.
 
 Later PRs:
 
@@ -211,8 +212,9 @@ Later PRs:
       now acks any mode it doesn't handle.
 - [x] Phase 3: delete the `alpha/` R2 objects. All 636 were deleted on 2026-11-20,
       before #223 merged.
-- [ ] Phase 4: collapse the band to a single quad, with a data migration and a simplified
-      corner editor.
+- [x] Phase 4: collapse the band to a single quad, with a simplified corner editor. No
+      data migration: `parseCrop` reads a stored band as its inner quad, and each record
+      is saved as a bare quad the next time it's applied.
 - [x] ~~Rescope `learned-sleeve-corner-detection.md`.~~ Dropped: #222 removed corner
       detection and its plan, and captures now start full-frame.
 
