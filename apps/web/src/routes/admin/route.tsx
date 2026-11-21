@@ -86,7 +86,9 @@ function AdminGate() {
 					</nav>
 					<nav
 						aria-label="Admin pages"
-						className="-my-2 flex min-w-0 items-center gap-1 overflow-x-auto"
+						// The scroll area clips on both axes, so pad it inside its negative
+						// margin to leave room for the focus ring.
+						className="-my-2 flex min-w-0 items-center gap-1 overflow-x-auto px-1 py-2"
 					>
 						{ADMIN_PAGES.map((page) => (
 							<Link

@@ -5,6 +5,7 @@ import {
 	buildSearchUrl,
 	checkMasterLiveness,
 	checkReleaseLiveness,
+	getMasterVersions,
 	getReleaseValue,
 	parseMasterId,
 	parseReleaseId,
@@ -570,5 +571,35 @@ describe("getReleaseValue", () => {
 			new Response(null, { status: 401 }),
 		);
 		await expect(getReleaseValue("1")).rejects.toThrow("Discogs 401");
+	});
+});
+
+describe("getMasterVersions", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	/** Answer the versions call with `versions`; the master lookup always 404s. */
+	function stubVersions(versions: Response) {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string | URL) =>
+				String(url).includes("/versions")
+					? versions
+					: new Response(null, { status: 404 }),
+			),
+		);
+	}
+
+	it("returns no pressings for a missing master", async () => {
+		stubVersions(new Response(null, { status: 404 }));
+		await expect(getMasterVersions("1")).resolves.toEqual([]);
+	});
+
+	it("throws on a Discogs failure instead of reporting no pressings", async () => {
+		stubVersions(new Response(null, { status: 401 }));
+		await expect(getMasterVersions("1")).rejects.toThrow(
+			"Discogs 401 for versions of master 1",
+		);
 	});
 });

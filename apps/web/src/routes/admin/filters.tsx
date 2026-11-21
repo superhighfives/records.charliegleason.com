@@ -107,13 +107,6 @@ function FiltersPage() {
 				<div className="flex gap-2">
 					<Button
 						type="button"
-						variant="ghost"
-						onClick={() => setDraft(DEFAULT_FILTER_SETTINGS)}
-					>
-						Reset to defaults
-					</Button>
-					<Button
-						type="button"
 						variant="outline"
 						disabled={!dirty}
 						onClick={() => saved && setDraft(saved)}
@@ -233,6 +226,18 @@ function FiltersPage() {
 					</li>
 				))}
 			</ol>
+
+			<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+				<p>Start over from the built-in order, headings and counts.</p>
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					onClick={() => setDraft(DEFAULT_FILTER_SETTINGS)}
+				>
+					Reset to defaults
+				</Button>
+			</div>
 		</div>
 	);
 }

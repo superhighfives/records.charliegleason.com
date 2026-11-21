@@ -279,7 +279,8 @@ function isVinylVersion(v: any): boolean {
  * offer "pick a specific pressing" once an album is chosen — vinyl only, since
  * that's the collection. The versions endpoint carries per-pressing fields but not
  * the artist/genre, so those come from the master (one extra fetch, cached). Each
- * candidate's `masterId` is the parent master. Returns [] on any failure.
+ * candidate's `masterId` is the parent master. Returns [] for a missing master
+ * and throws on any other Discogs failure.
  */
 export async function getMasterVersions(
 	masterId: string,
@@ -293,7 +294,10 @@ export async function getMasterVersions(
 	);
 	if (!res.ok) {
 		await res.body?.cancel().catch(() => {});
-		return [];
+		// A missing master has no versions. Anything else (rate limit, auth, an
+		// upstream blip) must not look like "no pressings".
+		if (res.status === 404) return [];
+		throw new Error(`Discogs ${res.status} for versions of master ${masterId}`);
 	}
 	const data = (await res.json()) as {
 		versions?: Array<Record<string, unknown>>;

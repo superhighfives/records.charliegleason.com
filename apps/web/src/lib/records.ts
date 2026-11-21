@@ -1359,7 +1359,7 @@ export const getDiscogsMasterVersions = createServerFn({ method: "GET" })
 	.validator((id: string) => id)
 	.handler(({ data: id }) =>
 		Sentry.startSpan({ name: "getDiscogsMasterVersions" }, () =>
-			getMasterVersions(id).catch(() => []),
+			getMasterVersions(id),
 		),
 	);
 

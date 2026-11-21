@@ -343,6 +343,10 @@ function CatalogItem({
 								<Loader2 className="size-4 animate-spin" />
 								Loading pressings…
 							</p>
+						) : versionsQuery.isError ? (
+							<p className="text-sm text-destructive">
+								Couldn't load pressings: {versionsQuery.error.message}
+							</p>
 						) : versions.length === 0 ? (
 							<p className="text-sm text-muted-foreground">
 								No vinyl pressings match. Try a different filter, or open the
