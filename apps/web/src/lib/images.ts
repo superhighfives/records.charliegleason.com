@@ -14,8 +14,8 @@ import { getReleaseImageUrl } from "#/lib/discogs";
 
 const UA = "RecordsCharlieGleasonCom/1.0 +https://records.charliegleason.com";
 
-// A stored capture's side, matching the browser downscale (`image-resize.ts`). Apply
-// crops the sleeve out of it before decoding, so this size doesn't raise memory.
+// The largest stored capture side, matching the browser downscale (`image-resize.ts`).
+// Apply crops the sleeve out of it before decoding, so this size doesn't raise memory.
 const CAPTURE_SIZE = 3072;
 
 export async function storeResizedCover(
@@ -89,7 +89,9 @@ export async function storeCapturePhotoFromR2(
 		const raw = await env.PHOTOS.get(rawKey);
 		if (!raw) throw new Error(`raw capture missing from R2: ${rawKey}`);
 		const out = await env.IMAGES.input(raw.body)
-			.transform({ width: CAPTURE_SIZE, height: CAPTURE_SIZE, fit: "cover" })
+			// `crop` shrinks and crops to a square but never enlarges, so an iPhone's
+			// 3024px square is stored at its native size rather than upscaled.
+			.transform({ width: CAPTURE_SIZE, height: CAPTURE_SIZE, fit: "crop" })
 			.output({ format: "image/webp", quality: 90 });
 		// The transformed webp is a few MB at most, so buffering it (unlike the
 		// original) is fine.
