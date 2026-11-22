@@ -26,8 +26,8 @@ export function CollectionTable({
 	onOpen: (record: PublicRecord) => void;
 	/** The record the panel has open, marked in the table. */
 	focusedRecordId: number | null;
-	sort: TableSort | null;
-	onSort: (sort: TableSort | null) => void;
+	sort: TableSort;
+	onSort: (sort: TableSort) => void;
 }) {
 	const body = useRef<HTMLTableSectionElement>(null);
 	// Paging through the panel keeps the open record's row in view: it
@@ -87,8 +87,8 @@ const SORT_COLUMNS: { column: SortColumn; label: string }[] = [
 ];
 
 /**
- * A column heading that sorts the table. Clicks go ascending, descending,
- * then back to the collection's own order.
+ * A column heading that sorts the table. The first click sorts ascending,
+ * and each one after flips the direction.
  */
 function SortHeading({
 	column,
@@ -98,10 +98,10 @@ function SortHeading({
 }: {
 	column: SortColumn;
 	label: string;
-	sort: TableSort | null;
-	onSort: (sort: TableSort | null) => void;
+	sort: TableSort;
+	onSort: (sort: TableSort) => void;
 }) {
-	const direction = sort?.column === column ? sort.direction : null;
+	const direction = sort.column === column ? sort.direction : null;
 	// A dot on hover until the column sorts (see `.collection-table-sort`).
 	const Icon = direction === "desc" ? ArrowDown : direction ? ArrowUp : Dot;
 	return (
@@ -120,13 +120,7 @@ function SortHeading({
 				className="collection-table-sort"
 				data-sorted={direction ? "" : undefined}
 				onClick={() =>
-					onSort(
-						direction === "asc"
-							? { column, direction: "desc" }
-							: direction === "desc"
-								? null
-								: { column, direction: "asc" },
-					)
+					onSort({ column, direction: direction === "asc" ? "desc" : "asc" })
 				}
 			>
 				{label}

@@ -33,6 +33,7 @@ import { WallCursor } from "#/components/wall/wall-cursor";
 import { WallPlaque } from "#/components/wall/wall-plaque";
 import {
 	type CollectionFilters,
+	DEFAULT_TABLE_SORT,
 	hasAnyFilter,
 	matchesFilters,
 	NO_FILTERS,
@@ -169,9 +170,9 @@ export function CollectionView({
 	);
 
 	const [filters, setFilters] = useState<CollectionFilters>(NO_FILTERS);
-	// The table's column sort; `null` is the collection's own order (newest
-	// first). The wall ignores it.
-	const [sort, setSort] = useState<TableSort | null>(null);
+	// The table's column sort, artist A–Z until a heading is clicked. The wall
+	// ignores it and keeps its own order.
+	const [sort, setSort] = useState<TableSort>(DEFAULT_TABLE_SORT);
 
 	// Search first, then the filter strip — kept as two steps because the
 	// strip's chip counts are scoped to the search matches (see `facetCounts`).
@@ -191,7 +192,7 @@ export function CollectionView({
 		const matched = hasAnyFilter(filters)
 			? searched.filter((r) => matchesFilters(r, filters))
 			: searched;
-		return sort && !wallMode ? sortRecords(matched, sort) : matched;
+		return wallMode ? matched : sortRecords(matched, sort);
 	}, [searched, filters, sort, wallMode]);
 
 	// Track the open record by id (not index) so re-filtering never jumps to the

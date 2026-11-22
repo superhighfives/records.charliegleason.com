@@ -194,18 +194,27 @@ interface SortableRecord {
 	size: string | null;
 }
 
+/** The table's order until a heading is clicked. */
+export const DEFAULT_TABLE_SORT: TableSort = {
+	column: "artist",
+	direction: "asc",
+};
+
 /**
- * The table's records in column order. Ties keep the order they came in (the
- * newest first), and records with no year or size go last either way.
+ * The table's records in column order. Ties fall back to artist, then title
+ * (A–Z whichever way the column runs), and records with no year or size go
+ * last either way.
  */
 export function sortRecords<T extends SortableRecord>(
 	records: T[],
 	{ column, direction }: TableSort,
 ): T[] {
 	const sign = direction === "asc" ? 1 : -1;
+	const byName = (a: T, b: T) =>
+		collator.compare(a.artist, b.artist) || collator.compare(a.title, b.title);
 	if (column === "title" || column === "artist")
 		return [...records].sort(
-			(a, b) => sign * collator.compare(a[column], b[column]),
+			(a, b) => sign * collator.compare(a[column], b[column]) || byName(a, b),
 		);
 	const rank = (r: T) =>
 		column === "year" ? r.year : r.size ? sizeRank(r.size) : null;
@@ -213,8 +222,8 @@ export function sortRecords<T extends SortableRecord>(
 		const x = rank(a);
 		const y = rank(b);
 		if (x == null || y == null)
-			return (x == null ? 1 : 0) - (y == null ? 1 : 0);
-		return sign * (x - y);
+			return (x == null ? 1 : 0) - (y == null ? 1 : 0) || byName(a, b);
+		return sign * (x - y) || byName(a, b);
 	});
 }
 

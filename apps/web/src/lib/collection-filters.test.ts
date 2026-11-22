@@ -151,10 +151,19 @@ describe("sortRecords", () => {
 	];
 	const ids = (sort: TableSort) => sortRecords(records, sort).map((r) => r.id);
 
-	it("sorts text columns case-insensitively, keeping ties in order", () => {
+	it("sorts text columns case-insensitively, breaking ties by title", () => {
 		expect(ids({ column: "title", direction: "asc" })).toEqual([2, 1, 3]);
 		expect(ids({ column: "artist", direction: "asc" })).toEqual([2, 3, 1]);
 		expect(ids({ column: "artist", direction: "desc" })).toEqual([1, 2, 3]);
+	});
+	it("breaks ties by artist and title rather than input order", () => {
+		const tied = [
+			{ id: 1, title: "Second", artist: "Same", year: 2000, size: null },
+			{ id: 2, title: "First", artist: "Same", year: 2000, size: null },
+		];
+		const order = (sort: TableSort) => sortRecords(tied, sort).map((r) => r.id);
+		expect(order({ column: "artist", direction: "desc" })).toEqual([2, 1]);
+		expect(order({ column: "year", direction: "asc" })).toEqual([2, 1]);
 	});
 	it("puts records with no year or size last in both directions", () => {
 		expect(ids({ column: "year", direction: "asc" })).toEqual([3, 1, 2]);
