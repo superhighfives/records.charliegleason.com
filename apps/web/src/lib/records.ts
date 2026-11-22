@@ -14,6 +14,7 @@ import {
 	notInArray,
 	or,
 } from "drizzle-orm";
+import { z } from "zod";
 
 import { getDb } from "#/db";
 import {
@@ -1021,6 +1022,32 @@ export const queueMissingValues = createServerFn({ method: "POST" })
 			const ids = rows.map((r) => r.id);
 			await enqueueValueBatch(ids);
 			return { count: ids.length };
+		}),
+	);
+
+/**
+ * Set or clear a record's hand-entered value (USD), from the list's inline value
+ * cell. `null` clears it, so the Discogs figure shows again. Returns the updated
+ * row, or null if the record is gone.
+ */
+export const setManualValue = createServerFn({ method: "POST" })
+	.middleware([authMiddleware])
+	.validator((data: unknown) =>
+		z
+			.object({
+				id: z.number().int(),
+				value: z.number().finite().nonnegative().nullable(),
+			})
+			.parse(data),
+	)
+	.handler(({ data: { id, value } }) =>
+		Sentry.startSpan({ name: "setManualValue" }, async () => {
+			const [row] = await getDb(env.DB)
+				.update(records)
+				.set({ manualValue: value, updatedAt: new Date() })
+				.where(eq(records.id, id))
+				.returning();
+			return row ?? null;
 		}),
 	);
 

@@ -58,6 +58,7 @@ import {
 } from "#/components/ui/popover";
 import { Sheet, SheetContent } from "#/components/ui/sheet";
 import { UnmatchedBadge } from "#/components/unmatched-badge";
+import { ValueCell } from "#/components/value-cell";
 import type { Record } from "#/db/schema";
 import { describeAnalysisError } from "#/lib/analysis-error";
 import { displayCoverKey } from "#/lib/cover";
@@ -686,6 +687,11 @@ function AdminRecords() {
 	const toggleFilter = (token: string) =>
 		setFacets(toggleFacet(activeFacets, token));
 	const [filter, setFilter] = useState(() => readStoredFilters().filter ?? "");
+	// Remember the facets in the URL, however they got there (an alerts-menu link
+	// included), so coming back to a bare /admin after saving a record restores them.
+	useEffect(() => {
+		if (rawFacets) writeStoredFilters({ ...readStoredFilters(), f: rawFacets });
+	}, [rawFacets]);
 	// Restore facets from localStorage once, only when the URL didn't already specify them.
 	const restoredFacetsRef = useRef(false);
 	useEffect(() => {
@@ -940,24 +946,9 @@ function AdminRecords() {
 				header: "Value",
 				meta: { className: "hidden lg:table-cell" },
 				// The effective value: manual (confirmed) figure if set, else the guess.
+				// Editable in place; see `ValueCell`.
 				accessorFn: (row) => effectiveValue(row),
-				cell: ({ row }) => {
-					const value = effectiveValue(row.original);
-					if (value == null)
-						return <span className="text-muted-foreground">—</span>;
-					return (
-						<span
-							className="tabular-nums"
-							title={
-								row.original.manualValue != null
-									? "Confirmed (manual) value"
-									: "Estimated from Discogs"
-							}
-						>
-							{formatMoney(value, row.original.discogsValueCurrency ?? "USD")}
-						</span>
-					);
-				},
+				cell: ({ row }) => <ValueCell record={row.original} />,
 			},
 			{
 				id: "release",
