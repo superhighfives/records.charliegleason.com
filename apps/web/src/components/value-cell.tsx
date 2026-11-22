@@ -14,6 +14,11 @@ import { effectiveValue, formatMoney } from "#/lib/value";
  * empty field clears the manual value so the Discogs figure shows again. The saved
  * row goes straight into the list cache, so filters such as "No price" update at once.
  */
+// The button and the input share one box, so opening the editor doesn't resize the
+// column or the row.
+const BOX =
+	"h-7 w-24 rounded-md border bg-transparent px-2 text-sm tabular-nums";
+
 export function ValueCell({ record }: { record: Record }) {
 	const queryClient = useQueryClient();
 	const [draft, setDraft] = useState<string | null>(null);
@@ -60,7 +65,10 @@ export function ValueCell({ record }: { record: Record }) {
 				inputMode="decimal"
 				placeholder={value != null ? formatMoney(value, currency) : "USD"}
 				aria-label={`Value of ${record.artist} — ${record.title}, in USD`}
-				className="h-7 w-24 rounded-md border border-input bg-transparent px-2 text-sm tabular-nums outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+				className={cn(
+					BOX,
+					"border-input outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+				)}
 			/>
 		);
 	}
@@ -78,7 +86,8 @@ export function ValueCell({ record }: { record: Record }) {
 						: "Click to add a value"
 			}
 			className={cn(
-				"rounded-md px-1 tabular-nums hover:bg-accent disabled:opacity-50",
+				BOX,
+				"border-transparent text-left whitespace-nowrap hover:bg-accent disabled:opacity-50",
 				value == null && "text-muted-foreground",
 			)}
 		>
